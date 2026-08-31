@@ -5,22 +5,28 @@
 
 namespace cdtb::render {
 
+// 후킹 대상 함수의 주소.
 struct VTableAddresses {
+    void* create_swap_chain = nullptr;
+    void* create_swap_chain_for_hwnd = nullptr;
     void* present = nullptr;
     void* resize_buffers = nullptr;
-    void* execute_command_lists = nullptr;
 };
 
-// 더미 D3D12 객체를 만들어 vtable에서 함수 주소를 읽는다.
-// 실패해도 게임에는 영향이 없다.
+// 더미 D3D12/DXGI 객체를 만들어 vtable에서 함수 주소를 읽는다.
 bool acquire_vtable_addresses(VTableAddresses& out);
 
 bool install_hooks();
 void remove_hooks();
 
-// ExecuteCommandLists 훅이 최초로 캡처한 게임의 커맨드큐.
-// 캡처 전에는 nullptr.
-ID3D12CommandQueue* captured_queue();
+// 이 스왑체인과 짝지어진 커맨드큐. 모르는 스왑체인이면 nullptr.
+//
+// ExecuteCommandLists에서 처음 본 DIRECT 큐를 잡는 방식은 쓰지 않는다.
+// NVIDIA Streamline 문서가 명시하듯 DLSS-G가 활성이면 커맨드큐와
+// present가 복수일 수 있어 오버레이는 그런 가정을 해서는 안 된다.
+// 대신 CreateSwapChain / CreateSwapChainForHwnd를 가로채 (큐, 스왑체인)
+// 쌍을 사실로 확보한다. D3D12에서 이 함수들의 pDevice 인자가 커맨드큐다.
+ID3D12CommandQueue* queue_for(IDXGISwapChain* swap_chain);
 
 // 예외 발생 지점을 좁히기 위한 단계 마커. on_frame이 진행하며 갱신하고,
 // SEH 핸들러가 예외 코드·주소와 함께 기록한다.
@@ -28,26 +34,24 @@ enum FrameStage {
     kStageIdle = 0,
     kStageTeardown = 1,
     kStageInitialize = 2,
-    kStageNewFrame = 3,
-    kStageDrawUi = 4,
-    kStageImGuiRender = 5,
-    kStageAllocatorReset = 6,
-    kStageRecordCommands = 7,
-    kStageExecute = 8,
-    // stage 7 세분화 - 어느 호출에서 터지는지 좁힌다.
-    kStageBarrierToRT = 71,
-    kStageOMSetRenderTargets = 72,
-    kStageSetDescriptorHeaps = 73,
-    kStageRenderDrawData = 74,
-    kStageBarrierToPresent = 75,
-    kStageCloseList = 76,
+    kStageWaitFence = 3,
+    kStageNewFrame = 4,
+    kStageDrawUi = 5,
+    kStageImGuiRender = 6,
+    kStageAllocatorReset = 7,
+    kStageBarrierToRT = 8,
+    kStageOMSetRenderTargets = 9,
+    kStageSetDescriptorHeaps = 10,
+    kStageRenderDrawData = 11,
+    kStageBarrierToPresent = 12,
+    kStageCloseList = 13,
+    kStageExecute = 14,
+    kStageSignal = 15,
 };
 extern volatile int g_frame_stage;
 
 // 아래 둘은 overlay.cpp가 정의한다.
-// Present 훅이 원본을 호출하기 직전에 부른다.
-void on_frame(IDXGISwapChain3* swap_chain);
-// ResizeBuffers 훅이 원본을 호출하기 직전에 부른다.
-void on_resize();
+void on_frame(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue);
+void on_resize(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue);
 
 }  // namespace cdtb::render

@@ -7,6 +7,7 @@
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
 
+#include <cstdint>
 #include <vector>
 
 #include "core/guard.h"
@@ -19,10 +20,14 @@
 // 접근해야 하므로 익명 네임스페이스를 쓸 수 없다.
 namespace cdtb::overlay::detail {
 
+// 공식 DX12 예제의 FrameContext와 같은 역할이다. fence_value가 핵심이다.
+// 이것 없이 allocator를 Reset 하면 GPU가 아직 읽는 중일 수 있고, 그때
+// 런타임은 호출을 버리고 디바이스를 제거한다(Microsoft 문서).
 struct FrameCtx {
     ID3D12CommandAllocator* allocator = nullptr;
     ID3D12Resource* back_buffer = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv{};
+    UINT64 fence_value = 0;
 };
 
 Config g_cfg;
@@ -46,6 +51,10 @@ ID3D12DescriptorHeap* g_srv_heap = nullptr;
 ID3D12GraphicsCommandList* g_cmd_list = nullptr;
 std::vector<FrameCtx> g_frames;
 
+ID3D12Fence* g_fence = nullptr;
+HANDLE g_fence_event = nullptr;
+UINT64 g_fence_last = 0;
+
 // ImGui 1.92부터 백엔드는 폰트 아틀라스 외 텍스처에도 SRV 디스크립터를
 // 요구한다. 단일 디스크립터로는 부족하므로 작은 프리리스트를 둔다.
 constexpr UINT kSrvHeapSize = 64;
@@ -54,9 +63,8 @@ UINT g_srv_increment = 0;
 
 void srv_alloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu,
                D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
-    // 계측: 고갈되면 back()/pop_back()이 UB다. RelWithDebInfo는 NDEBUG라
-    // IM_ASSERT가 no-op이 되어 조용히 크래시하므로 직접 확인한다.
-    log::infof("srv_alloc 요청: 남은 {}개", g_srv_free.size());
+    // RelWithDebInfo는 NDEBUG라 IM_ASSERT가 no-op이 된다. 고갈되면
+    // back()/pop_back()이 UB이므로 직접 확인한다.
     if (g_srv_free.empty()) {
         log::errorf("SRV 디스크립터 고갈 - 힙 크기 {}개로는 부족하다",
                     kSrvHeapSize);
@@ -79,6 +87,31 @@ void srv_free(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE cpu,
         static_cast<UINT>((cpu.ptr - base) / g_srv_increment));
 }
 
+// 우리가 제출한 모든 작업이 끝날 때까지 기다린다.
+// 백버퍼나 힙을 해제하기 전에 반드시 부른다.
+void wait_for_pending(ID3D12CommandQueue* queue) {
+    if (g_fence == nullptr || g_fence_event == nullptr || queue == nullptr) {
+        return;
+    }
+    const UINT64 target = ++g_fence_last;
+    if (FAILED(queue->Signal(g_fence, target))) return;
+    if (g_fence->GetCompletedValue() < target) {
+        if (SUCCEEDED(g_fence->SetEventOnCompletion(target, g_fence_event))) {
+            ::WaitForSingleObject(g_fence_event, 2000);
+        }
+    }
+}
+
+// 이 프레임 컨텍스트의 GPU 작업이 끝났는지 확인하고, 아니면 기다린다.
+void wait_for_frame(const FrameCtx& f) {
+    if (g_fence == nullptr || f.fence_value == 0) return;
+    if (g_fence->GetCompletedValue() >= f.fence_value) return;
+    if (SUCCEEDED(g_fence->SetEventOnCompletion(f.fence_value,
+                                                g_fence_event))) {
+        ::WaitForSingleObject(g_fence_event, 2000);
+    }
+}
+
 void release_resources() {
     g_srv_free.clear();
     for (auto& f : g_frames) {
@@ -90,12 +123,19 @@ void release_resources() {
     if (g_cmd_list != nullptr) { g_cmd_list->Release(); g_cmd_list = nullptr; }
     if (g_srv_heap != nullptr) { g_srv_heap->Release(); g_srv_heap = nullptr; }
     if (g_rtv_heap != nullptr) { g_rtv_heap->Release(); g_rtv_heap = nullptr; }
+    if (g_fence != nullptr) { g_fence->Release(); g_fence = nullptr; }
+    if (g_fence_event != nullptr) {
+        ::CloseHandle(g_fence_event);
+        g_fence_event = nullptr;
+    }
     if (g_device != nullptr) { g_device->Release(); g_device = nullptr; }
+    g_fence_last = 0;
 }
 
 // ImGui와 D3D12 리소스를 전부 해체한다. g_visible은 건드리지 않으므로
 // 해상도 변경 후 재초기화해도 사용자가 열어둔 상태가 유지된다.
-void teardown() {
+void teardown(ID3D12CommandQueue* queue) {
+    wait_for_pending(queue);   // GPU가 우리 리소스를 놓을 때까지
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
     if (g_win32_ready) { ImGui_ImplWin32_Shutdown(); g_win32_ready = false; }
     if (g_ctx_created) { ImGui::DestroyContext(); g_ctx_created = false; }
@@ -104,7 +144,7 @@ void teardown() {
     g_ready = false;
 }
 
-bool initialize(IDXGISwapChain3* sc) {
+bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     DXGI_SWAP_CHAIN_DESC desc{};
     if (FAILED(sc->GetDesc(&desc))) {
         log::errorf("SwapChain GetDesc 실패");
@@ -116,6 +156,17 @@ bool initialize(IDXGISwapChain3* sc) {
     }
 
     const UINT count = desc.BufferCount;
+
+    if (FAILED(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                     IID_PPV_ARGS(&g_fence)))) {
+        log::errorf("CreateFence 실패");
+        return false;
+    }
+    g_fence_event = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (g_fence_event == nullptr) {
+        log::errorf("CreateEvent 실패: {}", ::GetLastError());
+        return false;
+    }
 
     D3D12_DESCRIPTOR_HEAP_DESC rtv_desc{};
     rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -162,6 +213,7 @@ bool initialize(IDXGISwapChain3* sc) {
         g_device->CreateRenderTargetView(g_frames[i].back_buffer, nullptr,
                                          handle);
         g_frames[i].rtv = handle;
+        g_frames[i].fence_value = 0;
         handle.ptr += rtv_size;
     }
 
@@ -199,11 +251,13 @@ bool initialize(IDXGISwapChain3* sc) {
     g_win32_ready = true;
 
     // 1.91.5에서 위치인자 초기화가 obsolete 되었다. InitInfo를 쓴다.
+    // CommandQueue는 백엔드가 텍스처 업로드에 직접 쓴다. 반드시 이
+    // 스왑체인과 짝지어진 큐여야 한다.
     // RTVFormat은 게임의 실제 스왑체인 포맷을 그대로 넘긴다. 상수로
     // 박으면 HDR이나 sRGB 스왑체인에서 렌더가 깨진다.
     ImGui_ImplDX12_InitInfo info{};
     info.Device = g_device;
-    info.CommandQueue = cdtb::render::captured_queue();
+    info.CommandQueue = queue;
     info.NumFramesInFlight = static_cast<int>(count);
     info.RTVFormat = desc.BufferDesc.Format;
     info.SrvDescriptorHeap = g_srv_heap;
@@ -216,9 +270,10 @@ bool initialize(IDXGISwapChain3* sc) {
     g_dx12_ready = true;
 
     input::install(desc.OutputWindow);
-    log::infof("오버레이 초기화 완료: 백버퍼 {}개, 포맷 {}, hwnd={}", count,
-               static_cast<int>(desc.BufferDesc.Format),
-               static_cast<void*>(desc.OutputWindow));
+    log::infof("오버레이 초기화 완료: 백버퍼 {}개, 포맷 {}, hwnd={}, queue={}",
+               count, static_cast<int>(desc.BufferDesc.Format),
+               static_cast<void*>(desc.OutputWindow),
+               static_cast<void*>(queue));
     return true;
 }
 
@@ -313,7 +368,7 @@ void shutdown() {
 // ------------------------------------------------ d3d12_hook.h 의 콜백 구현
 namespace cdtb::render {
 
-void on_frame(IDXGISwapChain3* sc) {
+void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     using namespace cdtb::overlay::detail;
 
     // 해체는 반드시 이 스레드에서 한다 (overlay::shutdown 주석 참조).
@@ -321,7 +376,7 @@ void on_frame(IDXGISwapChain3* sc) {
         g_frame_stage = kStageTeardown;
         g_teardown_requested = false;
         g_visible = false;
-        teardown();
+        teardown(queue);
         log::infof("오버레이 비활성화 완료 - 토글 키로 재초기화 가능");
         g_frame_stage = kStageIdle;
         return;
@@ -329,9 +384,9 @@ void on_frame(IDXGISwapChain3* sc) {
 
     if (!g_ready) {
         g_frame_stage = kStageInitialize;
-        if (!initialize(sc)) {
+        if (!initialize(sc, queue)) {
             log::errorf("오버레이 초기화 실패 - 만든 것만 해체하고 중단한다");
-            teardown();
+            teardown(queue);
             g_frame_stage = kStageIdle;
             return;
         }
@@ -339,8 +394,14 @@ void on_frame(IDXGISwapChain3* sc) {
     }
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
 
-    ID3D12CommandQueue* queue = captured_queue();
-    if (queue == nullptr) { g_frame_stage = kStageIdle; return; }
+    const UINT idx = sc->GetCurrentBackBufferIndex();
+    if (idx >= g_frames.size()) { g_frame_stage = kStageIdle; return; }
+    FrameCtx& f = g_frames[idx];
+
+    // 이 얼로케이터의 이전 제출이 끝났는지 확인한다. 이 대기가 없으면
+    // 런타임이 호출을 버리고 디바이스를 제거한다(Microsoft 문서).
+    g_frame_stage = kStageWaitFence;
+    wait_for_frame(f);
 
     g_frame_stage = kStageNewFrame;
     ImGui_ImplDX12_NewFrame();
@@ -353,24 +414,9 @@ void on_frame(IDXGISwapChain3* sc) {
     g_frame_stage = kStageImGuiRender;
     ImGui::Render();
 
-    const UINT idx = sc->GetCurrentBackBufferIndex();
-    if (idx >= g_frames.size()) { g_frame_stage = kStageIdle; return; }
-    FrameCtx& f = g_frames[idx];
-
     g_frame_stage = kStageAllocatorReset;
     f.allocator->Reset();
     g_cmd_list->Reset(f.allocator, nullptr);
-
-    // 계측: 첫 프레임에 사용하는 객체 포인터를 남긴다. 손상 여부 판별용.
-    static bool logged_ptrs = false;
-    if (!logged_ptrs) {
-        logged_ptrs = true;
-        log::infof("렌더 객체: cmd_list={} back_buffer={} srv_heap={} rtv={:#x}",
-                   static_cast<void*>(g_cmd_list),
-                   static_cast<void*>(f.back_buffer),
-                   static_cast<void*>(g_srv_heap),
-                   static_cast<std::uintptr_t>(f.rtv.ptr));
-    }
 
     g_frame_stage = kStageBarrierToRT;
     D3D12_RESOURCE_BARRIER barrier{};
@@ -402,16 +448,23 @@ void on_frame(IDXGISwapChain3* sc) {
     ID3D12CommandList* lists[] = {g_cmd_list};
     queue->ExecuteCommandLists(1, lists);
 
+    // 이 프레임 컨텍스트를 다시 쓰기 전에 기다릴 지점을 기록한다.
+    g_frame_stage = kStageSignal;
+    if (SUCCEEDED(queue->Signal(g_fence, g_fence_last + 1))) {
+        ++g_fence_last;
+        f.fence_value = g_fence_last;
+    }
+
     g_frame_stage = kStageIdle;
 }
 
-void on_resize() {
+void on_resize(IDXGISwapChain3*, ID3D12CommandQueue* queue) {
     using namespace cdtb::overlay::detail;
     if (!g_ready) return;
 
     // 백버퍼 참조를 쥔 채로는 ResizeBuffers가 실패한다. 전체를 해체하고
     // 다음 Present에서 새 크기로 다시 만든다. g_visible은 유지된다.
-    teardown();
+    teardown(queue);
     log::infof("ResizeBuffers 감지 - 다음 프레임에 재초기화한다");
 }
 

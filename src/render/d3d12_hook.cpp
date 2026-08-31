@@ -8,35 +8,91 @@
 namespace cdtb::render {
 namespace {
 
+// 배포 1에서는 렌더링을 켜지 않는다. (큐, 스왑체인) 쌍이 실제로
+// 잡히는지만 로그로 확인한 뒤 배포 2에서 이 값을 true로 바꾼다.
+// 인게임 검증이 필요한 변경은 한 번에 하나만 내보낸다.
+constexpr bool kRenderEnabled = false;
+
+// IDXGIFactory vtable
+//   IUnknown 0..2, IDXGIObject 3..6,
+//   IDXGIFactory: EnumAdapters=7, MakeWindowAssociation=8,
+//                 GetWindowAssociation=9, CreateSwapChain=10
+constexpr int kIdxCreateSwapChain = 10;
+// IDXGIFactory2 vtable
+//   ...IDXGIFactory1: EnumAdapters1=12, IsCurrent=13,
+//   IDXGIFactory2: IsWindowedStereoEnabled=14, CreateSwapChainForHwnd=15
+constexpr int kIdxCreateSwapChainForHwnd = 15;
+
 // IDXGISwapChain vtable
 //   IUnknown 0..2, IDXGIObject 3..6, IDXGIDeviceSubObject 7,
 //   IDXGISwapChain: Present=8 ... ResizeBuffers=13
 constexpr int kIdxPresent = 8;
 constexpr int kIdxResizeBuffers = 13;
 
-// ID3D12CommandQueue vtable
-//   IUnknown 0..2, ID3D12Object 3..6, ID3D12DeviceChild 7,
-//   ID3D12Pageable(추가 없음),
-//   ID3D12CommandQueue: UpdateTileMappings=8, CopyTileMappings=9,
-//                       ExecuteCommandLists=10
-constexpr int kIdxExecuteCommandLists = 10;
-
+using PFN_CreateSwapChain = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*,
+                                                        IUnknown*,
+                                                        DXGI_SWAP_CHAIN_DESC*,
+                                                        IDXGISwapChain**);
+using PFN_CreateSwapChainForHwnd =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND,
+                                const DXGI_SWAP_CHAIN_DESC1*,
+                                const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*,
+                                IDXGIOutput*, IDXGISwapChain1**);
 using PFN_Present = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT);
 using PFN_ResizeBuffers = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT,
                                                       UINT, UINT,
                                                       DXGI_FORMAT, UINT);
-using PFN_ExecuteCommandLists =
-    void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT,
-                             ID3D12CommandList* const*);
 
+PFN_CreateSwapChain o_CreateSwapChain = nullptr;
+PFN_CreateSwapChainForHwnd o_CreateSwapChainForHwnd = nullptr;
 PFN_Present o_Present = nullptr;
 PFN_ResizeBuffers o_ResizeBuffers = nullptr;
-PFN_ExecuteCommandLists o_ExecuteCommandLists = nullptr;
 
 VTableAddresses g_addrs;
-ID3D12CommandQueue* g_queue = nullptr;
 bool g_disabled = false;
-bool g_logged_first_present = false;
+
+// (스왑체인, 커맨드큐) 쌍. 게임이나 Streamline이 스왑체인을 여러 개
+// 만들 수 있으므로 하나만 기억하지 않고 전부 담아 대조한다.
+struct Pair {
+    IDXGISwapChain* swap_chain = nullptr;
+    ID3D12CommandQueue* queue = nullptr;
+};
+constexpr int kMaxPairs = 8;
+Pair g_pairs[kMaxPairs];
+int g_pair_count = 0;
+SRWLOCK g_pairs_lock = SRWLOCK_INIT;
+
+void record_pair(IUnknown* device, IDXGISwapChain* sc, const char* who) {
+    if (device == nullptr || sc == nullptr) return;
+
+    // D3D12에서 CreateSwapChain* 의 pDevice는 커맨드큐다.
+    // D3D11이면 이 QueryInterface가 실패하므로 자연히 걸러진다.
+    ID3D12CommandQueue* q = nullptr;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&q))) || q == nullptr) {
+        return;
+    }
+    // 게임이 큐의 수명을 소유한다. 우리는 대조용 주소만 들고 있으면
+    // 되므로 QueryInterface가 올린 참조는 즉시 되돌린다.
+    q->Release();
+
+    ::AcquireSRWLockExclusive(&g_pairs_lock);
+    bool known = false;
+    for (int i = 0; i < g_pair_count; ++i) {
+        if (g_pairs[i].swap_chain == sc) {
+            g_pairs[i].queue = q;
+            known = true;
+            break;
+        }
+    }
+    if (!known && g_pair_count < kMaxPairs) {
+        g_pairs[g_pair_count++] = Pair{sc, q};
+    }
+    const int count = g_pair_count;
+    ::ReleaseSRWLockExclusive(&g_pairs_lock);
+
+    log::infof("스왑체인 쌍 확보 [{}]: swapchain={} queue={} (총 {}개)", who,
+               static_cast<void*>(sc), static_cast<void*>(q), count);
+}
 
 // 예외 코드와 주소를 남긴다. 이것이 없으면 무엇이 터졌는지 알 수 없다.
 DWORD g_exc_code = 0;
@@ -54,17 +110,17 @@ LONG seh_filter(DWORD code, EXCEPTION_POINTERS* ep) {
 
 // __try/__except는 소멸자를 가진 C++ 객체와 같은 함수에 있을 수 없다(C2712).
 // 그래서 SEH 껍데기와 본문을 분리한다.
-void guarded_frame(IDXGISwapChain3* sc) {
+void guarded_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* q) {
     __try {
-        on_frame(sc);
+        on_frame(sc, q);
     } __except (seh_filter(GetExceptionCode(), GetExceptionInformation())) {
         g_disabled = true;
     }
 }
 
-void guarded_resize() {
+void guarded_resize(IDXGISwapChain3* sc, ID3D12CommandQueue* q) {
     __try {
-        on_resize();
+        on_resize(sc, q);
     } __except (seh_filter(GetExceptionCode(), GetExceptionInformation())) {
         g_disabled = true;
     }
@@ -72,21 +128,22 @@ void guarded_resize() {
 
 const char* stage_name(int s) {
     switch (s) {
-        case kStageTeardown:       return "해체";
-        case kStageInitialize:     return "초기화";
-        case kStageNewFrame:       return "NewFrame";
-        case kStageDrawUi:         return "draw_ui";
-        case kStageImGuiRender:    return "ImGui::Render";
-        case kStageAllocatorReset: return "allocator Reset";
-        case kStageRecordCommands: return "커맨드 기록";
-        case kStageExecute:        return "ExecuteCommandLists";
+        case kStageTeardown:           return "해체";
+        case kStageInitialize:         return "초기화";
+        case kStageWaitFence:          return "펜스 대기";
+        case kStageNewFrame:           return "NewFrame";
+        case kStageDrawUi:             return "draw_ui";
+        case kStageImGuiRender:        return "ImGui::Render";
+        case kStageAllocatorReset:     return "allocator Reset";
         case kStageBarrierToRT:        return "배리어(→RT)";
         case kStageOMSetRenderTargets: return "OMSetRenderTargets";
         case kStageSetDescriptorHeaps: return "SetDescriptorHeaps";
         case kStageRenderDrawData:     return "RenderDrawData";
         case kStageBarrierToPresent:   return "배리어(→Present)";
         case kStageCloseList:          return "커맨드리스트 Close";
-        default:                   return "미상";
+        case kStageExecute:            return "ExecuteCommandLists";
+        case kStageSignal:             return "펜스 Signal";
+        default:                       return "미상";
     }
 }
 
@@ -97,7 +154,6 @@ void log_disabled_once() {
     log::errorf("훅 본문 예외: code=0x{:08X} addr={} stage={}({})", g_exc_code,
                 g_exc_addr, g_exc_stage, stage_name(g_exc_stage));
 
-    // 예외 주소가 어느 모듈에 속하는지 알면 범인이 좁혀진다.
     HMODULE mod = nullptr;
     if (g_exc_addr != nullptr &&
         ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -115,15 +171,47 @@ void log_disabled_once() {
     log::errorf("오버레이를 영구 비활성화한다");
 }
 
+// ------------------------------------------------------------------- hooks
+
+HRESULT STDMETHODCALLTYPE hk_CreateSwapChain(IDXGIFactory* self,
+                                             IUnknown* device,
+                                             DXGI_SWAP_CHAIN_DESC* desc,
+                                             IDXGISwapChain** out) {
+    const HRESULT hr = o_CreateSwapChain(self, device, desc, out);
+    if (SUCCEEDED(hr) && out != nullptr && *out != nullptr) {
+        record_pair(device, *out, "CreateSwapChain");
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE hk_CreateSwapChainForHwnd(
+    IDXGIFactory2* self, IUnknown* device, HWND hwnd,
+    const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fs_desc, IDXGIOutput* restrict_to,
+    IDXGISwapChain1** out) {
+    const HRESULT hr = o_CreateSwapChainForHwnd(self, device, hwnd, desc,
+                                                fs_desc, restrict_to, out);
+    if (SUCCEEDED(hr) && out != nullptr && *out != nullptr) {
+        record_pair(device, *out, "CreateSwapChainForHwnd");
+    }
+    return hr;
+}
+
+// 렌더 핫패스다. 로그와 뮤텍스를 두지 않는다.
 HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain3* sc, UINT interval,
                                      UINT flags) {
-    if (!g_logged_first_present) {
-        g_logged_first_present = true;
-        log::infof("Present 최초 호출: swapchain={} queue={}",
-                   static_cast<void*>(sc), static_cast<void*>(g_queue));
+    static bool logged_first = false;
+    ID3D12CommandQueue* q = queue_for(sc);
+
+    if (!logged_first) {
+        logged_first = true;
+        log::infof("Present 최초 호출: swapchain={} 짝지어진 queue={} {}",
+                   static_cast<void*>(sc), static_cast<void*>(q),
+                   q != nullptr ? "(쌍 확인됨)" : "(쌍 미확보 - 렌더 안 함)");
     }
-    if (!g_disabled && g_queue != nullptr) {
-        guarded_frame(sc);
+
+    if (kRenderEnabled && !g_disabled && q != nullptr) {
+        guarded_frame(sc, q);
         if (g_disabled) log_disabled_once();
     }
     return o_Present(sc, interval, flags);
@@ -132,43 +220,30 @@ HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain3* sc, UINT interval,
 HRESULT STDMETHODCALLTYPE hk_ResizeBuffers(IDXGISwapChain3* sc, UINT count,
                                            UINT w, UINT h, DXGI_FORMAT fmt,
                                            UINT flags) {
-    if (!g_disabled) {
-        guarded_resize();
+    ID3D12CommandQueue* q = queue_for(sc);
+    if (kRenderEnabled && !g_disabled && q != nullptr) {
+        guarded_resize(sc, q);
         if (g_disabled) log_disabled_once();
     }
     return o_ResizeBuffers(sc, count, w, h, fmt, flags);
-}
-
-// ImGui의 텍스처 업로드가 우리가 넘긴 커맨드큐로 ExecuteCommandLists를
-// 부르므로, on_frame 안에서 이 훅으로 재진입한다. 실제로 그러는지 센다.
-int g_exec_depth = 0;
-
-void STDMETHODCALLTYPE hk_ExecuteCommandLists(ID3D12CommandQueue* q, UINT n,
-                                              ID3D12CommandList* const* l) {
-    if (g_queue == nullptr && q != nullptr) {
-        const D3D12_COMMAND_QUEUE_DESC d = q->GetDesc();
-        if (d.Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-            g_queue = q;
-            log::infof("커맨드큐 캡처: {}", static_cast<void*>(q));
-        }
-    }
-
-    ++g_exec_depth;
-    if (g_frame_stage != kStageIdle) {
-        log::infof(
-            "ExecuteCommandLists 재진입: depth={} stage={} q={} n={} list={}",
-            g_exec_depth, static_cast<int>(g_frame_stage),
-            static_cast<void*>(q), n, static_cast<const void*>(l));
-    }
-    o_ExecuteCommandLists(q, n, l);
-    --g_exec_depth;
 }
 
 }  // namespace
 
 volatile int g_frame_stage = kStageIdle;
 
-ID3D12CommandQueue* captured_queue() { return g_queue; }
+ID3D12CommandQueue* queue_for(IDXGISwapChain* sc) {
+    ID3D12CommandQueue* found = nullptr;
+    ::AcquireSRWLockShared(&g_pairs_lock);
+    for (int i = 0; i < g_pair_count; ++i) {
+        if (g_pairs[i].swap_chain == sc) {
+            found = g_pairs[i].queue;
+            break;
+        }
+    }
+    ::ReleaseSRWLockShared(&g_pairs_lock);
+    return found;
+}
 
 bool acquire_vtable_addresses(VTableAddresses& out) {
     WNDCLASSEXW wc{};
@@ -186,7 +261,7 @@ bool acquire_vtable_addresses(VTableAddresses& out) {
                           1, 1, nullptr, nullptr, wc.hInstance, nullptr);
     ID3D12Device* device = nullptr;
     ID3D12CommandQueue* queue = nullptr;
-    IDXGIFactory4* factory = nullptr;
+    IDXGIFactory2* factory = nullptr;
     IDXGISwapChain* swap = nullptr;
     bool ok = false;
 
@@ -227,11 +302,12 @@ bool acquire_vtable_addresses(VTableAddresses& out) {
             break;
         }
 
+        void** f_vt = *reinterpret_cast<void***>(factory);
         void** sc_vt = *reinterpret_cast<void***>(swap);
-        void** q_vt = *reinterpret_cast<void***>(queue);
+        out.create_swap_chain = f_vt[kIdxCreateSwapChain];
+        out.create_swap_chain_for_hwnd = f_vt[kIdxCreateSwapChainForHwnd];
         out.present = sc_vt[kIdxPresent];
         out.resize_buffers = sc_vt[kIdxResizeBuffers];
-        out.execute_command_lists = q_vt[kIdxExecuteCommandLists];
         ok = true;
     } while (false);
 
@@ -243,9 +319,10 @@ bool acquire_vtable_addresses(VTableAddresses& out) {
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
 
     if (ok) {
-        log::infof("vtable 획득: Present={} ResizeBuffers={} Exec={}",
-                   out.present, out.resize_buffers,
-                   out.execute_command_lists);
+        log::infof("vtable 획득: CreateSwapChain={} ForHwnd={}",
+                   out.create_swap_chain, out.create_swap_chain_for_hwnd);
+        log::infof("vtable 획득: Present={} ResizeBuffers={}", out.present,
+                   out.resize_buffers);
     }
     return ok;
 }
@@ -255,25 +332,30 @@ bool install_hooks() {
     if (!mem::hook_init()) return false;
 
     bool ok = true;
+    ok &= mem::hook_install(g_addrs.create_swap_chain,
+                            reinterpret_cast<void*>(&hk_CreateSwapChain),
+                            reinterpret_cast<void**>(&o_CreateSwapChain));
+    ok &= mem::hook_install(
+        g_addrs.create_swap_chain_for_hwnd,
+        reinterpret_cast<void*>(&hk_CreateSwapChainForHwnd),
+        reinterpret_cast<void**>(&o_CreateSwapChainForHwnd));
     ok &= mem::hook_install(g_addrs.present,
                             reinterpret_cast<void*>(&hk_Present),
                             reinterpret_cast<void**>(&o_Present));
     ok &= mem::hook_install(g_addrs.resize_buffers,
                             reinterpret_cast<void*>(&hk_ResizeBuffers),
                             reinterpret_cast<void**>(&o_ResizeBuffers));
-    ok &= mem::hook_install(g_addrs.execute_command_lists,
-                            reinterpret_cast<void*>(&hk_ExecuteCommandLists),
-                            reinterpret_cast<void**>(&o_ExecuteCommandLists));
 
-    log::infof("훅 설치 {}", ok ? "성공" : "실패");
+    log::infof("훅 설치 {} (렌더링 {})", ok ? "성공" : "실패",
+               kRenderEnabled ? "활성" : "비활성 - 쌍 확보만 검증");
     return ok;
 }
 
 void remove_hooks() {
-    mem::hook_remove(g_addrs.execute_command_lists);
     mem::hook_remove(g_addrs.resize_buffers);
     mem::hook_remove(g_addrs.present);
-    g_queue = nullptr;
+    mem::hook_remove(g_addrs.create_swap_chain_for_hwnd);
+    mem::hook_remove(g_addrs.create_swap_chain);
     log::infof("훅 해제 완료");
 }
 
