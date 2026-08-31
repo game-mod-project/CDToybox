@@ -44,6 +44,18 @@ add_library(cdtb_core STATIC
 target_include_directories(cdtb_core PUBLIC src)
 target_link_libraries(cdtb_core PUBLIC minhook)
 
+# -------------------------------------------------------------------- DLL
+add_library(cdtoybox SHARED
+    src/dllmain.cpp
+    src/proxy/xinput_proxy.cpp
+    src/proxy/exports.def
+)
+set_target_properties(cdtoybox PROPERTIES
+    OUTPUT_NAME "xinput1_4"
+    PREFIX ""
+)
+target_link_libraries(cdtoybox PRIVATE cdtb_core)
+
 # ------------------------------------------------------------------ Tests
 add_executable(cdtb_tests
     tests/main.cpp
