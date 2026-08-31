@@ -8,10 +8,10 @@
 namespace cdtb::render {
 namespace {
 
-// 배포 1에서는 렌더링을 켜지 않는다. (큐, 스왑체인) 쌍이 실제로
-// 잡히는지만 로그로 확인한 뒤 배포 2에서 이 값을 true로 바꾼다.
-// 인게임 검증이 필요한 변경은 한 번에 하나만 내보낸다.
-constexpr bool kRenderEnabled = false;
+// 배포 1에서 (큐, 스왑체인) 쌍 확보를 검증했다.
+// CreateSwapChainForHwnd 훅이 잡은 스왑체인이 Present로 넘어오는 것과
+// 일치함을 확인했으므로 렌더링을 켠다.
+constexpr bool kRenderEnabled = true;
 
 // IDXGIFactory vtable
 //   IUnknown 0..2, IDXGIObject 3..6,
