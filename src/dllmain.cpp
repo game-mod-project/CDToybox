@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "proxy/xinput_proxy.h"
 #include "render/d3d12_hook.h"
+#include "game/camera.h"
 #include "render/overlay.h"
 
 namespace {
@@ -43,6 +44,9 @@ DWORD WINAPI init_thread(LPVOID) {
     if (!cdtb::render::install_hooks()) {
         cdtb::log::errorf("렌더 훅 설치 실패 - 오버레이 없이 계속한다");
     }
+
+    // 사용자가 버튼을 누를 필요 없이 스스로 분석한다.
+    cdtb::game::start_auto_analysis();
 
     cdtb::log::infof("초기화 완료");
     return 0;

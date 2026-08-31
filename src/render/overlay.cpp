@@ -340,8 +340,7 @@ void draw_ui() {
     ImGui::Text("Insert 토글 · End 비활성화");
     ImGui::End();
 
-    // 1단계 작업대. 역공학용 스캔 도구와 카메라 패널이다.
-    cdtb::render::draw_scan_panel();
+    // 분석 결과 표시. 버튼은 없다 - 분석은 백그라운드가 한다.
     cdtb::render::draw_camera_panel();
 }
 

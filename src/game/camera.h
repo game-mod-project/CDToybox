@@ -34,9 +34,13 @@ struct CameraSet {
     }
 };
 
-// RTTI로 카메라 객체를 찾는다. 수 초가 걸리므로 워커 스레드에서 부른다.
-// 진행 상황은 로그에 남는다.
-bool discover(CameraSet* out);
+// 백그라운드에서 스스로 분석한다. 사용자는 게임만 하면 된다.
+//
+// 월드에 진입할 때까지 주기적으로 탐색을 재시도하고, 카메라를 찾으면
+// 하드웨어 브레이크포인트로 갱신 코드를 추적해 결과를 로그에 남긴다.
+// 버튼을 눌러 달라고 하지 않는다 - 그러면 모드를 만든 의미가 없다.
+void start_auto_analysis();
+void stop_auto_analysis();
 
 // 마지막 탐색 결과.
 const CameraSet& cameras();
