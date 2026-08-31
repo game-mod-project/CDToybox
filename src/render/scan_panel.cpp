@@ -7,6 +7,7 @@
 #include <string>
 
 #include "game/camera.h"
+#include "game/freecam.h"
 
 namespace cdtb::render {
 
@@ -61,6 +62,23 @@ void draw_camera_panel() {
         game::read_fov(cam.addr, &fov);
         game::read_name(cam.addr, &name);
         ImGui::Text("[%s] %s   fov %6.2f", cam.label, name.c_str(), fov);
+    }
+
+    ImGui::Separator();
+    const auto fc = game::freecam_state();
+    if (!fc.hooked) {
+        ImGui::TextDisabled("프리카메라: 훅 대기 중");
+    } else {
+        ImGui::TextColored(fc.active ? ImVec4(0.4f, 1, 0.4f, 1)
+                                     : ImVec4(0.7f, 0.7f, 0.7f, 1),
+                           "프리카메라: %s  (F9)",
+                           fc.active ? "켜짐" : "꺼짐");
+        ImGui::Text("  갱신 함수 0x%llX",
+                    static_cast<unsigned long long>(fc.update_fn));
+        ImGui::Text("  좌표 %9.2f %9.2f %9.2f   속도 %.1f", fc.pos[0],
+                    fc.pos[1], fc.pos[2], fc.speed);
+        ImGui::TextDisabled("  넘패드 8/2=Z  4/6=X  9/3=Y  +/-=속도");
+        ImGui::TextDisabled("  Shift=빠르게  Ctrl=느리게");
     }
 
     ImGui::End();

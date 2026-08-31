@@ -11,7 +11,6 @@
 #include "mem/reader.h"
 #include "mem/rtti.h"
 #include "mem/safe_read.h"
-#include "mem/watchpoint.h"
 
 namespace cdtb::game {
 namespace {
@@ -38,44 +37,6 @@ const char* name_of(std::uintptr_t v, const CameraSet& set) {
     return "";
 }
 
-// 슬롯을 동시에 걸고 지정한 시간만큼 관찰한다.
-// 감시 중 새로 생긴 스레드에도 계속 디버그 레지스터를 건다.
-void observe(mem::WriteWatch& watch, int seconds) {
-    if (!watch.install()) {
-        log::errorf("  감시를 걸지 못했다");
-        return;
-    }
-
-    // 250ms 마다 모든 스레드의 설정을 다시 확인한다. 새로 생긴
-    // 스레드를 흡수하고, 보호 코드가 지워 버린 것을 되살린다.
-    // 이미 맞게 걸린 스레드는 건드리지 않으므로 비용은 낮다.
-    for (int i = 0; i < seconds * 4; ++i) {
-        ::Sleep(250);
-        watch.refresh_threads();
-    }
-
-    const auto st = watch.stats();
-    log::infof("  스레드 통계: 총 {} | OpenThread 실패 {} | 설정 실패 {} | "
-               "지워져 다시 건 횟수 {} | 현장 복구 {}",
-               st.enumerated, st.open_failed, st.set_failed, st.rearmed,
-               st.self_healed);
-    if (st.rearmed > 0) {
-        log::warnf("  보호 코드가 디버그 레지스터를 지우고 있다 - "
-                   "지워져 있던 동안의 쓰기는 놓쳤다");
-    }
-
-    const mem::LocalReader reader;
-    const auto base = reader.module_base();
-    for (const auto& s : watch.results()) {
-        log::infof("  [{}] 0x{:X}  히트 {}회, 쓰는 명령 {}곳", s.label, s.addr,
-                   s.total, s.rips.size());
-        for (const auto& h : s.rips) {
-            log::infof("      0x{:X}  (모듈+0x{:X})  {}회", h.rip,
-                       h.rip >= base ? h.rip - base : 0, h.count);
-        }
-    }
-    watch.remove();
-}
 
 }  // namespace
 
@@ -193,97 +154,21 @@ void run_analysis(const mem::Rtti& rtti, const CameraSet& set) {
     dump_vtable(rtti, "FreeCamCamera", set.free_cam, 40);
     dump_vtable(rtti, "PlayerCameraComponent", set.player_component, 40);
 
-    // --- 2단계: 카메라 월드 좌표를 누가 쓰는가 ---
+    // --- 2단계는 뺐다: 하드웨어 브레이크포인트는 이 게임에서 못 쓴다 ---
     //
-    // 이 단계의 핵심 측정이다. 카메라 객체의 지역 변환은 항등이고
-    // 이미지 전수 조사에서도 그 칸에 쓰는 코드가 0곳이었다. 진짜
-    // 좌표는 컴포넌트 +0x360 이고, 실행 중인 게임에서 매 프레임
-    // 변하는 것을 외부 도구로 확인했다. 그 값을 쓰는 함수가 카메라
-    // 컨트롤러이고, 그 함수를 알아야 회전도 같이 찾을 수 있다.
+    // 보호 코드가 250ms 마다 121개 스레드 중 47개가량의 디버그
+    // 레지스터를 지운다(실측: 한 창에서 2274회 다시 걸었다). 어떤
+    // 값은 잡히고 어떤 값은 영원히 히트 0으로 보여, 결과를 신뢰할 수
+    // 없다. 게다가 감시 창마다 24초씩 전 스레드를 정지시킨다.
     //
-    // 대조군(+0xA4)을 같은 창에 넣는다. 답을 이미 안다(0x140A59516).
-    // 대조군이 잡히는데 나머지가 0이면 그것은 진짜 "안 쓴다"이고,
-    // 대조군까지 0이면 감시 자체가 죽은 것이다.
-    // 대조군을 둘 쓴다. +0xA4 는 0x140A59516 이, 컴포넌트+0x35C 는
-    // 0x140A5878C 가 쓰는 것을 이미 확인했다. 특히 +0x35C 는 찾으려는
-    // +0x360 의 바로 앞 4바이트다. 그것이 잡히는데 +0x360 이 0이면
-    // 그 값은 정말 이 창에서 안 쓰인 것이다.
-    {
-        log::infof("=== 감시 1: 카메라 월드 좌표를 쓰는 코드 ===");
-        mem::WriteWatch watch;
-        watch.add(set.active + 0xA4, 4, "대조군A +0xA4 (기대 0x140A59516)");
-        watch.add(set.player_component + 0x35C, 4,
-                  "대조군B 컴포넌트+0x35C (기대 0x140A5879E)");
-        watch.add(set.player_component + component_offset::kWorldPosition, 4,
-                  "월드좌표 +0x360 (4바이트)");
-        // 같은 주소를 8바이트로도 본다. 4바이트에서만 0이 나오면
-        // 넓은 SIMD 저장이 4바이트 감시를 비껴간다는 뜻이고, 둘 다
-        // 0이면 그 스레드의 디버그 레지스터가 지워졌다는 뜻이다.
-        watch.add(set.player_component + component_offset::kWorldPosition, 8,
-                  "월드좌표 +0x360 (8바이트)");
-
-        observe(watch, 12);
-    }
-
-    // --- 3단계: FOV 를 누가 쓰는가, 카메라를 누가 갈아끼우는가 ---
+    // 찾으려던 답은 정적 분석으로 얻었다 - 카메라 위치 갱신 함수는
+    // 0x140A58540 이고 현재 = lerp(현재, 목표, t) 이다. 앞서 못 찾은
+    // 것은 내 패턴 스캐너가 VEX 접두사 바이트 순서를 뒤집어 써서
+    // AVX 저장을 전부 놓쳤기 때문이었다.
     //
-    // FOV 는 정적 분석에서 쓰는 코드가 6곳 있는데 실측 히트는 0이었다.
-    // 값을 바꿔 두면 게임이 되돌리려 쓰므로 그 쓰기가 잡혀야 한다.
-    // 지난번엔 되돌아왔는데도 히트가 0이었다 - 그때는 낙오 스레드
-    // 때문에 계측 자체가 어긋나 있었다.
-    //
-    // 프리캠 +0xBC(활성 플래그)는 활성 카메라에서 0x0101, 프리캠에서
-    // 0 이다. 누가 그것을 세우는지가 곧 활성화 경로다.
-    {
-        log::infof("=== 감시 2: FOV 와 전환 슬롯 ===");
-        mem::WriteWatch watch;
-        watch.add(set.active + 0xA4, 4, "대조군A +0xA4 (기대 0x140A59516)");
-        watch.add(set.active + camera_offset::kFov, 4, "FOV +0x9C (4바이트)");
-        // FOV 를 품는 8바이트 구간. 4바이트에서만 0이면 넓은 저장이
-        // 원인이고, 둘 다 0이면 디버그 레지스터가 지워진 것이다.
-        watch.add(set.active + 0x98, 8, "FOV 구간 +0x98 (8바이트)");
-        if (set.player_component != 0) {
-            watch.add(set.player_component + component_offset::kActiveCamera, 8,
-                      "활성 슬롯 컴포넌트+0x88");
-        }
-
-        // FOV 를 바꿔 둔다. 게임이 이 값을 관리한다면 되돌리려 쓸
-        // 것이고 그 쓰기가 잡힌다. 쓰기가 실제로 됐는지까지 남긴다 -
-        // 안 남기면 "히트 0인데 값이 바뀌었다"를 해석할 수 없다.
-        const auto fov_addr = set.active + camera_offset::kFov;
-        float before = 0.0f, poked = 0.0f;
-        const bool got = mem::safe_read_float(fov_addr, &before);
-        const bool wrote = got && mem::safe_write_float(fov_addr, before + 7.0f);
-        const bool reread = mem::safe_read_float(fov_addr, &poked);
-        log::infof("  FOV 쓰기 검증: 읽기={} 쓰기={} 재읽기={}", got, wrote,
-                   reread);
-        log::infof("  FOV 원래 {:.4g} -> 써넣은 값 {:.4g} -> 즉시 읽기 {:.4g}  [{}]",
-                   before, before + 7.0f, poked,
-                   (wrote && poked == before + 7.0f) ? "쓰기 반영됨"
-                                                     : "쓰기가 반영되지 않았다");
-
-        observe(watch, 12);
-
-        float after = 0.0f;
-        mem::safe_read_float(fov_addr, &after);
-        log::infof("  FOV 12초 뒤 {:.4g}  [{}]", after,
-                   after == before + 7.0f ? "우리 값 유지 - 게임이 안 쓴다"
-                                          : "게임이 덮어썼다");
-        if (got) mem::safe_write_float(fov_addr, before);
-    }
-
-    // --- 활성화 실험은 뺐다 ---
-    //
-    // 2026-08-31 실행에서 이미 답을 얻었다. 컴포넌트+0x88 에
-    // 프리캠+0x28 을 넣으면 게임의 파라미터 복사 루틴이 프리카메라를
-    // 대상으로 돌기 시작하고(프리캠 +0xA4 가 3 -> 6.239 로 갱신),
-    // 활성 플래그 +0xBC 가 0 -> 1 이 되며, 게임은 3초 동안 슬롯을
-    // 되돌리지 않았다. 그것이 활성화 지렛대다.
-    //
-    // 답을 얻은 실험을 매 실행마다 다시 돌릴 이유가 없다. 카메라
-    // 포인터를 바꿔치기하는 것은 게임을 죽일 수 있는 조작이므로,
-    // 앞으로는 사용자가 원할 때만 도는 기능(단축키)으로 만든다.
-    log::infof("자동 분석 끝 - 활성화는 기능으로 분리했다");
+    // WriteWatch 클래스와 테스트는 남겨 둔다. 보호가 없는 대상에는
+    // 여전히 유효한 도구다.
+    log::infof("자동 분석 완료 - 프리카메라는 F9");
 }
 
 }  // namespace cdtb::game

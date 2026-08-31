@@ -16,6 +16,7 @@
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
 #include "render/scan_panel.h"
+#include "game/freecam.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
 // 접근해야 하므로 익명 네임스페이스를 쓸 수 없다.
@@ -382,6 +383,11 @@ namespace cdtb::render {
 
 void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     using namespace cdtb::overlay::detail;
+
+    // 오버레이 상태와 무관하게 매 프레임 돈다. 프리카메라는
+    // 오버레이를 꺼 둔 채로도 써야 하고, 아래의 조기 반환들에
+    // 걸리면 안 된다.
+    cdtb::game::freecam_tick();
 
     // 해체는 반드시 이 스레드에서 한다 (overlay::shutdown 주석 참조).
     if (g_teardown_requested) {

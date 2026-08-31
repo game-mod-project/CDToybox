@@ -60,6 +60,7 @@ add_library(cdtoybox SHARED
     src/render/scan_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
+    src/game/freecam.cpp
     src/input/wndproc.cpp
     src/proxy/exports.def
 )
