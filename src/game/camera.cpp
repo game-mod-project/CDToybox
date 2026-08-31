@@ -169,28 +169,69 @@ void auto_analysis_loop() {
     }
     if (g_stop.load()) return;
 
-    // 카메라를 찾았다. 이제 누가 값을 쓰는지 추적한다.
-    const std::uintptr_t target = g_set.active + camera_offset::kFov;
-    log::infof("자동 분석: FOV(0x{:X}) 쓰기 추적 시작", target);
+    // 누가 값을 쓰는지 추적한다.
+    //
+    // 히트가 0이면 세 가지가 구분되지 않는다 - 그 값을 안 쓰는 것인지,
+    // 하드웨어 브레이크포인트가 동작하지 않는 것인지, 쓰는 스레드가
+    // 나중에 생겼는지. 그래서 대조군을 함께 건다.
+    //
+    // +0xA4 는 실측에서 매 프레임 변하는 것이 확인된 값이다. 여기서
+    // 히트가 잡히면 브레이크포인트는 동작하는 것이고, FOV 히트가
+    // 0인 것은 "안 쓴다"는 뜻이 된다.
+    struct Target {
+        const char* label;
+        std::uintptr_t addr;
+        bool poke;          // 값을 바꿔 게임이 되돌리도록 유도할지
+    };
+    const Target targets[] = {
+        {"대조군 +0xA4 (매 프레임 변동 확인된 값)", g_set.active + 0xA4,
+         false},
+        {"FOV +0x9C (값을 바꿔 되돌림 유도)",
+         g_set.active + camera_offset::kFov, true},
+        {"컴포넌트 위치 +0x360",
+         g_set.player_component != 0 ? g_set.player_component + 0x360 : 0,
+         false},
+    };
 
-    mem::WriteWatch watch;
-    if (!watch.install(target, 4)) {
-        log::errorf("자동 분석: 쓰기 감시를 걸지 못했다");
-        return;
-    }
-
-    // 15초면 60fps 기준 900프레임이다. 충분하다.
-    for (int i = 0; i < 150 && !g_stop.load(); ++i) ::Sleep(100);
-
-    const auto hits = watch.hits();
     const auto base = reader.module_base();
-    log::infof("자동 분석: 히트 {}회, 쓰는 명령 {}곳", watch.hit_count(),
-               hits.size());
-    for (const auto rip : hits) {
-        log::infof("  쓰는 명령 0x{:X}  (모듈+0x{:X})", rip,
-                   rip >= base ? rip - base : 0);
+    for (const auto& t : targets) {
+        if (g_stop.load()) break;
+        if (t.addr == 0) continue;
+
+        float saved = 0.0f;
+        const bool had = mem::safe_read_float(t.addr, &saved);
+        if (t.poke && had) {
+            // 원래 값과 다른 값을 써 둔다. 게임이 이 값을 관리한다면
+            // 되돌리려 쓸 것이고, 그 쓰기가 잡힌다.
+            mem::safe_write_float(t.addr, saved + 7.0f);
+        }
+
+        log::infof("추적 [{}] 0x{:X}", t.label, t.addr);
+        mem::WriteWatch watch;
+        if (!watch.install(t.addr, 4)) {
+            log::errorf("  감시를 걸지 못했다");
+            continue;
+        }
+        for (int i = 0; i < 80 && !g_stop.load(); ++i) ::Sleep(100);
+
+        const auto hits = watch.hits();
+        log::infof("  히트 {}회, 쓰는 명령 {}곳", watch.hit_count(),
+                   hits.size());
+        for (const auto rip : hits) {
+            log::infof("    0x{:X}  (모듈+0x{:X})", rip,
+                       rip >= base ? rip - base : 0);
+        }
+        watch.remove();
+
+        if (t.poke && had) {
+            float now = 0.0f;
+            mem::safe_read_float(t.addr, &now);
+            log::infof("  써둔 값 {} -> 현재 {} ({})", saved + 7.0f, now,
+                       now == saved + 7.0f ? "그대로 - 게임이 안 쓴다"
+                                           : "바뀜 - 게임이 썼다");
+            mem::safe_write_float(t.addr, saved);
+        }
     }
-    watch.remove();
     log::infof("자동 분석 완료");
 }
 
