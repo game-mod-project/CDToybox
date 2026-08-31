@@ -105,6 +105,92 @@ std::vector<std::uintptr_t> Rtti::vtables_for(
     return out;
 }
 
+std::string Rtti::class_of_vtable(std::uintptr_t vtable) const {
+    if (image_.empty() || vtable < r_.module_base()) return {};
+    const std::uintptr_t col_slot = vtable - 8;
+    if (col_slot < r_.module_base()) return {};
+
+    const std::size_t off = col_slot - r_.module_base();
+    if (off + 8 > image_.size()) return {};
+
+    std::uint64_t col = 0;
+    std::memcpy(&col, image_.data() + off, 8);
+    if (col < r_.module_base()) return {};
+
+    const std::size_t col_off = col - r_.module_base();
+    if (col_off + 16 > image_.size()) return {};
+
+    std::uint32_t sig = 0, desc_rva = 0;
+    std::memcpy(&sig, image_.data() + col_off, 4);
+    std::memcpy(&desc_rva, image_.data() + col_off + 12, 4);
+    if (sig != 0 && sig != 1) return {};
+    if (desc_rva == 0 || desc_rva + kTypeDescriptorNameOffset >= image_.size()) {
+        return {};
+    }
+
+    const std::size_t name_off = desc_rva + kTypeDescriptorNameOffset;
+    std::size_t end = name_off;
+    const std::size_t limit = (name_off + 512 < image_.size())
+                                  ? name_off + 512
+                                  : image_.size();
+    while (end < limit && image_[end] != 0) ++end;
+    if (end >= limit) return {};
+
+    return std::string(reinterpret_cast<const char*>(image_.data() + name_off),
+                       end - name_off);
+}
+
+std::string Rtti::class_of_object(std::uintptr_t object) const {
+    std::uint64_t vt = 0;
+    if (!r_.read(object, &vt, sizeof(vt))) return {};
+    return class_of_vtable(static_cast<std::uintptr_t>(vt));
+}
+
+std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
+                                            std::size_t max) const {
+    std::vector<Found> out;
+    if (image_.empty()) return out;
+
+    // 1) 모듈 안의 vtable 후보를 미리 해석해 캐시한다. 힙을 훑을 때마다
+    //    RTTI를 되짚으면 너무 느리다.
+    const std::uintptr_t mb = r_.module_base();
+    const std::uintptr_t me = mb + r_.module_size();
+
+    std::vector<std::pair<std::uintptr_t, std::string>> matching;
+    for (std::size_t i = 8; i + 8 <= image_.size(); i += 8) {
+        const std::uintptr_t vt = mb + i;
+        const auto cls = class_of_vtable(vt);
+        if (cls.empty()) continue;
+        if (cls.find(substring) == std::string::npos) continue;
+        matching.emplace_back(vt, cls);
+    }
+    if (matching.empty()) return out;
+
+    // 2) 힙에서 그 vtable을 첫 슬롯으로 갖는 객체를 찾는다.
+    const auto regions = r_.regions();
+    std::vector<std::uint8_t> buf;
+    for (const auto& reg : regions) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size == 0 || reg.size > (256u << 20)) continue;
+
+        buf.assign(reg.size, 0);
+        if (!r_.read(reg.base, buf.data(), buf.size())) continue;
+
+        for (std::size_t i = 0; i + 8 <= buf.size(); i += 8) {
+            std::uint64_t v;
+            std::memcpy(&v, buf.data() + i, 8);
+            if (v < mb || v >= me) continue;
+            for (const auto& m : matching) {
+                if (v != m.first) continue;
+                out.push_back(Found{reg.base + i, m.second});
+                break;
+            }
+            if (out.size() >= max) return out;
+        }
+    }
+    return out;
+}
+
 std::vector<std::uintptr_t> Rtti::instances_of(std::uintptr_t vtable,
                                                std::size_t max) const {
     std::vector<std::uintptr_t> out;

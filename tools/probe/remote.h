@@ -28,6 +28,10 @@ public:
     // 원격 메모리를 읽는다. 부분 읽기는 실패로 친다.
     bool read(std::uintptr_t addr, void* out, std::size_t n) const;
 
+    // 원격 메모리에 쓴다. 실행 중인 게임을 건드리므로, 무엇을 쓰는지
+    // 알고 있는 경우에만 부른다. 되돌릴 수 있는 값부터 시험한다.
+    bool write(std::uintptr_t addr, const void* src, std::size_t n) const;
+
     template <class T>
     bool read_value(std::uintptr_t addr, T* out) const {
         return read(addr, out, sizeof(T));

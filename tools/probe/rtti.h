@@ -44,6 +44,23 @@ public:
     std::vector<std::uintptr_t> instances_of(std::uintptr_t vtable,
                                              std::size_t max) const;
 
+    // vtable 주소에서 클래스 이름을 되짚는다.
+    // vtable[-1] -> COL -> pTypeDescriptor(RVA) -> name
+    std::string class_of_vtable(std::uintptr_t vtable) const;
+
+    // 객체 주소를 주면 그 vtable을 읽어 클래스 이름을 돌려준다.
+    std::string class_of_object(std::uintptr_t object) const;
+
+    // 힙을 한 번 훑어 클래스 이름에 substring이 들어가는 객체를 전부
+    // 찾는다. 클래스마다 따로 스캔하면 힙 10GB를 매번 읽어야 하므로,
+    // 한 번에 모아 온다.
+    struct Found {
+        std::uintptr_t address = 0;
+        std::string cls;
+    };
+    std::vector<Found> find_objects(const std::string& substring,
+                                    std::size_t max) const;
+
 private:
     const Remote& r_;
     std::vector<std::uint8_t> image_;

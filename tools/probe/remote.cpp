@@ -56,8 +56,9 @@ bool Remote::attach(const wchar_t* exe_name) {
     }
     pid_ = found;
 
-    handle_ = ::OpenProcess(
-        PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, found);
+    handle_ = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ |
+                                PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
+                            FALSE, found);
     if (handle_ == nullptr) {
         err_ = win_error("OpenProcess");
         return false;
@@ -90,6 +91,29 @@ bool Remote::read(std::uintptr_t addr, void* out, std::size_t n) const {
         return false;
     }
     return got == n;
+}
+
+bool Remote::write(std::uintptr_t addr, const void* src, std::size_t n) const {
+    if (handle_ == nullptr || src == nullptr || n == 0) return false;
+
+    // 페이지가 읽기 전용이면 잠시 쓰기를 허용했다가 되돌린다.
+    DWORD old = 0;
+    const bool changed = ::VirtualProtectEx(
+        handle_, reinterpret_cast<LPVOID>(addr), n, PAGE_EXECUTE_READWRITE,
+        &old) != 0;
+
+    SIZE_T put = 0;
+    const bool ok =
+        ::WriteProcessMemory(handle_, reinterpret_cast<LPVOID>(addr), src, n,
+                             &put) != 0 &&
+        put == n;
+
+    if (changed) {
+        DWORD ignored = 0;
+        ::VirtualProtectEx(handle_, reinterpret_cast<LPVOID>(addr), n, old,
+                           &ignored);
+    }
+    return ok;
 }
 
 std::vector<Remote::Region> Remote::regions() const {
