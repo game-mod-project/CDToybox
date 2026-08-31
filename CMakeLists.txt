@@ -49,13 +49,16 @@ add_library(cdtoybox SHARED
     src/dllmain.cpp
     src/proxy/xinput_proxy.cpp
     src/render/d3d12_hook.cpp
+    src/render/overlay.cpp
+    src/render/diagnostics.cpp
+    src/input/wndproc.cpp
     src/proxy/exports.def
 )
 set_target_properties(cdtoybox PROPERTIES
     OUTPUT_NAME "xinput1_4"
     PREFIX ""
 )
-target_link_libraries(cdtoybox PRIVATE cdtb_core d3d12 dxgi)
+target_link_libraries(cdtoybox PRIVATE cdtb_core imgui d3d12 dxgi)
 
 # ------------------------------------------------------------------ Tests
 add_executable(cdtb_tests

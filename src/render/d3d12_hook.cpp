@@ -211,9 +211,3 @@ void remove_hooks() {
 }
 
 }  // namespace cdtb::render
-
-// --- Task 8에서 overlay.cpp로 옮긴다 -------------------------------------
-namespace cdtb::render {
-void on_frame(IDXGISwapChain3*) {}
-void on_resize() {}
-}  // namespace cdtb::render
