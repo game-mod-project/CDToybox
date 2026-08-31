@@ -98,6 +98,7 @@ target_link_libraries(cdtb_bench PRIVATE cdtb_core)
 add_executable(cdtb_probe
     tools/probe/main.cpp
     tools/probe/remote.cpp
+    src/game/camera.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)

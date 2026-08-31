@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <string>
 
+#include "mem/reader.h"
+#include "mem/rtti.h"
+
 namespace cdtb::game {
 
 // 카메라 객체의 필드 오프셋.
@@ -33,6 +36,17 @@ struct CameraSet {
         return manager != 0 && free_cam != 0 && active != 0;
     }
 };
+
+// 탐색 본체. Reader 를 받으므로 모드(자기 프로세스)와 외부 분석
+// 도구(cdtb_probe)가 같은 로직을 돌린다. 배포하기 전에 probe로
+// 결과를 확인할 수 있어야 한다.
+bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
+                   CameraSet* out);
+
+// 카메라가 +0x48 에 들고 있는 이름을 읽는다.
+// 이름 객체는 +0x18 에 짧은 문자열을 인라인으로 담는다(SSO).
+bool camera_name(const mem::Reader& reader, std::uintptr_t camera,
+                 std::string* out);
 
 // 백그라운드에서 스스로 분석한다. 사용자는 게임만 하면 된다.
 //

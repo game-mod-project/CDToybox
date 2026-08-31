@@ -15,6 +15,7 @@
 #include "remote.h"
 #include "mem/rtti.h"
 #include "remote_reader.h"
+#include "game/camera.h"
 
 using namespace cdtb;
 using namespace cdtb::probe;
@@ -377,6 +378,30 @@ int main(int argc, char** argv) {
         return 3;
     }
 
+    if (cmd == "camera") {
+        // 모드가 실행 중에 돌리는 것과 똑같은 탐색이다.
+        // 배포하기 전에 여기서 결과를 확인한다.
+        cdtb::game::CameraSet cs;
+        cdtb::game::discover_with(rt, reader, &cs);
+        const struct RowKV { const char* k; std::uintptr_t v; } rows[] = {
+            {"manager  ", cs.manager},
+            {"freeCam  ", cs.free_cam},
+            {"photoCam ", cs.photo_cam},
+            {"playerCmp", cs.player_component},
+            {"active   ", cs.active},
+        };
+        for (const auto& kv : rows) {
+            std::printf("%s 0x%llX\n", kv.k,
+                        static_cast<unsigned long long>(kv.v));
+            if (kv.v == 0) continue;
+            std::string nm;
+            if (cdtb::game::camera_name(reader, kv.v, &nm)) {
+                std::printf("           이름 '%s'\n", nm.c_str());
+            }
+        }
+        std::printf("완전한가  %s\n", cs.complete() ? "예" : "아니오");
+        return 0;
+    }
     if (cmd == "types") {
         if (argc < 3) { usage(); return 1; }
         const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
