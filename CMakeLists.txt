@@ -74,3 +74,9 @@ target_link_libraries(cdtb_tests PRIVATE cdtb_core)
 # 후킹 테스트에서 대상 함수가 인라인/폴딩되지 않도록 최적화를 끈다.
 target_compile_options(cdtb_tests PRIVATE /Od)
 target_link_options(cdtb_tests PRIVATE /OPT:NOICF)
+
+# -------------------------------------------------------------- Benchmark
+# 테스트와 달리 최적화를 켜고 빌드한다. 스캐너 처리량을 재는 것이
+# 목적이므로 /Od로 재면 의미가 없다.
+add_executable(cdtb_bench tests/bench_scanner.cpp)
+target_link_libraries(cdtb_bench PRIVATE cdtb_core)
