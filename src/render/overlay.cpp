@@ -54,7 +54,16 @@ UINT g_srv_increment = 0;
 
 void srv_alloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu,
                D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
-    IM_ASSERT(!g_srv_free.empty());
+    // 계측: 고갈되면 back()/pop_back()이 UB다. RelWithDebInfo는 NDEBUG라
+    // IM_ASSERT가 no-op이 되어 조용히 크래시하므로 직접 확인한다.
+    log::infof("srv_alloc 요청: 남은 {}개", g_srv_free.size());
+    if (g_srv_free.empty()) {
+        log::errorf("SRV 디스크립터 고갈 - 힙 크기 {}개로는 부족하다",
+                    kSrvHeapSize);
+        cpu->ptr = g_srv_heap->GetCPUDescriptorHandleForHeapStart().ptr;
+        gpu->ptr = g_srv_heap->GetGPUDescriptorHandleForHeapStart().ptr;
+        return;
+    }
     const UINT idx = g_srv_free.back();
     g_srv_free.pop_back();
     cpu->ptr = g_srv_heap->GetCPUDescriptorHandleForHeapStart().ptr +
@@ -309,39 +318,61 @@ void on_frame(IDXGISwapChain3* sc) {
 
     // 해체는 반드시 이 스레드에서 한다 (overlay::shutdown 주석 참조).
     if (g_teardown_requested) {
+        g_frame_stage = kStageTeardown;
         g_teardown_requested = false;
         g_visible = false;
         teardown();
         log::infof("오버레이 비활성화 완료 - 토글 키로 재초기화 가능");
+        g_frame_stage = kStageIdle;
         return;
     }
 
     if (!g_ready) {
+        g_frame_stage = kStageInitialize;
         if (!initialize(sc)) {
             log::errorf("오버레이 초기화 실패 - 만든 것만 해체하고 중단한다");
             teardown();
+            g_frame_stage = kStageIdle;
             return;
         }
         g_ready = true;
     }
-    if (!g_visible) return;
+    if (!g_visible) { g_frame_stage = kStageIdle; return; }
 
     ID3D12CommandQueue* queue = captured_queue();
-    if (queue == nullptr) return;
+    if (queue == nullptr) { g_frame_stage = kStageIdle; return; }
 
+    g_frame_stage = kStageNewFrame;
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    g_frame_stage = kStageDrawUi;
     draw_ui();
+
+    g_frame_stage = kStageImGuiRender;
     ImGui::Render();
 
     const UINT idx = sc->GetCurrentBackBufferIndex();
-    if (idx >= g_frames.size()) return;
+    if (idx >= g_frames.size()) { g_frame_stage = kStageIdle; return; }
     FrameCtx& f = g_frames[idx];
 
+    g_frame_stage = kStageAllocatorReset;
     f.allocator->Reset();
     g_cmd_list->Reset(f.allocator, nullptr);
 
+    // 계측: 첫 프레임에 사용하는 객체 포인터를 남긴다. 손상 여부 판별용.
+    static bool logged_ptrs = false;
+    if (!logged_ptrs) {
+        logged_ptrs = true;
+        log::infof("렌더 객체: cmd_list={} back_buffer={} srv_heap={} rtv={:#x}",
+                   static_cast<void*>(g_cmd_list),
+                   static_cast<void*>(f.back_buffer),
+                   static_cast<void*>(g_srv_heap),
+                   static_cast<std::uintptr_t>(f.rtv.ptr));
+    }
+
+    g_frame_stage = kStageBarrierToRT;
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = f.back_buffer;
@@ -350,17 +381,28 @@ void on_frame(IDXGISwapChain3* sc) {
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     g_cmd_list->ResourceBarrier(1, &barrier);
 
+    g_frame_stage = kStageOMSetRenderTargets;
     g_cmd_list->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
+
+    g_frame_stage = kStageSetDescriptorHeaps;
     g_cmd_list->SetDescriptorHeaps(1, &g_srv_heap);
+
+    g_frame_stage = kStageRenderDrawData;
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmd_list);
 
+    g_frame_stage = kStageBarrierToPresent;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     g_cmd_list->ResourceBarrier(1, &barrier);
+
+    g_frame_stage = kStageCloseList;
     g_cmd_list->Close();
 
+    g_frame_stage = kStageExecute;
     ID3D12CommandList* lists[] = {g_cmd_list};
     queue->ExecuteCommandLists(1, lists);
+
+    g_frame_stage = kStageIdle;
 }
 
 void on_resize() {

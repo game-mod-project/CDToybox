@@ -38,12 +38,26 @@ ID3D12CommandQueue* g_queue = nullptr;
 bool g_disabled = false;
 bool g_logged_first_present = false;
 
+// 예외 코드와 주소를 남긴다. 이것이 없으면 무엇이 터졌는지 알 수 없다.
+DWORD g_exc_code = 0;
+void* g_exc_addr = nullptr;
+int g_exc_stage = 0;
+
+LONG seh_filter(DWORD code, EXCEPTION_POINTERS* ep) {
+    g_exc_code = code;
+    g_exc_addr = (ep != nullptr && ep->ExceptionRecord != nullptr)
+                     ? ep->ExceptionRecord->ExceptionAddress
+                     : nullptr;
+    g_exc_stage = g_frame_stage;
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 // __try/__except는 소멸자를 가진 C++ 객체와 같은 함수에 있을 수 없다(C2712).
 // 그래서 SEH 껍데기와 본문을 분리한다.
 void guarded_frame(IDXGISwapChain3* sc) {
     __try {
         on_frame(sc);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (seh_filter(GetExceptionCode(), GetExceptionInformation())) {
         g_disabled = true;
     }
 }
@@ -51,8 +65,28 @@ void guarded_frame(IDXGISwapChain3* sc) {
 void guarded_resize() {
     __try {
         on_resize();
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (seh_filter(GetExceptionCode(), GetExceptionInformation())) {
         g_disabled = true;
+    }
+}
+
+const char* stage_name(int s) {
+    switch (s) {
+        case kStageTeardown:       return "해체";
+        case kStageInitialize:     return "초기화";
+        case kStageNewFrame:       return "NewFrame";
+        case kStageDrawUi:         return "draw_ui";
+        case kStageImGuiRender:    return "ImGui::Render";
+        case kStageAllocatorReset: return "allocator Reset";
+        case kStageRecordCommands: return "커맨드 기록";
+        case kStageExecute:        return "ExecuteCommandLists";
+        case kStageBarrierToRT:        return "배리어(→RT)";
+        case kStageOMSetRenderTargets: return "OMSetRenderTargets";
+        case kStageSetDescriptorHeaps: return "SetDescriptorHeaps";
+        case kStageRenderDrawData:     return "RenderDrawData";
+        case kStageBarrierToPresent:   return "배리어(→Present)";
+        case kStageCloseList:          return "커맨드리스트 Close";
+        default:                   return "미상";
     }
 }
 
@@ -60,7 +94,25 @@ void log_disabled_once() {
     static bool logged = false;
     if (logged) return;
     logged = true;
-    log::errorf("훅 본문에서 예외 발생 - 오버레이를 영구 비활성화한다");
+    log::errorf("훅 본문 예외: code=0x{:08X} addr={} stage={}({})", g_exc_code,
+                g_exc_addr, g_exc_stage, stage_name(g_exc_stage));
+
+    // 예외 주소가 어느 모듈에 속하는지 알면 범인이 좁혀진다.
+    HMODULE mod = nullptr;
+    if (g_exc_addr != nullptr &&
+        ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                             reinterpret_cast<LPCWSTR>(g_exc_addr), &mod)) {
+        wchar_t path[MAX_PATH]{};
+        if (::GetModuleFileNameW(mod, path, MAX_PATH) != 0) {
+            char narrow[MAX_PATH]{};
+            ::WideCharToMultiByte(CP_UTF8, 0, path, -1, narrow, MAX_PATH,
+                                  nullptr, nullptr);
+            log::errorf("예외 모듈: {} (base={})", narrow,
+                        static_cast<void*>(mod));
+        }
+    }
+    log::errorf("오버레이를 영구 비활성화한다");
 }
 
 HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain3* sc, UINT interval,
@@ -87,6 +139,10 @@ HRESULT STDMETHODCALLTYPE hk_ResizeBuffers(IDXGISwapChain3* sc, UINT count,
     return o_ResizeBuffers(sc, count, w, h, fmt, flags);
 }
 
+// ImGui의 텍스처 업로드가 우리가 넘긴 커맨드큐로 ExecuteCommandLists를
+// 부르므로, on_frame 안에서 이 훅으로 재진입한다. 실제로 그러는지 센다.
+int g_exec_depth = 0;
+
 void STDMETHODCALLTYPE hk_ExecuteCommandLists(ID3D12CommandQueue* q, UINT n,
                                               ID3D12CommandList* const* l) {
     if (g_queue == nullptr && q != nullptr) {
@@ -96,10 +152,21 @@ void STDMETHODCALLTYPE hk_ExecuteCommandLists(ID3D12CommandQueue* q, UINT n,
             log::infof("커맨드큐 캡처: {}", static_cast<void*>(q));
         }
     }
+
+    ++g_exec_depth;
+    if (g_frame_stage != kStageIdle) {
+        log::infof(
+            "ExecuteCommandLists 재진입: depth={} stage={} q={} n={} list={}",
+            g_exec_depth, static_cast<int>(g_frame_stage),
+            static_cast<void*>(q), n, static_cast<const void*>(l));
+    }
     o_ExecuteCommandLists(q, n, l);
+    --g_exec_depth;
 }
 
 }  // namespace
+
+volatile int g_frame_stage = kStageIdle;
 
 ID3D12CommandQueue* captured_queue() { return g_queue; }
 

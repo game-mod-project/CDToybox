@@ -22,6 +22,28 @@ void remove_hooks();
 // 캡처 전에는 nullptr.
 ID3D12CommandQueue* captured_queue();
 
+// 예외 발생 지점을 좁히기 위한 단계 마커. on_frame이 진행하며 갱신하고,
+// SEH 핸들러가 예외 코드·주소와 함께 기록한다.
+enum FrameStage {
+    kStageIdle = 0,
+    kStageTeardown = 1,
+    kStageInitialize = 2,
+    kStageNewFrame = 3,
+    kStageDrawUi = 4,
+    kStageImGuiRender = 5,
+    kStageAllocatorReset = 6,
+    kStageRecordCommands = 7,
+    kStageExecute = 8,
+    // stage 7 세분화 - 어느 호출에서 터지는지 좁힌다.
+    kStageBarrierToRT = 71,
+    kStageOMSetRenderTargets = 72,
+    kStageSetDescriptorHeaps = 73,
+    kStageRenderDrawData = 74,
+    kStageBarrierToPresent = 75,
+    kStageCloseList = 76,
+};
+extern volatile int g_frame_stage;
+
 // 아래 둘은 overlay.cpp가 정의한다.
 // Present 훅이 원본을 호출하기 직전에 부른다.
 void on_frame(IDXGISwapChain3* swap_chain);
