@@ -37,6 +37,16 @@ bool safe_write_float(std::uintptr_t addr, float value) {
     }
 }
 
+bool safe_write_bytes(std::uintptr_t addr, const void* src, std::size_t n) {
+    if (addr == 0 || src == nullptr || n == 0) return false;
+    __try {
+        std::memcpy(reinterpret_cast<void*>(addr), src, n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool scan_region_floats(const std::uint8_t* base, std::size_t size,
                         float target, float eps, std::uintptr_t* out,
                         std::size_t cap, std::size_t* count) {

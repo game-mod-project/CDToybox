@@ -59,6 +59,7 @@ add_library(cdtoybox SHARED
     src/render/diagnostics.cpp
     src/render/scan_panel.cpp
     src/game/camera.cpp
+    src/game/analysis.cpp
     src/input/wndproc.cpp
     src/proxy/exports.def
 )
@@ -79,6 +80,7 @@ add_executable(cdtb_tests
     tests/safe_read_tests.cpp
     tests/regions_tests.cpp
     tests/value_scanner_tests.cpp
+    tests/watchpoint_tests.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -99,6 +101,7 @@ add_executable(cdtb_probe
     tools/probe/main.cpp
     tools/probe/remote.cpp
     src/game/camera.cpp
+    src/game/analysis.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)
