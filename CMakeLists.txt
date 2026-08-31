@@ -35,6 +35,7 @@ target_include_directories(imgui PUBLIC
 # ------------------------------------------------------------------- Core
 add_library(cdtb_core STATIC
     src/mem/scanner.cpp
+    src/mem/module.cpp
 )
 target_include_directories(cdtb_core PUBLIC src)
 
@@ -43,6 +44,7 @@ add_executable(cdtb_tests
     tests/main.cpp
     tests/smoke_tests.cpp
     tests/scanner_tests.cpp
+    tests/module_tests.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
