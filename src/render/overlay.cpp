@@ -39,6 +39,11 @@ bool g_ready = false;
 // 요청만 세워두고 실제 해체는 on_frame(렌더 스레드)에서 처리한다.
 volatile bool g_teardown_requested = false;
 
+// 사용자가 언로드 키로 끈 상태. 이것이 없으면 해체 직후 다음 프레임이
+// 곧바로 재초기화해 버려 "비활성화"가 아무 효과도 없다.
+// 토글 키로 다시 켤 때 해제된다.
+volatile bool g_user_disabled = false;
+
 // ImGui 초기화는 세 단계이고 각각 따로 되돌려야 한다. 중간에서 실패했을
 // 때 이미 만든 것만 정확히 해체하기 위해 단계별로 기록한다.
 bool g_ctx_created = false;
@@ -346,6 +351,7 @@ bool is_visible() { return g_visible && g_ready; }
 
 void toggle() {
     g_visible = !g_visible;
+    if (g_visible) g_user_disabled = false;   // 켜면 비활성화를 해제한다
     log::infof("오버레이 {}", g_visible ? "표시" : "숨김");
 }
 
@@ -358,6 +364,7 @@ bool handle_hotkey(int vk) {
 // 메시지 스레드에서 불릴 수 있으므로 요청만 남긴다.
 // 실제 해체는 on_frame이 렌더 스레드에서 수행한다.
 void shutdown() {
+    g_user_disabled = true;
     if (!g_ready && !g_ctx_created) return;
     g_teardown_requested = true;
     log::infof("오버레이 비활성화 요청 - 다음 프레임에 해체한다");
@@ -381,6 +388,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_frame_stage = kStageIdle;
         return;
     }
+
+    // 사용자가 껐으면 토글 키로 다시 켜기 전까지 아무것도 만들지 않는다.
+    if (g_user_disabled) { g_frame_stage = kStageIdle; return; }
 
     if (!g_ready) {
         g_frame_stage = kStageInitialize;
