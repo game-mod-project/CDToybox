@@ -76,6 +76,10 @@ TEST(config_ignores_garbage_lines) {
     fs::remove(p);
 }
 
-TEST(guard_refuses_modification_in_stage0) {
-    CHECK_EQ(cdtb::guard::is_safe_to_modify(), false);
+// 1단계에서 관문을 열었다. 이 게임은 출시부터 현재 빌드까지
+// co-op과 PvP가 전무한 순수 싱글플레이임을 확인했다.
+// 관문 자체는 남아 있어, 멀티플레이가 출시되면 이 함수 하나로
+// 모든 쓰기 기능을 차단할 수 있다.
+TEST(guard_allows_modification_in_single_player) {
+    CHECK_EQ(cdtb::guard::is_safe_to_modify(), true);
 }

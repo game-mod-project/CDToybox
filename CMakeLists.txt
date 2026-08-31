@@ -54,6 +54,8 @@ add_library(cdtoybox SHARED
     src/render/d3d12_hook.cpp
     src/render/overlay.cpp
     src/render/diagnostics.cpp
+    src/render/scan_panel.cpp
+    src/game/camera.cpp
     src/input/wndproc.cpp
     src/proxy/exports.def
 )

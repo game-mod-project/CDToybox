@@ -15,6 +15,7 @@
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
+#include "render/scan_panel.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
 // 접근해야 하므로 익명 네임스페이스를 쓸 수 없다.
@@ -140,6 +141,7 @@ void release_resources() {
 // ImGui와 D3D12 리소스를 전부 해체한다. g_visible은 건드리지 않으므로
 // 해상도 변경 후 재초기화해도 사용자가 열어둔 상태가 유지된다.
 void teardown(ID3D12CommandQueue* queue) {
+    cdtb::render::shutdown_scan_panel();   // 워커 스레드를 먼저 정리한다
     wait_for_pending(queue);   // GPU가 우리 리소스를 놓을 때까지
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
     if (g_win32_ready) { ImGui_ImplWin32_Shutdown(); g_win32_ready = false; }
@@ -337,6 +339,10 @@ void draw_ui() {
     ImGui::Separator();
     ImGui::Text("Insert 토글 · End 비활성화");
     ImGui::End();
+
+    // 1단계 작업대. 역공학용 스캔 도구와 카메라 패널이다.
+    cdtb::render::draw_scan_panel();
+    cdtb::render::draw_camera_panel();
 }
 
 }  // namespace cdtb::overlay::detail
