@@ -5,6 +5,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "proxy/xinput_proxy.h"
+#include "render/d3d12_hook.h"
 
 namespace {
 HMODULE g_self = nullptr;
@@ -35,6 +36,10 @@ DWORD WINAPI init_thread(LPVOID) {
     const cdtb::Config cfg = cdtb::config::load(dir + L"CDToybox.ini");
     cdtb::log::infof("설정: toggle=0x{:X} unload=0x{:X} diagnostics={}",
                      cfg.toggle_key, cfg.unload_key, cfg.show_diagnostics);
+
+    if (!cdtb::render::install_hooks()) {
+        cdtb::log::errorf("렌더 훅 설치 실패 - 오버레이 없이 계속한다");
+    }
 
     cdtb::log::infof("초기화 완료");
     return 0;
