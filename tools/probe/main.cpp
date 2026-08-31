@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "remote.h"
 #include "mem/rtti.h"
 #include "remote_reader.h"
+#include "findquat.h"
 #include "game/camera.h"
 
 using namespace cdtb;
@@ -35,6 +37,9 @@ void usage() {
         "  regions                     메모리 영역 요약\n"
         "  setf <주소> <값>            float 쓰기 (실행 중 게임에 반영)\n"
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
+        "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
+        "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
+        "  findmat <x> <y> <z> [오차] [최대]   좌표 근처의 정규직교 4x4 찾기\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
@@ -217,6 +222,126 @@ void cmd_diff(const Remote& r, std::uintptr_t addr, std::size_t count,
     std::printf("변한 슬롯 %zu / %zu (%u ms 간격)\n", changed, count, wait_ms);
 }
 
+// 메모리 전체에서 주어진 float3 와 일치하는 자리를 찾는다.
+//
+// 카메라 좌표는 여러 곳에 복제돼 있다. 어느 복사본이 렌더를
+// 구동하는지 가리려면 먼저 전부 찾아야 한다. 컴포넌트+0x360 에
+// 우리 값을 써 넣어도 화면이 안 변한 것이 이 명령이 필요해진
+// 이유다 - 그 칸은 렌더가 읽는 값이 아니었다.
+void cmd_findvec3(const Remote& r, float x, float y, float z, float eps,
+                  std::size_t max_hits) {
+    std::vector<std::uint8_t> buf;
+    std::size_t scanned = 0, hits = 0;
+
+    for (const auto& reg : r.regions()) {
+        if (reg.size == 0 || reg.size > (1u << 30)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), reg.size)) continue;
+        scanned += reg.size;
+
+        // 4바이트 정렬만 본다. 좌표는 정렬된 float 이고,
+        // 정렬을 가정하면 후보와 시간이 모두 1/4 로 준다.
+        for (std::size_t i = 0; i + 12 <= reg.size; i += 4) {
+            float v[3];
+            std::memcpy(v, buf.data() + i, 12);
+            // NaN 을 먼저 걸러야 한다. fabs(NaN - x) > eps 는 거짓이라
+            // 비교만으로는 전부 통과해 버린다. 포인터를 float 으로
+            // 읽은 자리가 죄다 오탐으로 잡힌다.
+            if (!std::isfinite(v[0]) || !std::isfinite(v[1]) ||
+                !std::isfinite(v[2])) {
+                continue;
+            }
+            if (std::fabs(v[0] - x) > eps) continue;
+            if (std::fabs(v[1] - y) > eps) continue;
+            if (std::fabs(v[2] - z) > eps) continue;
+            std::printf("0x%llX  (%.3f, %.3f, %.3f)  %s%s\n",
+                        static_cast<unsigned long long>(reg.base + i),
+                        v[0], v[1], v[2],
+                        reg.writable ? "쓰기가능" : "읽기전용",
+                        reg.is_image ? " 이미지" : "");
+            if (++hits >= max_hits) {
+                std::printf("(최대 %zu개에서 멈춤)\n", max_hits);
+                return;
+            }
+        }
+    }
+    std::printf("일치 %zu곳 / %.1f MB 훑음 (오차 %.3f)\n", hits,
+                static_cast<double>(scanned) / 1048576.0, eps);
+}
+
+// 카메라의 변환 행렬을 찾는다.
+//
+// 회전 행렬은 각 행이 단위벡터이고 서로 직교한다. 메모리에서
+// 이 조건을 만족하는 4x4 를 찾고, 그 이동 성분이 알고 있는
+// 카메라 좌표 근처인 것만 남기면 후보가 몇 개로 준다.
+// 컴포넌트+0x360 을 우리 값으로 고정해도 화면이 안 변했으므로,
+// 렌더가 읽는 것은 그 칸이 아니라 이런 행렬이다.
+void cmd_findmat(const Remote& r, float x, float y, float z, float eps,
+                 std::size_t max_hits) {
+    auto dot = [](const float* a, const float* b) {
+        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    };
+    std::vector<std::uint8_t> buf;
+    std::size_t scanned = 0, hits = 0;
+
+    for (const auto& reg : r.regions()) {
+        if (reg.size == 0 || reg.size > (1u << 30)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), reg.size)) continue;
+        scanned += reg.size;
+
+        for (std::size_t i = 0; i + 64 <= reg.size; i += 4) {
+            float m[16];
+            std::memcpy(m, buf.data() + i, 64);
+
+            // 이동 성분이 먼저다. 가장 싸게 걸러낸다.
+            // 행우선(12,13,14) 과 열우선(3,7,11) 을 모두 본다.
+            const float* t = nullptr;
+            const char* order = nullptr;
+            if (std::isfinite(m[12]) && std::fabs(m[12]-x) <= eps &&
+                std::isfinite(m[13]) && std::fabs(m[13]-y) <= eps &&
+                std::isfinite(m[14]) && std::fabs(m[14]-z) <= eps) {
+                t = m + 12; order = "행우선";
+            } else {
+                continue;
+            }
+
+            // 상단 3x3 이 정규직교인가.
+            const float* rows[3] = {m, m + 4, m + 8};
+            bool ok = true;
+            for (int k = 0; k < 3 && ok; ++k) {
+                for (int c = 0; c < 3; ++c) {
+                    if (!std::isfinite(rows[k][c])) { ok = false; break; }
+                }
+                if (!ok) break;
+                const float len = dot(rows[k], rows[k]);
+                if (std::fabs(len - 1.0f) > 0.02f) ok = false;
+            }
+            if (ok) {
+                if (std::fabs(dot(rows[0], rows[1])) > 0.02f) ok = false;
+                if (std::fabs(dot(rows[0], rows[2])) > 0.02f) ok = false;
+                if (std::fabs(dot(rows[1], rows[2])) > 0.02f) ok = false;
+            }
+            if (!ok) continue;
+
+            std::printf("0x%llX  %s  위치(%.2f, %.2f, %.2f)  %s\n",
+                        static_cast<unsigned long long>(reg.base + i),
+                        order, t[0], t[1], t[2],
+                        reg.writable ? "쓰기가능" : "읽기전용");
+            std::printf("    앞 (%+.3f %+.3f %+.3f)  우 (%+.3f %+.3f %+.3f)  "
+                        "상 (%+.3f %+.3f %+.3f)\n",
+                        m[8], m[9], m[10], m[0], m[1], m[2],
+                        m[4], m[5], m[6]);
+            if (++hits >= max_hits) {
+                std::printf("(최대 %zu개에서 멈춤)\n", max_hits);
+                return;
+            }
+        }
+    }
+    std::printf("행렬 %zu개 / %.1f MB 훑음 (오차 %.1f)\n", hits,
+                static_cast<double>(scanned) / 1048576.0, eps);
+}
+
 void cmd_whatis(mem::Rtti& rt, std::uintptr_t addr) {
     const auto name = rt.class_of_object(addr);
     if (name.empty()) {
@@ -354,6 +479,43 @@ int main(int argc, char** argv) {
         if (argc < 4) { usage(); return 1; }
         cmd_setf(r, parse_addr(argv[2]),
                  static_cast<float>(std::atof(argv[3])));
+        return 0;
+    }
+    if (cmd == "findmat") {
+        if (argc < 5) { usage(); return 1; }
+        const float x = static_cast<float>(std::atof(argv[2]));
+        const float y = static_cast<float>(std::atof(argv[3]));
+        const float z = static_cast<float>(std::atof(argv[4]));
+        const float eps = (argc > 5) ? static_cast<float>(std::atof(argv[5]))
+                                     : 30.0f;
+        const std::size_t mx = (argc > 6)
+                                   ? std::strtoull(argv[6], nullptr, 10)
+                                   : 40;
+        cmd_findmat(r, x, y, z, eps, mx);
+        return 0;
+    }
+    if (cmd == "findquat") {
+        const unsigned ms = (argc > 2)
+                                ? static_cast<unsigned>(
+                                      std::strtoul(argv[2], nullptr, 10))
+                                : 3000;
+        const std::size_t mx = (argc > 3)
+                                   ? std::strtoull(argv[3], nullptr, 10)
+                                   : 30;
+        cmd_findquat(r, ms, mx);
+        return 0;
+    }
+    if (cmd == "findvec3") {
+        if (argc < 5) { usage(); return 1; }
+        const float x = static_cast<float>(std::atof(argv[2]));
+        const float y = static_cast<float>(std::atof(argv[3]));
+        const float z = static_cast<float>(std::atof(argv[4]));
+        const float eps = (argc > 5) ? static_cast<float>(std::atof(argv[5]))
+                                     : 0.5f;
+        const std::size_t mx = (argc > 6)
+                                   ? std::strtoull(argv[6], nullptr, 10)
+                                   : 200;
+        cmd_findvec3(r, x, y, z, eps, mx);
         return 0;
     }
     if (cmd == "diff") {

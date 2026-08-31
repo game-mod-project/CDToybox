@@ -101,6 +101,7 @@ target_link_libraries(cdtb_bench PRIVATE cdtb_core)
 add_executable(cdtb_probe
     tools/probe/main.cpp
     tools/probe/remote.cpp
+    tools/probe/findquat.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
 )

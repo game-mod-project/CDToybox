@@ -75,6 +75,8 @@ void draw_camera_panel() {
                            fc.active ? "켜짐" : "꺼짐");
         ImGui::Text("  갱신 함수 0x%llX",
                     static_cast<unsigned long long>(fc.update_fn));
+        ImGui::Text("  변환 객체 0x%llX",
+                    static_cast<unsigned long long>(fc.script));
         ImGui::Text("  좌표 %9.2f %9.2f %9.2f   속도 %.1f", fc.pos[0],
                     fc.pos[1], fc.pos[2], fc.speed);
         ImGui::TextDisabled("  넘패드 8/2=Z  4/6=X  9/3=Y  +/-=속도");

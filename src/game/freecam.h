@@ -36,6 +36,7 @@ struct FreeCamState {
     float pos[3]{};
     float speed = 0.0f;
     std::uintptr_t update_fn = 0;   // 찾아낸 갱신 함수 주소
+    std::uintptr_t script = 0;      // 렌더가 읽는 카메라 변환 객체
 };
 FreeCamState freecam_state();
 
