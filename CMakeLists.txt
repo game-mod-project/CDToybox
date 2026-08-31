@@ -37,6 +37,8 @@ add_library(cdtb_core STATIC
     src/mem/scanner.cpp
     src/mem/module.cpp
     src/mem/hook.cpp
+    src/mem/safe_read.cpp
+    src/mem/regions.cpp
     src/core/log.cpp
     src/core/config.cpp
     src/core/guard.cpp
@@ -68,6 +70,8 @@ add_executable(cdtb_tests
     tests/module_tests.cpp
     tests/core_tests.cpp
     tests/hook_tests.cpp
+    tests/safe_read_tests.cpp
+    tests/regions_tests.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
