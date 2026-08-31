@@ -196,16 +196,10 @@ bool read_fov(std::uintptr_t camera, float* out) {
     return mem::safe_read_float(camera + camera_offset::kFov, out);
 }
 
-bool read_position(std::uintptr_t camera, float out[3]) {
-    if (camera == 0 || out == nullptr) return false;
-    return mem::safe_read_bytes(camera + camera_offset::kPosition, out,
-                                sizeof(float) * 3);
-}
-
-bool read_rotation(std::uintptr_t camera, float out[4]) {
-    if (camera == 0 || out == nullptr) return false;
-    return mem::safe_read_bytes(camera + camera_offset::kRotation, out,
-                                sizeof(float) * 4);
+bool read_world_position(std::uintptr_t component, float out[3]) {
+    if (component == 0 || out == nullptr) return false;
+    return mem::safe_read_bytes(component + component_offset::kWorldPosition,
+                                out, sizeof(float) * 3);
 }
 
 bool read_name(std::uintptr_t camera, std::string* out) {

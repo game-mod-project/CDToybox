@@ -46,23 +46,21 @@ void draw_camera_panel() {
     }
 
     ImGui::Separator();
+    // 카메라 월드 좌표는 카메라 객체가 아니라 컴포넌트에 있다.
+    // 카메라의 지역 변환은 항등이라 표시할 값이 없다.
+    float world[3]{};
+    if (game::read_world_position(c.player_component, world)) {
+        ImGui::Text("월드좌표  %9.2f %9.2f %9.2f", world[0], world[1], world[2]);
+    }
+
     const Row cams[] = {{"활성", c.active}, {"프리캠", c.free_cam}};
     for (const auto& cam : cams) {
         if (cam.addr == 0) continue;
-        float fov = 0.0f, pos[3]{}, rot[4]{};
+        float fov = 0.0f;
         std::string name;
         game::read_fov(cam.addr, &fov);
-        game::read_position(cam.addr, pos);
-        game::read_rotation(cam.addr, rot);
         game::read_name(cam.addr, &name);
-
-        ImGui::Text("[%s] %s", cam.label, name.c_str());
-        ImGui::Indent();
-        ImGui::Text("fov %7.2f   pos %9.2f %9.2f %9.2f", fov, pos[0], pos[1],
-                    pos[2]);
-        ImGui::Text("rot %7.4f %7.4f %7.4f %7.4f", rot[0], rot[1], rot[2],
-                    rot[3]);
-        ImGui::Unindent();
+        ImGui::Text("[%s] %s   fov %6.2f", cam.label, name.c_str(), fov);
     }
 
     ImGui::End();
