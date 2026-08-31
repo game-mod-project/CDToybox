@@ -2208,7 +2208,32 @@ ID3D12DescriptorHeap* g_srv_heap = nullptr;
 ID3D12GraphicsCommandList* g_cmd_list = nullptr;
 std::vector<FrameCtx> g_frames;
 
+// ImGui 1.92부터 백엔드는 폰트 아틀라스 외 텍스처에도 SRV 디스크립터를
+// 요구한다. 단일 디스크립터로는 부족하므로 작은 프리리스트를 둔다.
+constexpr UINT kSrvHeapSize = 64;
+std::vector<UINT> g_srv_free;
+UINT g_srv_increment = 0;
+
+void srv_alloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu,
+               D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
+    IM_ASSERT(!g_srv_free.empty());
+    const UINT idx = g_srv_free.back();
+    g_srv_free.pop_back();
+    cpu->ptr = g_srv_heap->GetCPUDescriptorHandleForHeapStart().ptr +
+               static_cast<SIZE_T>(idx) * g_srv_increment;
+    gpu->ptr = g_srv_heap->GetGPUDescriptorHandleForHeapStart().ptr +
+               static_cast<UINT64>(idx) * g_srv_increment;
+}
+
+void srv_free(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE cpu,
+              D3D12_GPU_DESCRIPTOR_HANDLE) {
+    const SIZE_T base = g_srv_heap->GetCPUDescriptorHandleForHeapStart().ptr;
+    g_srv_free.push_back(
+        static_cast<UINT>((cpu.ptr - base) / g_srv_increment));
+}
+
 void release_resources() {
+    g_srv_free.clear();
     for (auto& f : g_frames) {
         if (f.allocator != nullptr) f.allocator->Release();
         if (f.back_buffer != nullptr) f.back_buffer->Release();
@@ -2239,12 +2264,17 @@ bool initialize(IDXGISwapChain3* sc) {
 
     D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
     srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    srv_desc.NumDescriptors = 1;
+    srv_desc.NumDescriptors = kSrvHeapSize;
     srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (FAILED(g_device->CreateDescriptorHeap(&srv_desc,
                                               IID_PPV_ARGS(&g_srv_heap)))) {
         return false;
     }
+    g_srv_increment = g_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    g_srv_free.clear();
+    g_srv_free.reserve(kSrvHeapSize);
+    for (UINT i = kSrvHeapSize; i > 0; --i) g_srv_free.push_back(i - 1);
 
     const UINT rtv_size = g_device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -2279,12 +2309,19 @@ bool initialize(IDXGISwapChain3* sc) {
     ImGui::StyleColorsDark();
 
     if (!ImGui_ImplWin32_Init(desc.OutputWindow)) return false;
-    if (!ImGui_ImplDX12_Init(g_device, static_cast<int>(count),
-                             DXGI_FORMAT_R8G8B8A8_UNORM, g_srv_heap,
-                             g_srv_heap->GetCPUDescriptorHandleForHeapStart(),
-                             g_srv_heap->GetGPUDescriptorHandleForHeapStart())) {
-        return false;
-    }
+
+    // 1.91.5에서 위치인자 초기화가 obsolete 되었다. InitInfo를 쓴다.
+    // RTVFormat은 게임의 실제 스왑체인 포맷을 그대로 넘긴다. 상수로
+    // 박으면 HDR이나 sRGB 스왑체인에서 렌더가 깨진다.
+    ImGui_ImplDX12_InitInfo info{};
+    info.Device = g_device;
+    info.CommandQueue = cdtb::render::captured_queue();
+    info.NumFramesInFlight = static_cast<int>(count);
+    info.RTVFormat = desc.BufferDesc.Format;
+    info.SrvDescriptorHeap = g_srv_heap;
+    info.SrvDescriptorAllocFn = srv_alloc;
+    info.SrvDescriptorFreeFn = srv_free;
+    if (!ImGui_ImplDX12_Init(&info)) return false;
 
     input::install(desc.OutputWindow);
     log::infof("오버레이 초기화 완료: 백버퍼 {}개, hwnd={}", count,
