@@ -131,8 +131,23 @@ void draw_pinned() {
 }  // namespace
 
 void draw_scan_panel() {
-    ImGui::SetNextWindowSize(ImVec2(620, 560), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(620, 620), ImGuiCond_FirstUseEver);
     ImGui::Begin("메모리 스캔");
+
+    // 다음에 무엇을 해야 하는지 항상 한 줄로 말한다.
+    if (g_scan.count() == 0 && !g_busy.load()) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1, 1),
+                           "1) FOV 찾기: 찾을 값 60 / 오차 30 으로 첫 스캔");
+    } else if (g_pinned == 0 && !g_busy.load()) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1, 1),
+                           "2) 시야각을 바꾸며 '변함', 가만히 두고 '안 변함'을 "
+                           "번갈아 눌러 좁히세요");
+    } else if (!g_busy.load()) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1, 1),
+                           "3) 카메라 창에서 '고정 주소 사용' → fov 에 0 → "
+                           "FOV 쓰기");
+    }
+    ImGui::Separator();
 
     ImGui::SetNextItemWidth(140);
     ImGui::InputFloat("찾을 값", &g_target);
@@ -236,12 +251,25 @@ void draw_camera_panel() {
     static float fov_write = 60.0f;
     ImGui::SetNextItemWidth(140);
     ImGui::InputFloat("FOV 값", &fov_write);
-    ImGui::SameLine();
+
+    // 왜 못 쓰는지를 화면에 말한다. "실패"만 띄우면 사용자는 무엇을
+    // 고쳐야 할지 알 수 없다.
+    const char* blocker = game::fov_write_blocker();
     if (!guard::is_safe_to_modify()) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "쓰기 차단됨");
-    } else if (ImGui::Button("FOV 쓰기")) {
-        log::infof("FOV 쓰기 {} : {}", fov_write,
-                   game::write_fov(fov_write) ? "성공" : "실패");
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1),
+                           "guard가 쓰기를 차단하고 있습니다");
+    } else if (blocker != nullptr) {
+        ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), "아직 쓸 수 없습니다");
+        ImGui::TextWrapped("%s", blocker);
+    } else {
+        ImGui::SameLine();
+        if (ImGui::Button("FOV 쓰기")) {
+            const bool ok = game::write_fov(fov_write);
+            log::infof("FOV 쓰기 0x{:X}+{} <- {} : {}",
+                       static_cast<unsigned long long>(game::base()),
+                       game::offsets().fov, fov_write,
+                       ok ? "성공" : "실패(메모리 접근 거부)");
+        }
     }
     ImGui::End();
 }

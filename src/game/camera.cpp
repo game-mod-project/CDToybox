@@ -34,8 +34,21 @@ bool read_view(CameraView* out) {
     return true;
 }
 
+const char* fov_write_blocker() {
+    if (g_base == 0) {
+        return "베이스 주소가 설정되지 않았습니다. "
+               "메모리 스캔에서 후보를 고정한 뒤 '고정 주소 사용'을 "
+               "누르거나, 주소를 직접 입력하세요.";
+    }
+    if (g_off.fov < 0) {
+        return "fov 오프셋이 -1(미확정)입니다. "
+               "베이스가 곧 FOV 주소라면 0을 넣으세요.";
+    }
+    return nullptr;
+}
+
 bool write_fov(float value) {
-    if (g_base == 0 || g_off.fov < 0) return false;
+    if (fov_write_blocker() != nullptr) return false;
     return mem::safe_write_float(
         g_base + static_cast<std::uintptr_t>(g_off.fov), value);
 }

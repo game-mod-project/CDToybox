@@ -34,6 +34,12 @@ CameraOffsets offsets();
 // 확정된 오프셋의 필드만 채운다. 베이스가 0이면 false.
 bool read_view(CameraView* out);
 
+// 쓰기를 막고 있는 이유. 준비됐으면 nullptr.
+//
+// 실패를 bool로만 돌려주면 사용자가 무엇을 고쳐야 할지 알 수 없다.
+// 전제 조건이 안 갖춰졌으면 그것을 화면에 말해야 한다.
+const char* fov_write_blocker();
+
 bool write_fov(float value);
 
 }  // namespace cdtb::game
