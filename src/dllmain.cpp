@@ -8,6 +8,7 @@
 #include "render/d3d12_hook.h"
 #include "game/camera.h"
 #include "render/overlay.h"
+#include "mem/watchpoint.h"
 
 namespace {
 HMODULE g_self = nullptr;
@@ -69,6 +70,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
             ::CreateThread(nullptr, 0, init_thread, nullptr, 0, nullptr);
         if (t != nullptr) ::CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
+        // 로더 락 안이다. 스레드를 join 하면 교착할 수 있으므로
+        // 하지 않는다. 디버그 레지스터만 확실히 내린다 - 남겨 두면
+        // 핸들러가 사라진 뒤 처리되지 않은 단일 스텝 예외로 게임이
+        // 죽는다. 2026-08-31 실측에서 정확히 그렇게 죽었다.
+        cdtb::mem::WriteWatch::shutdown();
         cdtb::log::shutdown();
     }
     return TRUE;

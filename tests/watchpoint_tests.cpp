@@ -158,3 +158,114 @@ TEST(watchpoint_attributes_hits_to_the_right_slot) {
         CHECK_EQ(slots[1].total, static_cast<std::size_t>(0));   // b
     }
 }
+
+// 스레드 통계는 히트 0을 해석하는 데 필수다. 못 건 스레드가 있으면
+// "게임이 이 값을 안 쓴다"고 결론지을 수 없다.
+TEST(watchpoint_reports_thread_stats) {
+    g_writer_stop.store(false);
+    std::thread writer(writer_thread);
+    ::Sleep(50);
+
+    WriteWatch w;
+    CHECK(w.add(target_addr(), 4, "대상"));
+    CHECK(w.install());
+    const auto s = w.stats();
+    w.remove();
+    g_writer_stop.store(true);
+    writer.join();
+
+    CHECK(s.enumerated > 0);
+    CHECK(s.programmed > 0);
+    CHECK(s.programmed <= s.enumerated);
+}
+
+// 해제한 뒤에도 결과를 읽을 수 있어야 한다. 호출부가 remove() 를
+// 먼저 하고 결과를 보는 순서로 쓸 수 있기 때문이다.
+TEST(watchpoint_results_survive_remove) {
+    g_writer_stop.store(false);
+    std::thread writer(writer_thread);
+    ::Sleep(50);
+
+    WriteWatch w;
+    CHECK(w.add(target_addr(), 4, "대상"));
+    CHECK(w.install());
+    ::Sleep(200);
+    w.remove();
+
+    g_writer_stop.store(true);
+    writer.join();
+
+    const auto after = w.results();
+    CHECK_EQ(after.size(), static_cast<std::size_t>(1));
+    if (!after.empty()) CHECK(after[0].total > 0);
+}
+
+// 두 감시를 잇달아 돌려도 서로 오염되지 않아야 한다.
+//
+// 실측에서 두 번째 감시의 히트가 첫 번째 감시의 값이었다. 디버그
+// 레지스터를 못 지운 스레드가 남아 예전 주소를 계속 들고 있었고,
+// 그 히트가 두 번째 감시의 슬롯 라벨에 붙었다.
+TEST(watchpoint_second_window_is_not_contaminated) {
+    alignas(8) volatile std::uint32_t written = 0;
+    alignas(8) volatile std::uint32_t untouched = 0;
+    std::atomic<bool> stop{false};
+
+    std::thread writer([&] {
+        while (!stop.load()) {
+            written = written + 1;
+            ::Sleep(1);
+        }
+    });
+    ::Sleep(50);
+
+    {
+        WriteWatch first;
+        CHECK(first.add(reinterpret_cast<std::uintptr_t>(
+                            const_cast<std::uint32_t*>(&written)), 4, "1창"));
+        CHECK(first.install());
+        ::Sleep(200);
+        first.remove();
+    }
+
+    // 두 번째 창은 아무도 안 쓰는 주소만 본다. 첫 창이 깨끗이
+    // 정리됐다면 히트가 0이어야 한다.
+    WriteWatch second;
+    CHECK(second.add(reinterpret_cast<std::uintptr_t>(
+                         const_cast<std::uint32_t*>(&untouched)), 4, "2창"));
+    CHECK(second.install());
+    ::Sleep(200);
+    const auto r = second.results();
+    second.remove();
+
+    stop.store(true);
+    writer.join();
+
+    CHECK_EQ(r.size(), static_cast<std::size_t>(1));
+    if (!r.empty()) CHECK_EQ(r[0].total, static_cast<std::size_t>(0));
+}
+
+// shutdown() 은 여러 번 불러도 안전해야 한다. DLL 종료 경로와
+// 분석 종료 경로 양쪽에서 불릴 수 있다.
+TEST(watchpoint_shutdown_is_idempotent) {
+    WriteWatch::shutdown();
+    WriteWatch::shutdown();
+
+    // 종료 뒤에도 다시 쓸 수 있어야 한다.
+    g_writer_stop.store(false);
+    std::thread writer(writer_thread);
+    ::Sleep(50);
+
+    WriteWatch w;
+    CHECK(w.add(target_addr(), 4, "재사용"));
+    CHECK(w.install());
+    ::Sleep(200);
+    const auto r = w.results();
+    w.remove();
+
+    g_writer_stop.store(true);
+    writer.join();
+
+    CHECK_EQ(r.size(), static_cast<std::size_t>(1));
+    if (!r.empty()) CHECK(r[0].total > 0);
+    WriteWatch::shutdown();
+}

@@ -191,19 +191,50 @@ void run_analysis(const mem::Rtti& rtti, const CameraSet& set) {
     // 대조군(+0xA4)을 같은 창에 넣는다. 답을 이미 안다(0x140A59516).
     // 대조군이 잡히는데 나머지가 0이면 그것은 진짜 "안 쓴다"이고,
     // 대조군까지 0이면 감시 자체가 죽은 것이다.
+    // 대조군을 둘 쓴다. +0xA4 는 0x140A59516 이, 컴포넌트+0x35C 는
+    // 0x140A5878C 가 쓰는 것을 이미 확인했다. 특히 +0x35C 는 찾으려는
+    // +0x360 의 바로 앞 4바이트다. 그것이 잡히는데 +0x360 이 0이면
+    // 그 값은 정말 이 창에서 안 쓰인 것이다.
     {
         log::infof("=== 감시 1: 카메라 월드 좌표를 쓰는 코드 ===");
         mem::WriteWatch watch;
-        watch.add(set.active + 0xA4, 4, "대조군 +0xA4 (기대 0x140A59516)");
+        watch.add(set.active + 0xA4, 4, "대조군A +0xA4 (기대 0x140A59516)");
+        watch.add(set.player_component + 0x35C, 4,
+                  "대조군B 컴포넌트+0x35C (기대 0x140A5878C)");
         watch.add(set.player_component + component_offset::kWorldPosition, 4,
                   "월드좌표X 컴포넌트+0x360");
         watch.add(set.player_component + component_offset::kWorldPosition + 8, 4,
                   "월드좌표Z 컴포넌트+0x368");
-        watch.add(set.active + camera_offset::kFov, 4, "FOV +0x9C");
 
-        // FOV 쓰기 검증. 지난 실행에서 "히트 0인데 값이 바뀌었다"는
-        // 모순이 나왔는데, 쓰기가 애초에 됐는지를 안 남겨서 해석이
-        // 불가능했다. 이번엔 세 가지를 다 남긴다.
+        observe(watch, 12);
+    }
+
+    // --- 3단계: FOV 를 누가 쓰는가, 카메라를 누가 갈아끼우는가 ---
+    //
+    // FOV 는 정적 분석에서 쓰는 코드가 6곳 있는데 실측 히트는 0이었다.
+    // 값을 바꿔 두면 게임이 되돌리려 쓰므로 그 쓰기가 잡혀야 한다.
+    // 지난번엔 되돌아왔는데도 히트가 0이었다 - 그때는 낙오 스레드
+    // 때문에 계측 자체가 어긋나 있었다.
+    //
+    // 프리캠 +0xBC(활성 플래그)는 활성 카메라에서 0x0101, 프리캠에서
+    // 0 이다. 누가 그것을 세우는지가 곧 활성화 경로다.
+    {
+        log::infof("=== 감시 2: FOV 와 전환 슬롯 ===");
+        mem::WriteWatch watch;
+        watch.add(set.active + 0xA4, 4, "대조군A +0xA4 (기대 0x140A59516)");
+        watch.add(set.active + camera_offset::kFov, 4, "FOV +0x9C");
+        if (set.player_component != 0) {
+            watch.add(set.player_component + component_offset::kActiveCamera, 8,
+                      "활성 슬롯 컴포넌트+0x88");
+        }
+        if (set.free_cam != 0) {
+            watch.add(set.free_cam + camera_offset::kActiveFlags, 4,
+                      "프리캠 활성 플래그 +0xBC (기대 0x140A58796)");
+        }
+
+        // FOV 를 바꿔 둔다. 게임이 이 값을 관리한다면 되돌리려 쓸
+        // 것이고 그 쓰기가 잡힌다. 쓰기가 실제로 됐는지까지 남긴다 -
+        // 안 남기면 "히트 0인데 값이 바뀌었다"를 해석할 수 없다.
         const auto fov_addr = set.active + camera_offset::kFov;
         float before = 0.0f, poked = 0.0f;
         const bool got = mem::safe_read_float(fov_addr, &before);
@@ -226,77 +257,18 @@ void run_analysis(const mem::Rtti& rtti, const CameraSet& set) {
         if (got) mem::safe_write_float(fov_addr, before);
     }
 
-    // --- 3단계: 카메라를 누가 갈아끼우고, 프리캠은 살아 있는가 ---
+    // --- 활성화 실험은 뺐다 ---
     //
-    // +0x35C 는 좌표와 함께 매 프레임 변하는 것을 실측했다. 좌표와
-    // 같은 함수가 쓰는지 보면 컨트롤러의 범위를 알 수 있다.
-    // 프리캠 +0xBC(활성 플래그)는 활성 카메라에서 0x0101, 프리캠에서
-    // 0 이다. 누가 그것을 세우는지가 곧 활성화 경로다.
-    {
-        log::infof("=== 감시 2: 전환 슬롯과 프리캠 활성 플래그 ===");
-        mem::WriteWatch watch;
-        if (set.player_component != 0) {
-            watch.add(set.player_component + component_offset::kActiveCamera, 8,
-                      "활성 슬롯 컴포넌트+0x88");
-            watch.add(set.player_component + 0x35C, 4, "컴포넌트+0x35C (같이 변함)");
-        }
-        if (set.free_cam != 0) {
-            watch.add(set.free_cam + camera_offset::kActiveFlags, 4,
-                      "프리캠 활성 플래그 +0xBC");
-            watch.add(set.free_cam + camera_offset::kFov, 4, "프리캠 FOV +0x9C");
-        }
-        observe(watch, 12);
-    }
-
-    // --- 4단계: 활성화 실험. 프로세스를 죽일 수 있으므로 맨 뒤. ---
+    // 2026-08-31 실행에서 이미 답을 얻었다. 컴포넌트+0x88 에
+    // 프리캠+0x28 을 넣으면 게임의 파라미터 복사 루틴이 프리카메라를
+    // 대상으로 돌기 시작하고(프리캠 +0xA4 가 3 -> 6.239 로 갱신),
+    // 활성 플래그 +0xBC 가 0 -> 1 이 되며, 게임은 3초 동안 슬롯을
+    // 되돌리지 않았다. 그것이 활성화 지렛대다.
     //
-    // 컴포넌트+0x88 은 활성 카메라의 +0x28 을 가리킨다. 여기에
-    // 프리카메라를 넣으면 렌더가 프리카메라를 쓰는지 본다.
-    // 3초 뒤 무조건 되돌린다.
-    if (set.free_cam == 0 || set.player_component == 0) return;
-
-    const auto slot = set.player_component + component_offset::kActiveCamera;
-    std::uint64_t original = 0;
-    if (!mem::safe_read_bytes(slot, &original, sizeof(original))) {
-        log::errorf("=== 활성화 실험: 슬롯을 읽지 못해 건너뛴다 ===");
-        return;
-    }
-
-    const std::uint64_t want = set.free_cam + 0x28;
-    log::infof("=== 활성화 실험: 컴포넌트+0x88 을 프리카메라로 바꾼다 ===");
-    log::infof("  원래 0x{:X} -> 0x{:X} (프리캠+0x28), 3초 뒤 되돌린다", original,
-               want);
-
-    if (!mem::safe_write_bytes(slot, &want, sizeof(want))) {
-        log::errorf("  쓰기 실패 - 실험 중단");
-        return;
-    }
-
-    // 게임의 파라미터 복사 루틴(0x140A59230)은 [컴포넌트+0x88]+0x7C,
-    // 즉 카메라 +0xA4 에 매 프레임 쓴다. 슬롯을 바꾼 뒤 프리캠의
-    // +0xA4 가 변하면 그 루틴이 프리캠을 대상으로 돌고 있다는 뜻이다.
-    // 활성 플래그 +0xBC 도 같이 본다.
-    float before_a4 = 0.0f, after_a4 = 0.0f;
-    std::uint32_t before_flags = 0, after_flags = 0;
-    mem::safe_read_float(set.free_cam + 0xA4, &before_a4);
-    mem::safe_read_bytes(set.free_cam + camera_offset::kActiveFlags, &before_flags,
-                         4);
-    ::Sleep(3000);
-    mem::safe_read_float(set.free_cam + 0xA4, &after_a4);
-    mem::safe_read_bytes(set.free_cam + camera_offset::kActiveFlags, &after_flags,
-                         4);
-
-    std::uint64_t now = 0;
-    mem::safe_read_bytes(slot, &now, sizeof(now));
-    log::infof("  3초 뒤 슬롯 = 0x{:X} [{}]", now,
-               now == want ? "우리 값 유지" : "게임이 되돌렸다");
-    log::infof("  프리캠 +0xA4 {:.4g} -> {:.4g} [{}]", before_a4, after_a4,
-               before_a4 != after_a4 ? "갱신됨 - 복사 루틴이 프리캠을 대상으로 돈다"
-                                     : "그대로 - 여전히 비활성");
-    log::infof("  프리캠 +0xBC 플래그 {:08X} -> {:08X}", before_flags, after_flags);
-
-    mem::safe_write_bytes(slot, &original, sizeof(original));
-    log::infof("  원상 복구 완료");
+    // 답을 얻은 실험을 매 실행마다 다시 돌릴 이유가 없다. 카메라
+    // 포인터를 바꿔치기하는 것은 게임을 죽일 수 있는 조작이므로,
+    // 앞으로는 사용자가 원할 때만 도는 기능(단축키)으로 만든다.
+    log::infof("자동 분석 끝 - 활성화는 기능으로 분리했다");
 }
 
 }  // namespace cdtb::game
