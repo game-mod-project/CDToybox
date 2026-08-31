@@ -1,0 +1,11 @@
+build/
+dist/
+out/
+.vs/
+*.user
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+compile_commands.json
