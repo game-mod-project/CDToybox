@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# 소스는 BOM 없는 UTF-8이다. 지정하지 않으면 MSVC가 시스템 코드
+# 페이지(한국어 949)로 해석해 주석과 문자열 리터럴이 깨진다.
+add_compile_options(/utf-8)
+
 # ---------------------------------------------------------------- MinHook
 add_library(minhook STATIC
     external/minhook/src/buffer.c
@@ -28,12 +32,20 @@ target_include_directories(imgui PUBLIC
     external/imgui/backends
 )
 
+# ------------------------------------------------------------------- Core
+add_library(cdtb_core STATIC
+    src/mem/scanner.cpp
+)
+target_include_directories(cdtb_core PUBLIC src)
+
 # ------------------------------------------------------------------ Tests
 add_executable(cdtb_tests
     tests/main.cpp
     tests/smoke_tests.cpp
+    tests/scanner_tests.cpp
 )
-target_include_directories(cdtb_tests PRIVATE tests src)
+target_include_directories(cdtb_tests PRIVATE tests)
+target_link_libraries(cdtb_tests PRIVATE cdtb_core)
 # 후킹 테스트에서 대상 함수가 인라인/폴딩되지 않도록 최적화를 끈다.
 target_compile_options(cdtb_tests PRIVATE /Od)
 target_link_options(cdtb_tests PRIVATE /OPT:NOICF)
