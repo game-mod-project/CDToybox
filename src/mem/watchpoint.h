@@ -81,6 +81,7 @@ public:
         int open_failed = 0;   // OpenThread 실패
         int set_failed = 0;    // SetThreadContext 실패 또는 검증 불일치
         int self_healed = 0;   // 핸들러가 현장에서 고친 횟수
+        int rearmed = 0;       // 보호 코드가 지운 것을 다시 건 횟수
     };
     ThreadStats stats() const;
 

@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <thread>
+#include <cstdio>
 
 using namespace cdtb::mem;
 
@@ -268,4 +269,88 @@ TEST(watchpoint_shutdown_is_idempotent) {
     CHECK_EQ(r.size(), static_cast<std::size_t>(1));
     if (!r.empty()) CHECK(r[0].total > 0);
     WriteWatch::shutdown();
+}
+
+// 슬롯 4개가 전부 동작하는지 본다.
+//
+// 인게임 측정에서 DR0·DR1 만 히트가 나고 DR2·DR3 는 두 창 연속
+// 0회였다. 값이 실제로 매 프레임 변하는 것을 외부 도구로 확인했는데도
+// 그랬다. DR7 조립이나 DR6 판독이 틀렸을 수 있다.
+TEST(watchpoint_all_four_slots_catch_writes) {
+    // 서로 멀리 떨어뜨린다. 한 번의 저장이 여러 슬롯에 겹치는 경우를
+    // 배제하고 슬롯 자체의 동작만 본다.
+    struct Spaced {
+        alignas(64) volatile std::uint32_t v;
+    };
+    static Spaced s[WriteWatch::kMaxSlots]{};
+    std::atomic<bool> stop{false};
+
+    std::thread writer([&] {
+        while (!stop.load()) {
+            for (auto& e : s) e.v = e.v + 1;
+            ::Sleep(1);
+        }
+    });
+    ::Sleep(50);
+
+    WriteWatch w;
+    const char* names[] = {"슬롯0", "슬롯1", "슬롯2", "슬롯3"};
+    for (int i = 0; i < WriteWatch::kMaxSlots; ++i) {
+        CHECK(w.add(reinterpret_cast<std::uintptr_t>(
+                        const_cast<std::uint32_t*>(&s[i].v)), 4, names[i]));
+    }
+    CHECK(w.install());
+    ::Sleep(400);
+
+    const auto r = w.results();
+    w.remove();
+    stop.store(true);
+    writer.join();
+
+    CHECK_EQ(r.size(), static_cast<std::size_t>(WriteWatch::kMaxSlots));
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        if (r[i].total == 0) {
+            std::printf("    슬롯 %zu (%s) 히트 0\n", i, r[i].label.c_str());
+        }
+        CHECK(r[i].total > 0);
+    }
+}
+
+// 인게임과 같은 배치: 인접한 4바이트 칸 넷을 동시에 감시한다.
+// 게임에서는 +0x35C 는 잡히고 바로 옆 +0x360 은 0회였다.
+TEST(watchpoint_catches_adjacent_slots) {
+    alignas(16) static volatile std::uint32_t q[4]{};
+    std::atomic<bool> stop{false};
+
+    std::thread writer([&] {
+        while (!stop.load()) {
+            q[0] = q[0] + 1;
+            q[1] = q[1] + 1;
+            q[2] = q[2] + 1;
+            q[3] = q[3] + 1;
+            ::Sleep(1);
+        }
+    });
+    ::Sleep(50);
+
+    WriteWatch w;
+    const char* names[] = {"인접0", "인접1", "인접2", "인접3"};
+    for (int i = 0; i < 4; ++i) {
+        CHECK(w.add(reinterpret_cast<std::uintptr_t>(
+                        const_cast<std::uint32_t*>(&q[i])), 4, names[i]));
+    }
+    CHECK(w.install());
+    ::Sleep(400);
+
+    const auto r = w.results();
+    w.remove();
+    stop.store(true);
+    writer.join();
+
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        if (r[i].total == 0) {
+            std::printf("    %s 히트 0\n", r[i].label.c_str());
+        }
+        CHECK(r[i].total > 0);
+    }
 }

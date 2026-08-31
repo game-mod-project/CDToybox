@@ -46,13 +46,22 @@ void observe(mem::WriteWatch& watch, int seconds) {
         return;
     }
 
-    int added = 0;
-    for (int i = 0; i < seconds * 2; ++i) {
-        ::Sleep(500);
-        added += watch.refresh_threads();   // 새로 생긴 스레드 흡수
+    // 250ms 마다 모든 스레드의 설정을 다시 확인한다. 새로 생긴
+    // 스레드를 흡수하고, 보호 코드가 지워 버린 것을 되살린다.
+    // 이미 맞게 걸린 스레드는 건드리지 않으므로 비용은 낮다.
+    for (int i = 0; i < seconds * 4; ++i) {
+        ::Sleep(250);
+        watch.refresh_threads();
     }
-    if (added > 0) {
-        log::infof("  감시 중 새로 생긴 스레드 {}개에 추가로 걸었다", added);
+
+    const auto st = watch.stats();
+    log::infof("  스레드 통계: 총 {} | OpenThread 실패 {} | 설정 실패 {} | "
+               "지워져 다시 건 횟수 {} | 현장 복구 {}",
+               st.enumerated, st.open_failed, st.set_failed, st.rearmed,
+               st.self_healed);
+    if (st.rearmed > 0) {
+        log::warnf("  보호 코드가 디버그 레지스터를 지우고 있다 - "
+                   "지워져 있던 동안의 쓰기는 놓쳤다");
     }
 
     const mem::LocalReader reader;
@@ -79,8 +88,12 @@ void log_protection(const char* what, std::uintptr_t addr) {
     const bool writable =
         (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE |
                         PAGE_EXECUTE_WRITECOPY)) != 0;
-    log::infof("{} 0x{:X}: protect=0x{:X} state=0x{:X} {}", what, addr,
-               mbi.Protect, mbi.State, writable ? "쓰기 가능" : "쓰기 불가");
+    // Type 도 남긴다. MEM_MAPPED(0x40000) 면 같은 물리 페이지가
+    // 다른 가상 주소로도 매핑돼 있을 수 있고, 그 별칭 주소로
+    // 쓰면 이 주소에 건 하드웨어 브레이크포인트는 안 걸린다.
+    log::infof("{} 0x{:X}: protect=0x{:X} state=0x{:X} type=0x{:X} {}",
+               what, addr, mbi.Protect, mbi.State, mbi.Type,
+               writable ? "쓰기 가능" : "쓰기 불가");
 }
 
 void dump_qwords(const char* what, std::uintptr_t base, int bytes,
@@ -200,11 +213,14 @@ void run_analysis(const mem::Rtti& rtti, const CameraSet& set) {
         mem::WriteWatch watch;
         watch.add(set.active + 0xA4, 4, "대조군A +0xA4 (기대 0x140A59516)");
         watch.add(set.player_component + 0x35C, 4,
-                  "대조군B 컴포넌트+0x35C (기대 0x140A5878C)");
+                  "대조군B 컴포넌트+0x35C (기대 0x140A5879E)");
         watch.add(set.player_component + component_offset::kWorldPosition, 4,
-                  "월드좌표X 컴포넌트+0x360");
-        watch.add(set.player_component + component_offset::kWorldPosition + 8, 4,
-                  "월드좌표Z 컴포넌트+0x368");
+                  "월드좌표 +0x360 (4바이트)");
+        // 같은 주소를 8바이트로도 본다. 4바이트에서만 0이 나오면
+        // 넓은 SIMD 저장이 4바이트 감시를 비껴간다는 뜻이고, 둘 다
+        // 0이면 그 스레드의 디버그 레지스터가 지워졌다는 뜻이다.
+        watch.add(set.player_component + component_offset::kWorldPosition, 8,
+                  "월드좌표 +0x360 (8바이트)");
 
         observe(watch, 12);
     }
@@ -222,14 +238,13 @@ void run_analysis(const mem::Rtti& rtti, const CameraSet& set) {
         log::infof("=== 감시 2: FOV 와 전환 슬롯 ===");
         mem::WriteWatch watch;
         watch.add(set.active + 0xA4, 4, "대조군A +0xA4 (기대 0x140A59516)");
-        watch.add(set.active + camera_offset::kFov, 4, "FOV +0x9C");
+        watch.add(set.active + camera_offset::kFov, 4, "FOV +0x9C (4바이트)");
+        // FOV 를 품는 8바이트 구간. 4바이트에서만 0이면 넓은 저장이
+        // 원인이고, 둘 다 0이면 디버그 레지스터가 지워진 것이다.
+        watch.add(set.active + 0x98, 8, "FOV 구간 +0x98 (8바이트)");
         if (set.player_component != 0) {
             watch.add(set.player_component + component_offset::kActiveCamera, 8,
                       "활성 슬롯 컴포넌트+0x88");
-        }
-        if (set.free_cam != 0) {
-            watch.add(set.free_cam + camera_offset::kActiveFlags, 4,
-                      "프리캠 활성 플래그 +0xBC (기대 0x140A58796)");
         }
 
         // FOV 를 바꿔 둔다. 게임이 이 값을 관리한다면 되돌리려 쓸

@@ -36,6 +36,7 @@ int g_enumerated = 0;
 int g_open_failed = 0;
 int g_set_failed = 0;
 int g_self_healed = 0;
+int g_rearmed = 0;    // 보호 코드가 지운 것을 다시 건 횟수
 
 // DR7 의 LEN 필드 인코딩. 크기 순서가 아니라는 점을 조심할 것.
 DWORD64 len_bits(int size) {
@@ -145,54 +146,87 @@ LONG CALLBACK on_exception(EXCEPTION_POINTERS* ep) {
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 
+// 스레드의 디버그 레지스터가 우리 설정과 같은지.
+bool matches(const CONTEXT& c, bool enable) {
+    const DWORD64 want7 = enable ? make_dr7() : 0;
+    if (c.Dr7 != want7) return false;
+    if (!enable) return true;
+    return c.Dr0 == g_addr[0] && c.Dr1 == g_addr[1] && c.Dr2 == g_addr[2] &&
+           c.Dr3 == g_addr[3];
+}
+
+enum class Programmed { kAlreadyOk, kChanged, kFailed };
+
 // 스레드 하나에 현재 슬롯 구성을 쓰고, 되읽어 확인한다.
+// 이미 맞게 걸려 있으면 건드리지 않는다.
 // g_mutex 를 쥔 채 부른다.
-bool program_thread(DWORD tid, bool enable) {
+Programmed program_thread(DWORD tid, bool enable) {
     const HANDLE th = ::OpenThread(
         THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME,
         FALSE, tid);
     if (th == nullptr) {
         ++g_open_failed;
-        return false;
+        return Programmed::kFailed;
     }
 
-    bool ok = false;
+    auto result = Programmed::kFailed;
     ::SuspendThread(th);
     CONTEXT c{};
     c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
     if (::GetThreadContext(th, &c)) {
-        if (enable) {
-            apply_slots(&c);
+        if (matches(c, enable)) {
+            result = Programmed::kAlreadyOk;
         } else {
-            clear_slots(&c);
-        }
-        c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-        if (::SetThreadContext(th, &c)) {
-            // 되읽어 확인한다. 성공을 보고하고도 값이 안 들어가는
-            // 경우가 있다. 확인하지 않으면 그 스레드를 걸었다고
-            // 착각하고, 히트 0 을 "안 쓴다"로 잘못 읽게 된다.
-            CONTEXT v{};
-            v.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-            const DWORD64 want = enable ? make_dr7() : 0;
-            if (::GetThreadContext(th, &v) && v.Dr7 == want) ok = true;
+            if (enable) {
+                apply_slots(&c);
+            } else {
+                clear_slots(&c);
+            }
+            c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (::SetThreadContext(th, &c)) {
+                // 되읽어 확인한다. 성공을 보고하고도 값이 안 들어가는
+                // 경우가 있다. 확인하지 않으면 그 스레드를 걸었다고
+                // 착각하고, 히트 0 을 "안 쓴다"로 잘못 읽게 된다.
+                CONTEXT v{};
+                v.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                if (::GetThreadContext(th, &v) && matches(v, enable)) {
+                    result = Programmed::kChanged;
+                }
+            }
         }
     }
     ::ResumeThread(th);
     ::CloseHandle(th);
-    if (!ok) ++g_set_failed;
-    return ok;
+    if (result == Programmed::kFailed) ++g_set_failed;
+    return result;
 }
 
-// 프로세스의 스레드를 훑는다. only_new 면 아직 안 건 것만 건다.
+// 프로세스의 모든 스레드를 훑어 설정을 맞춘다.
+//
+// 예전에는 "아직 안 건 스레드만" 다시 걸었다. 그것은 사각지대를
+// 만든다 - 보호 코드가 이미 건 스레드의 디버그 레지스터를 지우면,
+// 그 스레드는 히트가 나지 않고(레지스터가 비었으니), 히트가 없으니
+// 핸들러의 현장 복구도 돌지 않고, 새 스레드가 아니니 여기서도
+// 건너뛴다. 영원히 눈이 먼다.
+//
+// 그래서 매번 전부 확인한다. 이미 맞게 걸린 스레드는 건드리지 않으므로
+// 비용은 GetThreadContext 한 번뿐이다.
+//
 // g_mutex 를 쥔 채 부른다.
-int walk_threads(bool enable, bool only_new) {
+struct WalkResult {
+    int fresh = 0;      // 처음 건 스레드
+    int rearmed = 0;    // 설정이 지워져 있어 다시 건 스레드
+};
+
+WalkResult walk_threads(bool enable) {
     const DWORD self_pid = ::GetCurrentProcessId();
     const DWORD self_tid = ::GetCurrentThreadId();
 
+    WalkResult r;
+    g_enumerated = 0;   // 한 바퀴 기준으로 센다
     const HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return 0;
+    if (snap == INVALID_HANDLE_VALUE) return r;
 
-    int applied = 0;
     THREADENTRY32 te{};
     te.dwSize = sizeof(te);
     if (::Thread32First(snap, &te)) {
@@ -200,15 +234,26 @@ int walk_threads(bool enable, bool only_new) {
             if (te.th32OwnerProcessID != self_pid) continue;
             if (te.th32ThreadID == self_tid) continue;
             ++g_enumerated;
-            if (only_new && g_programmed.count(te.th32ThreadID) != 0) continue;
 
-            if (!program_thread(te.th32ThreadID, enable)) continue;
-            ++applied;
-            if (enable) g_programmed.insert(te.th32ThreadID);
+            const bool known = g_programmed.count(te.th32ThreadID) != 0;
+            const auto p = program_thread(te.th32ThreadID, enable);
+            if (p == Programmed::kFailed) continue;
+
+            if (enable) {
+                g_programmed.insert(te.th32ThreadID);
+                if (p == Programmed::kChanged) {
+                    if (known) {
+                        ++r.rearmed;
+                        ++g_rearmed;
+                    } else {
+                        ++r.fresh;
+                    }
+                }
+            }
         } while (::Thread32Next(snap, &te));
     }
     ::CloseHandle(snap);
-    return applied;
+    return r;
 }
 
 void ensure_handler() {
@@ -262,6 +307,7 @@ bool WriteWatch::install() {
         }
         g_programmed.clear();
         g_enumerated = 0;
+        g_rearmed = 0;
         g_open_failed = 0;
         g_set_failed = 0;
         g_watching = true;
@@ -273,11 +319,12 @@ bool WriteWatch::install() {
         }
     }
 
-    int n = 0;
+    WalkResult w;
     {
         std::lock_guard lock(g_mutex);
-        n = walk_threads(true, false);
+        w = walk_threads(true);
     }
+    const int n = w.fresh + w.rearmed;
     if (n == 0) {
         std::lock_guard lock(g_mutex);
         g_watching = false;
@@ -303,7 +350,12 @@ bool WriteWatch::install() {
 int WriteWatch::refresh_threads() {
     if (!active_) return 0;
     std::lock_guard lock(g_mutex);
-    return walk_threads(true, true);
+    const auto w = walk_threads(true);
+    if (w.rearmed > 0) {
+        log::warnf("  스레드 {}개의 디버그 레지스터가 지워져 있어 다시 걸었다",
+                   w.rearmed);
+    }
+    return w.fresh + w.rearmed;
 }
 
 void WriteWatch::remove() {
@@ -318,8 +370,8 @@ void WriteWatch::remove() {
         // 감시 중 새로 생긴 스레드까지 전부 돌아야 한다. 두 바퀴를
         // 도는 것은 첫 바퀴에서 놓친 스레드가 두 번째에 잡히기 때문이다.
         const int before = g_open_failed + g_set_failed;
-        walk_threads(false, false);
-        walk_threads(false, false);
+        walk_threads(false);
+        walk_threads(false);
         const int failed = (g_open_failed + g_set_failed) - before;
 
         g_programmed.clear();
@@ -346,8 +398,8 @@ void WriteWatch::shutdown() {
         g_addr[i] = 0;
         g_size[i] = 0;
     }
-    walk_threads(false, false);
-    walk_threads(false, false);
+    walk_threads(false);
+    walk_threads(false);
     g_programmed.clear();
     // g_ever 는 비우지 않는다. 프로세스가 살아 있는 동안 낙오
     // 스레드가 나타날 수 있고, 그때 판별할 근거가 사라지면 안 된다.
@@ -367,6 +419,7 @@ WriteWatch::ThreadStats WriteWatch::stats() const {
     s.open_failed = g_open_failed;
     s.set_failed = g_set_failed;
     s.self_healed = g_self_healed;
+    s.rearmed = g_rearmed;
     return s;
 }
 
