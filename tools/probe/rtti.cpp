@@ -146,6 +146,107 @@ std::string Rtti::class_of_object(std::uintptr_t object) const {
     return class_of_vtable(static_cast<std::uintptr_t>(vt));
 }
 
+std::vector<Rtti::Ref> Rtti::find_refs(std::uintptr_t target,
+                                       std::size_t max) const {
+    std::vector<Ref> out;
+    if (image_.empty() || target == 0) return out;
+
+    const auto regions = r_.regions();
+    std::vector<std::uint8_t> buf;
+
+    for (const auto& reg : regions) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size == 0 || reg.size > (256u << 20)) continue;
+
+        buf.assign(reg.size, 0);
+        if (!r_.read(reg.base, buf.data(), buf.size())) continue;
+
+        for (std::size_t i = 0; i + 8 <= buf.size(); i += 8) {
+            std::uint64_t v;
+            std::memcpy(&v, buf.data() + i, 8);
+            if (v != target) continue;
+
+            Ref ref;
+            ref.slot = reg.base + i;
+
+            // 앞쪽으로 훑어 vtable이 보이는 지점을 소유 객체의 시작으로
+            // 본다. 객체는 vtable 포인터로 시작하므로 대개 맞는다.
+            // 완전한 방법은 아니지만 사슬을 따라가기에는 충분하다.
+            constexpr std::size_t kBack = 0x400;
+            for (std::size_t back = 0; back <= kBack && back <= i; back += 8) {
+                std::uint64_t cand;
+                std::memcpy(&cand, buf.data() + i - back, 8);
+                if (cand < r_.module_base()) continue;
+                if (cand >= r_.module_base() + r_.module_size()) continue;
+                const auto cls =
+                    class_of_vtable(static_cast<std::uintptr_t>(cand));
+                if (cls.empty()) continue;
+                ref.owner = reg.base + i - back;
+                ref.offset = back;
+                ref.owner_class = cls;
+                break;
+            }
+            out.push_back(ref);
+            if (out.size() >= max) return out;
+        }
+    }
+    return out;
+}
+
+std::vector<std::uintptr_t> Rtti::find_qword(std::uint64_t value,
+                                             std::size_t max) const {
+    std::vector<std::uintptr_t> out;
+    if (image_.empty()) return out;
+    for (std::size_t i = 0; i + 8 <= image_.size(); i += 8) {
+        std::uint64_t v;
+        std::memcpy(&v, image_.data() + i, 8);
+        if (v != value) continue;
+        out.push_back(r_.module_base() + i);
+        if (out.size() >= max) break;
+    }
+    return out;
+}
+
+std::vector<Rtti::Xref> Rtti::find_xrefs(std::uintptr_t target,
+                                         std::size_t max) const {
+    std::vector<Xref> out;
+    if (image_.empty()) return out;
+
+    const std::uintptr_t mb = r_.module_base();
+    // 명령 길이는 7바이트로 고정된 형태만 다룬다. REX + 8B/8D + ModRM +
+    // disp32. 이것으로 전역 접근의 대부분이 잡힌다.
+    constexpr std::size_t kLen = 7;
+
+    for (std::size_t i = 0; i + kLen <= image_.size(); ++i) {
+        const std::uint8_t rex = image_[i];
+        if (rex < 0x48 || rex > 0x4F) continue;   // REX.W 계열
+
+        const std::uint8_t op = image_[i + 1];
+        if (op != 0x8B && op != 0x8D) continue;
+
+        const std::uint8_t modrm = image_[i + 2];
+        if ((modrm & 0xC7) != 0x05) continue;     // mod=00, rm=101 → RIP 상대
+
+        std::int32_t disp;
+        std::memcpy(&disp, image_.data() + i + 3, 4);
+
+        const std::uintptr_t insn = mb + i;
+        const std::uintptr_t dst =
+            insn + kLen + static_cast<std::intptr_t>(disp);
+        if (dst != target) continue;
+
+        Xref x;
+        x.at = insn;
+        x.opcode = op;
+        // REX.R 이 reg 필드의 상위 비트를 준다.
+        x.reg = static_cast<std::uint8_t>(((modrm >> 3) & 7) |
+                                          (((rex >> 2) & 1) << 3));
+        out.push_back(x);
+        if (out.size() >= max) break;
+    }
+    return out;
+}
+
 std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
                                             std::size_t max) const {
     std::vector<Found> out;

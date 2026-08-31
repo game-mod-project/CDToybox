@@ -61,6 +61,35 @@ public:
     std::vector<Found> find_objects(const std::string& substring,
                                     std::size_t max) const;
 
+    // 모듈 이미지 안에서 8바이트 값이 저장된 위치를 찾는다.
+    // 전역 포인터를 찾을 때 쓴다.
+    std::vector<std::uintptr_t> find_qword(std::uint64_t value,
+                                           std::size_t max) const;
+
+    // 주어진 주소를 RIP 상대로 참조하는 명령을 찾는다.
+    //
+    // x64에서 전역 접근은 대부분 다음 형태다.
+    //   REX.W  8B /r  disp32   mov  r64, [rip+disp32]
+    //   REX.W  8D /r  disp32   lea  r64, [rip+disp32]
+    // ModRM 의 mod=00, rm=101 이면 RIP 상대이고, 대상은
+    // (명령 주소 + 명령 길이 7) + disp32 다.
+    struct Xref {
+        std::uintptr_t at = 0;   // 명령 주소
+        std::uint8_t opcode = 0; // 0x8B(mov) 또는 0x8D(lea)
+        std::uint8_t reg = 0;    // 목적 레지스터 번호
+    };
+    std::vector<Xref> find_xrefs(std::uintptr_t target, std::size_t max) const;
+
+    // 힙에서 이 주소를 담고 있는 곳을 찾고, 그 자리가 어떤 객체의
+    // 몇 번째 필드인지까지 짚어 준다. 소유 사슬을 거슬러 오를 때 쓴다.
+    struct Ref {
+        std::uintptr_t slot = 0;       // 포인터가 저장된 주소
+        std::uintptr_t owner = 0;      // 추정한 소유 객체의 시작
+        std::size_t offset = 0;        // owner 기준 오프셋
+        std::string owner_class;       // 비어 있으면 식별 실패
+    };
+    std::vector<Ref> find_refs(std::uintptr_t target, std::size_t max) const;
+
 private:
     const Remote& r_;
     std::vector<std::uint8_t> image_;

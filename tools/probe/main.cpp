@@ -386,6 +386,77 @@ int main(int argc, char** argv) {
         cmd_vtable(rt, argv[2]);
         return 0;
     }
+    if (cmd == "findstr") {
+        if (argc < 3) { usage(); return 1; }
+        const std::string needle = argv[2];
+        const auto& img = rt.image();
+        std::size_t shown = 0;
+        std::printf("'%s' 위치\n", needle.c_str());
+        for (std::size_t i = 0; i + needle.size() + 1 <= img.size(); ++i) {
+            if (std::memcmp(img.data() + i, needle.data(), needle.size()) != 0) {
+                continue;
+            }
+            // 널 종단인 것만 (부분 일치 제외)
+            if (img[i + needle.size()] != 0) continue;
+            // 앞이 널이거나 문자열 시작이어야 독립된 문자열이다.
+            if (i > 0 && img[i - 1] != 0) continue;
+            std::printf("  0x%llX  (RVA 0x%llX)\n",
+                        static_cast<unsigned long long>(r.module_base() + i),
+                        static_cast<unsigned long long>(i));
+            if (++shown >= 20) break;
+        }
+        if (shown == 0) std::printf("  찾지 못했습니다\n");
+        return 0;
+    }
+    if (cmd == "refs") {
+        if (argc < 3) { usage(); return 1; }
+        const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
+                                           : 30;
+        const auto refs = rt.find_refs(parse_addr(argv[2]), max);
+        std::printf("이 주소를 담고 있는 곳 %zu개\n", refs.size());
+        for (const auto& x : refs) {
+            std::printf("  slot 0x%llX", static_cast<unsigned long long>(x.slot));
+            if (!x.owner_class.empty()) {
+                std::printf("  <- %s + 0x%zX", x.owner_class.c_str(), x.offset);
+            } else {
+                std::printf("  <- (소유 객체 미식별)");
+            }
+            std::printf("\n");
+        }
+        return 0;
+    }
+    if (cmd == "findptr") {
+        if (argc < 3) { usage(); return 1; }
+        const std::uint64_t v = std::strtoull(argv[2], nullptr, 16);
+        const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
+                                           : 20;
+        const auto hits = rt.find_qword(v, max);
+        std::printf("모듈 안에서 0x%llX 를 담은 위치 %zu개\n",
+                    static_cast<unsigned long long>(v), hits.size());
+        for (const auto h : hits) {
+            std::printf("  0x%llX  (RVA 0x%llX)\n",
+                        static_cast<unsigned long long>(h),
+                        static_cast<unsigned long long>(h - r.module_base()));
+        }
+        return 0;
+    }
+    if (cmd == "xref") {
+        if (argc < 3) { usage(); return 1; }
+        const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
+                                           : 40;
+        const auto refs = rt.find_xrefs(parse_addr(argv[2]), max);
+        std::printf("RIP 상대 참조 %zu개\n", refs.size());
+        static const char* kReg[16] = {"rax", "rcx", "rdx", "rbx",
+                                       "rsp", "rbp", "rsi", "rdi",
+                                       "r8",  "r9",  "r10", "r11",
+                                       "r12", "r13", "r14", "r15"};
+        for (const auto& x : refs) {
+            std::printf("  0x%llX  %s %s, [rip+...]\n",
+                        static_cast<unsigned long long>(x.at),
+                        x.opcode == 0x8B ? "mov" : "lea", kReg[x.reg & 15]);
+        }
+        return 0;
+    }
     if (cmd == "objects") {
         if (argc < 3) { usage(); return 1; }
         const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
