@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <string>
 #include <vector>
 
 #include "core/guard.h"
@@ -32,6 +33,20 @@ float g_eps = 0.001f;
 // 관찰 고정. 후보 하나를 골라 실시간으로 값을 본다.
 std::uintptr_t g_pinned = 0;
 float g_write_value = 0.0f;
+
+// 카메라 RTTI 탐색도 수 초가 걸린다. 렌더 스레드를 막지 않는다.
+std::thread g_cam_worker;
+std::atomic<bool> g_cam_busy{false};
+
+void start_discovery() {
+    if (g_cam_busy.load()) return;
+    if (g_cam_worker.joinable()) g_cam_worker.join();
+    g_cam_busy.store(true);
+    g_cam_worker = std::thread([]() {
+        game::discover(nullptr);
+        g_cam_busy.store(false);
+    });
+}
 
 void start_first_scan() {
     if (g_busy.load()) return;
@@ -144,8 +159,8 @@ void draw_scan_panel() {
                            "번갈아 눌러 좁히세요");
     } else if (!g_busy.load()) {
         ImGui::TextColored(ImVec4(0.5f, 0.8f, 1, 1),
-                           "3) 카메라 창에서 '고정 주소 사용' → fov 에 0 → "
-                           "FOV 쓰기");
+                           "3) 카메라 창의 RTTI 탐색이 더 빠릅니다 "
+                           "(값 스캔은 보조 수단입니다)");
     }
     ImGui::Separator();
 
@@ -187,95 +202,86 @@ void draw_scan_panel() {
     ImGui::End();
 }
 
+
 void draw_camera_panel() {
-    ImGui::SetNextWindowSize(ImVec2(520, 420), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(620, 460), ImGuiCond_FirstUseEver);
     ImGui::Begin("카메라");
 
-    static char base_buf[32] = "0";
-    ImGui::SetNextItemWidth(220);
-    ImGui::InputText("베이스 (16진)", base_buf, sizeof(base_buf),
-                     ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::SameLine();
-    if (ImGui::Button("적용")) {
-        game::set_base(std::strtoull(base_buf, nullptr, 16));
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("고정 주소 사용")) {
-        std::snprintf(base_buf, sizeof(base_buf), "%llX",
-                      static_cast<unsigned long long>(g_pinned));
-        game::set_base(g_pinned);
+    if (g_cam_busy.load()) {
+        ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1),
+                           "RTTI로 카메라 탐색 중... (수 초)");
+        ImGui::End();
+        return;
     }
 
-    ImGui::Text("현재 베이스: 0x%llX",
-                static_cast<unsigned long long>(game::base()));
+    if (!game::discovered()) {
+        ImGui::TextWrapped(
+            "카메라 객체를 RTTI로 찾습니다. 값 스캔과 달리 게임을 "
+            "조작할 필요가 없습니다. 월드에 진입한 상태에서 누르세요.");
+        if (ImGui::Button("카메라 탐색")) start_discovery();
+        ImGui::End();
+        return;
+    }
+
+    const auto& c = game::cameras();
+    if (ImGui::Button("다시 탐색")) {
+        start_discovery();
+        ImGui::End();
+        return;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("주소는 실행마다 바뀝니다");
     ImGui::Separator();
 
-    game::CameraOffsets o = game::offsets();
-    bool changed = false;
-    ImGui::TextDisabled("오프셋 (-1 = 미확정)");
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("pos.x", &o.pos_x, 0, 0);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("pos.y", &o.pos_y, 0, 0);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("pos.z", &o.pos_z, 0, 0);
+    struct Row { const char* label; std::uintptr_t addr; };
+    const Row rows[] = {
+        {"CameraManager", c.manager},
+        {"FreeCamCamera", c.free_cam},
+        {"PhotoCamera", c.photo_cam},
+        {"PlayerCameraComponent", c.player_component},
+        {"활성 카메라", c.active},
+    };
 
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("pitch", &o.rot_pitch, 0, 0);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("yaw", &o.rot_yaw, 0, 0);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("roll", &o.rot_roll, 0, 0);
-
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("fov", &o.fov, 0, 0);
-    if (changed) game::set_offsets(o);
-
-    ImGui::Separator();
-    game::CameraView v;
-    if (game::read_view(&v)) {
-        ImGui::Text("pos  %10.3f  %10.3f  %10.3f", v.pos[0], v.pos[1],
-                    v.pos[2]);
-        ImGui::Text("rot  %10.4f  %10.4f  %10.4f", v.rot[0], v.rot[1],
-                    v.rot[2]);
-        ImGui::Text("fov  %10.4f", v.fov);
-    } else {
-        ImGui::TextDisabled("베이스가 설정되지 않았습니다");
+    for (const auto& row : rows) {
+        ImGui::Text("%-22s 0x%llX", row.label,
+                    static_cast<unsigned long long>(row.addr));
     }
 
     ImGui::Separator();
-    static float fov_write = 60.0f;
-    ImGui::SetNextItemWidth(140);
-    ImGui::InputFloat("FOV 값", &fov_write);
+    ImGui::TextDisabled("카메라 필드 (실시간)");
 
-    // 왜 못 쓰는지를 화면에 말한다. "실패"만 띄우면 사용자는 무엇을
-    // 고쳐야 할지 알 수 없다.
-    const char* blocker = game::fov_write_blocker();
-    if (!guard::is_safe_to_modify()) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1),
-                           "guard가 쓰기를 차단하고 있습니다");
-    } else if (blocker != nullptr) {
-        ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), "아직 쓸 수 없습니다");
-        ImGui::TextWrapped("%s", blocker);
-    } else {
-        ImGui::SameLine();
-        if (ImGui::Button("FOV 쓰기")) {
-            const bool ok = game::write_fov(fov_write);
-            log::infof("FOV 쓰기 0x{:X}+{} <- {} : {}",
-                       static_cast<unsigned long long>(game::base()),
-                       game::offsets().fov, fov_write,
-                       ok ? "성공" : "실패(메모리 접근 거부)");
-        }
+    const Row cams[] = {
+        {"활성", c.active},
+        {"프리캠", c.free_cam},
+    };
+    for (const auto& cam : cams) {
+        if (cam.addr == 0) continue;
+        float fov = 0.0f, pos[3]{}, rot[4]{};
+        std::string name;
+        game::read_fov(cam.addr, &fov);
+        game::read_position(cam.addr, pos);
+        game::read_rotation(cam.addr, rot);
+        game::read_name(cam.addr, &name);
+
+        ImGui::Text("[%s] %s", cam.label, name.c_str());
+        ImGui::Indent();
+        ImGui::Text("fov %8.3f   pos %9.2f %9.2f %9.2f", fov, pos[0], pos[1],
+                    pos[2]);
+        ImGui::Text("rot %7.4f %7.4f %7.4f %7.4f", rot[0], rot[1], rot[2],
+                    rot[3]);
+        ImGui::Unindent();
     }
+
+    ImGui::Separator();
+    ImGui::TextWrapped(
+        "실측 기록: 활성 카메라의 FOV에 값을 써도 게임이 매 프레임 "
+        "되돌립니다. 유지하려면 카메라 갱신 함수를 후킹해야 합니다.");
     ImGui::End();
 }
 
 void shutdown_scan_panel() {
     if (g_worker.joinable()) g_worker.join();
+    if (g_cam_worker.joinable()) g_cam_worker.join();
     g_scan.reset();
     g_pinned = 0;
 }

@@ -40,6 +40,8 @@ add_library(cdtb_core STATIC
     src/mem/safe_read.cpp
     src/mem/regions.cpp
     src/mem/value_scanner.cpp
+    src/mem/reader.cpp
+    src/mem/rtti.cpp
     src/core/log.cpp
     src/core/config.cpp
     src/core/guard.cpp
@@ -95,7 +97,6 @@ target_link_libraries(cdtb_bench PRIVATE cdtb_core)
 add_executable(cdtb_probe
     tools/probe/main.cpp
     tools/probe/remote.cpp
-    tools/probe/rtti.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
-target_link_libraries(cdtb_probe PRIVATE psapi)
+target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)

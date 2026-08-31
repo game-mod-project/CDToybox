@@ -13,8 +13,10 @@
 #include <vector>
 
 #include "remote.h"
-#include "rtti.h"
+#include "mem/rtti.h"
+#include "remote_reader.h"
 
+using namespace cdtb;
 using namespace cdtb::probe;
 
 namespace {
@@ -62,7 +64,7 @@ void cmd_regions(const Remote& r) {
     std::printf("  힙(비이미지) %.1f MB\n", heap / 1048576.0);
 }
 
-void cmd_types(Rtti& rt, const char* needle, std::size_t max) {
+void cmd_types(mem::Rtti& rt, const char* needle, std::size_t max) {
     const auto found = rt.find_types(needle, max);
     std::printf("일치 %zu개\n", found.size());
     for (const auto& t : found) {
@@ -73,7 +75,7 @@ void cmd_types(Rtti& rt, const char* needle, std::size_t max) {
 }
 
 // 정확한 이름 하나를 고른다. 여러 개면 첫 번째를 쓰고 경고한다.
-bool resolve_one(Rtti& rt, const char* name, Rtti::TypeInfo* out) {
+bool resolve_one(mem::Rtti& rt, const char* name, mem::Rtti::TypeInfo* out) {
     auto found = rt.find_types(name, 64);
     if (found.empty()) {
         std::printf("클래스를 찾지 못했습니다: %s\n", name);
@@ -93,8 +95,8 @@ bool resolve_one(Rtti& rt, const char* name, Rtti::TypeInfo* out) {
     return true;
 }
 
-void cmd_vtable(Rtti& rt, const char* name) {
-    Rtti::TypeInfo ti;
+void cmd_vtable(mem::Rtti& rt, const char* name) {
+    mem::Rtti::TypeInfo ti;
     if (!resolve_one(rt, name, &ti)) return;
     std::printf("%s\n  TypeDescriptor 0x%llX\n", ti.name.c_str(),
                 static_cast<unsigned long long>(ti.descriptor));
@@ -110,9 +112,9 @@ void cmd_vtable(Rtti& rt, const char* name) {
     }
 }
 
-void cmd_instances(Rtti& rt, const Remote& r, const char* name,
+void cmd_instances(mem::Rtti& rt, const Remote& r, const char* name,
                    std::size_t max) {
-    Rtti::TypeInfo ti;
+    mem::Rtti::TypeInfo ti;
     if (!resolve_one(rt, name, &ti)) return;
     const auto vts = rt.vtables_for(ti.descriptor);
     if (vts.empty()) {
@@ -121,7 +123,7 @@ void cmd_instances(Rtti& rt, const Remote& r, const char* name,
     }
     std::printf("%s  vtable %zu개\n", ti.name.c_str(), vts.size());
     for (const auto v : vts) {
-        const auto inst = rt.instances_of(v, max);
+        const auto inst = rt.instances_of_class(ti.name, max);
         std::printf("  vtable 0x%llX -> 인스턴스 %zu개\n",
                     static_cast<unsigned long long>(v), inst.size());
         for (std::size_t i = 0; i < inst.size() && i < max; ++i) {
@@ -214,7 +216,7 @@ void cmd_diff(const Remote& r, std::uintptr_t addr, std::size_t count,
     std::printf("변한 슬롯 %zu / %zu (%u ms 간격)\n", changed, count, wait_ms);
 }
 
-void cmd_whatis(Rtti& rt, std::uintptr_t addr) {
+void cmd_whatis(mem::Rtti& rt, std::uintptr_t addr) {
     const auto name = rt.class_of_object(addr);
     if (name.empty()) {
         std::printf("0x%llX  (RTTI로 식별되지 않음)\n",
@@ -227,7 +229,7 @@ void cmd_whatis(Rtti& rt, std::uintptr_t addr) {
 
 // 객체의 8바이트 슬롯을 훑어, 포인터면 그 대상 클래스를 함께 보여준다.
 // 구조체 안에 무엇이 들어 있는지 한눈에 파악하는 용도다.
-void cmd_fields(Rtti& rt, const Remote& r, std::uintptr_t addr,
+void cmd_fields(mem::Rtti& rt, const Remote& r, std::uintptr_t addr,
                 std::size_t slots) {
     std::vector<std::uint64_t> buf(slots);
     if (!r.read(addr, buf.data(), slots * 8)) {
@@ -366,7 +368,8 @@ int main(int argc, char** argv) {
     }
 
     // 아래 명령들은 모듈 이미지가 필요하다.
-    Rtti rt(r);
+    RemoteReader reader(r);
+    mem::Rtti rt(reader);
     std::printf("모듈 이미지 로드 중 (%.1f MB)...\n",
                 static_cast<double>(r.module_size()) / 1048576.0);
     if (!rt.load_image()) {

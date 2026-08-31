@@ -1,56 +1,145 @@
 #include "game/camera.h"
 
+#include <algorithm>
+#include <cstring>
+
+#include "core/log.h"
+#include "mem/reader.h"
+#include "mem/rtti.h"
 #include "mem/safe_read.h"
 
 namespace cdtb::game {
 namespace {
 
-std::uintptr_t g_base = 0;
-CameraOffsets g_off;
+CameraSet g_set;
+bool g_done = false;
 
-bool read_at(int off, float* out) {
-    if (off < 0 || g_base == 0) return false;
-    return mem::safe_read_float(g_base + static_cast<std::uintptr_t>(off),
-                                out);
+// 다중 상속이면 같은 객체가 서브객체 주소로도 잡힌다.
+// 가장 작은 주소가 객체 시작이다.
+std::uintptr_t lowest(const std::vector<std::uintptr_t>& v) {
+    if (v.empty()) return 0;
+    return *std::min_element(v.begin(), v.end());
+}
+
+// 카메라는 +0x48 에 이름 객체를 들고 있고, 이름 객체는 +0x18 에
+// 짧은 문자열을 인라인으로 담는다(SSO). 이름은 참조가 아니라
+// 복사되어 들어가므로 문자열 리터럴 주소로는 찾을 수 없다.
+bool name_of(std::uintptr_t camera, std::string* out) {
+    if (camera == 0 || out == nullptr) return false;
+
+    std::uint64_t name_obj = 0;
+    if (!mem::safe_read_bytes(camera + camera_offset::kName, &name_obj,
+                              sizeof(name_obj))) {
+        return false;
+    }
+    if (name_obj == 0) return false;
+
+    std::uint32_t len = 0;
+    if (!mem::safe_read_bytes(static_cast<std::uintptr_t>(name_obj) + 8, &len,
+                              sizeof(len))) {
+        return false;
+    }
+    if (len == 0 || len > 64) return false;
+
+    char buf[65]{};
+    if (!mem::safe_read_bytes(static_cast<std::uintptr_t>(name_obj) + 0x18,
+                              buf, len)) {
+        return false;
+    }
+    buf[len] = 0;
+    out->assign(buf, len);
+    return true;
 }
 
 }  // namespace
 
-void set_base(std::uintptr_t addr) { g_base = addr; }
-std::uintptr_t base() { return g_base; }
+bool discover(CameraSet* out) {
+    CameraSet found;
 
-void set_offsets(const CameraOffsets& o) { g_off = o; }
-CameraOffsets offsets() { return g_off; }
+    mem::LocalReader reader;
+    mem::Rtti rtti(reader);
 
-bool read_view(CameraView* out) {
-    if (out == nullptr || g_base == 0) return false;
-    read_at(g_off.pos_x, &out->pos[0]);
-    read_at(g_off.pos_y, &out->pos[1]);
-    read_at(g_off.pos_z, &out->pos[2]);
-    read_at(g_off.rot_pitch, &out->rot[0]);
-    read_at(g_off.rot_yaw, &out->rot[1]);
-    read_at(g_off.rot_roll, &out->rot[2]);
-    read_at(g_off.fov, &out->fov);
-    return true;
+    log::infof("카메라 탐색: 모듈 이미지 로드 중 ({:.1f} MB)",
+               reader.module_size() / (1024.0 * 1024.0));
+    if (!rtti.load_image()) {
+        log::errorf("카메라 탐색: 모듈 이미지를 읽지 못했다");
+        return false;
+    }
+
+    found.manager =
+        lowest(rtti.instances_of_class(".?AVCameraManager@pa@@", 8));
+    found.free_cam =
+        lowest(rtti.instances_of_class(".?AVFreeCamCamera@pa@@", 8));
+    found.photo_cam =
+        lowest(rtti.instances_of_class(".?AVPhotoCamera@pa@@", 8));
+    found.player_component =
+        lowest(rtti.instances_of_class(".?AVPlayerCameraComponent@pa@@", 8));
+
+    log::infof("카메라 탐색: manager={} freeCam={} photo={} playerComp={}",
+               reinterpret_cast<void*>(found.manager),
+               reinterpret_cast<void*>(found.free_cam),
+               reinterpret_cast<void*>(found.photo_cam),
+               reinterpret_cast<void*>(found.player_component));
+
+    // 활성 카메라는 RTTI에 노출되지 않는다. PlayerCameraComponent 가
+    // +0x88 에 그 ICamera 서브객체를 들고 있고, 객체 시작은 -0x28 이다.
+    if (found.player_component != 0) {
+        std::uint64_t icam = 0;
+        if (mem::safe_read_bytes(found.player_component + 0x88, &icam,
+                                 sizeof(icam)) &&
+            icam > 0x10000) {
+            found.active = static_cast<std::uintptr_t>(icam) - 0x28;
+        }
+    }
+
+    // 이름으로 검증한다. 활성 카메라는 "PlayerCamera" 여야 한다.
+    std::string n;
+    if (found.active != 0 && name_of(found.active, &n)) {
+        log::infof("활성 카메라 후보 {} 이름='{}'",
+                   reinterpret_cast<void*>(found.active), n);
+        if (n != "PlayerCamera") {
+            log::warnf("이름이 예상과 다르다 - 활성 카메라 추정을 버린다");
+            found.active = 0;
+        }
+    } else if (found.active != 0) {
+        log::warnf("활성 카메라 후보의 이름을 읽지 못했다");
+        found.active = 0;
+    }
+
+    if (found.free_cam != 0 && name_of(found.free_cam, &n)) {
+        log::infof("프리카메라 이름='{}'", n);
+    }
+
+    g_set = found;
+    g_done = found.complete();
+    if (out != nullptr) *out = found;
+
+    log::infof("카메라 탐색 {}", g_done ? "완료" : "불완전");
+    return g_done;
 }
 
-const char* fov_write_blocker() {
-    if (g_base == 0) {
-        return "베이스 주소가 설정되지 않았습니다. "
-               "메모리 스캔에서 후보를 고정한 뒤 '고정 주소 사용'을 "
-               "누르거나, 주소를 직접 입력하세요.";
-    }
-    if (g_off.fov < 0) {
-        return "fov 오프셋이 -1(미확정)입니다. "
-               "베이스가 곧 FOV 주소라면 0을 넣으세요.";
-    }
-    return nullptr;
+const CameraSet& cameras() { return g_set; }
+bool discovered() { return g_done; }
+
+bool read_fov(std::uintptr_t camera, float* out) {
+    if (camera == 0 || out == nullptr) return false;
+    return mem::safe_read_float(camera + camera_offset::kFov, out);
 }
 
-bool write_fov(float value) {
-    if (fov_write_blocker() != nullptr) return false;
-    return mem::safe_write_float(
-        g_base + static_cast<std::uintptr_t>(g_off.fov), value);
+bool read_position(std::uintptr_t camera, float out[3]) {
+    if (camera == 0 || out == nullptr) return false;
+    return mem::safe_read_bytes(camera + camera_offset::kPosition, out,
+                                sizeof(float) * 3);
+}
+
+bool read_rotation(std::uintptr_t camera, float out[4]) {
+    if (camera == 0 || out == nullptr) return false;
+    return mem::safe_read_bytes(camera + camera_offset::kRotation, out,
+                                sizeof(float) * 4);
+}
+
+bool read_name(std::uintptr_t camera, std::string* out) {
+    return name_of(camera, out);
 }
 
 }  // namespace cdtb::game

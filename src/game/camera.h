@@ -1,45 +1,51 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace cdtb::game {
 
-// 바이트 오프셋. -1은 아직 확정되지 않았다는 뜻이다.
+// 카메라 객체의 필드 오프셋.
 //
-// 값을 런타임에 바꿀 수 있게 두는 것이 핵심이다. 역공학은
-// 추측과 확인의 반복인데, 오프셋이 코드에 박혀 있으면 추측마다
-// 빌드·배포·게임 재시작이 필요하다.
-struct CameraOffsets {
-    int pos_x = -1;
-    int pos_y = -1;
-    int pos_z = -1;
-    int rot_pitch = -1;
-    int rot_yaw = -1;
-    int rot_roll = -1;
-    int fov = -1;
+// 2026-08-31 인게임 실측(문서: 2026-08-31-camera-offsets.md).
+// FreeCamCamera 와 활성 카메라가 같은 레이아웃을 쓴다.
+namespace camera_offset {
+constexpr int kName = 0x48;        // 이름 객체 포인터
+constexpr int kScale = 0x50;       // float[3]
+constexpr int kRotation = 0x5C;    // 쿼터니언 float[4]
+constexpr int kPosition = 0x6C;    // float[3]
+constexpr int kViewportW = 0x7C;   // int32
+constexpr int kViewportH = 0x80;   // int32
+constexpr int kFov = 0x9C;         // float, 도 단위
+constexpr int kNearClip = 0xB4;    // float
+constexpr int kFarClip = 0xB8;     // float
+}  // namespace camera_offset
+
+// 런타임에 찾아낸 카메라들. 주소는 실행마다 바뀌므로 매번 탐색한다.
+struct CameraSet {
+    std::uintptr_t manager = 0;      // CameraManager
+    std::uintptr_t free_cam = 0;     // FreeCamCamera (비활성 상태로 존재)
+    std::uintptr_t photo_cam = 0;    // PhotoCamera
+    std::uintptr_t active = 0;       // 현재 렌더에 쓰이는 카메라
+    std::uintptr_t player_component = 0;   // PlayerCameraComponent
+
+    bool complete() const {
+        return manager != 0 && free_cam != 0 && active != 0;
+    }
 };
 
-struct CameraView {
-    float pos[3]{};
-    float rot[3]{};
-    float fov = 0.0f;
-};
+// RTTI로 카메라 객체를 찾는다. 수 초가 걸리므로 워커 스레드에서 부른다.
+// 진행 상황은 로그에 남는다.
+bool discover(CameraSet* out);
 
-void set_base(std::uintptr_t addr);
-std::uintptr_t base();
+// 마지막 탐색 결과.
+const CameraSet& cameras();
+bool discovered();
 
-void set_offsets(const CameraOffsets& o);
-CameraOffsets offsets();
-
-// 확정된 오프셋의 필드만 채운다. 베이스가 0이면 false.
-bool read_view(CameraView* out);
-
-// 쓰기를 막고 있는 이유. 준비됐으면 nullptr.
-//
-// 실패를 bool로만 돌려주면 사용자가 무엇을 고쳐야 할지 알 수 없다.
-// 전제 조건이 안 갖춰졌으면 그것을 화면에 말해야 한다.
-const char* fov_write_blocker();
-
-bool write_fov(float value);
+// 필드 접근. 주소가 0이면 false.
+bool read_fov(std::uintptr_t camera, float* out);
+bool read_position(std::uintptr_t camera, float out[3]);
+bool read_rotation(std::uintptr_t camera, float out[4]);
+bool read_name(std::uintptr_t camera, std::string* out);
 
 }  // namespace cdtb::game
