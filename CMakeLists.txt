@@ -42,6 +42,7 @@ add_library(cdtb_core STATIC
     src/mem/value_scanner.cpp
     src/mem/reader.cpp
     src/mem/rtti.cpp
+    src/mem/watchpoint.cpp
     src/core/log.cpp
     src/core/config.cpp
     src/core/guard.cpp

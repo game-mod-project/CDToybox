@@ -1,5 +1,7 @@
 #include "render/scan_panel.h"
 
+#include <windows.h>
+
 #include <imgui.h>
 
 #include <atomic>
@@ -15,6 +17,7 @@
 #include "mem/regions.h"
 #include "mem/safe_read.h"
 #include "mem/value_scanner.h"
+#include "mem/watchpoint.h"
 
 namespace cdtb::render {
 namespace {
@@ -37,6 +40,9 @@ float g_write_value = 0.0f;
 // 카메라 RTTI 탐색도 수 초가 걸린다. 렌더 스레드를 막지 않는다.
 std::thread g_cam_worker;
 std::atomic<bool> g_cam_busy{false};
+
+// 카메라 값을 쓰는 코드를 찾기 위한 하드웨어 브레이크포인트.
+mem::WriteWatch g_watch;
 
 void start_discovery() {
     if (g_cam_busy.load()) return;
@@ -273,9 +279,56 @@ void draw_camera_panel() {
     }
 
     ImGui::Separator();
+    ImGui::TextDisabled("쓰기 감시 - 어느 코드가 이 값을 바꾸는가");
     ImGui::TextWrapped(
-        "실측 기록: 활성 카메라의 FOV에 값을 써도 게임이 매 프레임 "
-        "되돌립니다. 유지하려면 카메라 갱신 함수를 후킹해야 합니다.");
+        "게임은 카메라 값을 매 프레임 덮어씁니다. 하드웨어 브레이크포인트로 "
+        "쓰는 명령의 주소를 알아내면, 그 지점을 후킹해 우리 값을 유지할 수 "
+        "있습니다.");
+
+    static int watch_target = 0;
+    ImGui::RadioButton("활성 FOV", &watch_target, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("활성 위치", &watch_target, 1);
+    ImGui::SameLine();
+    ImGui::RadioButton("컴포넌트 위치", &watch_target, 2);
+
+    std::uintptr_t addr = 0;
+    switch (watch_target) {
+        case 0: addr = c.active ? c.active + game::camera_offset::kFov : 0;
+                break;
+        case 1: addr = c.active ? c.active + game::camera_offset::kPosition : 0;
+                break;
+        default:
+            addr = c.player_component ? c.player_component + 0x360 : 0;
+            break;
+    }
+    ImGui::Text("감시 대상 0x%llX", static_cast<unsigned long long>(addr));
+
+    if (!g_watch.active()) {
+        if (ImGui::Button("감시 시작") && addr != 0) {
+            g_watch.install(addr, 4);
+        }
+    } else {
+        if (ImGui::Button("감시 중지")) g_watch.remove();
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "감시 중  히트 %zu회",
+                           g_watch.hit_count());
+    }
+
+    const auto hits = g_watch.hits();
+    if (!hits.empty()) {
+        ImGui::Text("쓰는 명령 %zu곳:", hits.size());
+        ImGui::Indent();
+        const auto base = reinterpret_cast<std::uintptr_t>(
+            ::GetModuleHandleW(nullptr));
+        for (std::size_t i = 0; i < hits.size() && i < 12; ++i) {
+            ImGui::Text("0x%llX   (모듈+0x%llX)",
+                        static_cast<unsigned long long>(hits[i]),
+                        static_cast<unsigned long long>(hits[i] - base));
+        }
+        ImGui::Unindent();
+    }
+
     ImGui::End();
 }
 
