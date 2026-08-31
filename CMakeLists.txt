@@ -36,11 +36,13 @@ target_include_directories(imgui PUBLIC
 add_library(cdtb_core STATIC
     src/mem/scanner.cpp
     src/mem/module.cpp
+    src/mem/hook.cpp
     src/core/log.cpp
     src/core/config.cpp
     src/core/guard.cpp
 )
 target_include_directories(cdtb_core PUBLIC src)
+target_link_libraries(cdtb_core PUBLIC minhook)
 
 # ------------------------------------------------------------------ Tests
 add_executable(cdtb_tests
@@ -49,6 +51,7 @@ add_executable(cdtb_tests
     tests/scanner_tests.cpp
     tests/module_tests.cpp
     tests/core_tests.cpp
+    tests/hook_tests.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
