@@ -7,6 +7,9 @@
 
 #include "game/camera.h"
 #include "game/grant.h"
+#include "game/items.h"
+#include "render/icon_atlas.h"
+#include "render/item_style.h"
 
 namespace cdtb::render {
 namespace {
@@ -15,14 +18,19 @@ int g_pick = -1;
 bool g_picked_by_hand = false;
 int g_item_key = 50001;      // 화살
 int g_count = 1;
+bool g_show_advanced = false;
 
 bool g_called = false;
 bool g_call_ok = false;
+bool g_last_to_inventory = true;
 game::SpawnOutcome g_outcome;
 
-// 게임이 위치를 페이로드로 받는다 - 자동으로 발밑이 되지 않는다.
-// 카메라 분석이 찾아 둔 플레이어 컴포넌트에서 좌표를 가져온다.
-bool player_position(float out[3]) {
+constexpr float kIconSize = 24.0f;
+
+// 게임이 위치를 페이로드로 받는다. PlayerCameraComponent 의 월드
+// 좌표인데 실측에서 시점을 돌리면 값이 변했다 - 카메라 위치다.
+// 바닥 스폰에만 쓰이고, 인벤토리 지급은 위치가 필요 없다.
+bool camera_position(float out[3]) {
     const auto& set = game::cameras();
     if (set.player_component == 0) return false;
     return game::read_world_position(set.player_component, out);
@@ -35,6 +43,43 @@ const char* short_class(const char* mangled) {
     return (p != nullptr) ? p + 4 : mangled;
 }
 
+// 지금 고른 키의 아이템. 없으면 nullptr.
+const game::ItemCatalogEntry* selected_item() {
+    if (!game::items_ready() || g_item_key <= 0) return nullptr;
+    const auto key = static_cast<std::uint32_t>(g_item_key);
+    for (const auto& e : game::item_catalog()) {
+        if (e.key == key) return &e;
+    }
+    return nullptr;
+}
+
+// 고른 아이템을 아이콘·이름·등급·분류로 보여 준다. 키 숫자만
+// 보여 주면 무엇을 주는지 알 수 없다.
+void draw_selected(const game::ItemCatalogEntry* item) {
+    if (item == nullptr) {
+        ImGui::TextDisabled("그 키의 아이템이 목록에 없습니다");
+        return;
+    }
+    const IconRef ico = icon_for(item->key);
+    if (ico.valid) {
+        ImGui::Image(ico.tex, ImVec2(kIconSize, kIconSize), ico.uv0, ico.uv1);
+    } else {
+        ImGui::Dummy(ImVec2(kIconSize, kIconSize));
+    }
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    if (item->name.empty()) {
+        ImGui::TextDisabled("(이름 없음)");
+    } else {
+        ImGui::TextColored(grade_color(item->grade), "%s", item->name.c_str());
+    }
+    ImGui::SameLine();
+    const char* cat = category_name(item->category);
+    ImGui::TextDisabled("· %s%s%s", game::grade_label(item->grade),
+                        (cat != nullptr && cat[0] != 0) ? " · " : "",
+                        (cat != nullptr) ? cat : "");
+}
+
 }  // namespace
 
 void set_grant_item_key(unsigned int key) {
@@ -43,184 +88,164 @@ void set_grant_item_key(unsigned int key) {
 }
 
 void draw_grant_panel() {
-    // 아이템 목록 안에 접어 넣었더니 스크롤 밖으로 밀려 버튼이 보이지
-    // 않았다. 따로 띄운다.
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 340.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("지급 (시험)")) {
+    ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("아이템 지급")) {
         ImGui::End();
         return;
     }
 
     // 액터가 아니라 세션을 넘긴다. 그러면 게임이 자기 경로로 액터를
-    // 찾는다 - 우리가 인벤토리 컴포넌트를 고를 일이 없다. 예전에는
-    // 직접 골랐다가 틀린 것을 찍어 게임 안에서 죽었다.
+    // 찾는다 - 우리가 인벤토리 컴포넌트를 고를 일이 없다.
     std::uintptr_t seen[16]{};
     std::uint32_t hits[16]{};
     const int n = game::seen_sessions(seen, hits, 16);
     if (n == 0) {
-        ImGui::TextDisabled("세션을 아직 못 봤습니다. 월드에 들어가세요.");
+        ImGui::TextDisabled("월드에 들어가면 준비됩니다.");
         ImGui::End();
         return;
     }
 
-    // 세션에 따라 클라이언트 쪽 액터가 나오기도 한다. 실제 작업
-    // 함수는 서버 쪽 코드라 그걸 넘기면 죽는다 - 실측에서 그랬다.
-    // 서버 쪽이 나오는 세션 중 가장 많이 쓰인 것을 고른다.
     bool server[16]{};
     for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
     if (!g_picked_by_hand) g_pick = game::best_actor_index(hits, server, n);
 
-    const auto& msg = game::spawn_message();
-    if (msg.handler != 0) {
-        ImGui::Text("메시지 ID %u  처리기 0x%llX", msg.id,
-                    static_cast<unsigned long long>(msg.handler));
-    }
-    ImGui::TextUnformatted("세션 - 호출이 가장 많은 것이 플레이어입니다");
-    // 손으로 고르면 자동 선택이 덮인다. 라벨이 붙기 전에 고른 채로
-    // 굳으면 엉뚱한 세션으로 부르게 된다 - 실제로 2회짜리로 불렀다.
-    // 언제든 되돌릴 수 있게 둔다.
-    if (g_picked_by_hand) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton("자동으로 다시 고르기")) {
-            g_picked_by_hand = false;
-        }
-    }
-    if (ImGui::BeginTable("actors", 3,
-                          ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-        for (int i = 0; i < n; ++i) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            char id[32];
-            std::snprintf(id, sizeof(id), "##a%d", i);
-            if (ImGui::Selectable(id, g_pick == i,
-                                  ImGuiSelectableFlags_SpanAllColumns)) {
-                g_pick = i;
-                g_picked_by_hand = true;
-            }
-            ImGui::SameLine();
-            ImGui::Text("0x%llX", static_cast<unsigned long long>(seen[i]));
-            ImGui::TableNextColumn();
-            ImGui::Text("호출 %u회", hits[i]);
-            ImGui::TableNextColumn();
-            if (server[i]) {
-                ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
-                                   short_class(game::session_class(i)));
-            } else {
-                ImGui::TextDisabled("%s", short_class(game::session_class(i)));
-            }
-        }
-        ImGui::EndTable();
-    }
+    // --- 무엇을 줄 것인가 -------------------------------------------
+    const game::ItemCatalogEntry* item = selected_item();
+    draw_selected(item);
 
-    ImGui::Separator();
-    ImGui::TextUnformatted("아이템 키");
+    ImGui::TextUnformatted("키");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0f);
-    ImGui::InputInt("##itemkey", &g_item_key);
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputInt("##itemkey", &g_item_key, 0, 0);
     ImGui::SameLine();
     ImGui::TextUnformatted("개수");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputInt("##count", &g_count);
+    ImGui::InputInt("##count", &g_count, 1, 10);
     if (g_count < 1) g_count = 1;
 
-    float pos[3]{};
-    const bool have_pos = player_position(pos);
+    // 최대 스택을 넘기면 게임이 조용히 거절한다. 미리 자른다.
+    if (item != nullptr && item->max_stack > 0 &&
+        g_count > static_cast<int>(item->max_stack)) {
+        g_count = static_cast<int>(item->max_stack);
+    }
+    if (item != nullptr && item->max_stack > 0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(최대 %u)", item->max_stack);
+    }
+    ImGui::TextDisabled("아이템 목록에서 줄을 누르면 여기로 들어옵니다");
 
-    // 못 누르는 이유를 항상 적는다. 눌러도 아무 일이 없으면 무엇이
-    // 잘못됐는지 알 수 없다 - 실제로 그렇게 막혔다.
+    // --- 막힌 이유는 항상 적는다 ------------------------------------
     const char* blocked = nullptr;
     if (g_pick < 0 || g_pick >= n) {
-        blocked = "서버 쪽 액터가 나오는 세션이 아직 없습니다";
+        blocked = "플레이어 세션을 아직 못 찾았습니다";
     } else if (game::session_class(g_pick)[0] == 0) {
-        blocked = "그 세션이 어떤 액터를 내는지 아직 확인 중입니다";
+        blocked = "세션을 확인하는 중입니다";
     } else if (!server[g_pick]) {
-        // 클라이언트 쪽을 넘기면 게임 안에서 죽는다. 실측했다.
-        blocked = "클라이언트 쪽 세션입니다 - 초록색(Server)을 고르세요";
-    } else if (!have_pos) {
-        blocked = "플레이어 좌표를 아직 못 읽었습니다 (월드 진입 필요)";
+        blocked = "클라이언트 쪽 세션입니다 - 고급에서 초록색을 고르세요";
     } else if (!game::spawn_args_ok(static_cast<std::uint32_t>(g_item_key),
                                     g_count)) {
-        blocked = "아이템 키는 0이 아니어야 하고 개수는 1 이상이어야 합니다";
-    } else if (!game::spawn_ready()) {
-        blocked = "치트 메시지를 해석하지 못했습니다";
+        blocked = "키는 0이 아니어야 하고 개수는 1 이상이어야 합니다";
     }
-
-    if (have_pos) {
-        // PlayerCameraComponent 의 월드 좌표다. 이름은 카메라지만
-        // 컴포넌트가 플레이어에 붙어 있으므로 캐릭터 좌표일 수도
-        // 있다 - 확인 전까지 단정하지 않는다. 제자리에서 시점만
-        // 돌려 이 숫자가 변하는지 보면 갈린다.
-        ImGui::Text("위치 %.1f, %.1f, %.1f", pos[0], pos[1], pos[2]);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(시점만 돌려 보세요 - 변하면 카메라)");
-    }
-
     if (blocked != nullptr) {
         ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f), "%s", blocked);
     }
 
-    // 플레이어 세션은 게임플레이 코드가 끊임없이 부른다. 몇 번밖에
-    // 안 불린 것을 고르면 거의 확실히 다른 것이다.
-    if (blocked == nullptr && g_pick >= 0 && g_pick < n) {
-        std::uint32_t top = 0;
-        for (int i = 0; i < n; ++i) {
-            if (server[i] && hits[i] > top) top = hits[i];
-        }
-        if (hits[g_pick] * 10 < top) {
-            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
-                               "호출이 %u회뿐입니다 - 가장 많은 것은 %u회입니다",
-                               hits[g_pick], top);
-        }
-    }
+    // --- 버튼 -------------------------------------------------------
+    float pos[3]{};
+    const bool have_pos = camera_position(pos);
 
     ImGui::BeginDisabled(blocked != nullptr || !game::give_ready());
-    if (ImGui::Button("인벤토리에 넣기", ImVec2(160.0f, 0.0f))) {
+    if (ImGui::Button("인벤토리에 넣기", ImVec2(150.0f, 0.0f))) {
         g_call_ok = game::request_give(
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count);
         g_called = true;
+        g_last_to_inventory = true;
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
 
-    ImGui::BeginDisabled(blocked != nullptr);
-    if (ImGui::Button("발밑에 떨구기", ImVec2(160.0f, 0.0f))) {
-        // 이 함수는 렌더 스레드에서 돈다. 게임 함수를 부르기에 맞는
-        // 스레드다 - 다른 스레드에서 부르면 죽는다.
-        // 렌더 스레드에서 직접 부르면 죽는다. 작업 함수 안쪽이 TLS 를
-        // 쓰는데 이 스레드에는 그 블록이 없다 - 실측에서 RVA
-        // 0x25493D2 에서 널을 참조했다. 요청만 걸고 게임 스레드가
-        // 집어 가게 한다.
+    ImGui::BeginDisabled(blocked != nullptr || !have_pos);
+    if (ImGui::Button("바닥에 떨구기", ImVec2(150.0f, 0.0f))) {
+        // 렌더 스레드에서 직접 부르면 죽는다. 요청만 걸고 TLS 가 선
+        // 게임 스레드가 집어 간다.
         g_call_ok = game::request_spawn(
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
         g_called = true;
+        g_last_to_inventory = false;
     }
     ImGui::EndDisabled();
+    if (!have_pos) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(좌표 대기)");
+    }
 
     if (g_called) {
         g_outcome = game::last_outcome();
-        ImGui::SameLine();
         if (game::spawn_pending()) {
             ImGui::TextDisabled("게임 스레드를 기다리는 중...");
-        } else
-        if (!g_call_ok) {
-            ImGui::TextDisabled("부르지 못했습니다");
+        } else if (!g_call_ok) {
+            ImGui::TextDisabled("연달아 누르면 잠시 막힙니다 (2초)");
         } else if (g_outcome.no_actor) {
             ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
                                "그 세션에서 액터가 안 나왔습니다");
         } else if (g_outcome.crashed) {
             ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
-                               "게임 안에서 죽었다 0x%X - 대상이 틀렸습니다",
-                               g_outcome.seh);
-        } else if (g_outcome.result == 0) {
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "성공 (0)");
+                               "게임 안에서 죽었습니다 0x%X", g_outcome.seh);
+        } else if (g_last_to_inventory) {
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
+                               "인벤토리에 넣었습니다");
         } else {
-            ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.3f, 1.0f),
-                               "게임이 거절: 0x%X", g_outcome.result);
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
+                               "바닥에 떨궜습니다 - 발밑을 보세요");
         }
-        if (g_outcome.actor != 0) {
-            ImGui::Text("액터 0x%llX",
-                        static_cast<unsigned long long>(g_outcome.actor));
+    }
+
+    // --- 고급: 세션 고르기 ------------------------------------------
+    // 자동 선택이 맞는 것을 실측으로 확인했으므로 접어 둔다. 틀릴
+    // 때만 열면 된다.
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("고급")) {
+        const auto& msg = game::spawn_message();
+        if (msg.handler != 0) {
+            ImGui::TextDisabled("바닥 스폰 ID %u · 처리기 0x%llX", msg.id,
+                                static_cast<unsigned long long>(msg.handler));
+        }
+        if (g_picked_by_hand && ImGui::SmallButton("자동으로 다시 고르기")) {
+            g_picked_by_hand = false;
+        }
+        if (ImGui::BeginTable("sessions", 3,
+                              ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_SizingFixedFit)) {
+            for (int i = 0; i < n; ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                char id[32];
+                std::snprintf(id, sizeof(id), "##s%d", i);
+                if (ImGui::Selectable(id, g_pick == i,
+                                      ImGuiSelectableFlags_SpanAllColumns)) {
+                    g_pick = i;
+                    g_picked_by_hand = true;
+                }
+                ImGui::SameLine();
+                ImGui::Text("0x%llX",
+                            static_cast<unsigned long long>(seen[i]));
+                ImGui::TableNextColumn();
+                ImGui::Text("%u회", hits[i]);
+                ImGui::TableNextColumn();
+                if (server[i]) {
+                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
+                                       short_class(game::session_class(i)));
+                } else {
+                    ImGui::TextDisabled("%s",
+                                        short_class(game::session_class(i)));
+                }
+            }
+            ImGui::EndTable();
+        }
+        if (have_pos) {
+            ImGui::TextDisabled("카메라 좌표 %.1f, %.1f, %.1f", pos[0], pos[1],
+                                pos[2]);
         }
     }
     ImGui::End();

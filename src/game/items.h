@@ -29,6 +29,7 @@ struct ItemEntry {
     std::uintptr_t record = 0;
     std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
     std::uint8_t category = 0;    // 74종. 이름은 아직 못 붙였다
+    std::uint32_t max_stack = 0;  // 한 칸에 쌓이는 최대 개수
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -63,6 +64,7 @@ struct ItemCatalogEntry {
     std::string name;             // 빈 문자열이면 현지화 표에 없는 것
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
+    std::uint32_t max_stack = 0;
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름

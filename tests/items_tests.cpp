@@ -59,6 +59,8 @@ struct Fixture {
             // 등급 +0x210 (0=없음, 1..5), 분류 +0xA3
             mem.put_u8(rec + 0x210, static_cast<std::uint8_t>(i + 1));
             mem.put_u8(rec + 0xA3, static_cast<std::uint8_t>(56 + i));
+            // 최대 스택 +0x18. 지급 개수를 여기에 맞춰 자른다.
+            mem.put_u32(rec + 0x18, static_cast<std::uint32_t>(10 * (i + 1)));
         }
         build_localization();
     }
@@ -280,6 +282,18 @@ TEST(read_item_table_reads_grade_and_category) {
     CHECK_EQ(out[2].grade, static_cast<std::uint8_t>(3));
     CHECK_EQ(out[0].category, static_cast<std::uint8_t>(56));
     CHECK_EQ(out[2].category, static_cast<std::uint8_t>(58));
+}
+
+// 개수를 최대 스택보다 크게 넣으면 게임이 조용히 거절한다. 지급
+// 칸에서 미리 잘라 주려면 목록이 그 값을 들고 있어야 한다.
+TEST(build_item_catalog_carries_max_stack) {
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK(out.size() >= 2);
+    CHECK_EQ(out[0].max_stack, std::uint32_t{10});
+    CHECK_EQ(out[1].max_stack, std::uint32_t{20});
 }
 
 TEST(build_item_catalog_carries_grade_and_category) {

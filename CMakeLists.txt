@@ -61,6 +61,7 @@ add_library(cdtoybox SHARED
     src/render/item_panel.cpp
     src/render/icon_atlas.cpp
     src/render/grant_panel.cpp
+    src/render/item_style.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp

@@ -15,6 +15,7 @@ constexpr std::size_t kRecordsPtr = 0x58;   // 레코드 포인터 배열
 
 // --- 레코드 (0x500 바이트) ---
 constexpr std::size_t kRecKey = 0x00;       // u32 키
+constexpr std::size_t kRecMaxStack = 0x18;  // u32 최대 스택
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
 constexpr std::size_t kRecCategory = 0xA3;  // u8  분류 (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  등급 (0=없음, 1..5)
@@ -115,6 +116,7 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         if (!reader.read_value(e.record + kRecNameKey, &e.name_key)) continue;
         // 없으면 0 으로 둔다. 등급 0 은 '등급 없음' 이라 뜻이 맞는다.
         reader.read_value(e.record + kRecGrade, &e.grade);
+        reader.read_value(e.record + kRecMaxStack, &e.max_stack);
         reader.read_value(e.record + kRecCategory, &e.category);
         items.push_back(e);
     }
@@ -139,6 +141,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.name_key = e.name_key;
         entry.grade = e.grade;
         entry.category = e.category;
+        entry.max_stack = e.max_stack;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
