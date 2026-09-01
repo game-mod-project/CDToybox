@@ -91,20 +91,37 @@ bool sane_position(const float p[3]) {
     return true;
 }
 
+// 재기준 좌표의 지역 원점. 켤 때 한 번 구한다.
+//
+// 매 프레임 다시 구할 수 없다. 우리가 월드 좌표를 덮어쓰기 때문에,
+// 두 번째 프레임부터는 "게임의 월드 - 게임의 재기준" 이 아니라
+// "우리 값 - 게임의 재기준" 이 되어 원점이 매 프레임 어긋난다.
+// 원점은 지역이 바뀔 때만 변하므로 켤 때 한 번이면 된다.
+float g_origin[3]{};
+bool g_origin_ok = false;
+
 // 렌더가 읽는 카메라 좌표를 우리 값으로 덮는다.
 //
-// 최소한만 쓴다. 블록 0 의 월드 좌표 하나다.
+// 월드 좌표(+0x8C)는 우리 값을 그대로 유지하지만 게임이 거기서
+// 재기준 좌표를 파생시키지 않는다. 실측으로 확인했다 - 프리캠을 켜고
+// 움직이는 동안 월드는 우리를 따라왔고 재기준은 미동도 하지 않았다.
+// 렌더가 실제로 먹는 값은 재기준 쪽이다.
 //
-// 처음에는 블록 두 벌의 월드 좌표와 재기준 좌표 세 벌씩, 모두 8곳을
-// 썼다. 그 뒤 게임이 정지했다. 재기준 좌표는 렌더가 직접 먹는 값이고
-// 블록 1 은 이전 프레임(모션 벡터·TAA)으로 보이므로, 그것들을 건드리는
-// 것은 위험 대비 얻는 것이 없다. 게임이 월드 좌표에서 나머지를
-// 파생시킨다면 이 하나로 충분하고, 아니라면 아무 일도 일어나지 않는다.
-// 어느 쪽인지는 화면이 알려 준다.
+// 그래서 재기준도 함께 쓴다. 다만 블록 0 의 첫 칸 하나만이다.
+// 처음에는 블록 두 벌의 월드와 재기준 세 벌씩 8곳을 썼고, 그 뒤
+// 게임이 정지했다. 블록 1 은 이전 프레임(모션 벡터·TAA)으로 보여
+// 건드리지 않는다.
 void write_camera_position(std::uintptr_t script, const float pos[3]) {
     if (!sane_position(pos)) return;
-    mem::safe_write_bytes(script + kFirstQuat + kWorldPos, pos,
-                          sizeof(float) * 3);
+
+    const auto q = script + kFirstQuat;
+    mem::safe_write_bytes(q + kWorldPos, pos, sizeof(float) * 3);
+
+    if (!g_origin_ok) return;
+    const float rebased[3] = {pos[0] - g_origin[0], pos[1] - g_origin[1],
+                              pos[2] - g_origin[2]};
+    if (!sane_position(rebased)) return;
+    mem::safe_write_bytes(q + kRebased[0], rebased, sizeof(rebased));
 }
 
 // 원본이 보간해 둔 값을 우리 값으로 덮는다.
@@ -288,6 +305,21 @@ void freecam_toggle() {
             g_pos[0] = w[0];
             g_pos[1] = w[1];
             g_pos[2] = w[2];
+        }
+        // 재기준 원점을 여기서 한 번 구한다. 게임의 값이 아직
+        // 우리 손을 안 탄 유일한 시점이다.
+        const auto q = static_cast<std::uintptr_t>(script) + kFirstQuat;
+        float gw[3]{}, gr[3]{};
+        if (mem::safe_read_bytes(q + kWorldPos, gw, sizeof(gw)) &&
+            mem::safe_read_bytes(q + kRebased[0], gr, sizeof(gr)) &&
+            sane_position(gw) && sane_position(gr)) {
+            for (int i = 0; i < 3; ++i) g_origin[i] = gw[i] - gr[i];
+            g_origin_ok = true;
+            log::infof("프리캠: 재기준 원점 ({:.1f}, {:.1f}, {:.1f})",
+                       g_origin[0], g_origin[1], g_origin[2]);
+        } else {
+            g_origin_ok = false;
+            log::warnf("프리캠: 재기준 원점을 못 구했다 - 위치만 쓴다");
         }
         g_script.store(static_cast<std::uintptr_t>(script));
     } else {
