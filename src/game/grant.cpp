@@ -102,6 +102,28 @@ thread_local int g_detour_depth = 0;
 std::atomic<bool> g_running{false};
 std::atomic<unsigned long long> g_last_done{0};
 constexpr unsigned long long kCooldownMs = 2000;
+
+// 안전한 실행 지점을 찾으려고 호출 스택을 한 번만 뜬다. 지금은
+// 후킹이 걸린 자리에서 게임 함수를 부르는데, 그 자리가 락을 쥐고
+// 있으면 교착한다. 스택의 바깥쪽 프레임이 곧 그 스레드의 루프
+// 뿌리이고, 거기가 안전한 지점이다.
+std::atomic<bool> g_traced{false};
+
+void log_call_stack() {
+    void* frames[40]{};
+    const USHORT n = RtlCaptureStackBackTrace(0, 40, frames, nullptr);
+    const std::uintptr_t base = g_reader->module_base();
+    const std::size_t size = g_reader->module_size();
+    log::infof("실행 지점 호출 스택 {}단", n);
+    for (USHORT i = 0; i < n; ++i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) {
+            log::infof("  [{}] 모듈+0x{:X}", i, a - base);
+        } else {
+            log::infof("  [{}] 0x{:X} (모듈 밖)", i, a);
+        }
+    }
+}
 SpawnOutcome g_outcome;
 
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
@@ -141,6 +163,14 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     // TLS 검사를 요청을 집어 간 뒤에 하면, 준비 안 된 스레드가 요청을
     // 먹고 버린다 - 실측에서 요청만 쌓이고 아무것도 실행되지 않았다.
     // 반드시 소비하기 전에 본다.
+    // 안전 지점을 찾기 위한 일회성 채집. 요청과 무관하게 한 번만.
+    if (g_detour_depth == 1 && g_reader != nullptr &&
+        !g_traced.load(std::memory_order_acquire) && thread_ready_for_spawn()) {
+        if (!g_traced.exchange(true, std::memory_order_acq_rel)) {
+            log_call_stack();
+        }
+    }
+
     if (g_detour_depth == 1 && g_has_pending.load(std::memory_order_acquire) &&
         thread_ready_for_spawn() &&
         !g_running.exchange(true, std::memory_order_acq_rel)) {

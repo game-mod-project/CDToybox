@@ -18,7 +18,10 @@ int g_pick = -1;
 bool g_picked_by_hand = false;
 int g_item_key = 50001;      // 화살
 int g_count = 1;
-bool g_show_advanced = false;
+// 카메라 좌표를 넘기면 시선 쪽에 생겨 발밑이 아니다. 게임이 위치를
+// 스스로 정하는지 시험할 수 있게 둔다 - 역직렬화가 위치 필드를
+// 기본값으로 초기화하는 코드가 있었다.
+bool g_let_game_pick_pos = false;
 
 bool g_called = false;
 bool g_call_ok = false;
@@ -27,9 +30,10 @@ game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
 
-// 게임이 위치를 페이로드로 받는다. PlayerCameraComponent 의 월드
-// 좌표인데 실측에서 시점을 돌리면 값이 변했다 - 카메라 위치다.
-// 바닥 스폰에만 쓰이고, 인벤토리 지급은 위치가 필요 없다.
+// 게임이 위치를 페이로드로 받는다. PlayerCameraComponent 의 +0x360
+// 을 읽는데, 실측에서 아이템이 화면 정중앙에 생겼다 - 카메라의
+// 초점 좌표다(그 점이 크로스헤어에 투영된다). 캐릭터 발밑 좌표는
+// 아직 못 찾았다. 인벤토리 지급은 위치가 필요 없으므로 그쪽이 낫다.
 bool camera_position(float out[3]) {
     const auto& set = game::cameras();
     if (set.player_component == 0) return false;
@@ -165,8 +169,14 @@ void draw_grant_panel() {
     ImGui::EndDisabled();
     ImGui::SameLine();
 
-    ImGui::BeginDisabled(blocked != nullptr || !have_pos);
-    if (ImGui::Button("바닥에 떨구기", ImVec2(150.0f, 0.0f))) {
+    ImGui::BeginDisabled(blocked != nullptr ||
+                         (!have_pos && !g_let_game_pick_pos));
+    if (ImGui::Button("조준한 곳에 떨구기", ImVec2(150.0f, 0.0f))) {
+        if (g_let_game_pick_pos) {
+            pos[0] = 0.0f;
+            pos[1] = 0.0f;
+            pos[2] = 0.0f;
+        }
         // 렌더 스레드에서 직접 부르면 죽는다. 요청만 걸고 TLS 가 선
         // 게임 스레드가 집어 간다.
         g_call_ok = game::request_spawn(
@@ -175,9 +185,16 @@ void draw_grant_panel() {
         g_last_to_inventory = false;
     }
     ImGui::EndDisabled();
-    if (!have_pos) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("(좌표 대기)");
+    ImGui::SameLine();
+    ImGui::Checkbox("위치를 게임에 맡기기", &g_let_game_pick_pos);
+    if (g_let_game_pick_pos) {
+        ImGui::TextDisabled("(0,0,0) 을 넘깁니다 - 게임이 발밑을 잡아 주는지 시험");
+    } else if (!have_pos) {
+        ImGui::TextDisabled("좌표 대기 중");
+    } else {
+        // 읽는 값은 카메라의 초점 좌표다 - 그래서 화면 정중앙,
+        // 크로스헤어 자리에 생긴다. 캐릭터 발밑 좌표는 아직 못 찾았다.
+        ImGui::TextDisabled("화면 중앙(크로스헤어) 자리에 생깁니다");
     }
 
     if (g_called) {
@@ -197,7 +214,7 @@ void draw_grant_panel() {
                                "인벤토리에 넣었습니다");
         } else {
             ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
-                               "바닥에 떨궜습니다 - 발밑을 보세요");
+                               "조준한 곳에 떨궜습니다");
         }
     }
 
