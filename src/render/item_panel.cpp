@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <cfloat>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -18,7 +19,9 @@ namespace {
 // 한다 - 경계 계산을 UI 안에 두면 화면으로만 확인하게 된다.
 
 char g_query[128] = "";
-bool g_hide_unnamed = false;
+// 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개 개발용이라 목록에
+// 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
+bool g_hide_unnamed = true;
 int g_per_page_idx = 1;                      // 아래 표의 첨자
 int g_grade_idx = 0;                         // 0=전체, 1=없음, 2..6=T1..T5
 int g_category_idx = 0;                      // 0=전체, 그 뒤는 g_categories
@@ -175,32 +178,70 @@ void rebuild() {
     g_dirty = false;
 }
 
+// 다음 항목이 창 오른쪽을 넘지 않으면 같은 줄에 이어 붙인다.
+//
+// ImGui 데모의 줄바꿈 관용구다. SameLine 을 무조건 걸면 창을 좁혔을 때
+// 오른쪽이 잘려 나가고, 무조건 줄을 바꾸면 넓은 창에서 빈 줄이 남는다.
+// 남은 폭을 보고 정한다.
+void flow(float next_width) {
+    const float right = ImGui::GetWindowPos().x +
+                        ImGui::GetWindowContentRegionMax().x;
+    const float end = ImGui::GetItemRectMax().x +
+                      ImGui::GetStyle().ItemSpacing.x + next_width;
+    if (end < right) ImGui::SameLine();
+}
+
+float text_w(const char* s) { return ImGui::CalcTextSize(s).x; }
+
+// 라벨이 오른쪽에 붙는 위젯(Combo 등)이 실제로 차지하는 폭.
+float labeled_w(float item_w, const char* label) {
+    return item_w + ImGui::GetStyle().ItemInnerSpacing.x + text_w(label);
+}
+
 void draw_filter_bar() {
-    ImGui::SetNextItemWidth(-190.0f);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float clear_w = text_w("지우기") + st.FramePadding.x * 2.0f;
+    const float check_w = text_w("이름 없는 것 감추기") +
+                          ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
+
+    // 검색창은 남은 폭을 쓰되 상한을 둔다. 상한이 없으면 창을 넓혔을
+    // 때 검색창만 늘어나 오른쪽 항목이 전부 밀려 잘린다.
+    float query_w = ImGui::GetContentRegionAvail().x - clear_w -
+                    st.ItemSpacing.x;
+    if (query_w > 420.0f) query_w = 420.0f;
+    if (query_w < 140.0f) query_w = 140.0f;
+    ImGui::SetNextItemWidth(query_w);
     if (ImGui::InputTextWithHint("##query", "이름 또는 키로 검색", g_query,
                                  sizeof(g_query))) {
         g_dirty = true;
         g_page = 0;
     }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("지우기")) {
+
+    flow(clear_w);
+    if (ImGui::Button("지우기")) {
         g_query[0] = '\0';
         g_dirty = true;
         g_page = 0;
     }
-    ImGui::SameLine();
+
+    flow(check_w);
     if (ImGui::Checkbox("이름 없는 것 감추기", &g_hide_unnamed)) {
         g_dirty = true;
         g_page = 0;
     }
 
-    ImGui::SetNextItemWidth(110.0f);
+    const float grade_w = labeled_w(120.0f, "등급");
+    const float cat_w = labeled_w(190.0f, "분류");
+
+    flow(grade_w);
+    ImGui::SetNextItemWidth(120.0f);
     if (ImGui::Combo("등급", &g_grade_idx, kGradeLabel)) {
         g_dirty = true;
         g_page = 0;
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(150.0f);
+
+    flow(cat_w);
+    ImGui::SetNextItemWidth(190.0f);
     if (ImGui::Combo("분류", &g_category_idx, g_category_labels.c_str())) {
         g_dirty = true;
         g_page = 0;
@@ -211,16 +252,26 @@ void draw_pager(std::size_t total) {
     const std::size_t pages = game::page_count(total, per_page());
     if (g_page >= pages) g_page = pages - 1;
 
+    // 쪽 이동은 한 덩어리다. 중간에서 줄이 바뀌면 읽기 나쁘므로
+    // 통째로 들어갈 자리가 있을 때만 같은 줄에 붙인다.
+    char label[64];
+    std::snprintf(label, sizeof(label), "%zu / %zu 쪽", g_page + 1, pages);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float btn = ImGui::GetFrameHeight();
+    const float nav_w = btn * 2.0f + text_w(label) + 70.0f +
+                        st.ItemSpacing.x * 3.0f;
+
+    flow(labeled_w(70.0f, "쪽당"));
     ImGui::SetNextItemWidth(70.0f);
     if (ImGui::Combo("쪽당", &g_per_page_idx, kPerPageLabel)) g_page = 0;
 
-    ImGui::SameLine();
+    flow(nav_w);
     ImGui::BeginDisabled(g_page == 0);
     if (ImGui::Button("<")) --g_page;
     ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::Text("%zu / %zu 쪽", g_page + 1, pages);
+    ImGui::TextUnformatted(label);
 
     ImGui::SameLine();
     ImGui::BeginDisabled(g_page + 1 >= pages);
@@ -238,8 +289,7 @@ void draw_pager(std::size_t total) {
         }
         g_page = static_cast<std::size_t>(jump) - 1;
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("쪽 이동");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("쪽 번호를 넣고 Enter");
 }
 
 void apply_sort_specs() {
@@ -262,7 +312,10 @@ void apply_sort_specs() {
 }  // namespace
 
 void draw_item_panel() {
-    ImGui::SetNextWindowSize(ImVec2(720, 520), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
+    // 너무 좁히면 표가 읽히지 않는다. 아래로는 못 내려가게 막는다.
+    ImGui::SetNextWindowSizeConstraints(ImVec2(430.0f, 240.0f),
+                                        ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("아이템 목록");
 
     if (!game::items_ready()) {
