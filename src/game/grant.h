@@ -112,6 +112,7 @@ struct SpawnOutcome {
     bool no_actor = false;      // 세션에서 액터가 안 나왔는가
     std::uintptr_t actor = 0;   // 게임이 그 세션으로 찾아 준 액터
     std::uint32_t seh = 0;      // 예외 코드
+    std::uintptr_t fault = 0;   // 터진 주소
     std::uint32_t result = 0;   // 게임이 낸 코드. 0 이면 성공
 };
 

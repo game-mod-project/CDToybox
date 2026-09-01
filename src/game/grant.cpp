@@ -105,15 +105,25 @@ bool call_spawn_guarded(SpawnFn fn, void* actor, std::uint32_t* result,
     }
 }
 
+// 예외 코드만으로는 어디서 죽었는지 알 수 없다. 터진 주소까지
+// 받아 둔다 - 그 주소를 파일에서 디스어셈블하면 무엇을 참조하다
+// 죽었는지 바로 보인다.
+int seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
+               std::uintptr_t* addr) {
+    *code = static_cast<std::uint32_t>(ep->ExceptionRecord->ExceptionCode);
+    *addr = reinterpret_cast<std::uintptr_t>(
+        ep->ExceptionRecord->ExceptionAddress);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
                           const std::uint32_t* key, const std::int64_t* count,
                           const std::uint16_t* f3, const float* pos,
-                          std::uint32_t* seh_out) {
+                          std::uint32_t* seh_out, std::uintptr_t* addr_out) {
     __try {
         fn(self, packet, key, count, f3, pos);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        *seh_out = static_cast<std::uint32_t>(GetExceptionCode());
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
         return false;
     }
 }
@@ -494,7 +504,10 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
         return true;
     }
     o.actor = g_orig_actor_getter(reinterpret_cast<void*>(session));
-    log::infof("바닥 스폰: 문 0x{:X} 액터 0x{:X}", gate, o.actor);
+    std::uintptr_t avt = 0;
+    g_reader->read(o.actor, &avt, sizeof(avt));
+    log::infof("바닥 스폰: 문 0x{:X} 액터 0x{:X} (vtable 0x{:X})", gate, o.actor,
+               avt);
 
     // 처리기는 패킷에서 세션만 꺼낸다 ([패킷+0]). 나머지는 건드리지
     // 않지만 넉넉히 0으로 채워 둔다.
@@ -505,9 +518,11 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
     o.crashed = !call_handler_guarded(
         reinterpret_cast<HandlerFn>(g_spawn_msg.handler),
         reinterpret_cast<void*>(g_spawn_msg.descriptor), packet, &key, &n,
-        &field3, where, &o.seh);
+        &field3, where, &o.seh, &o.fault);
     if (o.crashed) {
-        log::errorf("바닥 스폰이 게임 안에서 죽었다: 0x{:X}", o.seh);
+        log::errorf("바닥 스폰이 게임 안에서 죽었다: 0x{:X} at 0x{:X} (RVA 0x{:X})",
+                    o.seh, o.fault,
+                    o.fault - g_reader->module_base());
     } else {
         log::infof("바닥 스폰 끝 (처리기 경로)");
     }
