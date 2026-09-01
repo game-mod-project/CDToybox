@@ -15,6 +15,7 @@
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
+#include "render/icon_atlas.h"
 #include "render/item_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
@@ -154,6 +155,8 @@ void teardown(ID3D12CommandQueue* queue) {
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
     if (g_win32_ready) { ImGui_ImplWin32_Shutdown(); g_win32_ready = false; }
     if (g_ctx_created) { ImGui::DestroyContext(); g_ctx_created = false; }
+    // GPU 자원은 위 DX12 Shutdown 이 정리했다. 우리 객체만 지운다.
+    cdtb::render::unload_icon_atlas();
     log::infof("해체 3: ImGui 정리 완료");
     input::remove();
     release_resources();
@@ -285,6 +288,9 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         return false;
     }
     g_dx12_ready = true;
+
+    // 아이콘은 있으면 좋은 것이다. 실패해도 오버레이는 그대로 뜬다.
+    cdtb::render::load_icon_atlas();
 
     input::install(desc.OutputWindow);
     log::infof("오버레이 초기화 완료: 백버퍼 {}개, 포맷 {}, hwnd={}, queue={}",

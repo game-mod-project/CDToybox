@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "game/item_view.h"
+#include "render/icon_atlas.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -31,6 +32,7 @@ std::string g_category_labels;               // Combo 용 널 구분 문자열
 bool g_dirty = true;
 std::size_t g_built_from = 0;
 
+constexpr float kIconSize = 22.0f;
 constexpr std::size_t kPerPage[] = {20, 40, 60, 100};
 constexpr const char* kPerPageLabel = "20\0" "40\0" "60\0" "100\0";
 constexpr const char* kGradeLabel = "전체\0" "등급 없음\0" "T1\0" "T2\0" "T3\0"
@@ -290,6 +292,17 @@ void draw_item_panel() {
             }
 
             ImGui::TableSetColumnIndex(3);
+            // 아이콘은 있으면 그리고 없으면 자리만 비운다. 줄 높이가
+            // 들쭉날쭉하지 않도록 없을 때도 같은 크기를 차지시킨다.
+            const IconRef ico = icon_for(e.key);
+            if (ico.valid) {
+                ImGui::Image(ico.tex, ImVec2(kIconSize, kIconSize), ico.uv0,
+                             ico.uv1);
+            } else {
+                ImGui::Dummy(ImVec2(kIconSize, kIconSize));
+            }
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
             if (e.name.empty()) {
                 ImGui::TextDisabled("(이름 없음)");
             } else {
