@@ -9,6 +9,8 @@
 
 #include "core/log.h"
 #include "game/analysis.h"
+#include "game/grant.h"
+#include "game/items.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
 #include "mem/safe_read.h"
@@ -146,6 +148,29 @@ std::atomic<bool> g_stop{false};
 
 // 게임을 켜면 알아서 돈다. 월드 진입 전에는 카메라가 기본값이라
 // 찾아도 쓸모가 없으므로, 찾을 때까지 주기적으로 재시도한다.
+// 조회 함수가 무엇을 돌려주는지 남긴다. 클라이언트 쪽과 서버 쪽
+// 인벤토리 컴포넌트가 둘 다 살아 있어서, 치트 경로가 어느 쪽을
+// 받는지 이걸로 가린다. 읽기만 한다.
+//
+// 카메라 확보 뒤에 두었더니 카메라를 못 찾는 동안 이 로그도 같이
+// 막혔다. 카메라와 무관하게 매 시도마다 낸다.
+void log_new_actors(const mem::Rtti& rtti, const mem::Reader& reader) {
+    std::uintptr_t seen[16]{};
+    std::uint32_t hits[16]{};
+    const int n = seen_sessions(seen, hits, 16);
+    for (int i = 0; i < n; ++i) {
+        const std::uintptr_t actor = session_actor(i);
+        if (actor == 0 || session_class(i)[0] != 0) continue;
+        const std::string cls = rtti.class_of_object(actor);
+        if (cls.empty()) continue;
+        set_session_class(i, cls.c_str());
+        log::infof("세션 {} 0x{:X} -> 액터 0x{:X} ({})", i + 1, seen[i], actor,
+                   cls);
+        // 치트 35개가 전부 지나는 문. 세션마다 한 번만 본다.
+        log_gate(rtti, reader, seen[i]);
+    }
+}
+
 void auto_analysis_loop() {
     mem::LocalReader reader;
     mem::Rtti rtti(reader);
@@ -158,7 +183,20 @@ void auto_analysis_loop() {
     }
     log::infof("자동 분석 시작 - 월드 진입을 기다린다");
 
+    // 세션에서 플레이어 액터를 꺼내는 게임 함수를 후킹해 둔다. 게임
+    // 안에서 647곳이 부르므로 가만 두어도 곧 값이 들어온다. 지금은
+    // 받아 적기만 한다 - 아무것도 쓰지 않는다.
+    actor_hook_install(rtti, reader);
+    spawn_resolve_message(rtti, reader);
+    spawn_resolve(rtti, reader);
+    spawn_trace_install();
+
     for (int attempt = 1; !g_stop.load(); ++attempt) {
+        // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
+        // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
+        // 준비되면 스스로 즉시 빠진다.
+        discover_items(rtti, reader);
+        log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
             break;
@@ -173,6 +211,29 @@ void auto_analysis_loop() {
     run_analysis(rtti, g_set);
 
     log::infof("자동 분석 완료");
+
+    // 아이템 이름은 현지화가 올라온 뒤에야 풀린다. 게임은 아이템 표를
+    // 먼저 올리므로 위 루프가 도는 동안에는 이름이 비어 있는 것이
+    // 정상이다. 예전에는 카메라를 찾는 순간 이 루프를 빠져나가 이름이
+    // 영영 비었다 - 로그에 "이름 풀린 것 0개" 로 남았다.
+    for (int i = 0; i < 120 && !g_stop.load(); ++i) {
+        if (discover_items(rtti, reader)) break;
+        for (int j = 0; j < 50 && !g_stop.load(); ++j) {
+            ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
+        }
+    }
+    if (!items_named() && !g_stop.load()) {
+        log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
+    }
+
+    // 세션은 플레이하는 내내 새로 생긴다. 위의 두 루프는 각각 카메라와
+    // 아이템 이름을 얻으면 끝나므로, 그 뒤에 잡힌 세션에는 이름표가
+    // 붙지 않았다 - 실측에서 목록이 전부 "확인 중" 이었다. 종료할
+    // 때까지 계속 붙인다. 아직 안 붙은 것만 보므로 값싸다.
+    while (!g_stop.load()) {
+        log_new_actors(rtti, reader);
+        for (int i = 0; i < 20 && !g_stop.load(); ++i) ::Sleep(100);
+    }
 }
 
 }  // namespace

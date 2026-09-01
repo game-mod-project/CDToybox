@@ -10,7 +10,11 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
+#include <map>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "remote.h"
@@ -18,6 +22,8 @@
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
+#include "game/items.h"
+#include "game/localization.h"
 
 using namespace cdtb;
 using namespace cdtb::probe;
@@ -43,12 +49,840 @@ void usage() {
         "  findvec3d <x> <y> <z> [오차] [최대] double 좌표 찾기\n"
         "  holdmany <x> <y> <z> <오차> <dy> [ms] [start] [count]  묶어서 눌러쓰기\n"
         "  findmat <x> <y> <z> [오차] [최대]   좌표 근처의 정규직교 4x4 찾기\n"
+        "  loc                         현지화 시스템 + 카테고리별 개수\n"
+        "  loc <키>                    현지화 키 하나 조회 (10진/0x16진)\n"
+        "  loc item <엔티티키>         이름(0x70)과 다음 칸(0x71)\n"
+        "  items [최대]                아이템 표를 키+이름으로 나열\n"
+        "  items find <문자열>         이름에 그 문자열이 든 것만\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
 
+std::string ansi_to_utf8(const char* s);
+
 std::uintptr_t parse_addr(const char* s) {
     return static_cast<std::uintptr_t>(std::strtoull(s, nullptr, 16));
+}
+
+// 현지화 표를 읽어 이름을 푼다. 전부 읽기다.
+//
+// 게임 자신의 조회 함수(0x1410d7230)는 부르지 않는다. 그 함수는
+// 잠금을 잡고, 못 찾은 키의 항목을 새로 만들어 표에 끼워 넣는다.
+void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+             int argc, char** argv) {
+    game::LocSystem sys;
+    if (!game::find_loc_system(rt, reader, &sys)) {
+        std::printf("현지화 시스템을 찾지 못했습니다.\n");
+        std::uint64_t rva = 0;
+        if (game::find_loc_global_rva(rt.image(), &rva)) {
+            std::printf("  전역 RVA 0x%llX 는 찾았습니다.\n"
+                        "  전역이 비었거나 문자열 풀이 아직 없습니다.\n",
+                        static_cast<unsigned long long>(rva));
+        } else {
+            std::printf("  str() 본문 패턴이 이미지에서 유일하게 일치하지\n"
+                        "  않습니다. 게임이 갱신돼 본문이 바뀌었을 수 있습니다.\n");
+        }
+        return;
+    }
+
+    std::printf("전역    0x%llX  (RVA 0x%llX)\n",
+                static_cast<unsigned long long>(sys.global),
+                static_cast<unsigned long long>(sys.global - r.module_base()));
+    std::printf("시스템  0x%llX\n",
+                static_cast<unsigned long long>(sys.object));
+    std::printf("풀      0x%llX   크기 %u 바이트\n",
+                static_cast<unsigned long long>(sys.pool), sys.pool_size);
+
+    if (argc < 3) {
+        std::vector<game::LocCategory> cats;
+        if (!game::loc_categories(reader, sys, &cats)) {
+            std::printf("카테고리 표를 읽지 못했습니다.\n");
+            return;
+        }
+        std::printf("\n카테고리     개수  포인터 배열\n");
+        std::size_t total = 0;
+        for (int c = 0; c < static_cast<int>(cats.size()); ++c) {
+            if (cats[c].count == 0) continue;
+            total += cats[c].count;
+            std::printf("  %3d    %9u  0x%llX\n", c, cats[c].count,
+                        static_cast<unsigned long long>(cats[c].array));
+        }
+        std::printf("비어있지 않은 카테고리의 합계 %zu 항목\n", total);
+        return;
+    }
+
+    // loc find <문자열> [최대]  : 텍스트로 키를 역으로 찾는다.
+    //
+    // 분류명("도구", "한손 무기")도 현지화 문자열이다. 그 키를 알면
+    // 레코드의 어느 칸이 분류인지 바로 드러난다.
+    if (std::strcmp(argv[2], "find") == 0) {
+        if (argc < 4) { std::printf("사용법: loc find <문자열> [최대]\n"); return; }
+        const std::string needle = ansi_to_utf8(argv[3]);
+        const std::size_t max = (argc > 4) ? std::strtoull(argv[4], nullptr, 10)
+                                           : 30;
+        // 카테고리를 지정하지 않으면 설명(cat 7)이 한도를 다 써 버린다.
+        const int only_cat = (argc > 5) ? std::atoi(argv[5]) : -1;
+        // 정확히 일치하는 것만 볼지. 분류명은 짧아 부분 일치가 넘친다.
+        const bool exact = (argc > 6) && std::strcmp(argv[6], "exact") == 0;
+
+        // 풀을 한 번에 읽어 둔다. 항목마다 읽으면 너무 느리다.
+        std::vector<char> pool(sys.pool_size);
+        if (!reader.read(sys.pool, pool.data(), pool.size())) {
+            std::printf("문자열 풀을 읽지 못했습니다\n");
+            return;
+        }
+        std::vector<game::LocCategory> cats;
+        if (!game::loc_categories(reader, sys, &cats)) {
+            std::printf("카테고리 표를 읽지 못했습니다\n");
+            return;
+        }
+        std::printf("\n'%s' 를 담은 항목\n\n", needle.c_str());
+        std::printf("%-4s %-22s %-12s %-10s %s\n", "cat", "키", "엔티티",
+                    "필드", "텍스트");
+        std::size_t shown = 0, scanned = 0;
+        for (int c = 0; c < static_cast<int>(cats.size()) && shown < max; ++c) {
+            if (only_cat >= 0 && c != only_cat) continue;
+            if (cats[c].count == 0 || cats[c].array == 0) continue;
+            std::vector<std::uint64_t> ptrs(cats[c].count);
+            if (!reader.read(cats[c].array, ptrs.data(), ptrs.size() * 8)) {
+                continue;
+            }
+            for (const auto p : ptrs) {
+                if (p == 0 || shown >= max) continue;
+                ++scanned;
+                struct { std::uint64_t key; std::uint32_t off; } h{};
+                if (!reader.read(static_cast<std::uintptr_t>(p) + 0x10, &h,
+                                 sizeof(h))) {
+                    continue;
+                }
+                if (h.off == 0xFFFFFFFFu || h.off >= pool.size()) continue;
+                const char* s = pool.data() + h.off;
+                const std::size_t room = pool.size() - h.off;
+                if (::strnlen(s, room) >= room) continue;
+                const std::string_view sv(s);
+                if (exact ? (sv != needle)
+                          : (sv.find(needle) == std::string_view::npos)) {
+                    continue;
+                }
+                ++shown;
+                std::printf("%-4d %-22llu %-12u 0x%-8X %s\n", c,
+                            static_cast<unsigned long long>(h.key),
+                            game::loc_key_entity(h.key),
+                            game::loc_key_field(h.key), s);
+            }
+        }
+        std::printf("\n항목 %zu개를 훑어 %zu개 일치\n", scanned, shown);
+        return;
+    }
+
+    // loc item <엔티티키>  : 이름(0x70)과 그 다음 칸(0x71)
+    if (std::strcmp(argv[2], "item") == 0) {
+        if (argc < 4) {
+            std::printf("사용법: loc item <엔티티키>\n");
+            return;
+        }
+        const std::uint32_t ent =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        // 필드 번호를 훑는다. 이름(0x70)·설명(0x71) 말고 무엇이 더
+        // 달려 있는지 보려면 넓게 봐야 한다.
+        const std::uint32_t lo = (argc > 4)
+            ? static_cast<std::uint32_t>(std::strtoul(argv[4], nullptr, 0)) : 0;
+        const std::uint32_t hi = (argc > 5)
+            ? static_cast<std::uint32_t>(std::strtoul(argv[5], nullptr, 0))
+            : 0xFF;
+        std::printf("\n엔티티 %u (0x%X)  필드 0x%X..0x%X\n", ent, ent, lo, hi);
+        std::size_t hits = 0;
+        for (std::uint32_t f = lo; f <= hi; ++f) {
+            const std::uint64_t k = game::loc_key(ent, f);
+            std::string text;
+            int cat = -1;
+            if (!game::resolve(reader, sys, k, &text, &cat)) continue;
+            ++hits;
+            if (text.size() > 90) text = text.substr(0, 90) + "...";
+            std::printf("  필드 0x%02X  [cat %2d]  '%s'\n", f, cat,
+                        text.c_str());
+        }
+        std::printf("  일치 %zu개\n", hits);
+        return;
+    }
+
+    // loc <키>  : 10진 또는 0x 16진
+    const std::uint64_t key = std::strtoull(argv[2], nullptr, 0);
+    std::printf("\n키 %llu = 0x%llX   (엔티티 %u, 필드 0x%X)\n",
+                static_cast<unsigned long long>(key),
+                static_cast<unsigned long long>(key),
+                game::loc_key_entity(key), game::loc_key_field(key));
+    std::string text;
+    int cat = -1;
+    if (game::resolve(reader, sys, key, &text, &cat)) {
+        std::printf("카테고리 %d\n'%s'\n", cat, text.c_str());
+    } else {
+        std::printf("찾지 못했습니다.\n");
+    }
+}
+
+// argv 는 시스템 ANSI 코드페이지로 온다(이 기계는 949). 게임의 문자열
+// 풀은 UTF-8 이므로 그대로 비교하면 한글이 절대 맞지 않는다 - 'items
+// find 화살' 이 0건으로 나왔다. 비교 전에 UTF-8 로 옮긴다.
+std::string ansi_to_utf8(const char* s) {
+    if (s == nullptr || *s == '\0') return {};
+    const int wn = ::MultiByteToWideChar(CP_ACP, 0, s, -1, nullptr, 0);
+    if (wn <= 0) return s;
+    std::wstring w(static_cast<std::size_t>(wn), L'\0');
+    ::MultiByteToWideChar(CP_ACP, 0, s, -1, w.data(), wn);
+    const int un = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, nullptr, 0,
+                                         nullptr, nullptr);
+    if (un <= 0) return s;
+    std::string u(static_cast<std::size_t>(un), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, u.data(), un, nullptr,
+                          nullptr);
+    u.resize(std::strlen(u.c_str()));   // 세었던 널 종단을 뗀다
+    return u;
+}
+
+// 힙에서 u32 값을 찾는다. 아이템 키가 어디 담겨 있는지 보는 용도다.
+//
+// 인벤토리 컴포넌트를 한 겹 따라가서는 못 찾았다. 값이 어디 있는지
+// 먼저 알아야 소유 구조를 거슬러 올라갈 수 있다.
+void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
+    const auto regs = r.regions();
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0, scanned = 0;
+    std::printf("힙에서 %u (0x%X) 를 찾습니다\n", value, value);
+    for (const auto& reg : regs) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size == 0 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        scanned += reg.size;
+        for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+            std::uint32_t v = 0;
+            std::memcpy(&v, buf.data() + i, 4);
+            if (v != value) continue;
+            std::printf("  0x%llX\n",
+                        static_cast<unsigned long long>(reg.base + i));
+            if (++found >= max) {
+                std::printf("(%zu개에서 멈춥니다)\n", max);
+                return;
+            }
+        }
+    }
+    std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
+}
+
+// 힙에서 어떤 주소를 담은 8바이트를 찾는다.
+//
+// findptr 은 모듈 이미지만 본다. 메시지 서술자를 가리키는 표는
+// 이미지에 없고 힙에 있어서 이게 필요했다.
+void cmd_heapptr(const Remote& r, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: heapptr <주소> [최대]\n");
+        return;
+    }
+    const std::uint64_t want =
+        std::strtoull(argv[2], nullptr, 16);
+    const std::size_t limit =
+        (argc > 3) ? static_cast<std::size_t>(std::atoi(argv[3])) : 40;
+
+    std::printf("힙에서 0x%llX 를 담은 곳을 찾습니다\n",
+                static_cast<unsigned long long>(want));
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size < 8 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        for (std::size_t i = 0; i + 8 <= buf.size(); i += 8) {
+            std::uint64_t v = 0;
+            std::memcpy(&v, buf.data() + i, 8);
+            if (v != want) continue;
+            std::printf("  0x%llX\n",
+                        static_cast<unsigned long long>(reg.base + i));
+            if (++found >= limit) {
+                std::printf("(%zu개에서 멈춥니다)\n", found);
+                return;
+            }
+        }
+    }
+    std::printf("모두 %zu곳\n", found);
+}
+
+// 값이 바뀌는 것을 따라가며 후보를 좁힌다. 치트엔진이 쓰는 방식이다.
+//
+// "키 옆에 개수가 있는 곳" 을 찾는 방법은 실패했다. 그런 구조가
+// 여럿이고 개수처럼 보이는 값이 실제 개수와 달랐다. 값 자체를 쫓는
+// 편이 확실하다 - 아이템을 하나 쓰면 진짜 개수만 줄어든다.
+//
+//   scan <값>       처음 훑어 후보를 파일에 적는다
+//   scan next <값>  적어 둔 후보 중 지금 그 값인 것만 남긴다
+//
+// 몇 번 반복하면 한 곳으로 수렴한다.
+void cmd_scan(const Remote& r, int argc, char** argv) {
+    const char* kFile = "cdtb_scan.bin";
+    const bool next = (argc > 2) && std::strcmp(argv[2], "next") == 0;
+    const int vi = next ? 3 : 2;
+    if (argc <= vi) {
+        std::printf("사용법: scan <값>  |  scan next <값>\n");
+        return;
+    }
+    const std::uint32_t value =
+        static_cast<std::uint32_t>(std::strtoul(argv[vi], nullptr, 0));
+    // 개수는 대개 한두 바이트다. 폭을 지정할 수 있게 둔다.
+    const int width = (argc > vi + 1) ? std::atoi(argv[vi + 1]) : 4;
+
+    auto matches = [&](const std::uint8_t* p) {
+        if (width == 1) return *p == static_cast<std::uint8_t>(value);
+        if (width == 2) {
+            std::uint16_t v = 0;
+            std::memcpy(&v, p, 2);
+            return v == static_cast<std::uint16_t>(value);
+        }
+        std::uint32_t v = 0;
+        std::memcpy(&v, p, 4);
+        return v == value;
+    };
+
+    std::vector<std::uintptr_t> cands;
+    if (next) {
+        std::FILE* f = std::fopen(kFile, "rb");
+        if (f == nullptr) {
+            std::printf("이전 후보 파일이 없습니다. 먼저 scan <값> 을 하세요.\n");
+            return;
+        }
+        std::uintptr_t a = 0;
+        while (std::fread(&a, sizeof(a), 1, f) == 1) cands.push_back(a);
+        std::fclose(f);
+        std::printf("이전 후보 %zu개\n", cands.size());
+        std::vector<std::uintptr_t> keep;
+        std::uint8_t tmp[4]{};
+        for (const auto a2 : cands) {
+            if (!r.read(a2, tmp, static_cast<std::size_t>(width))) continue;
+            if (matches(tmp)) keep.push_back(a2);
+        }
+        cands.swap(keep);
+    } else {
+        std::vector<std::uint8_t> buf;
+        for (const auto& reg : r.regions()) {
+            if (!reg.writable || reg.is_image) continue;
+            if (reg.size == 0 || reg.size > (512u << 20)) continue;
+            buf.resize(reg.size);
+            if (!r.read(reg.base, buf.data(), buf.size())) continue;
+            const std::size_t end = buf.size() - static_cast<std::size_t>(width);
+            for (std::size_t i = 0; i <= end; ++i) {
+                if (matches(buf.data() + i)) cands.push_back(reg.base + i);
+            }
+            if (cands.size() > 40000000u) break;   // 안전장치
+        }
+    }
+
+    std::FILE* f = std::fopen(kFile, "wb");
+    if (f != nullptr) {
+        for (const auto a : cands) std::fwrite(&a, sizeof(a), 1, f);
+        std::fclose(f);
+    }
+    std::printf("값 %u (%d바이트) 후보 %zu개 -> %s\n", value, width,
+                cands.size(), kFile);
+    for (std::size_t i = 0; i < cands.size() && i < 24; ++i) {
+        std::printf("  0x%llX\n", static_cast<unsigned long long>(cands[i]));
+    }
+}
+
+// 인벤토리를 찾는다. "키 옆에 그 개수가 있는가" 로 가른다.
+//
+// 아이템 키만으로는 못 가린다. 마스터 표·도감·상점 목록·제작 재료·UI
+// 캐시가 전부 키를 담고 있어, 힙을 훑으면 한 키가 수십 곳에서 나온다.
+// **개수가 붙어 있는 구조는 사실상 인벤토리뿐이다** - 도감에는 개수가
+// 없고 마스터 표에는 최대 스택만 있다.
+//
+// 게다가 서로 다른 (키,개수) 쌍이 한 덩어리 안에 둘 이상 모여 있으면
+// 우연일 수 없다. 인벤토리 칸은 이웃해 있기 때문이다.
+void cmd_invfind(const Remote& r, int argc, char** argv) {
+    struct Want { std::uint32_t key; std::uint32_t count; };
+    std::vector<Want> want;
+    for (int i = 2; i < argc; ++i) {
+        const char* colon = std::strchr(argv[i], ':');
+        if (colon == nullptr) continue;
+        want.push_back({static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 0)),
+                        static_cast<std::uint32_t>(std::strtoul(colon + 1, nullptr, 0))});
+    }
+    if (want.empty()) {
+        std::printf("사용법: invfind <키:개수> [키:개수 ...]\n");
+        return;
+    }
+    std::printf("찾는 것:");
+    for (const auto& w : want) std::printf(" %u x%u", w.key, w.count);
+    std::printf("\n\n");
+
+    constexpr std::size_t kNear = 0x40;    // 키에서 개수까지 볼 거리
+    constexpr std::size_t kGroup = 0x800;  // 한 덩어리로 볼 범위
+
+    std::vector<std::uint8_t> buf;
+    // (주소, 어느 want 인지)
+    std::vector<std::pair<std::uintptr_t, std::size_t>> hits;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size == 0 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+            std::uint32_t v = 0;
+            std::memcpy(&v, buf.data() + i, 4);
+            for (std::size_t w = 0; w < want.size(); ++w) {
+                if (v != want[w].key) continue;
+                // 개수가 근처에 있는지 본다.
+                const std::size_t lo = (i > kNear) ? i - kNear : 0;
+                const std::size_t hi = (i + kNear + 4 <= buf.size())
+                                           ? i + kNear : buf.size() - 4;
+                // 개수가 u32 라는 보장이 없다. u8·u16 도 본다 - 스택
+                // 상한이 20 대라 한 바이트로 충분하기 때문이다.
+                // 'near' 는 windows.h 의 레거시 매크로라 쓰지 않는다.
+                bool count_nearby = false;
+                const std::uint32_t c32 = want[w].count;
+                for (std::size_t j = lo; j <= hi && !count_nearby; ++j) {
+                    if (buf[j] == static_cast<std::uint8_t>(c32) &&
+                        c32 <= 0xFF) {
+                        count_nearby = true;
+                        break;
+                    }
+                    if (j + 2 <= buf.size()) {
+                        std::uint16_t c16 = 0;
+                        std::memcpy(&c16, buf.data() + j, 2);
+                        if (c16 == c32) count_nearby = true;
+                    }
+                }
+                if (count_nearby) hits.emplace_back(reg.base + i, w);
+            }
+        }
+    }
+
+    std::printf("키+개수가 같이 있는 곳 %zu 곳\n", hits.size());
+    for (const auto& h : hits) {
+        std::printf("  0x%llX  키 %u x%u\n",
+                    static_cast<unsigned long long>(h.first),
+                    want[h.second].key, want[h.second].count);
+    }
+    std::printf("\n");
+    // 서로 다른 아이템이 한 덩어리에 모인 곳을 찾는다.
+    std::sort(hits.begin(), hits.end());
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+        std::size_t j = i;
+        std::vector<bool> kinds(want.size(), false);
+        while (j < hits.size() && hits[j].first - hits[i].first < kGroup) {
+            kinds[hits[j].second] = true;
+            ++j;
+        }
+        std::size_t n = 0;
+        for (const bool b : kinds) n += b ? 1 : 0;
+        if (n >= 2) {
+            std::printf("  0x%llX ~ 0x%llX  서로 다른 아이템 %zu종 (%zu개 일치)\n",
+                        static_cast<unsigned long long>(hits[i].first),
+                        static_cast<unsigned long long>(hits[j - 1].first), n,
+                        j - i);
+            i = j - 1;
+        }
+    }
+}
+
+// 살아 있는 인벤토리 컴포넌트 중 플레이어 것을 가려낸다. 전부 읽기다.
+//
+// 판정 근거는 "아이템 표에 실재하는 키가 얼마나 들어 있는가" 다.
+// 인스턴스가 여럿이라 주소만 보고 고를 수 없고, 잘못 고른 채로
+// 쓰기로 넘어가면 무엇이 깨지는지도 모르게 된다.
+void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+             char** argv) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_item_manager(rt, reader, &mgr)) {
+        std::printf("ItemInfoManager 를 찾지 못했습니다.\n");
+        return;
+    }
+    game::LocSystem sys;
+    game::find_loc_system(rt, reader, &sys);
+    std::vector<game::ItemCatalogEntry> items;
+    if (!game::build_item_catalog(reader, mgr, sys, &items)) {
+        std::printf("아이템 표를 읽지 못했습니다.\n");
+        return;
+    }
+    std::map<std::uint32_t, const game::ItemCatalogEntry*> by_key;
+    for (const auto& e : items) by_key[e.key] = &e;
+
+    // 찾을 키를 주면 그것만 본다. 안 주면 작은 값을 걸러낸다 -
+    // 2 나 101 같은 값은 우연히 유효 키라서 어디서나 걸린다.
+    std::vector<std::uint32_t> want;
+    for (int i = 2; i < argc; ++i) {
+        const unsigned long v = std::strtoul(argv[i], nullptr, 0);
+        if (v != 0) want.push_back(static_cast<std::uint32_t>(v));
+    }
+    const char* cls = ".?AVClientInventoryActorComponent@pa@@";
+    if (!want.empty()) {
+        std::printf("찾는 키:");
+        for (const auto k : want) std::printf(" %u", k);
+        std::printf("\n");
+    }
+    const auto insts = rt.instances_of_class(cls, 32);
+    std::printf("%s\n인스턴스 %zu개\n\n", cls, insts.size());
+
+    // 객체 자체와, 객체가 가리키는 곳 한 겹까지 본다. 아이템 목록이
+    // 객체 안에 박혀 있을 수도, 따로 할당돼 있을 수도 있다.
+    constexpr std::size_t kSelf = 0x200;
+    constexpr std::size_t kDeep = 0x1000;
+    for (const auto base : insts) {
+        std::vector<std::uint8_t> self(kSelf);
+        if (!reader.read(base, self.data(), self.size())) continue;
+
+        struct Hit { std::uintptr_t at; std::uint32_t key; };
+        std::vector<Hit> hits;
+        auto scan = [&](const std::vector<std::uint8_t>& buf,
+                        std::uintptr_t origin) {
+            for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+                std::uint32_t v = 0;
+                std::memcpy(&v, buf.data() + i, 4);
+                if (!want.empty()) {
+                    if (std::find(want.begin(), want.end(), v) == want.end()) {
+                        continue;
+                    }
+                } else {
+                    // 작은 값은 어디서나 우연히 걸린다.
+                    if (v < 1000 || v > 0x7FFFFFFF) continue;
+                    if (by_key.find(v) == by_key.end()) continue;
+                }
+                if (hits.size() < 12) hits.push_back({origin + i, v});
+            }
+        };
+        scan(self, base);
+
+        std::size_t deep_hits = 0;
+        for (std::size_t i = 0; i + 8 <= self.size(); i += 8) {
+            std::uint64_t p = 0;
+            std::memcpy(&p, self.data() + i, 8);
+            if (p < 0x10000 || (p & 7) != 0) continue;
+            std::vector<std::uint8_t> deep(kDeep);
+            if (!reader.read(static_cast<std::uintptr_t>(p), deep.data(),
+                             deep.size())) {
+                continue;
+            }
+            const std::size_t before = hits.size();
+            scan(deep, static_cast<std::uintptr_t>(p));
+            deep_hits += hits.size() - before;
+        }
+
+        std::uint32_t a = 0, b = 0;
+        reader.read_value(base + 0x20, &a);
+        reader.read_value(base + 0x24, &b);
+        std::printf("0x%llX  +0x20=%u/%u  아이템키 %zu개 (그중 포인터 너머 %zu)\n",
+                    static_cast<unsigned long long>(base), a, b, hits.size(),
+                    deep_hits);
+        for (const auto& h : hits) {
+            const auto* e = by_key[h.key];
+            std::printf("    0x%llX  %-9u %s\n",
+                        static_cast<unsigned long long>(h.at), h.key,
+                        (e && !e->name.empty()) ? e->name.c_str() : "(이름 없음)");
+        }
+    }
+}
+
+// 아이템 표를 걸어 키와 이름을 낸다. 전부 읽기다.
+void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+               char** argv) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_item_manager(rt, reader, &mgr)) {
+        std::printf("ItemInfoManager 를 찾지 못했습니다.\n");
+        return;
+    }
+    game::LocSystem sys;
+    if (!game::find_loc_system(rt, reader, &sys)) {
+        std::printf("현지화 시스템을 찾지 못해 이름 없이 키만 냅니다.\n");
+    }
+
+    // 모드가 돌리는 것과 같은 함수다. 배포하기 전에 여기서 결과를
+    // 확인할 수 있어야 한다 - camera 명령과 같은 이유다.
+    std::vector<game::ItemCatalogEntry> items;
+    if (!game::build_item_catalog(reader, mgr, sys, &items)) {
+        std::printf("아이템 목록을 만들지 못했습니다. (매니저 0x%llX)\n",
+                    static_cast<unsigned long long>(mgr));
+        return;
+    }
+    std::printf("매니저   0x%llX\n", static_cast<unsigned long long>(mgr));
+    std::printf("아이템   %zu개\n", items.size());
+
+    // items save <파일>  : 표 전체를 파일로 내린다.
+    //
+    // 이후 분석은 게임 없이 반복할 수 있다. 등급·분류가 어느 칸인지는
+    // 알려진 값과의 상관으로 가려야 하는데, 그때마다 게임을 켤 수는
+    // 없다.
+    //
+    // 형식 (리틀엔디언):
+    //   u32 매직 'CDTI', u32 개수, u32 레코드 크기
+    //   개수 번 반복: u32 키, u64 이름키, u32 이름길이, 이름, 레코드
+    if (argc > 3 && std::strcmp(argv[2], "save") == 0) {
+        constexpr std::size_t kRecBytes = 0x500;
+        std::vector<game::ItemEntry> raw;
+        if (!game::read_item_table(reader, mgr, &raw, 0)) {
+            std::printf("표를 읽지 못했습니다\n");
+            return;
+        }
+        std::FILE* f = std::fopen(argv[3], "wb");
+        if (f == nullptr) {
+            std::printf("파일을 열지 못했습니다: %s\n", argv[3]);
+            return;
+        }
+        const std::uint32_t magic = 0x49544443;   // 'CDTI'
+        const std::uint32_t count = static_cast<std::uint32_t>(raw.size());
+        const std::uint32_t recsz = static_cast<std::uint32_t>(kRecBytes);
+        std::fwrite(&magic, 4, 1, f);
+        std::fwrite(&count, 4, 1, f);
+        std::fwrite(&recsz, 4, 1, f);
+
+        std::vector<std::uint8_t> rec(kRecBytes);
+        std::size_t wrote = 0, failed = 0;
+        for (const auto& it : raw) {
+            std::string name;
+            game::resolve(reader, sys, it.name_key, &name, nullptr);
+            if (!reader.read(it.record, rec.data(), rec.size())) {
+                std::fill(rec.begin(), rec.end(), 0);
+                ++failed;
+            }
+            const std::uint32_t nlen = static_cast<std::uint32_t>(name.size());
+            std::fwrite(&it.key, 4, 1, f);
+            std::fwrite(&it.name_key, 8, 1, f);
+            std::fwrite(&nlen, 4, 1, f);
+            if (nlen != 0) std::fwrite(name.data(), 1, nlen, f);
+            std::fwrite(rec.data(), 1, rec.size(), f);
+            ++wrote;
+        }
+        std::fclose(f);
+        std::printf("\n%zu개를 %s 에 썼습니다 (레코드 읽기 실패 %zu)\n", wrote,
+                    argv[3], failed);
+        return;
+    }
+
+    // items aux <키>  : 그 아이템의 보조 객체들을 함께 뜬다.
+    //
+    // 매니저에는 레코드(+0x58) 말고도 아이템별 배열이 더 있다.
+    // 분류·등급·가격이 레코드에 없으므로 이쪽을 본다.
+    if (argc > 3 && std::strcmp(argv[2], "aux") == 0) {
+        const std::uint32_t want =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        std::vector<game::ItemEntry> raw;
+        game::read_item_table(reader, mgr, &raw, 0);
+        std::size_t idx = raw.size();
+        for (std::size_t i = 0; i < raw.size(); ++i) {
+            if (raw[i].key == want) { idx = i; break; }
+        }
+        if (idx == raw.size()) {
+            std::printf("키 %u 를 찾지 못했습니다\n", want);
+            return;
+        }
+        std::string name;
+        game::resolve(reader, sys, raw[idx].name_key, &name, nullptr);
+        std::printf("\n키 %u  색인 %zu  '%s'\n", want, idx, name.c_str());
+
+        struct Aux { const char* label; std::size_t field; std::size_t stride;
+                     std::size_t bytes; };
+        const Aux auxes[] = {
+            {"+0x50 배열", 0x50, 8, 0x50},
+            {"+0x80 배열", 0x80, 8, 0x20},
+        };
+        for (const auto& a : auxes) {
+            std::uint64_t base = 0;
+            if (!reader.read_value(mgr + a.field, &base) || base == 0) {
+                std::printf("\n%s : 비어 있음\n", a.label);
+                continue;
+            }
+            std::uint64_t obj = 0;
+            if (!reader.read_value(
+                    static_cast<std::uintptr_t>(base) + idx * a.stride, &obj) ||
+                obj == 0) {
+                std::printf("\n%s : 항목이 비어 있음\n", a.label);
+                continue;
+            }
+            std::printf("\n%s [%zu] -> 0x%llX\n", a.label, idx,
+                        static_cast<unsigned long long>(obj));
+            std::vector<std::uint32_t> w(a.bytes / 4);
+            if (!reader.read(static_cast<std::uintptr_t>(obj), w.data(),
+                             w.size() * 4)) {
+                std::printf("  읽기 실패\n");
+                continue;
+            }
+            for (std::size_t i = 0; i < w.size(); i += 4) {
+                std::printf("  +0x%03zX ", i * 4);
+                for (std::size_t k = 0; k < 4 && i + k < w.size(); ++k) {
+                    std::printf(" %10u(%08X)", w[i + k], w[i + k]);
+                }
+                std::printf("\n");
+            }
+        }
+        return;
+    }
+
+    // items rec <키> [바이트]  : 레코드 한 개를 u32 격자로 뜬다.
+    // 카테고리·등급·가격이 어느 칸인지 찾는 정찰용이다.
+    if (argc > 3 && std::strcmp(argv[2], "rec") == 0) {
+        const std::uint32_t want =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        const std::size_t bytes =
+            (argc > 4) ? std::strtoull(argv[4], nullptr, 0) : 0x100;
+        std::vector<game::ItemEntry> raw;
+        game::read_item_table(reader, mgr, &raw, 0);
+        for (const auto& it : raw) {
+            if (it.key != want) continue;
+            std::string name;
+            game::resolve(reader, sys, it.name_key, &name, nullptr);
+            std::printf("\n키 %u  레코드 0x%llX  '%s'\n", it.key,
+                        static_cast<unsigned long long>(it.record),
+                        name.c_str());
+            std::vector<std::uint32_t> w(bytes / 4);
+            if (!reader.read(it.record, w.data(), w.size() * 4)) {
+                std::printf("레코드를 읽지 못했습니다\n");
+                return;
+            }
+            // 0 만 있는 줄은 건너뛴다. 레코드가 0x500 바이트라
+            // 전부 찍으면 읽을 수가 없다.
+            std::size_t skipped = 0;
+            for (std::size_t i = 0; i < w.size(); i += 4) {
+                bool all_zero = true;
+                for (std::size_t k = 0; k < 4 && i + k < w.size(); ++k) {
+                    if (w[i + k] != 0) all_zero = false;
+                }
+                if (all_zero) { ++skipped; continue; }
+                std::printf("+0x%03zX ", i * 4);
+                for (std::size_t k = 0; k < 4 && i + k < w.size(); ++k) {
+                    std::printf(" %10u(%08X)", w[i + k], w[i + k]);
+                }
+                std::printf("\n");
+            }
+            std::printf("(0 만 있는 줄 %zu개 생략)\n", skipped);
+            return;
+        }
+        std::printf("키 %u 를 표에서 찾지 못했습니다\n", want);
+        return;
+    }
+
+    // items diff <키A> <키B> [바이트]  : 두 레코드에서 다른 칸만 낸다.
+    // 등급·가격·카테고리가 어느 칸인지 좁히는 정찰용이다.
+    if (argc > 4 && std::strcmp(argv[2], "diff") == 0) {
+        const std::uint32_t ka =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        const std::uint32_t kb =
+            static_cast<std::uint32_t>(std::strtoul(argv[4], nullptr, 0));
+        const std::size_t bytes =
+            (argc > 5) ? std::strtoull(argv[5], nullptr, 0) : 0x500;
+
+        std::vector<game::ItemEntry> raw;
+        game::read_item_table(reader, mgr, &raw, 0);
+        std::uintptr_t ra = 0, rb = 0;
+        std::string na, nb;
+        for (const auto& it : raw) {
+            if (it.key == ka && ra == 0) {
+                ra = it.record;
+                game::resolve(reader, sys, it.name_key, &na, nullptr);
+            }
+            if (it.key == kb && rb == 0) {
+                rb = it.record;
+                game::resolve(reader, sys, it.name_key, &nb, nullptr);
+            }
+        }
+        if (ra == 0 || rb == 0) {
+            std::printf("키를 찾지 못했습니다 (A=%s B=%s)\n",
+                        ra ? "있음" : "없음", rb ? "있음" : "없음");
+            return;
+        }
+        std::vector<std::uint32_t> a(bytes / 4), b(bytes / 4);
+        if (!reader.read(ra, a.data(), a.size() * 4) ||
+            !reader.read(rb, b.data(), b.size() * 4)) {
+            std::printf("레코드를 읽지 못했습니다\n");
+            return;
+        }
+        std::printf("\nA %u '%s'\nB %u '%s'\n\n", ka, na.c_str(), kb,
+                    nb.c_str());
+        std::printf("%-8s %22s %22s\n", "오프셋", "A", "B");
+        std::size_t same = 0;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (a[i] == b[i]) { ++same; continue; }
+            // 포인터로 보이는 칸은 건너뛴다. 값이 아니라 주소다.
+            const bool ptr_like =
+                (i + 1 < a.size() && a[i + 1] == 0x2F1 && b[i + 1] == 0x2F1) ||
+                (i > 0 && a[i] == b[i] && a[i] > 0x100);
+            if (ptr_like) { ++same; continue; }
+            std::printf("+0x%03zX  %10u(%08X) %10u(%08X)\n", i * 4, a[i], a[i],
+                        b[i], b[i]);
+        }
+        std::printf("\n같은 칸 %zu / %zu\n", same, a.size());
+        return;
+    }
+
+    // items hist <오프셋> [폭]  : 그 칸의 값 분포를 6,810개 전체에서 센다.
+    // 값 종류가 적으면 등급·분류 같은 열거형이고, 넓게 퍼지면 가격
+    // 이나 아이디다. 어느 칸이 무엇인지 좁히는 정찰용이다.
+    if (argc > 3 && std::strcmp(argv[2], "hist") == 0) {
+        const std::size_t off = std::strtoull(argv[3], nullptr, 0);
+        const int width = (argc > 4) ? std::atoi(argv[4]) : 4;
+        std::vector<game::ItemEntry> raw;
+        if (!game::read_item_table(reader, mgr, &raw, 0)) {
+            std::printf("표를 읽지 못했습니다\n");
+            return;
+        }
+        std::map<std::uint64_t, std::size_t> hist;
+        std::size_t failed = 0;
+        for (const auto& it : raw) {
+            std::uint64_t v = 0;
+            bool ok = false;
+            if (width == 1) { std::uint8_t x = 0; ok = reader.read_value(it.record + off, &x); v = x; }
+            else if (width == 2) { std::uint16_t x = 0; ok = reader.read_value(it.record + off, &x); v = x; }
+            else if (width == 8) { ok = reader.read_value(it.record + off, &v); }
+            else { std::uint32_t x = 0; ok = reader.read_value(it.record + off, &x); v = x; }
+            if (!ok) { ++failed; continue; }
+            ++hist[v];
+        }
+        std::printf("\n+0x%zX (%d바이트): 값 종류 %zu개, 읽기 실패 %zu\n\n",
+                    off, width, hist.size(), failed);
+        std::vector<std::pair<std::uint64_t, std::size_t>> rows(hist.begin(),
+                                                                hist.end());
+        std::sort(rows.begin(), rows.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (std::size_t i = 0; i < rows.size() && i < 24; ++i) {
+            std::printf("  %12llu (0x%llX)  x %zu\n",
+                        static_cast<unsigned long long>(rows[i].first),
+                        static_cast<unsigned long long>(rows[i].first),
+                        rows[i].second);
+        }
+        if (rows.size() > 24) std::printf("  ... 그 외 %zu종\n", rows.size() - 24);
+        return;
+    }
+
+    // items [최대]  |  items find <문자열>
+    std::string needle;
+    bool filtering = false;
+    std::size_t max = 40;
+    if (argc > 2) {
+        if (std::strcmp(argv[2], "find") == 0) {
+            if (argc < 4) { std::printf("사용법: items find <문자열>\n"); return; }
+            needle = ansi_to_utf8(argv[3]);
+            filtering = true;
+            max = 0;
+        } else {
+            max = std::strtoull(argv[2], nullptr, 10);
+        }
+    }
+
+    std::size_t named = 0, shown = 0;
+    std::printf("\n%-10s %-20s %s\n", "키", "이름키", "이름");
+    for (const auto& it : items) {
+        const bool ok = !it.name.empty();
+        if (ok) ++named;
+        if (filtering) {
+            if (!ok || it.name.find(needle) == std::string::npos) continue;
+        }
+        if (max != 0 && shown >= max) continue;
+        ++shown;
+        std::printf("%-10u %-20llu %s\n", it.key,
+                    static_cast<unsigned long long>(it.name_key),
+                    ok ? it.name.c_str() : "(이름 없음)");
+    }
+    std::printf("\n이름이 풀린 것 %zu / %zu\n", named, items.size());
+    if (max != 0 && items.size() > shown) {
+        std::printf("%zu개만 냈습니다. 전부 보려면 개수를 크게 주세요.\n", shown);
+    }
 }
 
 void cmd_info(const Remote& r) {
@@ -562,6 +1396,27 @@ int main(int argc, char** argv) {
         cmd_findvec3(r, x, y, z, eps, mx);
         return 0;
     }
+    if (cmd == "heapptr") {
+        cmd_heapptr(r, argc, argv);
+        return 0;
+    }
+    if (cmd == "scan") {
+        cmd_scan(r, argc, argv);
+        return 0;
+    }
+    if (cmd == "invfind") {
+        cmd_invfind(r, argc, argv);
+        return 0;
+    }
+    if (cmd == "findu32") {
+        if (argc < 3) { usage(); return 1; }
+        const std::uint32_t v =
+            static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 0));
+        const std::size_t mx = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
+                                          : 40;
+        cmd_findu32(r, v, mx);
+        return 0;
+    }
     if (cmd == "diff") {
         if (argc < 3) { usage(); return 1; }
         const std::size_t n = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
@@ -721,6 +1576,18 @@ int main(int argc, char** argv) {
         const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
                                            : 20;
         cmd_instances(rt, r, argv[2], max);
+        return 0;
+    }
+    if (cmd == "loc") {
+        cmd_loc(rt, reader, r, argc, argv);
+        return 0;
+    }
+    if (cmd == "items") {
+        cmd_items(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "inv") {
+        cmd_inv(rt, reader, argc, argv);
         return 0;
     }
 

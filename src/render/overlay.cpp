@@ -12,9 +12,13 @@
 
 #include "core/guard.h"
 #include "core/log.h"
+#include "input/cursor.h"
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
+#include "render/icon_atlas.h"
+#include "render/grant_panel.h"
+#include "render/item_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
 
@@ -153,6 +157,8 @@ void teardown(ID3D12CommandQueue* queue) {
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
     if (g_win32_ready) { ImGui_ImplWin32_Shutdown(); g_win32_ready = false; }
     if (g_ctx_created) { ImGui::DestroyContext(); g_ctx_created = false; }
+    // GPU 자원은 위 DX12 Shutdown 이 정리했다. 우리 객체만 지운다.
+    cdtb::render::unload_icon_atlas();
     log::infof("해체 3: ImGui 정리 완료");
     input::remove();
     release_resources();
@@ -285,6 +291,9 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     }
     g_dx12_ready = true;
 
+    // 아이콘은 있으면 좋은 것이다. 실패해도 오버레이는 그대로 뜬다.
+    cdtb::render::load_icon_atlas();
+
     input::install(desc.OutputWindow);
     log::infof("오버레이 초기화 완료: 백버퍼 {}개, 포맷 {}, hwnd={}, queue={}",
                count, static_cast<int>(desc.BufferDesc.Format),
@@ -351,6 +360,8 @@ void draw_ui() {
 
     // 분석 결과 표시. 버튼은 없다 - 분석은 백그라운드가 한다.
     cdtb::render::draw_camera_panel();
+    cdtb::render::draw_item_panel();
+    cdtb::render::draw_grant_panel();
 }
 
 }  // namespace cdtb::overlay::detail
@@ -361,7 +372,11 @@ using namespace detail;
 
 void set_config(const Config& cfg) { g_cfg = cfg; }
 
-bool is_visible() { return g_visible && g_ready; }
+bool is_visible() {
+    // 그리기가 꺼졌으면 열려 있다고 하지 않는다. 그래야 wndproc 이
+    // 입력을 가로채지 않는다 - 오버레이가 죽은 뒤 키보드까지 막혔다.
+    return g_visible && g_ready && !render::render_disabled();
+}
 
 void toggle() {
     g_visible = !g_visible;
@@ -402,6 +417,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_frame_stage = kStageTeardown;
         g_teardown_requested = false;
         g_visible = false;
+        // 훅을 떼기 전에 OS 커서를 원래 상태로 돌린다. 순서가 바뀌면
+        // 되돌릴 원본 함수가 없다.
+        input::cursor_guard_sync(false);
+        input::cursor_guard_remove();
         teardown(queue);
         log::infof("오버레이 비활성화 완료 - 토글 키로 재초기화 가능");
         g_frame_stage = kStageIdle;
@@ -421,6 +440,15 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         }
         g_ready = true;
     }
+    // 커서 가드. 게임은 카메라를 돌리려고 매 프레임 커서를 화면
+    // 중앙으로 되돌리고 창 안에 가둔다. 그대로 두면 오버레이를 열어도
+    // 커서가 한 점에 붙박여 안 움직이고, 그 자리에 OS 커서가 남아
+    // 두 개로 보인다. 열려 있는 동안만 그 호출들을 막는다.
+    if (!input::cursor_guard_installed()) {
+        input::cursor_guard_install(&cdtb::overlay::is_visible);
+    }
+    input::cursor_guard_sync(cdtb::overlay::is_visible());
+
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
 
     const UINT idx = sc->GetCurrentBackBufferIndex();
@@ -433,6 +461,15 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     wait_for_frame(f);
 
     g_frame_stage = kStageNewFrame;
+
+    // 커서는 ImGui 가 직접 그린다. OS 것만 쓰게 했더니 오버레이
+    // 위에서 아예 안 보였다 - 백엔드가 창 위에서 OS 커서를 끈다.
+    // 대신 wndproc 에서 오버레이 위의 OS 커서를 확실히 끈다.
+    //
+    // 백엔드의 NewFrame 이 이 값을 보고 OS 커서를 처리하므로 그보다
+    // 먼저 세운다.
+    ImGui::GetIO().MouseDrawCursor = true;
+
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();

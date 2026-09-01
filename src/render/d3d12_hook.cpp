@@ -147,6 +147,12 @@ const char* stage_name(int s) {
     }
 }
 
+}  // namespace
+
+bool render_disabled() { return g_disabled; }
+
+namespace {
+
 void log_disabled_once() {
     static bool logged = false;
     if (logged) return;
