@@ -1,5 +1,7 @@
 #include "render/item_panel.h"
 
+#include "render/grant_panel.h"
+
 #include <imgui.h>
 
 #include <cfloat>
@@ -436,6 +438,7 @@ void draw_item_panel() {
         }
         ImGui::EndTable();
     }
+    draw_grant_panel();
     ImGui::End();
 }
 

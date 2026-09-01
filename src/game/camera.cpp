@@ -148,6 +148,23 @@ std::atomic<bool> g_stop{false};
 
 // 게임을 켜면 알아서 돈다. 월드 진입 전에는 카메라가 기본값이라
 // 찾아도 쓸모가 없으므로, 찾을 때까지 주기적으로 재시도한다.
+// 조회 함수가 무엇을 돌려주는지 남긴다. 클라이언트 쪽과 서버 쪽
+// 인벤토리 컴포넌트가 둘 다 살아 있어서, 치트 경로가 어느 쪽을
+// 받는지 이걸로 가린다. 읽기만 한다.
+//
+// 카메라 확보 뒤에 두었더니 카메라를 못 찾는 동안 이 로그도 같이
+// 막혔다. 카메라와 무관하게 매 시도마다 낸다.
+void log_new_actors(const mem::Rtti& rtti) {
+    static int shown = 0;
+    std::uintptr_t seen[16]{};
+    std::uint32_t hits[16]{};
+    const int n = seen_actors(seen, hits, 16);
+    for (; shown < n; ++shown) {
+        log::infof("액터 후보 {} 0x{:X} ({})", shown + 1, seen[shown],
+                   rtti.class_of_object(seen[shown]));
+    }
+}
+
 void auto_analysis_loop() {
     mem::LocalReader reader;
     mem::Rtti rtti(reader);
@@ -164,12 +181,14 @@ void auto_analysis_loop() {
     // 안에서 647곳이 부르므로 가만 두어도 곧 값이 들어온다. 지금은
     // 받아 적기만 한다 - 아무것도 쓰지 않는다.
     actor_hook_install(rtti, reader);
+    spawn_resolve(rtti, reader);
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
         discover_items(rtti, reader);
+        log_new_actors(rtti);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
             break;
@@ -199,22 +218,6 @@ void auto_analysis_loop() {
         log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
     }
 
-    // 조회 함수가 무엇을 돌려주는지 전부 남긴다. 클라이언트 쪽과
-    // 서버 쪽 인벤토리 컴포넌트가 둘 다 살아 있어서, 치트 경로가
-    // 어느 쪽을 받는지 이걸로 가린다. 읽기만 한다.
-    std::uintptr_t seen[16]{};
-    int shown = 0;
-    for (int i = 0; i < 90 && !g_stop.load(); ++i) {
-        const int n = seen_actors(seen, 16);
-        for (; shown < n; ++shown) {
-            log::infof("액터 후보 {} 0x{:X} ({})", shown + 1, seen[shown],
-                       rtti.class_of_object(seen[shown]));
-        }
-        for (int j = 0; j < 20 && !g_stop.load(); ++j) ::Sleep(100);
-    }
-    if (shown == 0 && !g_stop.load()) {
-        log::warnf("액터를 한 번도 못 봤다 - 후킹이 안 걸렸을 수 있다");
-    }
 }
 
 }  // namespace
