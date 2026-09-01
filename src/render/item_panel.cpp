@@ -107,6 +107,25 @@ const char* category_name(std::uint8_t c) {
         case 38: return "펫의상";
         case 39: return "펫투구";
         case 104: return "펫악세사리";
+        // --- 소비·재료 (게임 안 항목을 직접 확인해 붙였다) ---
+        case 0: return "탄환";          // 편전·화살·포탄·총탄
+        case 16: return "낚시";         // 송사리·미꾸라지·참서대
+        case 19: return "재료·요리";    // 약초·고기·곡물
+        case 26: return "곤충";         // 잠자리·나비·거미
+        case 28: return "투척품";       // 연막 폭탄·디코이 소환 볼
+        case 41: return "비약";         // 성수·하급/중급 비약
+        case 48: return "조리법·제작법";
+        case 61: return "포장 교역품";  // 포장된 치즈·밀가루·양모
+        case 62: return "교역품";       // 치즈·밀가루·소금·후추
+        // --- 그 외 ---
+        case 8: return "서적";          // 세계의 무기 일람·제작법
+        case 27: return "열쇠";
+        case 31: return "하우징";       // 평작·걸작·습작, 요리용 솥
+        case 63: return "보물 지도";
+        case 74: return "심연 장비";    // 파괴 I·간파 I. 개수 190 이 사이트와 같다
+        case 102: return "어비스 장치"; // 전송 장치·유적 기둥·동력핵
+        case 50: return "A.T.A.G.";
+        case 54: return "가방·보금자리";
         // --- 도구·기타 ---
         case 6: return "가방";
         case 17: return "낚싯대";
