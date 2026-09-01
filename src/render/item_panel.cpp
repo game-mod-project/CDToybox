@@ -53,29 +53,31 @@ ImVec4 grade_color(std::uint8_t grade) {
     }
 }
 
-// 분류 번호의 이름.
+// 분류 번호(+0xA3, 74종)의 이름.
 //
-// 무기 20종은 crimsondb.gg 의 유형과 대조해 확정했다 - 유형마다
-// 표본 2~5개를 모아 +0xA3 값을 봤더니 전부 한 값으로 모였다.
-// 갑옷·장갑·도구는 게임 툴팁으로 확인했다.
+// crimsondb.gg 의 카드 유형과 대조해 얻었다. 표본 1,379개를 아이템
+// 표와 이름으로 맞춘 뒤, 분류값마다 어떤 유형이 걸리는지 셌다.
+// 37종은 한 유형이 100% 를 차지했고, 몇 종은 여러 유형이 섞였다.
+// 섞인 것은 묶어서 적는다 - 게임의 분류가 사이트보다 거칠어서다.
 //
-// 세 값은 사이트 유형 여럿이 한 값을 쓴다. 게임의 분류가 사이트보다
-// 거칠기 때문이라 묶어서 적는다.
-//
-// **확인한 것만 이름을 붙인다.** 나머지 50여 종은 번호로 둔다 -
-// 추측으로 붙이면 조용히 틀린 표가 된다.
+// **나머지 30종은 번호로 둔다.** 재료·소비·기타 카테고리는 사이트
+// 카드에 유형 자체가 실려 있지 않아 대조할 것이 없다. 이름 표본으로
+// 짐작할 수는 있으나(19=약초, 26=곤충, 48=조리법 ...) 추측으로 붙이면
+// 조용히 틀린 표가 된다.
 const char* category_name(std::uint8_t c) {
     switch (c) {
-        // 게임 툴팁으로 확인
-        case 3: return "갑옷";
+        // --- 방어구 ---
+        case 3: return "갑옷·망토";      // 갑옷155 / 망토97 이 섞인다
+        case 24: return "투구";
         case 22: return "장갑";
-        case 58: return "도구";
-        // 사이트 유형과 대조해 확정
+        case 9: return "신발";
+        case 21: return "안경";
+        case 30: return "복면";
+        // --- 무기 ---
         case 5: return "한손도끼";
         case 10: return "활";
         case 11: return "석궁";
         case 12: return "단검";
-        case 18: return "한손 특수";      // 대포·드릴·건틀렛·부채·전기톱
         case 23: return "양손대포";
         case 29: return "한손둔기";
         case 33: return "장총";
@@ -87,10 +89,31 @@ const char* category_name(std::uint8_t c) {
         case 65: return "양손도끼";
         case 68: return "거대양손검";
         case 69: return "양손망치";
-        case 70: return "양손창·파이크";
-        case 71: return "방사기·침봉";
         case 72: return "양손검";
         case 73: return "양손 워해머";
+        case 18: return "한손 특수";     // 대포·부채·주먹·드릴·건틀렛
+        case 70: return "양손창·파이크";
+        case 71: return "방사기";
+        // --- 방패 ---
+        case 52: return "한손방패";
+        case 60: return "대형방패";
+        // --- 악세서리 ---
+        case 15: return "귀걸이";
+        case 34: return "목걸이";
+        case 49: return "반지";
+        // --- 탈것·펫 ---
+        case 25: return "탈것 장비";     // 마갑·등자·안장·편자·마면
+        case 14: return "드래곤갑옷";
+        case 38: return "펫의상";
+        case 39: return "펫투구";
+        case 104: return "펫악세사리";
+        // --- 도구·기타 ---
+        case 6: return "가방";
+        case 17: return "낚싯대";
+        case 57: return "랜턴";
+        case 58: return "도구";          // 나팔·도끼·갈퀴 등
+        case 59: return "횃불";
+        case 55: return "분무기 등짐";
         default: return nullptr;
     }
 }
