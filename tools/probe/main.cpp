@@ -18,6 +18,7 @@
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
+#include "game/localization.h"
 
 using namespace cdtb;
 using namespace cdtb::probe;
@@ -43,12 +44,102 @@ void usage() {
         "  findvec3d <x> <y> <z> [오차] [최대] double 좌표 찾기\n"
         "  holdmany <x> <y> <z> <오차> <dy> [ms] [start] [count]  묶어서 눌러쓰기\n"
         "  findmat <x> <y> <z> [오차] [최대]   좌표 근처의 정규직교 4x4 찾기\n"
+        "  loc                         현지화 시스템 + 카테고리별 개수\n"
+        "  loc <키>                    현지화 키 하나 조회 (10진/0x16진)\n"
+        "  loc item <엔티티키>         이름(0x70)과 다음 칸(0x71)\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
 
 std::uintptr_t parse_addr(const char* s) {
     return static_cast<std::uintptr_t>(std::strtoull(s, nullptr, 16));
+}
+
+// 현지화 표를 읽어 이름을 푼다. 전부 읽기다.
+//
+// 게임 자신의 조회 함수(0x1410d7230)는 부르지 않는다. 그 함수는
+// 잠금을 잡고, 못 찾은 키의 항목을 새로 만들어 표에 끼워 넣는다.
+void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+             int argc, char** argv) {
+    game::LocSystem sys;
+    if (!game::find_loc_system(rt, reader, &sys)) {
+        std::printf("현지화 시스템을 찾지 못했습니다.\n");
+        std::uint64_t rva = 0;
+        if (game::find_loc_global_rva(rt.image(), &rva)) {
+            std::printf("  전역 RVA 0x%llX 는 찾았습니다.\n"
+                        "  전역이 비었거나 문자열 풀이 아직 없습니다.\n",
+                        static_cast<unsigned long long>(rva));
+        } else {
+            std::printf("  str() 본문 패턴이 이미지에서 유일하게 일치하지\n"
+                        "  않습니다. 게임이 갱신돼 본문이 바뀌었을 수 있습니다.\n");
+        }
+        return;
+    }
+
+    std::printf("전역    0x%llX  (RVA 0x%llX)\n",
+                static_cast<unsigned long long>(sys.global),
+                static_cast<unsigned long long>(sys.global - r.module_base()));
+    std::printf("시스템  0x%llX\n",
+                static_cast<unsigned long long>(sys.object));
+    std::printf("풀      0x%llX   크기 %u 바이트\n",
+                static_cast<unsigned long long>(sys.pool), sys.pool_size);
+
+    if (argc < 3) {
+        std::vector<game::LocCategory> cats;
+        if (!game::loc_categories(reader, sys, &cats)) {
+            std::printf("카테고리 표를 읽지 못했습니다.\n");
+            return;
+        }
+        std::printf("\n카테고리     개수  포인터 배열\n");
+        std::size_t total = 0;
+        for (int c = 0; c < static_cast<int>(cats.size()); ++c) {
+            if (cats[c].count == 0) continue;
+            total += cats[c].count;
+            std::printf("  %3d    %9u  0x%llX\n", c, cats[c].count,
+                        static_cast<unsigned long long>(cats[c].array));
+        }
+        std::printf("비어있지 않은 카테고리의 합계 %zu 항목\n", total);
+        return;
+    }
+
+    // loc item <엔티티키>  : 이름(0x70)과 그 다음 칸(0x71)
+    if (std::strcmp(argv[2], "item") == 0) {
+        if (argc < 4) {
+            std::printf("사용법: loc item <엔티티키>\n");
+            return;
+        }
+        const std::uint32_t ent =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        std::printf("\n엔티티 %u (0x%X)\n", ent, ent);
+        for (std::uint32_t f = game::kLocFieldName;
+             f <= game::kLocFieldName + 1; ++f) {
+            const std::uint64_t k = game::loc_key(ent, f);
+            std::string text;
+            int cat = -1;
+            std::printf("  필드 0x%X  키 %llu :  ", f,
+                        static_cast<unsigned long long>(k));
+            if (game::resolve(reader, sys, k, &text, &cat)) {
+                std::printf("[카테고리 %d] '%s'\n", cat, text.c_str());
+            } else {
+                std::printf("없음\n");
+            }
+        }
+        return;
+    }
+
+    // loc <키>  : 10진 또는 0x 16진
+    const std::uint64_t key = std::strtoull(argv[2], nullptr, 0);
+    std::printf("\n키 %llu = 0x%llX   (엔티티 %u, 필드 0x%X)\n",
+                static_cast<unsigned long long>(key),
+                static_cast<unsigned long long>(key),
+                game::loc_key_entity(key), game::loc_key_field(key));
+    std::string text;
+    int cat = -1;
+    if (game::resolve(reader, sys, key, &text, &cat)) {
+        std::printf("카테고리 %d\n'%s'\n", cat, text.c_str());
+    } else {
+        std::printf("찾지 못했습니다.\n");
+    }
 }
 
 void cmd_info(const Remote& r) {
@@ -721,6 +812,10 @@ int main(int argc, char** argv) {
         const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
                                            : 20;
         cmd_instances(rt, r, argv[2], max);
+        return 0;
+    }
+    if (cmd == "loc") {
+        cmd_loc(rt, reader, r, argc, argv);
         return 0;
     }
 
