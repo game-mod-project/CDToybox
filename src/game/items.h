@@ -27,7 +27,12 @@ struct ItemEntry {
     std::uint32_t key = 0;
     std::uint64_t name_key = 0;   // 레코드가 들고 있는 현지화 키
     std::uintptr_t record = 0;
+    std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
+    std::uint8_t category = 0;    // 74종. 이름은 아직 못 붙였다
 };
+
+// 등급 표시 이름. 표 밖의 값은 "?" 다.
+const char* grade_label(std::uint8_t grade);
 
 // 개수가 이보다 크면 매니저를 잘못 집은 것으로 본다. 실측 6,810개다.
 inline constexpr std::uint32_t kMaxItemCount = 1u << 20;
@@ -55,7 +60,9 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
 struct ItemCatalogEntry {
     std::uint32_t key = 0;
     std::uint64_t name_key = 0;
-    std::string name;   // 빈 문자열이면 현지화 표에 없는 것
+    std::string name;             // 빈 문자열이면 현지화 표에 없는 것
+    std::uint8_t grade = 0;
+    std::uint8_t category = 0;
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름

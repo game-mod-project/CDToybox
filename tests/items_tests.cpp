@@ -25,22 +25,21 @@ using cdtb::tests::FakeMemory;
 //   0x0000  매니저
 //   0x0100  색인 표
 //   0x0200  레코드 포인터 배열
-//   0x0300  레코드 3개 (0x100 간격 - 진짜는 0x500 이지만 간격은
-//           포인터 배열이 정하므로 시험에는 상관없다)
+//   0x1000  레코드 3개 (0x600 간격. 등급이 +0x210 에 있어 겹치면 안 된다)
 struct Fixture {
     FakeMemory mem;
     static constexpr std::size_t kMgr = 0x0000;
     static constexpr std::size_t kIndex = 0x0100;
     static constexpr std::size_t kPtrs = 0x0200;
-    static constexpr std::size_t kRecords = 0x0300;
-    static constexpr std::size_t kRecStride = 0x100;
+    static constexpr std::size_t kRecords = 0x1000;
+    static constexpr std::size_t kRecStride = 0x600;
 
     static constexpr std::uint32_t kKeyA = 2200;
     static constexpr std::uint32_t kKeyB = 50001;
     static constexpr std::uint32_t kKeyC = 1002557;
 
     Fixture() {
-        mem.heap.assign(0x1000, 0);
+        mem.heap.assign(0x4000, 0);
         mem.put_u64(kMgr + 0x28, mem.heap_addr(kIndex));
         mem.put_u32(kMgr + 0x30, 3);
         mem.put_u64(kMgr + 0x58, mem.heap_addr(kPtrs));
@@ -57,6 +56,9 @@ struct Fixture {
             // 이름 현지화 키는 레코드가 직접 들고 있다.
             mem.put_u64(rec + 0x28,
                         (static_cast<std::uint64_t>(keys[i]) << 32) | 0x70ull);
+            // 등급 +0x210 (0=없음, 1..5), 분류 +0xA3
+            mem.put_u8(rec + 0x210, static_cast<std::uint8_t>(i + 1));
+            mem.put_u8(rec + 0xA3, static_cast<std::uint8_t>(56 + i));
         }
         build_localization();
     }
@@ -241,4 +243,40 @@ TEST(item_manager_is_rejected_when_index_pointer_is_null) {
     Fixture f;
     f.mem.put_u64(Fixture::kMgr + 0x28, 0);
     CHECK(!cdtb::game::looks_like_item_manager(f.mem, f.manager()));
+}
+
+// ------------------------------------------------------------ 등급·분류
+
+TEST(read_item_table_reads_grade_and_category) {
+    // 등급은 +0x210 (0=없음, 1..5 = T1..T5), 분류는 +0xA3.
+    // 사이트의 T1~T5 가 알려진 아이템 103개와 대조해 확정했다 -
+    // 1,280바이트 중 다섯 등급을 완벽히 가르는 칸은 +0x210 하나뿐이다.
+    Fixture f;
+    std::vector<ItemEntry> out;
+    CHECK(cdtb::game::read_item_table(f.mem, f.manager(), &out, 0));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() != 3) return;
+    CHECK_EQ(out[0].grade, static_cast<std::uint8_t>(1));
+    CHECK_EQ(out[2].grade, static_cast<std::uint8_t>(3));
+    CHECK_EQ(out[0].category, static_cast<std::uint8_t>(56));
+    CHECK_EQ(out[2].category, static_cast<std::uint8_t>(58));
+}
+
+TEST(build_item_catalog_carries_grade_and_category) {
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() != 3) return;
+    CHECK_EQ(out[1].grade, static_cast<std::uint8_t>(2));
+    CHECK_EQ(out[1].category, static_cast<std::uint8_t>(57));
+}
+
+TEST(grade_label_names_the_five_tiers) {
+    CHECK_EQ(std::string(cdtb::game::grade_label(0)), std::string("-"));
+    CHECK_EQ(std::string(cdtb::game::grade_label(1)), std::string("T1"));
+    CHECK_EQ(std::string(cdtb::game::grade_label(5)), std::string("T5"));
+    // 표에 없는 값이 나와도 죽지 않는다.
+    CHECK_EQ(std::string(cdtb::game::grade_label(9)), std::string("?"));
 }

@@ -15,6 +15,8 @@ constexpr std::size_t kRecordsPtr = 0x58;   // 레코드 포인터 배열
 // --- 레코드 (0x500 바이트) ---
 constexpr std::size_t kRecKey = 0x00;       // u32 키
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
+constexpr std::size_t kRecCategory = 0xA3;  // u8  분류 (74종)
+constexpr std::size_t kRecGrade = 0x210;    // u8  등급 (0=없음, 1..5)
 
 constexpr const char* kManagerClass = ".?AVItemInfoManager@pa@@";
 
@@ -34,6 +36,18 @@ bool read_header(const mem::Reader& r, std::uintptr_t manager,
 }
 
 }  // namespace
+
+const char* grade_label(std::uint8_t grade) {
+    switch (grade) {
+        case 0: return "-";
+        case 1: return "T1";
+        case 2: return "T2";
+        case 3: return "T3";
+        case 4: return "T4";
+        case 5: return "T5";
+        default: return "?";
+    }
+}
 
 bool looks_like_item_manager(const mem::Reader& reader,
                              std::uintptr_t manager) {
@@ -98,6 +112,9 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         e.record = static_cast<std::uintptr_t>(record);
         if (!reader.read_value(e.record + kRecKey, &e.key)) continue;
         if (!reader.read_value(e.record + kRecNameKey, &e.name_key)) continue;
+        // 없으면 0 으로 둔다. 등급 0 은 '등급 없음' 이라 뜻이 맞는다.
+        reader.read_value(e.record + kRecGrade, &e.grade);
+        reader.read_value(e.record + kRecCategory, &e.category);
         items.push_back(e);
     }
     *out = std::move(items);
@@ -119,6 +136,8 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         ItemCatalogEntry entry;
         entry.key = e.key;
         entry.name_key = e.name_key;
+        entry.grade = e.grade;
+        entry.category = e.category;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
