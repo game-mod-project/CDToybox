@@ -187,6 +187,7 @@ void auto_analysis_loop() {
     // 안에서 647곳이 부르므로 가만 두어도 곧 값이 들어온다. 지금은
     // 받아 적기만 한다 - 아무것도 쓰지 않는다.
     actor_hook_install(rtti, reader);
+    tick_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
     spawn_trace_install();

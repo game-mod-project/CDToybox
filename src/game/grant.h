@@ -24,6 +24,19 @@ bool find_actor_getter_rva(const std::vector<std::uint8_t>& image,
 bool find_spawn_ground_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out);
 
+// 스레드의 작업 디스패처. 여기 진입점이 안전한 실행 지점이다.
+//
+// 호출 스택을 떠서 찾았다 - 스레드 본체가 이 함수를 부르고, 이
+// 함수가 작업 콜백을 부른다. 그 앞은 스택이 얕고 아직 아무 작업도
+// 시작하지 않아 락을 쥐고 있지 않다.
+bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
+                              std::uint64_t* rva_out);
+
+// 작업 디스패처를 후킹해 걸어 둔 요청을 거기서 실행한다.
+bool tick_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
+void tick_hook_remove();
+bool tick_hook_installed();
+
 // 액터 조회 함수를 후킹한다. 그 함수는 게임 안에서 647곳이 부르므로
 // 가만 두어도 곧 값이 들어온다 - 우리가 세션에서 액터를 꺼내는
 // 복잡한 경로를 흉내 낼 필요가 없다. 훅은 값을 적어 두기만 하고

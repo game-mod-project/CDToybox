@@ -243,6 +243,32 @@ TEST(item_value_refuses_a_small_buffer) {
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
 }
 
+// 게임 함수를 후킹 안에서 부르면 그 자리가 락을 쥐고 있을 때
+// 교착한다 - 실측에서 게임 조작이 통째로 멈췄다. 안전한 자리는
+// 스레드의 작업 디스패처 진입점이다. 호출 스택을 떠서 찾았다.
+//
+//   sub rsp,0x28
+//   mov rax,[rcx+0x78]
+//   mov rdx,[rax+8]
+//   test rdx,rdx / je / call rdx     <- 작업 콜백
+//
+// 그 앞은 아직 아무 작업도 시작하지 않은 자리다.
+TEST(find_task_dispatcher_returns_its_offset) {
+    const std::uint8_t body[] = {0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B,
+                                 0x41, 0x78, 0x48, 0x8B, 0x50, 0x08};
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    for (std::size_t i = 0; i < sizeof(body); ++i) img[0x200 + i] = body[i];
+    std::uint64_t rva = 0;
+    CHECK(cdtb::game::find_task_dispatcher_rva(img, &rva));
+    CHECK_EQ(rva, 0x200u);
+}
+
+TEST(find_task_dispatcher_fails_when_absent) {
+    const std::vector<std::uint8_t> img(4096, 0xCC);
+    std::uint64_t rva = 0;
+    CHECK(!cdtb::game::find_task_dispatcher_rva(img, &rva));
+}
+
 // 세션이 없으면 요청 자체를 걸지 않는다.
 TEST(request_refuses_without_a_session) {
     const float pos[3] = {0.0f, 0.0f, 0.0f};

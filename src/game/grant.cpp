@@ -22,6 +22,10 @@ constexpr const char* kActorGetterPattern =
 constexpr const char* kItemValueCtorPattern =
     "48 89 5C 24 08 57 48 83 EC 20 33 FF 48 C7 01 FF FF FF FF 48 8D 41 40 89";
 
+// 스레드의 작업 디스패처. 12바이트만으로 이미지 안에서 유일하다.
+constexpr const char* kTaskDispatcherPattern =
+    "48 83 EC 28 48 8B 41 78 48 8B 50 08";
+
 constexpr const char* kSpawnGroundPattern =
     "4C 8B DC 49 89 5B 08 49 89 6B 10 56 57 41 54 41 56 41 57 48 81 EC 50 01";
 
@@ -126,6 +130,41 @@ void log_call_stack() {
 }
 SpawnOutcome g_outcome;
 
+// 작업 디스패처. 여기 진입점이 안전한 실행 지점이다 - 스택이 얕고
+// 아직 아무 작업도 시작하지 않았다.
+using TaskDispatchFn = void(__fastcall*)(void*);
+TaskDispatchFn g_orig_dispatch = nullptr;
+void* g_dispatch_target = nullptr;
+bool g_tick_installed = false;
+
+// 걸어 둔 요청이 있으면 여기서 실행한다. 조건을 한 곳에 모은다.
+void run_pending_if_any() {
+    if (!g_has_pending.load(std::memory_order_acquire)) return;
+    if (!thread_ready_for_spawn()) return;
+    if (g_running.exchange(true, std::memory_order_acq_rel)) return;
+    if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
+        const Pending req = g_pending;
+        if (req.to_inventory) {
+            run_give(req.session, req.key, req.count, &g_outcome);
+        } else {
+            run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+        }
+    }
+    g_last_done.store(GetTickCount64(), std::memory_order_release);
+    g_running.store(false, std::memory_order_release);
+}
+
+// 작업 콜백을 부르기 **전에** 우리 일을 한다. 그 자리는 스레드
+// 본체가 막 넘어온 지점이라 락을 쥐고 있지 않다.
+void __fastcall det_task_dispatch(void* self) {
+    if (g_detour_depth == 0) {
+        ++g_detour_depth;
+        run_pending_if_any();
+        --g_detour_depth;
+    }
+    g_orig_dispatch(self);
+}
+
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     // 우리가 부른 게임 함수가 이 후킹을 다시 밟는다. 진입할 때마다
@@ -154,36 +193,15 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         if (now != n) g_seen_count.store(now, std::memory_order_release);
     }
 
-    // 걸어 둔 요청을 여기서 집어 간다. 게임의 여러 스레드가 이
-    // 함수를 부르므로 TLS 가 선 스레드도 곧 지나간다.
-    //
-    // 깊이가 1일 때만 - 즉 게임 코드에 중첩되지 않은 자리에서만 -
-    // 실행한다. 중첩된 자리는 이미 락을 쥐고 있을 수 있고, 실측에서
-    // 그렇게 교착해 게임 조작이 통째로 멈췄다.
-    // TLS 검사를 요청을 집어 간 뒤에 하면, 준비 안 된 스레드가 요청을
-    // 먹고 버린다 - 실측에서 요청만 쌓이고 아무것도 실행되지 않았다.
-    // 반드시 소비하기 전에 본다.
-    // 안전 지점을 찾기 위한 일회성 채집. 요청과 무관하게 한 번만.
+    // 예전에는 여기서 요청을 실행했다. 그 자리는 게임 코드 한복판이라
+    // 락을 쥐고 있을 수 있고, 실측에서 교착해 게임 조작이 통째로
+    // 멈췄다. 지금은 작업 디스패처에서만 실행한다. 이 훅은 세션을
+    // 모으는 일만 한다.
     if (g_detour_depth == 1 && g_reader != nullptr &&
         !g_traced.load(std::memory_order_acquire) && thread_ready_for_spawn()) {
         if (!g_traced.exchange(true, std::memory_order_acq_rel)) {
             log_call_stack();
         }
-    }
-
-    if (g_detour_depth == 1 && g_has_pending.load(std::memory_order_acquire) &&
-        thread_ready_for_spawn() &&
-        !g_running.exchange(true, std::memory_order_acq_rel)) {
-        if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
-            const Pending req = g_pending;
-            if (req.to_inventory) {
-                run_give(req.session, req.key, req.count, &g_outcome);
-            } else {
-                run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
-            }
-        }
-        g_last_done.store(GetTickCount64(), std::memory_order_release);
-        g_running.store(false, std::memory_order_release);
     }
 
     --g_detour_depth;
@@ -304,6 +322,42 @@ bool find_spawn_ground_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out) {
     return find_one(image, kSpawnGroundPattern, rva_out);
 }
+
+bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
+                              std::uint64_t* rva_out) {
+    return find_one(image, kTaskDispatcherPattern, rva_out);
+}
+
+bool tick_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_tick_installed) return true;
+    std::uint64_t rva = 0;
+    if (!find_task_dispatcher_rva(rtti.image(), &rva)) {
+        log::warnf("작업 디스패처를 찾지 못했다 - 안전 지점 없이 돈다");
+        return false;
+    }
+    if (!mem::hook_init()) return false;
+    g_dispatch_target = reinterpret_cast<void*>(
+        reader.module_base() + static_cast<std::uintptr_t>(rva));
+    if (!mem::hook_install(g_dispatch_target, &det_task_dispatch,
+                           reinterpret_cast<void**>(&g_orig_dispatch))) {
+        log::errorf("작업 디스패처 후킹 실패 (RVA 0x{:X})", rva);
+        g_dispatch_target = nullptr;
+        return false;
+    }
+    g_tick_installed = true;
+    log::infof("작업 디스패처 후킹 설치 (RVA 0x{:X}) - 여기서만 실행한다", rva);
+    return true;
+}
+
+void tick_hook_remove() {
+    if (!g_tick_installed) return;
+    mem::hook_remove(g_dispatch_target);
+    g_dispatch_target = nullptr;
+    g_orig_dispatch = nullptr;
+    g_tick_installed = false;
+}
+
+bool tick_hook_installed() { return g_tick_installed; }
 
 bool actor_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_installed) return true;
