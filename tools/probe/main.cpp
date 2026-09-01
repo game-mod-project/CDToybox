@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -56,6 +57,8 @@ void usage() {
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
+
+std::string ansi_to_utf8(const char* s);
 
 std::uintptr_t parse_addr(const char* s) {
     return static_cast<std::uintptr_t>(std::strtoull(s, nullptr, 16));
@@ -105,6 +108,63 @@ void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                         static_cast<unsigned long long>(cats[c].array));
         }
         std::printf("비어있지 않은 카테고리의 합계 %zu 항목\n", total);
+        return;
+    }
+
+    // loc find <문자열> [최대]  : 텍스트로 키를 역으로 찾는다.
+    //
+    // 분류명("도구", "한손 무기")도 현지화 문자열이다. 그 키를 알면
+    // 레코드의 어느 칸이 분류인지 바로 드러난다.
+    if (std::strcmp(argv[2], "find") == 0) {
+        if (argc < 4) { std::printf("사용법: loc find <문자열> [최대]\n"); return; }
+        const std::string needle = ansi_to_utf8(argv[3]);
+        const std::size_t max = (argc > 4) ? std::strtoull(argv[4], nullptr, 10)
+                                           : 30;
+
+        // 풀을 한 번에 읽어 둔다. 항목마다 읽으면 너무 느리다.
+        std::vector<char> pool(sys.pool_size);
+        if (!reader.read(sys.pool, pool.data(), pool.size())) {
+            std::printf("문자열 풀을 읽지 못했습니다\n");
+            return;
+        }
+        std::vector<game::LocCategory> cats;
+        if (!game::loc_categories(reader, sys, &cats)) {
+            std::printf("카테고리 표를 읽지 못했습니다\n");
+            return;
+        }
+        std::printf("\n'%s' 를 담은 항목\n\n", needle.c_str());
+        std::printf("%-4s %-22s %-12s %-10s %s\n", "cat", "키", "엔티티",
+                    "필드", "텍스트");
+        std::size_t shown = 0, scanned = 0;
+        for (int c = 0; c < static_cast<int>(cats.size()) && shown < max; ++c) {
+            if (cats[c].count == 0 || cats[c].array == 0) continue;
+            std::vector<std::uint64_t> ptrs(cats[c].count);
+            if (!reader.read(cats[c].array, ptrs.data(), ptrs.size() * 8)) {
+                continue;
+            }
+            for (const auto p : ptrs) {
+                if (p == 0 || shown >= max) continue;
+                ++scanned;
+                struct { std::uint64_t key; std::uint32_t off; } h{};
+                if (!reader.read(static_cast<std::uintptr_t>(p) + 0x10, &h,
+                                 sizeof(h))) {
+                    continue;
+                }
+                if (h.off == 0xFFFFFFFFu || h.off >= pool.size()) continue;
+                const char* s = pool.data() + h.off;
+                const std::size_t room = pool.size() - h.off;
+                if (::strnlen(s, room) >= room) continue;
+                if (std::string_view(s).find(needle) == std::string_view::npos) {
+                    continue;
+                }
+                ++shown;
+                std::printf("%-4d %-22llu %-12u 0x%-8X %s\n", c,
+                            static_cast<unsigned long long>(h.key),
+                            game::loc_key_entity(h.key),
+                            game::loc_key_field(h.key), s);
+            }
+        }
+        std::printf("\n항목 %zu개를 훑어 %zu개 일치\n", scanned, shown);
         return;
     }
 
