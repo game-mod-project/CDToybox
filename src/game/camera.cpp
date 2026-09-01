@@ -9,6 +9,7 @@
 
 #include "core/log.h"
 #include "game/analysis.h"
+#include "game/items.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
 #include "mem/safe_read.h"
@@ -159,6 +160,10 @@ void auto_analysis_loop() {
     log::infof("자동 분석 시작 - 월드 진입을 기다린다");
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
+        // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
+        // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
+        // 준비되면 스스로 즉시 빠진다.
+        discover_items(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
             break;

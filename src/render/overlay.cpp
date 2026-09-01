@@ -15,6 +15,7 @@
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
+#include "render/item_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
 
@@ -351,6 +352,7 @@ void draw_ui() {
 
     // 분석 결과 표시. 버튼은 없다 - 분석은 백그라운드가 한다.
     cdtb::render::draw_camera_panel();
+    cdtb::render::draw_item_panel();
 }
 
 }  // namespace cdtb::overlay::detail

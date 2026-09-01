@@ -58,9 +58,12 @@ add_library(cdtoybox SHARED
     src/render/overlay.cpp
     src/render/diagnostics.cpp
     src/render/scan_panel.cpp
+    src/render/item_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
+    src/game/localization.cpp
+    src/game/items.cpp
     src/input/wndproc.cpp
     src/proxy/exports.def
 )
