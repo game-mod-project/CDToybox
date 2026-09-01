@@ -48,7 +48,8 @@ CARD_RE = re.compile(
     r'<a href="(?P<href>/ko/[^"]+)"[^>]*class="item-card".*?'
     r'(?:<span class="tier-badge"[^>]*>(?P<tier>T\d)</span>)?.*?'
     r'images/items/(?P<dir>[a-z-]+)/(?P<hash>[0-9a-f]+)\.webp.*?'
-    r'class="card-name"[^>]*>(?P<name>[^<]+)<', re.S)
+    r'class="card-name"[^>]*>(?P<name>[^<]+)<'
+    r'(?:/span><span class="card-type"[^>]*>(?P<type>[^<]*)<)?', re.S)
 
 
 def fetch(url, tries=3):
@@ -79,7 +80,8 @@ def scrape():
             for m in cards:
                 name = m.group('name').strip()
                 if name and name not in found:
-                    found[name] = (m.group('dir'), m.group('hash'))
+                    found[name] = (m.group('dir'), m.group('hash'),
+                                   (m.group('type') or '').strip())
             seen_here += len(cards)
             page += 1
             time.sleep(0.2)
@@ -93,7 +95,7 @@ def scrape():
 def download_icons(found, cache_dir, cell):
     os.makedirs(cache_dir, exist_ok=True)
     got, failed = {}, 0
-    for i, (name, (d, h)) in enumerate(found.items(), 1):
+    for i, (name, (d, h, _t)) in enumerate(found.items(), 1):
         path = os.path.join(cache_dir, '%s_%s.png' % (d, h))
         if not os.path.exists(path):
             url = '%s/_ipx/f_png&s_%dx%d/images/items/%s/%s.webp' % (
@@ -135,6 +137,10 @@ def main():
     ap.add_argument('--out', required=True, help='만들 아틀라스 경로')
     ap.add_argument('--cell', type=int, default=32)
     ap.add_argument('--cache', default=None, help='내려받은 PNG 보관 폴더')
+    ap.add_argument('--types-out', default=None,
+                    help='"유형 TAB 이름" TSV 경로 (분류 라벨링용)')
+    ap.add_argument('--types-only', action='store_true',
+                    help='아이콘은 건너뛰고 유형만 모은다')
     args = ap.parse_args()
 
     from PIL import Image   # 아틀라스를 구울 때만 필요하다
@@ -144,6 +150,15 @@ def main():
     print('1) 사이트에서 아이콘 목록을 모읍니다')
     found = scrape()
     print('   이름 %d개' % len(found))
+
+    if args.types_out:
+        with open(args.types_out, 'w', encoding='utf-8') as f:
+            for name, (_d, _h, t) in found.items():
+                if t:
+                    f.write(t + '\t' + name + '\n')
+        print('   유형 TSV -> %s' % args.types_out)
+    if args.types_only:
+        return
 
     print('2) 아이콘을 내려받습니다 (%dx%d PNG, 이미 있으면 건너뜁니다)'
           % (args.cell, args.cell))
