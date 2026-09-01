@@ -251,6 +251,65 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::printf("매니저   0x%llX\n", static_cast<unsigned long long>(mgr));
     std::printf("아이템   %zu개\n", items.size());
 
+    // items aux <키>  : 그 아이템의 보조 객체들을 함께 뜬다.
+    //
+    // 매니저에는 레코드(+0x58) 말고도 아이템별 배열이 더 있다.
+    // 분류·등급·가격이 레코드에 없으므로 이쪽을 본다.
+    if (argc > 3 && std::strcmp(argv[2], "aux") == 0) {
+        const std::uint32_t want =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        std::vector<game::ItemEntry> raw;
+        game::read_item_table(reader, mgr, &raw, 0);
+        std::size_t idx = raw.size();
+        for (std::size_t i = 0; i < raw.size(); ++i) {
+            if (raw[i].key == want) { idx = i; break; }
+        }
+        if (idx == raw.size()) {
+            std::printf("키 %u 를 찾지 못했습니다\n", want);
+            return;
+        }
+        std::string name;
+        game::resolve(reader, sys, raw[idx].name_key, &name, nullptr);
+        std::printf("\n키 %u  색인 %zu  '%s'\n", want, idx, name.c_str());
+
+        struct Aux { const char* label; std::size_t field; std::size_t stride;
+                     std::size_t bytes; };
+        const Aux auxes[] = {
+            {"+0x50 배열", 0x50, 8, 0x50},
+            {"+0x80 배열", 0x80, 8, 0x20},
+        };
+        for (const auto& a : auxes) {
+            std::uint64_t base = 0;
+            if (!reader.read_value(mgr + a.field, &base) || base == 0) {
+                std::printf("\n%s : 비어 있음\n", a.label);
+                continue;
+            }
+            std::uint64_t obj = 0;
+            if (!reader.read_value(
+                    static_cast<std::uintptr_t>(base) + idx * a.stride, &obj) ||
+                obj == 0) {
+                std::printf("\n%s : 항목이 비어 있음\n", a.label);
+                continue;
+            }
+            std::printf("\n%s [%zu] -> 0x%llX\n", a.label, idx,
+                        static_cast<unsigned long long>(obj));
+            std::vector<std::uint32_t> w(a.bytes / 4);
+            if (!reader.read(static_cast<std::uintptr_t>(obj), w.data(),
+                             w.size() * 4)) {
+                std::printf("  읽기 실패\n");
+                continue;
+            }
+            for (std::size_t i = 0; i < w.size(); i += 4) {
+                std::printf("  +0x%03zX ", i * 4);
+                for (std::size_t k = 0; k < 4 && i + k < w.size(); ++k) {
+                    std::printf(" %10u(%08X)", w[i + k], w[i + k]);
+                }
+                std::printf("\n");
+            }
+        }
+        return;
+    }
+
     // items rec <키> [바이트]  : 레코드 한 개를 u32 격자로 뜬다.
     // 카테고리·등급·가격이 어느 칸인지 찾는 정찰용이다.
     if (argc > 3 && std::strcmp(argv[2], "rec") == 0) {
