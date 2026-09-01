@@ -270,6 +270,86 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
     std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
 }
 
+// 값이 바뀌는 것을 따라가며 후보를 좁힌다. 치트엔진이 쓰는 방식이다.
+//
+// "키 옆에 개수가 있는 곳" 을 찾는 방법은 실패했다. 그런 구조가
+// 여럿이고 개수처럼 보이는 값이 실제 개수와 달랐다. 값 자체를 쫓는
+// 편이 확실하다 - 아이템을 하나 쓰면 진짜 개수만 줄어든다.
+//
+//   scan <값>       처음 훑어 후보를 파일에 적는다
+//   scan next <값>  적어 둔 후보 중 지금 그 값인 것만 남긴다
+//
+// 몇 번 반복하면 한 곳으로 수렴한다.
+void cmd_scan(const Remote& r, int argc, char** argv) {
+    const char* kFile = "cdtb_scan.bin";
+    const bool next = (argc > 2) && std::strcmp(argv[2], "next") == 0;
+    const int vi = next ? 3 : 2;
+    if (argc <= vi) {
+        std::printf("사용법: scan <값>  |  scan next <값>\n");
+        return;
+    }
+    const std::uint32_t value =
+        static_cast<std::uint32_t>(std::strtoul(argv[vi], nullptr, 0));
+    // 개수는 대개 한두 바이트다. 폭을 지정할 수 있게 둔다.
+    const int width = (argc > vi + 1) ? std::atoi(argv[vi + 1]) : 4;
+
+    auto matches = [&](const std::uint8_t* p) {
+        if (width == 1) return *p == static_cast<std::uint8_t>(value);
+        if (width == 2) {
+            std::uint16_t v = 0;
+            std::memcpy(&v, p, 2);
+            return v == static_cast<std::uint16_t>(value);
+        }
+        std::uint32_t v = 0;
+        std::memcpy(&v, p, 4);
+        return v == value;
+    };
+
+    std::vector<std::uintptr_t> cands;
+    if (next) {
+        std::FILE* f = std::fopen(kFile, "rb");
+        if (f == nullptr) {
+            std::printf("이전 후보 파일이 없습니다. 먼저 scan <값> 을 하세요.\n");
+            return;
+        }
+        std::uintptr_t a = 0;
+        while (std::fread(&a, sizeof(a), 1, f) == 1) cands.push_back(a);
+        std::fclose(f);
+        std::printf("이전 후보 %zu개\n", cands.size());
+        std::vector<std::uintptr_t> keep;
+        std::uint8_t tmp[4]{};
+        for (const auto a2 : cands) {
+            if (!r.read(a2, tmp, static_cast<std::size_t>(width))) continue;
+            if (matches(tmp)) keep.push_back(a2);
+        }
+        cands.swap(keep);
+    } else {
+        std::vector<std::uint8_t> buf;
+        for (const auto& reg : r.regions()) {
+            if (!reg.writable || reg.is_image) continue;
+            if (reg.size == 0 || reg.size > (512u << 20)) continue;
+            buf.resize(reg.size);
+            if (!r.read(reg.base, buf.data(), buf.size())) continue;
+            const std::size_t end = buf.size() - static_cast<std::size_t>(width);
+            for (std::size_t i = 0; i <= end; ++i) {
+                if (matches(buf.data() + i)) cands.push_back(reg.base + i);
+            }
+            if (cands.size() > 40000000u) break;   // 안전장치
+        }
+    }
+
+    std::FILE* f = std::fopen(kFile, "wb");
+    if (f != nullptr) {
+        for (const auto a : cands) std::fwrite(&a, sizeof(a), 1, f);
+        std::fclose(f);
+    }
+    std::printf("값 %u (%d바이트) 후보 %zu개 -> %s\n", value, width,
+                cands.size(), kFile);
+    for (std::size_t i = 0; i < cands.size() && i < 24; ++i) {
+        std::printf("  0x%llX\n", static_cast<unsigned long long>(cands[i]));
+    }
+}
+
 // 인벤토리를 찾는다. "키 옆에 그 개수가 있는가" 로 가른다.
 //
 // 아이템 키만으로는 못 가린다. 마스터 표·도감·상점 목록·제작 재료·UI
@@ -1276,6 +1356,10 @@ int main(int argc, char** argv) {
                                    ? std::strtoull(argv[6], nullptr, 10)
                                    : 200;
         cmd_findvec3(r, x, y, z, eps, mx);
+        return 0;
+    }
+    if (cmd == "scan") {
+        cmd_scan(r, argc, argv);
         return 0;
     }
     if (cmd == "invfind") {

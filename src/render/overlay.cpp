@@ -12,6 +12,7 @@
 
 #include "core/guard.h"
 #include "core/log.h"
+#include "input/cursor.h"
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
@@ -410,6 +411,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_frame_stage = kStageTeardown;
         g_teardown_requested = false;
         g_visible = false;
+        // 훅을 떼기 전에 OS 커서를 원래 상태로 돌린다. 순서가 바뀌면
+        // 되돌릴 원본 함수가 없다.
+        input::cursor_guard_sync(false);
+        input::cursor_guard_remove();
         teardown(queue);
         log::infof("오버레이 비활성화 완료 - 토글 키로 재초기화 가능");
         g_frame_stage = kStageIdle;
@@ -429,6 +434,15 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         }
         g_ready = true;
     }
+    // 커서 가드. 게임은 카메라를 돌리려고 매 프레임 커서를 화면
+    // 중앙으로 되돌리고 창 안에 가둔다. 그대로 두면 오버레이를 열어도
+    // 커서가 한 점에 붙박여 안 움직이고, 그 자리에 OS 커서가 남아
+    // 두 개로 보인다. 열려 있는 동안만 그 호출들을 막는다.
+    if (!input::cursor_guard_installed()) {
+        input::cursor_guard_install(&cdtb::overlay::is_visible);
+    }
+    input::cursor_guard_sync(cdtb::overlay::is_visible());
+
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
 
     const UINT idx = sc->GetCurrentBackBufferIndex();
@@ -442,9 +456,8 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 
     g_frame_stage = kStageNewFrame;
 
-    // 게임이 OS 커서를 숨겨 두므로 오버레이를 켜도 마우스가 보이지
-    // 않는다. ShowCursor 로 되살려도 게임이 다음 프레임에 다시 숨긴다.
-    // ImGui 가 자기 커서를 직접 그리게 한다 - 게임과 다투지 않는다.
+    // 커서는 ImGui 가 직접 그린다. 전체화면에서도 확실히 보이고,
+    // 커서 가드가 OS 커서를 숨겨 두므로 두 개로 보이지 않는다.
     //
     // 백엔드의 NewFrame 이 이 값을 보고 OS 커서를 처리하므로 그보다
     // 먼저 세운다.
