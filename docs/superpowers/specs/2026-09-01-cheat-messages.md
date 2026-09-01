@@ -144,6 +144,69 @@ jle 실패
 
 필드3(2바이트)의 뜻은 아직 모른다. 0 으로 두고 시작한다.
 
+## 35개 전수 분석 (2026-09-01)
+
+`tools/rtti/cheat_report.py` 로 뽑는다. 산출물은 `cheat_report.txt`.
+
+35개 중 33개가 메시지 서술자를 갖는다(ConditionData_TestCheat 과
+DummyTaskCheat 은 메시지가 아니다). 방향은 Req 30개가 4, Ack 4개가 1.
+머리는 전부 5바이트, 최대 크기는 전부 32710.
+
+**모든 치트가 같은 문 하나를 지난다.** 처리기 앞머리가 전부 같은
+모양이다.
+
+```
+rdi = [패킷]                    세션
+rax = [rdi+0xA0]
+rdx = [rax+0x68]
+rcx = [rdx+0x130]
+call [rcx의 vtable + N]         거짓이면 조용히 반환
+```
+
+`N` 은 무리마다 다르다.
+
+| 슬롯 | 쓰는 치트 |
+|------|-----------|
+| `+0xD0` | 퀘스트·지식·용병·월드 등 대부분 (20개) |
+| `+0x140` | 아이템 생성·삭제·바닥 스폰 |
+| `+0x160` | 내구도·AI 제어 |
+| 없음 | Kill, VaryStat, SpawnCharacter, CheatDirectPlay, ResetGameAdvice |
+
+**이 문 하나를 열면 35개가 전부 열린다.** 치트마다 우회하는 것보다
+훨씬 낫다. 실측에서 바닥 스폰은 죽지도 않고 아무 일도 없었는데,
+이 문에서 조용히 빠져나간 것으로 보인다.
+
+문이 없는 다섯 개(Kill, VaryStat, SpawnCharacter, CheatDirectPlay,
+ResetGameAdvice)는 검사 없이 바로 처리한다 - 문 없이도 시험해 볼 수
+있는 것들이다.
+
+### 아이템 관련
+
+| ID | 클래스 | 페이로드 | 문 | 작업 함수 |
+|----|--------|----------|-----|----------|
+| 2440 | SetInventorySlotCountByCheatReq | ? | +0xD0 | ? |
+| 2503 | DeleteItemCheatReq | 3B (2,1) | +0x140 | 0x26A2EA0 |
+| 2736 | VaryEnduranceItemByCheatReq | 4B (2,2) | +0x160 | 0x1D9CBB0 |
+| 2944 | CreateItemFromTrItemValueCheatReq | ? | +0x140 | 0x26A2600 |
+| 3013 | SpawnItemToGroundByCheatReq | 151B | +0x140 | 0x26A2C50 |
+
+작업 함수들이 `0x26A2xxx` 에 몰려 있다 - 같은 인벤토리 계열이다.
+
+`SpawnItemToGround` 의 페이로드 151바이트는 전부 고정 길이다.
+가변 길이가 없어 만들 수 있다.
+
+```
+4(아이템키) 8(개수) 2(?) 12(위치)
+16(0x120CB20) 4 40(0x120CC00) 64(0x10C46C0) 1
+```
+
+### 다음 수
+
+문 하나가 전부를 막고 있으므로, 그 가상 함수가 무엇을 보는지 알아야
+한다. 실행 중에 `세션→[0xA0]→[0x68]→[0x130]` 의 클래스를 확인하고
+`vtable+0x140` 을 디스어셈블하면 된다. 단순한 플래그면 코드가 아니라
+데이터만 바꾸면 된다.
+
 ## 도구
 
 ```
@@ -151,6 +214,7 @@ python tools/rtti/find_class.py <exe> <이름조각>     한 클래스의 vtable
 python tools/rtti/map_cheats.py <exe> [조각]         전부 훑기
 python tools/rtti/xref_data.py  <exe> <RVA> [길이]   그 주소를 쓰는 코드
 python tools/rtti/disasm.py     <exe> <RVA> [개수]   함수 디스어셈블
+python tools/rtti/cheat_report.py <exe> [조각]       35개 전수 분석
 ```
 
 `disasm.py` 는 capstone 이 필요하다 (`pip install capstone`).

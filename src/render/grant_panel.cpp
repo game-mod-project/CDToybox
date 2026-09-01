@@ -118,6 +118,11 @@ void draw_grant_panel() {
     const char* blocked = nullptr;
     if (g_pick < 0 || g_pick >= n) {
         blocked = "서버 쪽 액터가 나오는 세션이 아직 없습니다";
+    } else if (game::session_class(g_pick)[0] == 0) {
+        blocked = "그 세션이 어떤 액터를 내는지 아직 확인 중입니다";
+    } else if (!server[g_pick]) {
+        // 클라이언트 쪽을 넘기면 게임 안에서 죽는다. 실측했다.
+        blocked = "클라이언트 쪽 세션입니다 - 초록색(Server)을 고르세요";
     } else if (!have_pos) {
         blocked = "플레이어 좌표를 아직 못 읽었습니다 (월드 진입 필요)";
     } else if (!game::spawn_args_ok(static_cast<std::uint32_t>(g_item_key),
