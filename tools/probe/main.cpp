@@ -172,20 +172,21 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         std::printf("ItemInfoManager 를 찾지 못했습니다.\n");
         return;
     }
-    std::vector<game::ItemEntry> items;
-    if (!game::read_item_table(reader, mgr, &items, 0)) {
-        std::printf("아이템 표를 읽지 못했습니다. (매니저 0x%llX)\n",
+    game::LocSystem sys;
+    if (!game::find_loc_system(rt, reader, &sys)) {
+        std::printf("현지화 시스템을 찾지 못해 이름 없이 키만 냅니다.\n");
+    }
+
+    // 모드가 돌리는 것과 같은 함수다. 배포하기 전에 여기서 결과를
+    // 확인할 수 있어야 한다 - camera 명령과 같은 이유다.
+    std::vector<game::ItemCatalogEntry> items;
+    if (!game::build_item_catalog(reader, mgr, sys, &items)) {
+        std::printf("아이템 목록을 만들지 못했습니다. (매니저 0x%llX)\n",
                     static_cast<unsigned long long>(mgr));
         return;
     }
     std::printf("매니저   0x%llX\n", static_cast<unsigned long long>(mgr));
     std::printf("아이템   %zu개\n", items.size());
-
-    game::LocSystem sys;
-    const bool has_loc = game::find_loc_system(rt, reader, &sys);
-    if (!has_loc) {
-        std::printf("현지화 시스템을 찾지 못해 이름 없이 키만 냅니다.\n");
-    }
 
     // items [최대]  |  items find <문자열>
     std::string needle;
@@ -205,18 +206,16 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::size_t named = 0, shown = 0;
     std::printf("\n%-10s %-20s %s\n", "키", "이름키", "이름");
     for (const auto& it : items) {
-        std::string name;
-        const bool ok = has_loc &&
-                        game::resolve(reader, sys, it.name_key, &name, nullptr);
+        const bool ok = !it.name.empty();
         if (ok) ++named;
         if (filtering) {
-            if (!ok || name.find(needle) == std::string::npos) continue;
+            if (!ok || it.name.find(needle) == std::string::npos) continue;
         }
         if (max != 0 && shown >= max) continue;
         ++shown;
         std::printf("%-10u %-20llu %s\n", it.key,
                     static_cast<unsigned long long>(it.name_key),
-                    ok ? name.c_str() : "(이름 없음)");
+                    ok ? it.name.c_str() : "(이름 없음)");
     }
     std::printf("\n이름이 풀린 것 %zu / %zu\n", named, items.size());
     if (max != 0 && items.size() > shown) {
