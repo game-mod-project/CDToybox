@@ -264,6 +264,57 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::printf("매니저   0x%llX\n", static_cast<unsigned long long>(mgr));
     std::printf("아이템   %zu개\n", items.size());
 
+    // items save <파일>  : 표 전체를 파일로 내린다.
+    //
+    // 이후 분석은 게임 없이 반복할 수 있다. 등급·분류가 어느 칸인지는
+    // 알려진 값과의 상관으로 가려야 하는데, 그때마다 게임을 켤 수는
+    // 없다.
+    //
+    // 형식 (리틀엔디언):
+    //   u32 매직 'CDTI', u32 개수, u32 레코드 크기
+    //   개수 번 반복: u32 키, u64 이름키, u32 이름길이, 이름, 레코드
+    if (argc > 3 && std::strcmp(argv[2], "save") == 0) {
+        constexpr std::size_t kRecBytes = 0x500;
+        std::vector<game::ItemEntry> raw;
+        if (!game::read_item_table(reader, mgr, &raw, 0)) {
+            std::printf("표를 읽지 못했습니다\n");
+            return;
+        }
+        std::FILE* f = std::fopen(argv[3], "wb");
+        if (f == nullptr) {
+            std::printf("파일을 열지 못했습니다: %s\n", argv[3]);
+            return;
+        }
+        const std::uint32_t magic = 0x49544443;   // 'CDTI'
+        const std::uint32_t count = static_cast<std::uint32_t>(raw.size());
+        const std::uint32_t recsz = static_cast<std::uint32_t>(kRecBytes);
+        std::fwrite(&magic, 4, 1, f);
+        std::fwrite(&count, 4, 1, f);
+        std::fwrite(&recsz, 4, 1, f);
+
+        std::vector<std::uint8_t> rec(kRecBytes);
+        std::size_t wrote = 0, failed = 0;
+        for (const auto& it : raw) {
+            std::string name;
+            game::resolve(reader, sys, it.name_key, &name, nullptr);
+            if (!reader.read(it.record, rec.data(), rec.size())) {
+                std::fill(rec.begin(), rec.end(), 0);
+                ++failed;
+            }
+            const std::uint32_t nlen = static_cast<std::uint32_t>(name.size());
+            std::fwrite(&it.key, 4, 1, f);
+            std::fwrite(&it.name_key, 8, 1, f);
+            std::fwrite(&nlen, 4, 1, f);
+            if (nlen != 0) std::fwrite(name.data(), 1, nlen, f);
+            std::fwrite(rec.data(), 1, rec.size(), f);
+            ++wrote;
+        }
+        std::fclose(f);
+        std::printf("\n%zu개를 %s 에 썼습니다 (레코드 읽기 실패 %zu)\n", wrote,
+                    argv[3], failed);
+        return;
+    }
+
     // items aux <키>  : 그 아이템의 보조 객체들을 함께 뜬다.
     //
     // 매니저에는 레코드(+0x58) 말고도 아이템별 배열이 더 있다.
