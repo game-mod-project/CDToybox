@@ -372,7 +372,11 @@ using namespace detail;
 
 void set_config(const Config& cfg) { g_cfg = cfg; }
 
-bool is_visible() { return g_visible && g_ready; }
+bool is_visible() {
+    // 그리기가 꺼졌으면 열려 있다고 하지 않는다. 그래야 wndproc 이
+    // 입력을 가로채지 않는다 - 오버레이가 죽은 뒤 키보드까지 막혔다.
+    return g_visible && g_ready && !render::render_disabled();
+}
 
 void toggle() {
     g_visible = !g_visible;

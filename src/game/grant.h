@@ -45,6 +45,24 @@ int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap);
 // 마지막으로 본 액터. 아직 못 봤으면 0.
 std::uintptr_t last_actor();
 
+// 조회 함수에 들어간 세션들. 액터가 아니라 이쪽이 필요하다 - 세션을
+// 처리기에 넘기면 게임이 자기 경로로 액터를 찾는다. 우리가 인벤토리
+// 컴포넌트를 고를 일이 없어진다.
+int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap);
+
+// 치트 메시지 하나를 해석한다. 주소는 하나도 박지 않는다.
+//   1. RTTI 로 클래스의 vtable 을 얻고
+//   2. 정적 초기화가 그 vtable 을 넣는 전역이 곧 메시지 서술자이며
+//   3. vtable[2] 가 역직렬화 함수이고
+//   4. 그 본문의 처리기 호출을 찾는다
+struct CheatMessage {
+    std::uintptr_t descriptor = 0;
+    std::uintptr_t handler = 0;
+    std::uint32_t id = 0;
+};
+bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
+                           const char* class_name, CheatMessage* out);
+
 // 서버 쪽 후보 중 호출이 가장 많은 자리. 없으면 -1.
 //
 // 치트는 Req(클라이언트->서버) 라 서버 쪽이어야 한다. 서버 쪽만 해도
@@ -58,26 +76,40 @@ void set_actor_class(int index, const char* name);
 const char* actor_class(int index);
 bool actor_is_server(int index);
 
+// 역직렬화 함수 본문에서 처리기 호출 자리를 찾는다. 파싱을 마치고
+// 성공했을 때만 부르므로 "call rel32" 뒤에 "mov dword ptr [rbx],0"
+// 이 온다. 딱 한 곳에서 맞아야 한다.
+bool find_handler_call(const std::uint8_t* body, std::size_t n,
+                       std::uint64_t body_rva, std::uint64_t* handler_rva);
+
 // 부르기 전에 게임이 하는 검사를 우리도 한다. 게임 코드에 그대로
 // 있다 - 키가 0이거나 개수가 0 이하면 게임이 실패로 돌려준다.
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count);
+
+struct SpawnOutcome {
+    bool called = false;        // 게임 함수를 실제로 불렀는가
+    bool crashed = false;       // 부르다 예외가 났는가
+    std::uint32_t seh = 0;      // 예외 코드
+    std::uint32_t result = 0;   // 게임이 낸 코드. 0 이면 성공
+};
 
 // 아이템을 발밑 바닥에 떨군다. 인벤토리에서 버리기와 같은 루틴이라
 // 게임이 평소에도 도는 경로다.
 //
 // **반드시 게임 스레드에서 불러야 한다.** 렌더 훅이 그 스레드다.
 //
-// actor 가 0 이면 마지막으로 본 액터를 쓴다. result_out 에는 게임이
-// 낸 코드가 들어간다 - 0 이면 성공이다. 부르지 못했으면 false.
-bool spawn_item_to_ground(std::uintptr_t actor, std::uint32_t item_key,
+// 잘못된 대상으로 부르면 게임 안에서 죽는다 - 실측에서 0xC0000005
+// 가 났고 오버레이가 통째로 내려갔다. 예외를 안에서 막고 결과로
+// 돌려준다. 돌려주는 값은 "부를 조건이 됐는가" 다.
+bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
                           std::int64_t count, const float pos[3],
-                          std::uint32_t* result_out);
+                          SpawnOutcome* out);
 
-// 스폰 함수를 찾아 둔다. 못 찾으면 spawn_item_to_ground 는 항상
-// false 를 돌려준다.
-bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
+// 바닥 스폰 메시지를 해석해 둔다.
+bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader);
+const CheatMessage& spawn_message();
 
-// 스폰 함수를 찾아 뒀는가.
+// 메시지를 해석해 뒀는가.
 bool spawn_ready();
 
 }  // namespace cdtb::game

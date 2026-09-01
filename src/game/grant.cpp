@@ -1,5 +1,7 @@
 #include "game/grant.h"
 
+#include <windows.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstring>
@@ -33,6 +35,11 @@ std::uintptr_t g_seen[kSeenCap]{};
 std::uint32_t g_seen_hits[kSeenCap]{};
 char g_seen_class[kSeenCap][96]{};
 bool g_seen_server[kSeenCap]{};
+
+// 세션은 조회 함수의 인자다. 처리기에 넘길 것은 이쪽이다.
+std::uintptr_t g_sess[kSeenCap]{};
+std::uint32_t g_sess_hits[kSeenCap]{};
+std::atomic<int> g_sess_count{0};
 std::atomic<int> g_seen_count{0};
 
 // 바닥 스폰. 인자는 전부 포인터다 - 디스어셈블에서 확인했다.
@@ -42,9 +49,23 @@ using SpawnFn = void*(__fastcall*)(void*, std::uint32_t*, const std::uint32_t*,
                                    const float*);
 SpawnFn g_spawn = nullptr;
 
+// 처리기. 역직렬화가 파싱을 마치고 부르는 그 함수다. 값이 아니라
+// 포인터를 받는다.
+//   rcx 서술자  rdx 패킷  r8 아이템키  r9 개수  arg5 필드3  arg6 위치
+using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
+                                    const std::int64_t*, const std::uint16_t*,
+                                    const float*);
+CheatMessage g_spawn_msg;
+
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     const std::uintptr_t actor = g_orig_actor_getter(session);
+    if (session != nullptr) {
+        const int m = g_sess_count.load(std::memory_order_relaxed);
+        const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap,
+                                   reinterpret_cast<std::uintptr_t>(session));
+        if (now != m) g_sess_count.store(now, std::memory_order_release);
+    }
     if (actor != 0) {
         g_last_actor.store(actor, std::memory_order_relaxed);
         const int n = g_seen_count.load(std::memory_order_relaxed);
@@ -52,6 +73,22 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         if (now != n) g_seen_count.store(now, std::memory_order_release);
     }
     return actor;
+}
+
+// 게임 함수를 부르다 죽으면 오버레이가 통째로 내려간다 - 실측에서
+// 그렇게 됐다. 예외를 여기서 막는다. 이 함수 안에는 소멸자를 가진
+// 객체를 두지 않는다(__try 가 허용하지 않는다).
+bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
+                          const std::uint32_t* key, const std::int64_t* count,
+                          const std::uint16_t* f3, const float* pos,
+                          std::uint32_t* seh_out) {
+    __try {
+        fn(self, packet, key, count, f3, pos);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *seh_out = static_cast<std::uint32_t>(GetExceptionCode());
+        return false;
+    }
 }
 
 bool find_one(const std::vector<std::uint8_t>& image, const char* pattern,
@@ -130,6 +167,16 @@ int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
     return count + 1;
 }
 
+int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
+    const int n = g_sess_count.load(std::memory_order_acquire);
+    const int take = (n < cap) ? n : cap;
+    for (int i = 0; i < take; ++i) {
+        out[i] = g_sess[i];
+        if (hits_out != nullptr) hits_out[i] = g_sess_hits[i];
+    }
+    return take;
+}
+
 int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
     const int n = g_seen_count.load(std::memory_order_acquire);
     const int take = (n < cap) ? n : cap;
@@ -175,43 +222,144 @@ bool actor_is_server(int index) {
     return g_seen_server[index];
 }
 
+bool find_handler_call(const std::uint8_t* body, std::size_t n,
+                       std::uint64_t body_rva, std::uint64_t* handler_rva) {
+    if (body == nullptr || handler_rva == nullptr || n < 11) return false;
+    // "call rel32" 5바이트 + "C7 03 00 00 00 00" 6바이트
+    static const std::uint8_t kMark[] = {0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
+    std::uint64_t found = 0;
+    int hits = 0;
+    for (std::size_t i = 5; i + sizeof(kMark) <= n; ++i) {
+        if (body[i - 5] != 0xE8) continue;
+        if (std::memcmp(body + i, kMark, sizeof(kMark)) != 0) continue;
+        std::int32_t rel = 0;
+        std::memcpy(&rel, body + i - 4, sizeof(rel));
+        found = body_rva + i + static_cast<std::uint64_t>(
+                                   static_cast<std::int64_t>(rel));
+        if (++hits > 1) return false;
+    }
+    if (hits != 1) return false;
+    *handler_rva = found;
+    return true;
+}
+
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count) {
     return item_key != 0 && count > 0;
 }
 
-bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_spawn != nullptr) return true;
-    std::uint64_t rva = 0;
-    if (!find_spawn_ground_rva(rtti.image(), &rva)) {
-        log::warnf("바닥 스폰 함수를 찾지 못했다 - 패치로 밀렸을 수 있다");
+bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
+                           const char* class_name, CheatMessage* out) {
+    if (out == nullptr || class_name == nullptr) return false;
+
+    const auto types = rtti.find_types(class_name, 2);
+    if (types.size() != 1) {
+        log::warnf("치트 메시지 {}: 클래스가 {}개 - 고를 수 없다", class_name,
+                   types.size());
         return false;
     }
-    g_spawn = reinterpret_cast<SpawnFn>(
-        reader.module_base() + static_cast<std::uintptr_t>(rva));
-    log::infof("바닥 스폰 함수 확보 (RVA 0x{:X})", rva);
+    const auto vts = rtti.vtables_for(types[0].descriptor);
+    if (vts.empty()) return false;
+    const std::uintptr_t vtable = vts[0];
+    const std::uint64_t vtable_rva = vtable - reader.module_base();
+
+    // 정적 초기화가 vtable 을 넣는 전역이 곧 메시지 서술자다.
+    //   48 8D 05 <-vtable>   lea rax, [rip+..]
+    //   48 89 05 <-서술자>   mov [rip+..], rax
+    const auto& img = rtti.image();
+    std::uint64_t desc_rva = 0;
+    int hits = 0;
+    for (std::size_t i = 0; i + 14 <= img.size(); ++i) {
+        if (img[i] != 0x48 || img[i + 1] != 0x8D || img[i + 2] != 0x05) continue;
+        if (img[i + 7] != 0x48 || img[i + 8] != 0x89 || img[i + 9] != 0x05) {
+            continue;
+        }
+        std::int32_t d1 = 0, d2 = 0;
+        std::memcpy(&d1, img.data() + i + 3, 4);
+        std::memcpy(&d2, img.data() + i + 10, 4);
+        if (static_cast<std::uint64_t>(i + 7 + d1) != vtable_rva) continue;
+        desc_rva = static_cast<std::uint64_t>(i + 14 + d2);
+        if (++hits > 1) break;
+    }
+    if (hits != 1) {
+        log::warnf("치트 메시지 {}: 서술자를 {}곳에서 찾았다", class_name, hits);
+        return false;
+    }
+
+    CheatMessage m;
+    m.descriptor = reader.module_base() + static_cast<std::uintptr_t>(desc_rva);
+
+    // 서술자의 vptr 이 그 vtable 이어야 한다. 아니면 해석이 틀렸다.
+    std::uintptr_t vptr = 0;
+    if (!reader.read(m.descriptor, &vptr, sizeof(vptr)) || vptr != vtable) {
+        log::warnf("치트 메시지 {}: 서술자 vptr 이 다르다", class_name);
+        return false;
+    }
+    reader.read(m.descriptor + 0x0C, &m.id, sizeof(m.id));
+
+    // vtable[2] 가 역직렬화 함수다.
+    std::uintptr_t deser = 0;
+    if (!reader.read(vtable + 0x10, &deser, sizeof(deser))) return false;
+    const std::uint64_t deser_rva = deser - reader.module_base();
+    if (deser_rva + 0x600 > img.size()) return false;
+
+    std::uint64_t handler_rva = 0;
+    if (!find_handler_call(img.data() + deser_rva, 0x600, deser_rva,
+                           &handler_rva)) {
+        log::warnf("치트 메시지 {}: 처리기 호출을 못 찾았다", class_name);
+        return false;
+    }
+    m.handler = reader.module_base() + static_cast<std::uintptr_t>(handler_rva);
+
+    log::infof("치트 메시지 {}: ID {} 서술자 0x{:X} 처리기 0x{:X}", class_name,
+               m.id, m.descriptor, m.handler);
+    *out = m;
     return true;
 }
 
-bool spawn_ready() { return g_spawn != nullptr; }
+bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_spawn_msg.handler != 0) return true;
+    return resolve_cheat_message(rtti, reader, "SpawnItemToGroundByCheatReq",
+                                 &g_spawn_msg);
+}
 
-bool spawn_item_to_ground(std::uintptr_t actor, std::uint32_t item_key,
+const CheatMessage& spawn_message() { return g_spawn_msg; }
+
+bool spawn_ready() { return g_spawn_msg.handler != 0; }
+
+bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
                           std::int64_t count, const float pos[3],
-                          std::uint32_t* result_out) {
-    if (g_spawn == nullptr || pos == nullptr) return false;
+                          SpawnOutcome* out) {
+    SpawnOutcome o;
+    if (out != nullptr) *out = o;
+    if (g_spawn_msg.handler == 0 || pos == nullptr) return false;
     if (!spawn_args_ok(item_key, count)) return false;
-    if (actor == 0) actor = last_actor();
-    if (actor == 0) return false;
+    if (session == 0) return false;
 
-    // 게임은 값이 아니라 포인터를 받는다. 수명이 호출 동안 유지되게
-    // 지역에 두고 넘긴다.
-    std::uint32_t result = 0;
+    // 처리기는 패킷에서 세션만 꺼낸다 ([패킷+0]). 나머지는 건드리지
+    // 않지만 넉넉히 0으로 채워 둔다.
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+
     std::uint32_t key = item_key;
     std::int64_t n = count;
     std::uint16_t field3 = 0;      // 뜻을 아직 모른다. 0 으로 둔다
     float where[3] = {pos[0], pos[1], pos[2]};
 
-    g_spawn(reinterpret_cast<void*>(actor), &result, &key, &n, &field3, where);
-    if (result_out != nullptr) *result_out = result;
+    // 무엇을 넣고 불렀는지 먼저 남긴다. 죽으면 이 줄이 마지막 단서다.
+    log::infof("바닥 스폰: 세션 0x{:X} 키 {} 개수 {} 위치 {:.1f},{:.1f},{:.1f}",
+               session, item_key, count, where[0], where[1], where[2]);
+
+    o.called = true;
+    o.crashed = !call_handler_guarded(
+        reinterpret_cast<HandlerFn>(g_spawn_msg.handler),
+        reinterpret_cast<void*>(g_spawn_msg.descriptor), packet, &key, &n,
+        &field3, where, &o.seh);
+    if (o.crashed) {
+        log::errorf("바닥 스폰이 게임 안에서 죽었다: 0x{:X}", o.seh);
+    } else {
+        log::infof("바닥 스폰 끝");
+    }
+    if (out != nullptr) *out = o;
     return true;
 }
 

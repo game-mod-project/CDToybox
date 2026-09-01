@@ -117,6 +117,40 @@ TEST(best_actor_returns_none_when_empty) {
     CHECK_EQ(cdtb::game::best_actor_index(nullptr, nullptr, 0), -1);
 }
 
+// 처리기는 바이트 패턴으로 찍을 수 없다 - 거의 같은 함수가 하나 더
+// 있어서 40바이트까지 가야 갈리고, 그 40번째가 점프 변위라 패치에
+// 밀린다. 대신 역직렬화 함수 본문에서 호출 자리를 찾는다. 파싱을
+// 마치고 성공했을 때만 부르므로 "call rel32" 뒤에 "mov [rbx],0"
+// 이 온다. 실측에서 본문 안에 딱 한 번 나왔다.
+TEST(find_handler_call_reads_the_relative_target) {
+    // E8 10 00 00 00  = call +0x10 (다음 명령 기준)
+    // C7 03 00 00 00 00 = mov dword ptr [rbx], 0
+    const std::uint8_t body[] = {0x90, 0x90,
+                                 0xE8, 0x10, 0x00, 0x00, 0x00,
+                                 0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
+    std::uint64_t handler = 0;
+    CHECK(cdtb::game::find_handler_call(body, sizeof(body), 0x1000, &handler));
+    // 호출은 0x1002, 다음 명령은 0x1007, 대상은 0x1017
+    CHECK_EQ(handler, std::uint64_t{0x1017});
+}
+
+TEST(find_handler_call_fails_without_the_marker) {
+    const std::uint8_t body[] = {0xE8, 0x10, 0x00, 0x00, 0x00, 0x90, 0x90};
+    std::uint64_t handler = 0;
+    CHECK(!cdtb::game::find_handler_call(body, sizeof(body), 0x1000, &handler));
+}
+
+// 두 곳에서 맞으면 고를 수 없다. 못 찾은 것으로 다룬다.
+TEST(find_handler_call_fails_when_ambiguous) {
+    const std::uint8_t one[] = {0xE8, 0x10, 0x00, 0x00, 0x00,
+                                0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
+    std::vector<std::uint8_t> body(one, one + sizeof(one));
+    body.insert(body.end(), one, one + sizeof(one));
+    std::uint64_t handler = 0;
+    CHECK(!cdtb::game::find_handler_call(body.data(), body.size(), 0x1000,
+                                         &handler));
+}
+
 TEST(spawn_args_reject_zero_key) {
     CHECK(!cdtb::game::spawn_args_ok(0, 1));
 }
@@ -132,9 +166,10 @@ TEST(spawn_args_accept_a_real_item) {
 
 // 액터를 아직 못 봤으면 아무것도 부르지 않는다.
 TEST(spawn_refuses_without_an_actor) {
-    std::uint32_t result = 0xFFFFFFFFu;
+    cdtb::game::SpawnOutcome out;
     const float pos[3] = {0.0f, 0.0f, 0.0f};
-    CHECK(!cdtb::game::spawn_item_to_ground(0, 50001, 1, pos, &result));
+    CHECK(!cdtb::game::spawn_item_to_ground(0, 50001, 1, pos, &out));
+    CHECK(!out.called);
 }
 
 TEST(no_actor_before_the_hook_sees_one) {

@@ -18,7 +18,7 @@ int g_count = 1;
 
 bool g_called = false;
 bool g_call_ok = false;
-std::uint32_t g_result = 0;
+game::SpawnOutcome g_outcome;
 
 // 게임이 위치를 페이로드로 받는다 - 자동으로 발밑이 되지 않는다.
 // 카메라 분석이 찾아 둔 플레이어 컴포넌트에서 좌표를 가져온다.
@@ -46,24 +46,34 @@ void draw_grant_panel() {
         return;
     }
 
+    // 액터가 아니라 세션을 넘긴다. 그러면 게임이 자기 경로로 액터를
+    // 찾는다 - 우리가 인벤토리 컴포넌트를 고를 일이 없다. 예전에는
+    // 직접 골랐다가 틀린 것을 찍어 게임 안에서 죽었다.
     std::uintptr_t seen[16]{};
     std::uint32_t hits[16]{};
-    const int n = game::seen_actors(seen, hits, 16);
+    const int n = game::seen_sessions(seen, hits, 16);
     if (n == 0) {
-        ImGui::TextDisabled("액터를 아직 못 봤습니다. 월드에 들어가세요.");
+        ImGui::TextDisabled("세션을 아직 못 봤습니다. 월드에 들어가세요.");
         ImGui::End();
         return;
     }
 
-    bool server[16]{};
-    for (int i = 0; i < n; ++i) server[i] = game::actor_is_server(i);
+    // 가장 많이 쓰인 세션이 플레이어 것이다.
+    if (!g_picked_by_hand) {
+        int best = 0;
+        for (int i = 1; i < n; ++i) {
+            if (hits[i] > hits[best]) best = i;
+        }
+        g_pick = best;
+    }
 
-    // 서버 쪽 중 가장 많이 불린 것을 미리 골라 둔다. 사용자가 직접
-    // 고르면 그 뒤로는 건드리지 않는다.
-    if (!g_picked_by_hand) g_pick = game::best_actor_index(hits, server, n);
-
-    ImGui::TextUnformatted("대상 - 서버 쪽 중 호출이 가장 많은 것이 플레이어입니다");
-    if (ImGui::BeginTable("actors", 3,
+    const auto& msg = game::spawn_message();
+    if (msg.handler != 0) {
+        ImGui::Text("메시지 ID %u  처리기 0x%llX", msg.id,
+                    static_cast<unsigned long long>(msg.handler));
+    }
+    ImGui::TextUnformatted("세션 - 호출이 가장 많은 것이 플레이어입니다");
+    if (ImGui::BeginTable("actors", 2,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         for (int i = 0; i < n; ++i) {
             ImGui::TableNextRow();
@@ -77,13 +87,6 @@ void draw_grant_panel() {
             }
             ImGui::SameLine();
             ImGui::Text("0x%llX", static_cast<unsigned long long>(seen[i]));
-            ImGui::TableNextColumn();
-            if (server[i]) {
-                ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
-                                   short_class(game::actor_class(i)));
-            } else {
-                ImGui::TextDisabled("%s", short_class(game::actor_class(i)));
-            }
             ImGui::TableNextColumn();
             ImGui::Text("호출 %u회", hits[i]);
         }
@@ -109,14 +112,14 @@ void draw_grant_panel() {
     // 잘못됐는지 알 수 없다 - 실제로 그렇게 막혔다.
     const char* blocked = nullptr;
     if (g_pick < 0 || g_pick >= n) {
-        blocked = "대상을 고르세요";
+        blocked = "세션을 고르세요";
     } else if (!have_pos) {
         blocked = "플레이어 좌표를 아직 못 읽었습니다 (월드 진입 필요)";
     } else if (!game::spawn_args_ok(static_cast<std::uint32_t>(g_item_key),
                                     g_count)) {
         blocked = "아이템 키는 0이 아니어야 하고 개수는 1 이상이어야 합니다";
     } else if (!game::spawn_ready()) {
-        blocked = "스폰 함수를 찾지 못했습니다";
+        blocked = "치트 메시지를 해석하지 못했습니다";
     }
 
     if (have_pos) {
@@ -133,7 +136,7 @@ void draw_grant_panel() {
         // 스레드다 - 다른 스레드에서 부르면 죽는다.
         g_call_ok = game::spawn_item_to_ground(
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos,
-            &g_result);
+            &g_outcome);
         g_called = true;
     }
     ImGui::EndDisabled();
@@ -142,11 +145,15 @@ void draw_grant_panel() {
         ImGui::SameLine();
         if (!g_call_ok) {
             ImGui::TextDisabled("부르지 못했습니다");
-        } else if (g_result == 0) {
+        } else if (g_outcome.crashed) {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                               "게임 안에서 죽었다 0x%X - 대상이 틀렸습니다",
+                               g_outcome.seh);
+        } else if (g_outcome.result == 0) {
             ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "성공 (0)");
         } else {
             ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.3f, 1.0f),
-                               "게임이 거절: 0x%X", g_result);
+                               "게임이 거절: 0x%X", g_outcome.result);
         }
     }
     ImGui::End();
