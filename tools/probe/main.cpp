@@ -120,6 +120,10 @@ void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
         const std::string needle = ansi_to_utf8(argv[3]);
         const std::size_t max = (argc > 4) ? std::strtoull(argv[4], nullptr, 10)
                                            : 30;
+        // 카테고리를 지정하지 않으면 설명(cat 7)이 한도를 다 써 버린다.
+        const int only_cat = (argc > 5) ? std::atoi(argv[5]) : -1;
+        // 정확히 일치하는 것만 볼지. 분류명은 짧아 부분 일치가 넘친다.
+        const bool exact = (argc > 6) && std::strcmp(argv[6], "exact") == 0;
 
         // 풀을 한 번에 읽어 둔다. 항목마다 읽으면 너무 느리다.
         std::vector<char> pool(sys.pool_size);
@@ -137,6 +141,7 @@ void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                     "필드", "텍스트");
         std::size_t shown = 0, scanned = 0;
         for (int c = 0; c < static_cast<int>(cats.size()) && shown < max; ++c) {
+            if (only_cat >= 0 && c != only_cat) continue;
             if (cats[c].count == 0 || cats[c].array == 0) continue;
             std::vector<std::uint64_t> ptrs(cats[c].count);
             if (!reader.read(cats[c].array, ptrs.data(), ptrs.size() * 8)) {
@@ -154,7 +159,9 @@ void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                 const char* s = pool.data() + h.off;
                 const std::size_t room = pool.size() - h.off;
                 if (::strnlen(s, room) >= room) continue;
-                if (std::string_view(s).find(needle) == std::string_view::npos) {
+                const std::string_view sv(s);
+                if (exact ? (sv != needle)
+                          : (sv.find(needle) == std::string_view::npos)) {
                     continue;
                 }
                 ++shown;
@@ -176,20 +183,26 @@ void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
         }
         const std::uint32_t ent =
             static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
-        std::printf("\n엔티티 %u (0x%X)\n", ent, ent);
-        for (std::uint32_t f = game::kLocFieldName;
-             f <= game::kLocFieldName + 1; ++f) {
+        // 필드 번호를 훑는다. 이름(0x70)·설명(0x71) 말고 무엇이 더
+        // 달려 있는지 보려면 넓게 봐야 한다.
+        const std::uint32_t lo = (argc > 4)
+            ? static_cast<std::uint32_t>(std::strtoul(argv[4], nullptr, 0)) : 0;
+        const std::uint32_t hi = (argc > 5)
+            ? static_cast<std::uint32_t>(std::strtoul(argv[5], nullptr, 0))
+            : 0xFF;
+        std::printf("\n엔티티 %u (0x%X)  필드 0x%X..0x%X\n", ent, ent, lo, hi);
+        std::size_t hits = 0;
+        for (std::uint32_t f = lo; f <= hi; ++f) {
             const std::uint64_t k = game::loc_key(ent, f);
             std::string text;
             int cat = -1;
-            std::printf("  필드 0x%X  키 %llu :  ", f,
-                        static_cast<unsigned long long>(k));
-            if (game::resolve(reader, sys, k, &text, &cat)) {
-                std::printf("[카테고리 %d] '%s'\n", cat, text.c_str());
-            } else {
-                std::printf("없음\n");
-            }
+            if (!game::resolve(reader, sys, k, &text, &cat)) continue;
+            ++hits;
+            if (text.size() > 90) text = text.substr(0, 90) + "...";
+            std::printf("  필드 0x%02X  [cat %2d]  '%s'\n", f, cat,
+                        text.c_str());
         }
+        std::printf("  일치 %zu개\n", hits);
         return;
     }
 
