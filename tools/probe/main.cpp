@@ -270,6 +270,102 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
     std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
 }
 
+// 인벤토리를 찾는다. "키 옆에 그 개수가 있는가" 로 가른다.
+//
+// 아이템 키만으로는 못 가린다. 마스터 표·도감·상점 목록·제작 재료·UI
+// 캐시가 전부 키를 담고 있어, 힙을 훑으면 한 키가 수십 곳에서 나온다.
+// **개수가 붙어 있는 구조는 사실상 인벤토리뿐이다** - 도감에는 개수가
+// 없고 마스터 표에는 최대 스택만 있다.
+//
+// 게다가 서로 다른 (키,개수) 쌍이 한 덩어리 안에 둘 이상 모여 있으면
+// 우연일 수 없다. 인벤토리 칸은 이웃해 있기 때문이다.
+void cmd_invfind(const Remote& r, int argc, char** argv) {
+    struct Want { std::uint32_t key; std::uint32_t count; };
+    std::vector<Want> want;
+    for (int i = 2; i < argc; ++i) {
+        const char* colon = std::strchr(argv[i], ':');
+        if (colon == nullptr) continue;
+        want.push_back({static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 0)),
+                        static_cast<std::uint32_t>(std::strtoul(colon + 1, nullptr, 0))});
+    }
+    if (want.empty()) {
+        std::printf("사용법: invfind <키:개수> [키:개수 ...]\n");
+        return;
+    }
+    std::printf("찾는 것:");
+    for (const auto& w : want) std::printf(" %u x%u", w.key, w.count);
+    std::printf("\n\n");
+
+    constexpr std::size_t kNear = 0x40;    // 키에서 개수까지 볼 거리
+    constexpr std::size_t kGroup = 0x800;  // 한 덩어리로 볼 범위
+
+    std::vector<std::uint8_t> buf;
+    // (주소, 어느 want 인지)
+    std::vector<std::pair<std::uintptr_t, std::size_t>> hits;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size == 0 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+            std::uint32_t v = 0;
+            std::memcpy(&v, buf.data() + i, 4);
+            for (std::size_t w = 0; w < want.size(); ++w) {
+                if (v != want[w].key) continue;
+                // 개수가 근처에 있는지 본다.
+                const std::size_t lo = (i > kNear) ? i - kNear : 0;
+                const std::size_t hi = (i + kNear + 4 <= buf.size())
+                                           ? i + kNear : buf.size() - 4;
+                // 개수가 u32 라는 보장이 없다. u8·u16 도 본다 - 스택
+                // 상한이 20 대라 한 바이트로 충분하기 때문이다.
+                // 'near' 는 windows.h 의 레거시 매크로라 쓰지 않는다.
+                bool count_nearby = false;
+                const std::uint32_t c32 = want[w].count;
+                for (std::size_t j = lo; j <= hi && !count_nearby; ++j) {
+                    if (buf[j] == static_cast<std::uint8_t>(c32) &&
+                        c32 <= 0xFF) {
+                        count_nearby = true;
+                        break;
+                    }
+                    if (j + 2 <= buf.size()) {
+                        std::uint16_t c16 = 0;
+                        std::memcpy(&c16, buf.data() + j, 2);
+                        if (c16 == c32) count_nearby = true;
+                    }
+                }
+                if (count_nearby) hits.emplace_back(reg.base + i, w);
+            }
+        }
+    }
+
+    std::printf("키+개수가 같이 있는 곳 %zu 곳\n", hits.size());
+    for (const auto& h : hits) {
+        std::printf("  0x%llX  키 %u x%u\n",
+                    static_cast<unsigned long long>(h.first),
+                    want[h.second].key, want[h.second].count);
+    }
+    std::printf("\n");
+    // 서로 다른 아이템이 한 덩어리에 모인 곳을 찾는다.
+    std::sort(hits.begin(), hits.end());
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+        std::size_t j = i;
+        std::vector<bool> kinds(want.size(), false);
+        while (j < hits.size() && hits[j].first - hits[i].first < kGroup) {
+            kinds[hits[j].second] = true;
+            ++j;
+        }
+        std::size_t n = 0;
+        for (const bool b : kinds) n += b ? 1 : 0;
+        if (n >= 2) {
+            std::printf("  0x%llX ~ 0x%llX  서로 다른 아이템 %zu종 (%zu개 일치)\n",
+                        static_cast<unsigned long long>(hits[i].first),
+                        static_cast<unsigned long long>(hits[j - 1].first), n,
+                        j - i);
+            i = j - 1;
+        }
+    }
+}
+
 // 살아 있는 인벤토리 컴포넌트 중 플레이어 것을 가려낸다. 전부 읽기다.
 //
 // 판정 근거는 "아이템 표에 실재하는 키가 얼마나 들어 있는가" 다.
@@ -1180,6 +1276,10 @@ int main(int argc, char** argv) {
                                    ? std::strtoull(argv[6], nullptr, 10)
                                    : 200;
         cmd_findvec3(r, x, y, z, eps, mx);
+        return 0;
+    }
+    if (cmd == "invfind") {
+        cmd_invfind(r, argc, argv);
         return 0;
     }
     if (cmd == "findu32") {
