@@ -83,7 +83,9 @@ add_executable(cdtb_tests
     tests/value_scanner_tests.cpp
     tests/watchpoint_tests.cpp
     tests/localization_tests.cpp
+    tests/items_tests.cpp
     src/game/localization.cpp
+    src/game/items.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -107,6 +109,7 @@ add_executable(cdtb_probe
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/localization.cpp
+    src/game/items.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)
