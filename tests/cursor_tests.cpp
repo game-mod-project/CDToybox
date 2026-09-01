@@ -25,6 +25,19 @@ TEST(cursor_delta_counts_down_to_hide) {
     CHECK_EQ(cursor_show_delta(2, -1), -3);
 }
 
+// ShowCursor 훅이 고정값을 돌려주다 게임을 멎게 한 적이 있다
+// (`while (ShowCursor(TRUE) < 0);`). 남은 훅도 같은 식으로 게임을
+// 가둘 수 있으므로, 한 프레임에 막는 횟수에 상한을 둔다.
+TEST(cursor_blocks_until_budget_runs_out) {
+    CHECK(cdtb::input::cursor_should_block(0, 500));
+    CHECK(cdtb::input::cursor_should_block(499, 500));
+}
+
+TEST(cursor_stops_blocking_past_budget) {
+    CHECK(!cdtb::input::cursor_should_block(500, 500));
+    CHECK(!cdtb::input::cursor_should_block(9999, 500));
+}
+
 TEST(cursor_guard_is_not_installed_before_install) {
     CHECK(!cdtb::input::cursor_guard_installed());
 }

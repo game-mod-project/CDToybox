@@ -1,6 +1,7 @@
 #include "game/items.h"
 
 #include <atomic>
+#include <memory>
 
 #include "core/log.h"
 
@@ -152,13 +153,28 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
 
 namespace {
 
-std::vector<ItemCatalogEntry> g_catalog;
+const std::vector<ItemCatalogEntry> kEmptyCatalog;
+
+// 목록은 바꿔 끼우기만 한다. 그리는 쪽이 참조를 쥔 채로 프레임을
+// 도는데 그 밑에서 vector 를 갈아엎으면 죽는다. 옛 판은 그대로
+// 살려 둔다 - 많아야 두 판이다.
+std::atomic<const std::vector<ItemCatalogEntry>*> g_catalog{&kEmptyCatalog};
+std::vector<std::unique_ptr<std::vector<ItemCatalogEntry>>> g_versions;
 std::atomic<bool> g_ready{false};
+std::atomic<bool> g_named{false};
 
 }  // namespace
 
+bool should_rebuild_catalog(bool have_catalog, bool names_resolved,
+                            bool loc_available) {
+    if (!have_catalog) return true;
+    if (names_resolved) return false;
+    // 현지화가 아직 없으면 다시 만들어도 결과가 같다.
+    return loc_available;
+}
+
 bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_ready.load(std::memory_order_acquire)) return true;
+    if (g_named.load(std::memory_order_acquire)) return true;
 
     // 표가 아직 안 올라왔을 수 있다. 재시도 루프에서 부르므로 못
     // 찾은 것은 로그를 남기지 않는다 - 매번 남으면 잡음이 된다.
@@ -166,31 +182,40 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (!find_item_manager(rtti, reader, &manager)) return false;
 
     LocSystem sys;
-    if (!find_loc_system(rtti, reader, &sys)) {
-        log::warnf("아이템 표: 현지화 시스템이 없다 - 이름 없이 키만 낸다");
-    }
+    const bool has_loc = find_loc_system(rtti, reader, &sys);
+    const bool have = g_ready.load(std::memory_order_acquire);
+    if (!should_rebuild_catalog(have, false, has_loc)) return false;
 
-    std::vector<ItemCatalogEntry> catalog;
-    if (!build_item_catalog(reader, manager, sys, &catalog)) {
+    auto built = std::make_unique<std::vector<ItemCatalogEntry>>();
+    if (!build_item_catalog(reader, manager, sys, built.get())) {
         log::errorf("아이템 표: 목록을 만들지 못했다 (매니저 0x{:X})", manager);
         return false;
     }
 
     std::size_t named = 0;
-    for (const auto& e : catalog) {
+    for (const auto& e : *built) {
         if (!e.name.empty()) ++named;
     }
 
     // 목록을 먼저 채우고 나서 준비 플래그를 세운다. 그리는 쪽은
     // 플래그를 먼저 보므로 반쯤 채워진 목록을 읽지 않는다.
-    g_catalog = std::move(catalog);
+    const std::size_t total = built->size();
+    const auto* p = built.get();
+    g_versions.push_back(std::move(built));
+    g_catalog.store(p, std::memory_order_release);
     g_ready.store(true, std::memory_order_release);
-    log::infof("아이템 표: {}개, 이름 풀린 것 {}개", g_catalog.size(), named);
-    return true;
+    if (named > 0) g_named.store(true, std::memory_order_release);
+    log::infof("아이템 표: {}개, 이름 풀린 것 {}개{}", total, named,
+               named == 0 ? " - 현지화를 기다렸다 다시 만든다" : "");
+    return named > 0;
 }
 
 bool items_ready() { return g_ready.load(std::memory_order_acquire); }
 
-const std::vector<ItemCatalogEntry>& item_catalog() { return g_catalog; }
+bool items_named() { return g_named.load(std::memory_order_acquire); }
+
+const std::vector<ItemCatalogEntry>& item_catalog() {
+    return *g_catalog.load(std::memory_order_acquire);
+}
 
 }  // namespace cdtb::game

@@ -82,7 +82,19 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
 //
 // 표가 아직 안 올라왔으면 조용히 false 다. 재시도 루프에서 부르면
 // 된다 - 이미 준비됐으면 즉시 true 로 빠진다.
+// 목록을 (다시) 만들어야 하는가.
+//
+// 게임은 아이템 표를 현지화보다 먼저 올린다. 그 순간에 만들고 굳으면
+// 이름이 영영 빈다 - 실제로 그렇게 났다. 현지화가 올라온 뒤 한 번
+// 더 만들어야 한다.
+bool should_rebuild_catalog(bool have_catalog, bool names_resolved,
+                            bool loc_available);
+
+// 이름까지 풀린 목록을 만들었으면 true. 아직이면 다시 부르면 된다.
 bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 이름이 실제로 풀렸는가.
+bool items_named();
 
 // 캐시가 준비됐는가. 준비된 뒤에는 목록이 다시 바뀌지 않는다.
 bool items_ready();

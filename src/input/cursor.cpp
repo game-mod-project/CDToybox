@@ -20,6 +20,10 @@ bool (*g_is_active)() = nullptr;
 bool g_installed = false;
 bool g_hidden_by_us = false;
 int g_saved_count = 0;
+int g_blocked = 0;
+
+// 한 프레임에 이만큼까지만 막는다.
+constexpr int kBlockLimit = 500;
 
 bool active() { return g_is_active != nullptr && g_is_active(); }
 
@@ -28,21 +32,16 @@ bool active() { return g_is_active != nullptr && g_is_active(); }
 // 움직이는 것처럼 보인다. 실제로 그 증상이 났다 - 처음 열 때는
 // 멀쩡하다가 한 번 닫고 게임을 조작한 뒤 다시 열면 굳어 있었다.
 BOOL WINAPI det_set_cursor_pos(int x, int y) {
-    if (active()) return TRUE;
+    if (active() && cursor_should_block(g_blocked++, kBlockLimit)) return TRUE;
     return g_orig_set_pos(x, y);
 }
 
 // 같은 이유로 커서를 한 구역에 가두는 것도 막는다.
 BOOL WINAPI det_clip_cursor(const RECT* rect) {
-    if (active()) return g_orig_clip(nullptr);
+    if (active() && cursor_should_block(g_blocked++, kBlockLimit)) {
+        return g_orig_clip(nullptr);
+    }
     return g_orig_clip(rect);
-}
-
-// 오버레이는 ImGui가 커서를 직접 그린다. OS 커서까지 보이면 두 개로
-// 보이므로, 열려 있는 동안에는 게임이 뭘 하든 숨긴 채로 둔다.
-int WINAPI det_show_cursor(BOOL show) {
-    if (active()) return -1;
-    return g_orig_show(show);
 }
 
 // 지금 카운터를 읽는다. ShowCursor 는 바꾼 뒤의 값을 돌려주므로
@@ -63,6 +62,10 @@ void drive_to(int target) {
 
 int cursor_show_delta(int current, int target) { return target - current; }
 
+bool cursor_should_block(int consecutive, int limit) {
+    return consecutive < limit;
+}
+
 bool cursor_guard_install(bool (*is_active)()) {
     if (g_installed) return true;
     if (is_active == nullptr) return false;
@@ -74,24 +77,26 @@ bool cursor_guard_install(bool (*is_active)()) {
         ::GetProcAddress(user32, "SetCursorPos"));
     void* clip = reinterpret_cast<void*>(
         ::GetProcAddress(user32, "ClipCursor"));
-    void* show = reinterpret_cast<void*>(
+    // ShowCursor 는 후킹하지 않는다. 게임은 커서를 켤 때
+    // `while (ShowCursor(TRUE) < 0);` 를 쓴다. 훅이 고정된 값을
+    // 돌려주면 그 루프가 끝나지 않아 게임이 멎는다 - 실제로 멎었다.
+    // 원본만 잡아 두고 우리가 필요할 때 직접 부른다.
+    g_orig_show = reinterpret_cast<ShowCursorFn>(
         ::GetProcAddress(user32, "ShowCursor"));
-    if (set_pos == nullptr || clip == nullptr || show == nullptr) return false;
+    if (set_pos == nullptr || clip == nullptr || g_orig_show == nullptr) {
+        return false;
+    }
 
     g_is_active = is_active;
     const bool a = mem::hook_install(set_pos, &det_set_cursor_pos,
                                      reinterpret_cast<void**>(&g_orig_set_pos));
     const bool b = mem::hook_install(clip, &det_clip_cursor,
                                      reinterpret_cast<void**>(&g_orig_clip));
-    const bool c = mem::hook_install(show, &det_show_cursor,
-                                     reinterpret_cast<void**>(&g_orig_show));
-    if (!a || !b || !c) {
+    if (!a || !b) {
         if (a) mem::hook_remove(set_pos);
         if (b) mem::hook_remove(clip);
-        if (c) mem::hook_remove(show);
         g_is_active = nullptr;
-        log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={} ShowCursor={})",
-                   a, b, c);
+        log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={})", a, b);
         return false;
     }
     g_installed = true;
@@ -108,8 +113,6 @@ void cursor_guard_remove() {
             reinterpret_cast<void*>(::GetProcAddress(user32, "SetCursorPos")));
         mem::hook_remove(
             reinterpret_cast<void*>(::GetProcAddress(user32, "ClipCursor")));
-        mem::hook_remove(
-            reinterpret_cast<void*>(::GetProcAddress(user32, "ShowCursor")));
     }
     g_orig_set_pos = nullptr;
     g_orig_clip = nullptr;
@@ -123,6 +126,7 @@ bool cursor_guard_installed() { return g_installed; }
 
 void cursor_guard_sync(bool overlay_visible) {
     if (!g_installed) return;
+    g_blocked = 0;      // 예산은 프레임마다 되돌린다
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
         g_saved_count = probe_count();

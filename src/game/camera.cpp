@@ -178,6 +178,20 @@ void auto_analysis_loop() {
     run_analysis(rtti, g_set);
 
     log::infof("자동 분석 완료");
+
+    // 아이템 이름은 현지화가 올라온 뒤에야 풀린다. 게임은 아이템 표를
+    // 먼저 올리므로 위 루프가 도는 동안에는 이름이 비어 있는 것이
+    // 정상이다. 예전에는 카메라를 찾는 순간 이 루프를 빠져나가 이름이
+    // 영영 비었다 - 로그에 "이름 풀린 것 0개" 로 남았다.
+    for (int i = 0; i < 120 && !g_stop.load(); ++i) {
+        if (discover_items(rtti, reader)) break;
+        for (int j = 0; j < 50 && !g_stop.load(); ++j) {
+            ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
+        }
+    }
+    if (!items_named() && !g_stop.load()) {
+        log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
+    }
 }
 
 }  // namespace

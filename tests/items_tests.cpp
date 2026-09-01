@@ -174,6 +174,26 @@ TEST(read_item_table_rejects_zero_count) {
 
 // ---------------------------------------------------------------- 목록
 
+// 게임은 아이템 표를 현지화보다 먼저 올린다. 예전에는 그 순간에
+// 목록을 만들고 굳어 버려서 이름이 영영 비었다 - 실제로 그렇게 났다
+// (로그: "현지화 시스템이 없다" -> "이름 풀린 것 0개").
+TEST(rebuild_catalog_when_none_yet) {
+    CHECK(cdtb::game::should_rebuild_catalog(false, false, false));
+    CHECK(cdtb::game::should_rebuild_catalog(false, false, true));
+}
+
+TEST(rebuild_catalog_once_localization_shows_up) {
+    CHECK(cdtb::game::should_rebuild_catalog(true, false, true));
+}
+
+TEST(no_rebuild_while_localization_is_still_missing) {
+    CHECK(!cdtb::game::should_rebuild_catalog(true, false, false));
+}
+
+TEST(no_rebuild_once_names_resolved) {
+    CHECK(!cdtb::game::should_rebuild_catalog(true, true, true));
+}
+
 TEST(build_item_catalog_fills_names_from_localization) {
     Fixture f;
     std::vector<cdtb::game::ItemCatalogEntry> out;
