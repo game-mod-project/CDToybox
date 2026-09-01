@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -130,6 +131,23 @@ struct SpawnOutcome {
 // 거기에 쓴다. 렌더 스레드에는 그 블록이 없어서 널을 참조하고 죽는다.
 // 실측에서 RVA 0x25493D2 가 정확히 그 자리였다.
 bool thread_ready_for_spawn();
+
+// TrItemValue 의 키와 개수 칸을 채운다. 나머지 칸은 게임 생성자가
+// 채우므로 여기서는 건드리지 않는다.
+//
+// 작업 함수(0x26A2600)가 검사하는 자리가 코드에 그대로 있다.
+//   mov eax, [r8+8]; test eax,eax; je 실패        아이템 키
+//   cmp qword [r8+0x10], 0; jle 실패              개수
+bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
+                     std::int64_t count);
+
+// 바닥이 아니라 인벤토리로 바로 넣는다.
+// (CreateItemFromTrItemValueCheatReq, ID 2944)
+bool request_give(std::uintptr_t session, std::uint32_t item_key,
+                  std::int64_t count);
+
+// 인벤토리 직행을 쓸 수 있는가.
+bool give_ready();
 
 // 요청을 걸어 둔다. 실제 호출은 TLS 가 준비된 게임 스레드에서 한다.
 // 렌더 스레드에서 부르면 죽는다.

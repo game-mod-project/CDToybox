@@ -18,6 +18,10 @@ namespace {
 constexpr const char* kActorGetterPattern =
     "40 53 48 83 EC 20 48 8B 41 68 48 8B D9 48 8B 48 20 0F B7 41";
 
+// TrItemValue 생성자. 기본값을 우리가 흉내내지 않고 게임에 맡긴다.
+constexpr const char* kItemValueCtorPattern =
+    "48 89 5C 24 08 57 48 83 EC 20 33 FF 48 C7 01 FF FF FF FF 48 8D 41 40 89";
+
 constexpr const char* kSpawnGroundPattern =
     "4C 8B DC 49 89 5B 08 49 89 6B 10 56 57 41 54 41 56 41 57 48 81 EC 50 01";
 
@@ -61,11 +65,18 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
                                     const std::int64_t*, const std::uint16_t*,
                                     const float*);
 CheatMessage g_spawn_msg;
+CheatMessage g_give_msg;
+
+// TrItemValue 생성자와 인벤토리 직행 처리기.
+using CtorFn = void*(__fastcall*)(void*);
+using GiveFn = void(__fastcall*)(void*, void*, void*);
+CtorFn g_item_value_ctor = nullptr;
 const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
 struct Pending {
+    bool to_inventory = false;   // true 면 바닥이 아니라 인벤토리
     std::uintptr_t session = 0;
     std::uint32_t key = 0;
     std::int64_t count = 0;
@@ -74,25 +85,32 @@ struct Pending {
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
                std::int64_t count, const float pos[3], SpawnOutcome* out);
+void run_give(std::uintptr_t session, std::uint32_t item_key,
+              std::int64_t count, SpawnOutcome* out);
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
+
+// 게임 함수를 후킹 안에서 부르면, 그 후킹이 걸린 자리가 이미 락을
+// 쥐고 있을 때 교착한다 - 실측에서 세 번째 호출이 돌아오지 않고
+// 게임 조작이 통째로 멈췄다. 다음으로 줄인다.
+//
+//   1. 우리 후킹 안에 이미 들어와 있으면 실행하지 않는다 (중첩 금지)
+//   2. 한 번에 하나만, 끝날 때까지 다음 요청을 받지 않는다
+//   3. 연속 호출 사이에 간격을 둔다
+thread_local int g_detour_depth = 0;
+std::atomic<bool> g_running{false};
+std::atomic<unsigned long long> g_last_done{0};
+constexpr unsigned long long kCooldownMs = 2000;
 SpawnOutcome g_outcome;
 
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
+    // 우리가 부른 게임 함수가 이 후킹을 다시 밟는다. 진입할 때마다
+    // 깊이를 세어, 중첩된 자리에서는 아무것도 실행하지 않는다.
+    ++g_detour_depth;
     const std::uintptr_t actor = g_orig_actor_getter(session);
 
-    // 걸어 둔 요청을 여기서 집어 간다. 이 함수는 게임의 여러
-    // 스레드에서 불리므로 TLS 가 준비된 스레드도 곧 지나간다.
-    // 플래그를 먼저 내려 재진입을 막는다 - 처리기가 이 함수를 다시
-    // 부른다.
-    if (g_has_pending.load(std::memory_order_acquire) &&
-        thread_ready_for_spawn()) {
-        Pending req = g_pending;
-        g_has_pending.store(false, std::memory_order_release);
-        run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
-    }
     if (session != nullptr) {
         const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
@@ -113,6 +131,32 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         const int now = note_actor(g_seen, g_seen_hits, n, kSeenCap, actor);
         if (now != n) g_seen_count.store(now, std::memory_order_release);
     }
+
+    // 걸어 둔 요청을 여기서 집어 간다. 게임의 여러 스레드가 이
+    // 함수를 부르므로 TLS 가 선 스레드도 곧 지나간다.
+    //
+    // 깊이가 1일 때만 - 즉 게임 코드에 중첩되지 않은 자리에서만 -
+    // 실행한다. 중첩된 자리는 이미 락을 쥐고 있을 수 있고, 실측에서
+    // 그렇게 교착해 게임 조작이 통째로 멈췄다.
+    // TLS 검사를 요청을 집어 간 뒤에 하면, 준비 안 된 스레드가 요청을
+    // 먹고 버린다 - 실측에서 요청만 쌓이고 아무것도 실행되지 않았다.
+    // 반드시 소비하기 전에 본다.
+    if (g_detour_depth == 1 && g_has_pending.load(std::memory_order_acquire) &&
+        thread_ready_for_spawn() &&
+        !g_running.exchange(true, std::memory_order_acq_rel)) {
+        if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
+            const Pending req = g_pending;
+            if (req.to_inventory) {
+                run_give(req.session, req.key, req.count, &g_outcome);
+            } else {
+                run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+            }
+        }
+        g_last_done.store(GetTickCount64(), std::memory_order_release);
+        g_running.store(false, std::memory_order_release);
+    }
+
+    --g_detour_depth;
     return actor;
 }
 
@@ -151,6 +195,26 @@ int seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
     *addr = reinterpret_cast<std::uintptr_t>(
         ep->ExceptionRecord->ExceptionAddress);
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+bool call_give_guarded(GiveFn fn, void* self, void* packet, void* value,
+                       std::uint32_t* seh_out, std::uintptr_t* addr_out) {
+    __try {
+        fn(self, packet, value);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
+}
+
+bool call_ctor_guarded(CtorFn fn, void* obj, std::uint32_t* seh_out,
+                       std::uintptr_t* addr_out) {
+    __try {
+        fn(obj);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
 }
 
 bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
@@ -459,6 +523,23 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
 
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
     g_reader = &reader;
+
+    // 인벤토리 직행도 같이 해석한다.
+    if (g_give_msg.handler == 0) {
+        resolve_cheat_message(rtti, reader,
+                              "CreateItemFromTrItemValueCheatReq", &g_give_msg);
+    }
+    if (g_item_value_ctor == nullptr) {
+        std::uint64_t rva = 0;
+        if (find_one(rtti.image(), kItemValueCtorPattern, &rva)) {
+            g_item_value_ctor = reinterpret_cast<CtorFn>(
+                reader.module_base() + static_cast<std::uintptr_t>(rva));
+            log::infof("TrItemValue 생성자 확보 (RVA 0x{:X})", rva);
+        } else {
+            log::warnf("TrItemValue 생성자를 찾지 못했다");
+        }
+    }
+
     if (g_spawn_msg.handler != 0) return true;
     return resolve_cheat_message(rtti, reader, "SpawnItemToGroundByCheatReq",
                                  &g_spawn_msg);
@@ -577,7 +658,87 @@ void run_spawn(std::uintptr_t session, std::uint32_t item_key,
     if (out != nullptr) *out = o;
 }
 
+// 인벤토리로 바로 넣는다. TLS 가 준비된 스레드에서만 부른다.
+void run_give(std::uintptr_t session, std::uint32_t item_key,
+              std::int64_t count, SpawnOutcome* out) {
+    SpawnOutcome o;
+    std::uintptr_t gate = 0;
+    if (!gate_object(*g_reader, session, &gate)) {
+        o.no_actor = true;
+        log::warnf("인벤토리 지급: 세션 0x{:X} 는 사슬이 끊겼다", session);
+        if (out != nullptr) *out = o;
+        return;
+    }
+
+    // 구조체는 게임 생성자에게 맡긴다. 기본값을 흉내내지 않는다.
+    alignas(16) std::uint8_t value[0x100]{};
+    o.called = true;
+    if (!call_ctor_guarded(g_item_value_ctor, value, &o.seh, &o.fault)) {
+        o.crashed = true;
+        log::errorf("인벤토리 지급: TrItemValue 생성자에서 죽었다 0x{:X}", o.seh);
+        if (out != nullptr) *out = o;
+        return;
+    }
+    if (!fill_item_value(value, sizeof(value), item_key, count)) {
+        if (out != nullptr) *out = o;
+        return;
+    }
+
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+
+    log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {}", session, item_key,
+               count);
+    o.crashed = !call_give_guarded(
+        reinterpret_cast<GiveFn>(g_give_msg.handler),
+        reinterpret_cast<void*>(g_give_msg.descriptor), packet, value, &o.seh,
+        &o.fault);
+    if (o.crashed) {
+        log::errorf("인벤토리 지급이 게임 안에서 죽었다: 0x{:X} (RVA 0x{:X})",
+                    o.seh, o.fault - g_reader->module_base());
+    } else {
+        log::infof("인벤토리 지급 끝");
+    }
+    if (out != nullptr) *out = o;
+}
+
 }  // namespace
+
+bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
+                     std::int64_t count) {
+    if (buf == nullptr || n < 0x18) return false;
+    auto* p = static_cast<std::uint8_t*>(buf);
+    std::memcpy(p + 0x08, &item_key, sizeof(item_key));
+    std::memcpy(p + 0x10, &count, sizeof(count));
+    return true;
+}
+
+bool give_ready() {
+    return g_give_msg.handler != 0 && g_item_value_ctor != nullptr &&
+           g_orig_actor_getter != nullptr && g_reader != nullptr;
+}
+
+bool request_give(std::uintptr_t session, std::uint32_t item_key,
+                  std::int64_t count) {
+    if (!give_ready()) return false;
+    if (!spawn_args_ok(item_key, count) || session == 0) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+
+    g_pending = Pending{};
+    g_pending.to_inventory = true;
+    g_pending.session = session;
+    g_pending.key = item_key;
+    g_pending.count = count;
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("인벤토리 지급 요청을 걸었다 - 게임 스레드를 기다린다");
+    return true;
+}
 
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]) {
@@ -586,7 +747,13 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     }
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
 
+    g_pending = Pending{};
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;

@@ -371,7 +371,7 @@ void draw_item_panel() {
 
     ImGui::Text("%zu / %zu", g_view.size(), all.size());
     ImGui::SameLine();
-    ImGui::TextDisabled("(줄을 누르면 키가 클립보드로 · 머리글을 누르면 정렬)");
+    ImGui::TextDisabled("(줄을 누르면 지급 칸과 클립보드로 · 머리글을 누르면 정렬)");
     ImGui::Separator();
 
     constexpr ImGuiTableFlags kFlags =
@@ -404,6 +404,7 @@ void draw_item_panel() {
             if (ImGui::Selectable(key, false,
                                   ImGuiSelectableFlags_SpanAllColumns)) {
                 ImGui::SetClipboardText(key);
+                set_grant_item_key(e.key);   // 지급 칸에도 넣는다
             }
             ImGui::PopID();
 

@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include "game/grant.h"
@@ -213,6 +214,26 @@ TEST(spawn_args_reject_non_positive_count) {
 
 TEST(spawn_args_accept_a_real_item) {
     CHECK(cdtb::game::spawn_args_ok(50001, 1));
+}
+
+// 인벤토리 직행은 TrItemValue 구조를 넘긴다. 작업 함수(0x26A2600)가
+// 검사하는 칸이 코드에 그대로 있다.
+//   mov eax, [r8+8];  test eax,eax; je 실패      아이템 키
+//   cmp qword [r8+0x10], 0; jle 실패             개수
+TEST(item_value_puts_key_at_8_and_count_at_10) {
+    std::uint8_t buf[0x80]{};
+    cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 7);
+    std::uint32_t key = 0;
+    std::int64_t count = 0;
+    std::memcpy(&key, buf + 0x08, sizeof(key));
+    std::memcpy(&count, buf + 0x10, sizeof(count));
+    CHECK_EQ(key, std::uint32_t{50001});
+    CHECK_EQ(count, std::int64_t{7});
+}
+
+TEST(item_value_refuses_a_small_buffer) {
+    std::uint8_t buf[8]{};
+    CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
 }
 
 // 세션이 없으면 요청 자체를 걸지 않는다.

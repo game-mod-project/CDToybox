@@ -37,6 +37,11 @@ const char* short_class(const char* mangled) {
 
 }  // namespace
 
+void set_grant_item_key(unsigned int key) {
+    g_item_key = static_cast<int>(key);
+    g_called = false;      // 새 아이템을 고르면 이전 결과는 지운다
+}
+
 void draw_grant_panel() {
     // 아이템 목록 안에 접어 넣었더니 스크롤 밖으로 밀려 버튼이 보이지
     // 않았다. 따로 띄운다.
@@ -142,7 +147,13 @@ void draw_grant_panel() {
     }
 
     if (have_pos) {
+        // PlayerCameraComponent 의 월드 좌표다. 이름은 카메라지만
+        // 컴포넌트가 플레이어에 붙어 있으므로 캐릭터 좌표일 수도
+        // 있다 - 확인 전까지 단정하지 않는다. 제자리에서 시점만
+        // 돌려 이 숫자가 변하는지 보면 갈린다.
         ImGui::Text("위치 %.1f, %.1f, %.1f", pos[0], pos[1], pos[2]);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(시점만 돌려 보세요 - 변하면 카메라)");
     }
 
     if (blocked != nullptr) {
@@ -162,6 +173,15 @@ void draw_grant_panel() {
                                hits[g_pick], top);
         }
     }
+
+    ImGui::BeginDisabled(blocked != nullptr || !game::give_ready());
+    if (ImGui::Button("인벤토리에 넣기", ImVec2(160.0f, 0.0f))) {
+        g_call_ok = game::request_give(
+            seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count);
+        g_called = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
 
     ImGui::BeginDisabled(blocked != nullptr);
     if (ImGui::Button("발밑에 떨구기", ImVec2(160.0f, 0.0f))) {
