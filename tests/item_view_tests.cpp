@@ -150,3 +150,55 @@ TEST(page_range_of_empty_list_is_empty) {
     CHECK_EQ(r.begin, static_cast<std::size_t>(0));
     CHECK_EQ(r.end, static_cast<std::size_t>(0));
 }
+
+// ------------------------------------------------------- 등급·분류 거르기
+
+namespace {
+
+std::vector<ItemCatalogEntry> graded() {
+    std::vector<ItemCatalogEntry> v(4);
+    v[0].key = 1; v[0].name = "T5 검";  v[0].grade = 5; v[0].category = 56;
+    v[1].key = 2; v[1].name = "T1 검";  v[1].grade = 1; v[1].category = 56;
+    v[2].key = 3; v[2].name = "장갑";   v[2].grade = 3; v[2].category = 22;
+    v[3].key = 4; v[3].name = "화살";   v[3].grade = 0; v[3].category = 70;
+    return v;
+}
+
+}  // namespace
+
+TEST(filter_items_by_grade) {
+    const auto all = graded();
+    ItemFilter f;
+    f.grade = 5;
+    const auto out = cdtb::game::filter_items(all, f);
+    CHECK_EQ(out.size(), static_cast<std::size_t>(1));
+    if (!out.empty()) CHECK_EQ(out[0]->key, 1u);
+}
+
+TEST(filter_items_by_grade_zero_means_ungraded_not_all) {
+    // 0 은 '등급 없음' 이라는 뜻이지 '전체' 가 아니다. 전체는 -1 이다.
+    const auto all = graded();
+    ItemFilter f;
+    f.grade = 0;
+    const auto out = cdtb::game::filter_items(all, f);
+    CHECK_EQ(out.size(), static_cast<std::size_t>(1));
+    if (!out.empty()) CHECK_EQ(out[0]->key, 4u);
+}
+
+TEST(filter_items_by_category) {
+    const auto all = graded();
+    ItemFilter f;
+    f.category = 56;
+    const auto out = cdtb::game::filter_items(all, f);
+    CHECK_EQ(out.size(), static_cast<std::size_t>(2));
+}
+
+TEST(sort_items_orders_by_grade) {
+    const auto all = graded();
+    auto out = cdtb::game::filter_items(all, ItemFilter{});
+    CHECK_EQ(out.size(), static_cast<std::size_t>(4));
+    if (out.size() != 4) return;
+    cdtb::game::sort_items(out, ItemSort::Grade, false);
+    CHECK_EQ(out[0]->grade, static_cast<std::uint8_t>(5));
+    CHECK_EQ(out[3]->grade, static_cast<std::uint8_t>(0));
+}

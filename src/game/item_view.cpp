@@ -23,6 +23,12 @@ int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
         case ItemSort::NameKey:
             if (a.name_key < b.name_key) return -1;
             return (a.name_key > b.name_key) ? 1 : 0;
+        case ItemSort::Grade:
+            if (a.grade < b.grade) return -1;
+            return (a.grade > b.grade) ? 1 : 0;
+        case ItemSort::Category:
+            if (a.category < b.category) return -1;
+            return (a.category > b.category) ? 1 : 0;
         case ItemSort::Key:
         default:
             if (a.key < b.key) return -1;
@@ -38,6 +44,8 @@ std::vector<const ItemCatalogEntry*> filter_items(
     out.reserve(all.size());
     for (const auto& e : all) {
         if (filter.hide_unnamed && e.name.empty()) continue;
+        if (filter.grade >= 0 && e.grade != filter.grade) continue;
+        if (filter.category >= 0 && e.category != filter.category) continue;
         if (!matches(e, filter.query)) continue;
         out.push_back(&e);
     }

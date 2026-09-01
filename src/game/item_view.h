@@ -17,9 +17,11 @@ namespace cdtb::game {
 struct ItemFilter {
     std::string query;          // 이름 또는 키에 걸린다
     bool hide_unnamed = false;  // 현지화 표에 없는 것을 감춘다
+    int grade = -1;             // -1 = 전체, 0 = 등급 없음, 1..5 = T1..T5
+    int category = -1;          // -1 = 전체
 };
 
-enum class ItemSort { Key, Name, NameKey };
+enum class ItemSort { Key, Name, NameKey, Grade, Category };
 
 // 조건에 맞는 항목의 포인터를 모은다. 원본 순서를 지킨다.
 //
