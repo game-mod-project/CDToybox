@@ -91,37 +91,62 @@ bool sane_position(const float p[3]) {
     return true;
 }
 
-// 재기준 좌표의 지역 원점. 켤 때 한 번 구한다.
+// 좌표 칸 하나. 켤 때 잰 오프셋을 들고 있는다.
 //
-// 매 프레임 다시 구할 수 없다. 우리가 월드 좌표를 덮어쓰기 때문에,
-// 두 번째 프레임부터는 "게임의 월드 - 게임의 재기준" 이 아니라
-// "우리 값 - 게임의 재기준" 이 되어 원점이 매 프레임 어긋난다.
-// 원점은 지역이 바뀔 때만 변하므로 켤 때 한 번이면 된다.
-float g_origin[3]{};
-bool g_origin_ok = false;
+// 오프셋을 매 프레임 다시 재면 안 된다. 우리가 이미 덮어쓴 값에서
+// 다시 빼게 되어 프레임마다 두 배씩 벌어지고, 결국 터무니없는 수가
+// 렌더로 들어간다. 2026-09-01 에 게임이 크래시 없이 정지한 원인이
+// 이것이다. 오프셋은 지역이 바뀔 때만 변하므로 켤 때 한 번이면 된다.
+struct Slot {
+    std::uintptr_t addr = 0;
+    float offset[3]{};   // 기준 좌표에서 이 칸까지의 차이
+};
+Slot g_slots[kBlockCount * 4];   // 블록마다 월드 1 + 재기준 3
+int g_slot_count = 0;
 
-// 렌더가 읽는 카메라 좌표를 우리 값으로 덮는다.
+// 켤 때 좌표 칸들의 위치와 오프셋을 잰다.
 //
-// 월드 좌표(+0x8C)는 우리 값을 그대로 유지하지만 게임이 거기서
-// 재기준 좌표를 파생시키지 않는다. 실측으로 확인했다 - 프리캠을 켜고
-// 움직이는 동안 월드는 우리를 따라왔고 재기준은 미동도 하지 않았다.
-// 렌더가 실제로 먹는 값은 재기준 쪽이다.
+// 기준은 블록 0 의 월드 좌표다. 나머지 칸은 전부 그것과의 차이로
+// 기억해 두고, 쓸 때 우리 좌표에 그 차이를 더한다.
 //
-// 그래서 재기준도 함께 쓴다. 다만 블록 0 의 첫 칸 하나만이다.
-// 처음에는 블록 두 벌의 월드와 재기준 세 벌씩 8곳을 썼고, 그 뒤
-// 게임이 정지했다. 블록 1 은 이전 프레임(모션 벡터·TAA)으로 보여
-// 건드리지 않는다.
-void write_camera_position(std::uintptr_t script, const float pos[3]) {
+// 어느 블록이 이번 프레임이고 어느 쪽이 이전 프레임인지는 모른다.
+// 추측으로 하나만 고르는 대신 둘 다 쓴다. 값이 정상 범위인지 매번
+// 검사하므로 폭주할 여지는 없다.
+bool measure_slots(std::uintptr_t script, float base[3]) {
+    g_slot_count = 0;
+
+    const auto q0 = script + kFirstQuat;
+    if (!mem::safe_read_bytes(q0 + kWorldPos, base, sizeof(float) * 3)) {
+        return false;
+    }
+    if (!sane_position(base)) return false;
+
+    for (int b = 0; b < kBlockCount; ++b) {
+        const auto q = script + kFirstQuat + b * kBlockStride;
+
+        const int offs[4] = {kWorldPos, kRebased[0], kRebased[1], kRebased[2]};
+        for (const int off : offs) {
+            float v[3]{};
+            if (!mem::safe_read_bytes(q + off, v, sizeof(v))) continue;
+            if (!sane_position(v)) continue;
+
+            Slot& s = g_slots[g_slot_count++];
+            s.addr = q + off;
+            for (int i = 0; i < 3; ++i) s.offset[i] = v[i] - base[i];
+        }
+    }
+    return g_slot_count > 0;
+}
+
+void write_camera_position(const float pos[3]) {
     if (!sane_position(pos)) return;
-
-    const auto q = script + kFirstQuat;
-    mem::safe_write_bytes(q + kWorldPos, pos, sizeof(float) * 3);
-
-    if (!g_origin_ok) return;
-    const float rebased[3] = {pos[0] - g_origin[0], pos[1] - g_origin[1],
-                              pos[2] - g_origin[2]};
-    if (!sane_position(rebased)) return;
-    mem::safe_write_bytes(q + kRebased[0], rebased, sizeof(rebased));
+    for (int i = 0; i < g_slot_count; ++i) {
+        const Slot& s = g_slots[i];
+        const float v[3] = {pos[0] + s.offset[0], pos[1] + s.offset[1],
+                            pos[2] + s.offset[2]};
+        if (!sane_position(v)) continue;
+        mem::safe_write_bytes(s.addr, v, sizeof(v));
+    }
 }
 
 // 원본이 보간해 둔 값을 우리 값으로 덮는다.
@@ -169,7 +194,7 @@ void __fastcall hooked_update(void* comp, float dt) {
     if (script < 0x10000) return;
     g_script.store(static_cast<std::uintptr_t>(script),
                    std::memory_order_relaxed);
-    write_camera_position(static_cast<std::uintptr_t>(script), g_pos);
+    write_camera_position(g_pos);
 }
 
 // 저장 명령에서 앞으로 훑어 함수 시작을 찾는다.
@@ -235,7 +260,21 @@ bool key_down(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
 
 }  // namespace
 
+// 카메라 기능은 보류 상태다.
+//
+// 훅과 패턴 탐색은 검증됐다(게임 함수에 108,000회 호출 동안
+// 안정). 문제는 그 다음이다 - 렌더가 실제로 읽는 카메라 값을
+// 아직 못 찾았다. 컴포넌트+0x360, 변환 객체의 월드·재기준·회전을
+// 전부 우리 값으로 고정해도 화면이 변하지 않았고, double 좌표는
+// 메모리 전체에 없었다.
+//
+// 답을 못 찾은 기능이 게임 코드에 훅을 걸고 있을 이유가 없으므로
+// 설치 자체를 하지 않는다. 다시 켤 때는 이 상수 하나만 바꾸면
+// 된다. 알아낸 것은 docs 에 남겼다.
+constexpr bool kDeferred = true;
+
 bool freecam_install() {
+    if (kDeferred) return false;
     if (g_hooked.load()) return true;
 
     g_update_fn = find_update_function();
@@ -306,20 +345,16 @@ void freecam_toggle() {
             g_pos[1] = w[1];
             g_pos[2] = w[2];
         }
-        // 재기준 원점을 여기서 한 번 구한다. 게임의 값이 아직
-        // 우리 손을 안 탄 유일한 시점이다.
-        const auto q = static_cast<std::uintptr_t>(script) + kFirstQuat;
-        float gw[3]{}, gr[3]{};
-        if (mem::safe_read_bytes(q + kWorldPos, gw, sizeof(gw)) &&
-            mem::safe_read_bytes(q + kRebased[0], gr, sizeof(gr)) &&
-            sane_position(gw) && sane_position(gr)) {
-            for (int i = 0; i < 3; ++i) g_origin[i] = gw[i] - gr[i];
-            g_origin_ok = true;
-            log::infof("프리캠: 재기준 원점 ({:.1f}, {:.1f}, {:.1f})",
-                       g_origin[0], g_origin[1], g_origin[2]);
+        // 좌표 칸들의 위치와 오프셋을 여기서 한 번 잰다.
+        // 게임의 값이 아직 우리 손을 안 탄 유일한 시점이다.
+        float base[3]{};
+        if (measure_slots(static_cast<std::uintptr_t>(script), base)) {
+            g_pos[0] = base[0];
+            g_pos[1] = base[1];
+            g_pos[2] = base[2];
+            log::infof("프리캠: 좌표 칸 {}개 확보", g_slot_count);
         } else {
-            g_origin_ok = false;
-            log::warnf("프리캠: 재기준 원점을 못 구했다 - 위치만 쓴다");
+            log::warnf("프리캠: 좌표 칸을 재지 못했다");
         }
         g_script.store(static_cast<std::uintptr_t>(script));
     } else {
@@ -332,6 +367,7 @@ void freecam_toggle() {
 
 FreeCamState freecam_state() {
     FreeCamState s;
+    s.deferred = kDeferred;
     s.hooked = g_hooked.load();
     s.active = g_active.load();
     s.speed = g_speed;
@@ -342,6 +378,7 @@ FreeCamState freecam_state() {
 }
 
 void freecam_tick() {
+    if (kDeferred) return;
     // 카메라를 찾은 뒤에 한 번만 건다. 여기서 거는 이유는 이 함수가
     // 프레임마다 불리는 유일한 지점이고, 훅 설치가 카메라 탐색보다
     // 뒤여야 하기 때문이다. 실패하면 잠시 쉬었다 다시 본다.

@@ -66,7 +66,9 @@ void draw_camera_panel() {
 
     ImGui::Separator();
     const auto fc = game::freecam_state();
-    if (!fc.hooked) {
+    if (fc.deferred) {
+        ImGui::TextDisabled("프리카메라: 보류 - 렌더가 읽는 값을 아직 못 찾았다");
+    } else if (!fc.hooked) {
         ImGui::TextDisabled("프리카메라: 훅 대기 중");
     } else {
         ImGui::TextColored(fc.active ? ImVec4(0.4f, 1, 0.4f, 1)

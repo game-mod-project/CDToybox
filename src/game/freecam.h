@@ -31,6 +31,7 @@ void freecam_uninstall();
 void freecam_toggle();
 
 struct FreeCamState {
+    bool deferred = false;   // 보류 중이면 훅을 걸지 않는다
     bool hooked = false;
     bool active = false;
     float pos[3]{};

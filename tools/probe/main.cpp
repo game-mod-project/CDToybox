@@ -39,6 +39,9 @@ void usage() {
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
         "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
         "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
+        "  hold <주소> <x> <y> <z> [ms]  좌표를 눌러 써서 화면이 변하는지 본다\n"
+        "  findvec3d <x> <y> <z> [오차] [최대] double 좌표 찾기\n"
+        "  holdmany <x> <y> <z> <오차> <dy> [ms] [start] [count]  묶어서 눌러쓰기\n"
         "  findmat <x> <y> <z> [오차] [최대]   좌표 근처의 정규직교 4x4 찾기\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
@@ -492,6 +495,47 @@ int main(int argc, char** argv) {
                                    ? std::strtoull(argv[6], nullptr, 10)
                                    : 40;
         cmd_findmat(r, x, y, z, eps, mx);
+        return 0;
+    }
+    if (cmd == "holdmany") {
+        if (argc < 7) { usage(); return 1; }
+        const unsigned ms = (argc > 7)
+                                ? static_cast<unsigned>(
+                                      std::strtoul(argv[7], nullptr, 10))
+                                : 6000;
+        const std::size_t st = (argc > 8)
+                                   ? std::strtoull(argv[8], nullptr, 10)
+                                   : 0;
+        const std::size_t cn = (argc > 9)
+                                   ? std::strtoull(argv[9], nullptr, 10)
+                                   : 0;
+        cmd_holdmany(r, static_cast<float>(std::atof(argv[2])),
+                     static_cast<float>(std::atof(argv[3])),
+                     static_cast<float>(std::atof(argv[4])),
+                     static_cast<float>(std::atof(argv[5])),
+                     static_cast<float>(std::atof(argv[6])), ms, st, cn);
+        return 0;
+    }
+    if (cmd == "findvec3d") {
+        if (argc < 5) { usage(); return 1; }
+        const double eps = (argc > 5) ? std::atof(argv[5]) : 1.0;
+        const std::size_t mx = (argc > 6)
+                                   ? std::strtoull(argv[6], nullptr, 10)
+                                   : 60;
+        cmd_findvec3d(r, std::atof(argv[2]), std::atof(argv[3]),
+                      std::atof(argv[4]), eps, mx);
+        return 0;
+    }
+    if (cmd == "hold") {
+        if (argc < 6) { usage(); return 1; }
+        const unsigned ms = (argc > 6)
+                                ? static_cast<unsigned>(
+                                      std::strtoul(argv[6], nullptr, 10))
+                                : 3000;
+        cmd_hold(r, parse_addr(argv[2]),
+                 static_cast<float>(std::atof(argv[3])),
+                 static_cast<float>(std::atof(argv[4])),
+                 static_cast<float>(std::atof(argv[5])), ms);
         return 0;
     }
     if (cmd == "findquat") {
