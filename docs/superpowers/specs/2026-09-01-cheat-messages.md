@@ -298,6 +298,48 @@ mov dword ptr [rbx + 0x1b0], edi
 완화이지 보장이 아니다. 근본 해결은 게임 로직 스레드의 프레임
 경계를 찾는 것이다.
 
+## 실제로 동작하는 치트는 10개뿐이다 (2026-09-02)
+
+35개 중 25개는 **역직렬화만 있고 처리기가 없다.** 페이로드를 끝까지
+읽고 길이까지 검증한 다음 성공으로 처리하고 끝난다.
+
+`MovePlayerByCheatReq` (텔레포트, ID 2173) 가 그 예다.
+
+```
+... 12바이트(위치)와 4바이트를 읽고 ...
+movzx eax, word ptr [rsi + 3]
+cmp   dword ptr [rbp - 4], eax     ; 소비한 길이 == 선언한 길이
+je    성공
+성공:
+mov dword ptr [rbx], 0             ; 처리기 호출 없이 끝
+```
+
+출시하면서 알맹이만 걷어낸 것으로 보인다. 메시지 정의와 파서는
+남았지만 하는 일이 없다.
+
+### 처리기가 있는 것
+
+| ID | 클래스 | 처리기 | 상태 |
+|----|--------|--------|------|
+| 2333 | KillCheatReq | 0x278CE30 | 대상 ID 필요 |
+| 2387 | VaryStatCheatReq | 0x278CE30 | 미시도 |
+| 2448 | AiControlChangeCheatReq | 0x278D270 | 미시도 |
+| 2503 | DeleteItemCheatReq | 0x2791E60 | 미시도 |
+| 2510 | SpawnCharacterCheatReq | 0x278B860 | 미시도 |
+| 2736 | VaryEnduranceItemByCheatReq | 0x2792E70 | 미시도 |
+| 2944 | CreateItemFromTrItemValueCheatReq | 0x2791AC0 | **동작 확인** |
+| 3013 | SpawnItemToGroundByCheatReq | 0x2791C80 | **동작 확인** |
+
+2122(CheatDirectPlay) 와 2786(ResetGameAdvice) 은 0x2520670 을
+가리키는데 그것은 여러 처리기가 공유하는 헬퍼다 - 알맹이가 없을
+가능성이 높다.
+
+### 확인하는 법
+
+`cheat_report.py` 의 "[마지막 호출]" 표시가 곧 "처리기를 못 찾았다"
+는 뜻이다. 역직렬화 본문에 `call rel32` 뒤 `mov dword [reg],0` 이
+없으면 처리기가 없는 것이다.
+
 ## 도구
 
 ```
