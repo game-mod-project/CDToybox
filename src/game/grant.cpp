@@ -78,6 +78,19 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
 // 게임 함수를 부르다 죽으면 오버레이가 통째로 내려간다 - 실측에서
 // 그렇게 됐다. 예외를 여기서 막는다. 이 함수 안에는 소멸자를 가진
 // 객체를 두지 않는다(__try 가 허용하지 않는다).
+bool call_spawn_guarded(SpawnFn fn, void* actor, std::uint32_t* result,
+                        const std::uint32_t* key, const std::int64_t* count,
+                        const std::uint16_t* f3, const float* pos,
+                        std::uint32_t* seh_out) {
+    __try {
+        fn(actor, result, key, count, f3, pos);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *seh_out = static_cast<std::uint32_t>(GetExceptionCode());
+        return false;
+    }
+}
+
 bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
                           const std::uint32_t* key, const std::int64_t* count,
                           const std::uint16_t* f3, const float* pos,
@@ -336,14 +349,27 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
 
 const CheatMessage& spawn_message() { return g_spawn_msg; }
 
-bool spawn_ready() { return g_spawn_msg.handler != 0; }
+bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_spawn != nullptr) return true;
+    std::uint64_t rva = 0;
+    if (!find_spawn_ground_rva(rtti.image(), &rva)) {
+        log::warnf("바닥 스폰 함수를 찾지 못했다 - 패치로 밀렸을 수 있다");
+        return false;
+    }
+    g_spawn = reinterpret_cast<SpawnFn>(
+        reader.module_base() + static_cast<std::uintptr_t>(rva));
+    log::infof("바닥 스폰 함수 확보 (RVA 0x{:X})", rva);
+    return true;
+}
+
+bool spawn_ready() { return g_spawn != nullptr && g_orig_actor_getter != nullptr; }
 
 bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
                           std::int64_t count, const float pos[3],
                           SpawnOutcome* out) {
     SpawnOutcome o;
     if (out != nullptr) *out = o;
-    if (g_spawn_msg.handler == 0 || pos == nullptr) return false;
+    if (!spawn_ready() || pos == nullptr) return false;
     if (!spawn_args_ok(item_key, count)) return false;
     if (session == 0) return false;
 
@@ -361,15 +387,27 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
     log::infof("바닥 스폰: 세션 0x{:X} 키 {} 개수 {} 위치 {:.1f},{:.1f},{:.1f}",
                session, item_key, count, where[0], where[1], where[2]);
 
+    // 처리기를 통째로 부르면 앞단 권한 검사에서 조용히 빠져나간다 -
+    // 실측에서 죽지도 않고 아무 일도 없었다. 그래서 액터 조회만
+    // 게임에게 시키고(세션이 있으니 정확하다) 실제 작업은 직접
+    // 부른다. 우리가 인벤토리 컴포넌트를 고르는 일은 여전히 없다.
     o.called = true;
-    o.crashed = !call_handler_guarded(
-        reinterpret_cast<HandlerFn>(g_spawn_msg.handler),
-        reinterpret_cast<void*>(g_spawn_msg.descriptor), packet, &key, &n,
-        &field3, where, &o.seh);
+    o.actor = g_orig_actor_getter(reinterpret_cast<void*>(session));
+    if (o.actor == 0) {
+        o.no_actor = true;
+        log::warnf("바닥 스폰: 그 세션에서 액터가 안 나왔다");
+        if (out != nullptr) *out = o;
+        return true;
+    }
+    log::infof("바닥 스폰: 액터 0x{:X}", o.actor);
+
+    o.crashed = !call_spawn_guarded(g_spawn, reinterpret_cast<void*>(o.actor),
+                                    &o.result, &key, &n, &field3, where,
+                                    &o.seh);
     if (o.crashed) {
         log::errorf("바닥 스폰이 게임 안에서 죽었다: 0x{:X}", o.seh);
     } else {
-        log::infof("바닥 스폰 끝");
+        log::infof("바닥 스폰 결과 0x{:X}", o.result);
     }
     if (out != nullptr) *out = o;
     return true;

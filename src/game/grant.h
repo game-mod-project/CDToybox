@@ -89,6 +89,8 @@ bool spawn_args_ok(std::uint32_t item_key, std::int64_t count);
 struct SpawnOutcome {
     bool called = false;        // 게임 함수를 실제로 불렀는가
     bool crashed = false;       // 부르다 예외가 났는가
+    bool no_actor = false;      // 세션에서 액터가 안 나왔는가
+    std::uintptr_t actor = 0;   // 게임이 그 세션으로 찾아 준 액터
     std::uint32_t seh = 0;      // 예외 코드
     std::uint32_t result = 0;   // 게임이 낸 코드. 0 이면 성공
 };
@@ -109,7 +111,10 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader);
 const CheatMessage& spawn_message();
 
-// 메시지를 해석해 뒀는가.
+// 실제 작업 함수를 찾아 둔다.
+bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 부를 준비가 됐는가.
 bool spawn_ready();
 
 }  // namespace cdtb::game

@@ -145,6 +145,9 @@ void draw_grant_panel() {
         ImGui::SameLine();
         if (!g_call_ok) {
             ImGui::TextDisabled("부르지 못했습니다");
+        } else if (g_outcome.no_actor) {
+            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                               "그 세션에서 액터가 안 나왔습니다");
         } else if (g_outcome.crashed) {
             ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
                                "게임 안에서 죽었다 0x%X - 대상이 틀렸습니다",
@@ -154,6 +157,10 @@ void draw_grant_panel() {
         } else {
             ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.3f, 1.0f),
                                "게임이 거절: 0x%X", g_outcome.result);
+        }
+        if (g_outcome.actor != 0) {
+            ImGui::Text("액터 0x%llX",
+                        static_cast<unsigned long long>(g_outcome.actor));
         }
     }
     ImGui::End();
