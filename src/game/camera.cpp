@@ -199,16 +199,21 @@ void auto_analysis_loop() {
         log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
     }
 
-    // 액터가 잡혔는지 한 번 확인해 남긴다. 이 포인터가 치트 경로가
-    // 쓰는 바로 그 값이다.
-    for (int i = 0; i < 60 && !g_stop.load(); ++i) {
-        const std::uintptr_t actor = last_actor();
-        if (actor != 0) {
-            log::infof("플레이어 액터 0x{:X} ({})", actor,
-                       rtti.class_of_object(actor));
-            break;
+    // 조회 함수가 무엇을 돌려주는지 전부 남긴다. 클라이언트 쪽과
+    // 서버 쪽 인벤토리 컴포넌트가 둘 다 살아 있어서, 치트 경로가
+    // 어느 쪽을 받는지 이걸로 가린다. 읽기만 한다.
+    std::uintptr_t seen[16]{};
+    int shown = 0;
+    for (int i = 0; i < 90 && !g_stop.load(); ++i) {
+        const int n = seen_actors(seen, 16);
+        for (; shown < n; ++shown) {
+            log::infof("액터 후보 {} 0x{:X} ({})", shown + 1, seen[shown],
+                       rtti.class_of_object(seen[shown]));
         }
         for (int j = 0; j < 20 && !g_stop.load(); ++j) ::Sleep(100);
+    }
+    if (shown == 0 && !g_stop.load()) {
+        log::warnf("액터를 한 번도 못 봤다 - 후킹이 안 걸렸을 수 있다");
     }
 }
 

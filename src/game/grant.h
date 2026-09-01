@@ -31,6 +31,16 @@ bool actor_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 void actor_hook_remove();
 bool actor_hook_installed();
 
+// 이미 있는 값이면 그대로, 새 값이면 넣고 늘어난 개수를 돌려준다.
+// 자리가 없으면 그대로 둔다.
+int remember_distinct(std::uintptr_t* slots, int count, int cap,
+                      std::uintptr_t value);
+
+// 조회 함수가 지금까지 돌려준 서로 다른 값들. 클라이언트 쪽과 서버
+// 쪽 인벤토리 컴포넌트가 둘 다 살아 있어서, 어느 쪽을 주는지 봐야
+// 한다. 돌려주는 것은 실제로 채워진 개수다.
+int seen_actors(std::uintptr_t* out, int cap);
+
 // 마지막으로 본 액터. 아직 못 봤으면 0.
 std::uintptr_t last_actor();
 

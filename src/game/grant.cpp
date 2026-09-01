@@ -25,11 +25,22 @@ void* g_actor_getter_target = nullptr;
 std::atomic<std::uintptr_t> g_last_actor{0};
 bool g_installed = false;
 
+// 서로 다른 값을 모은다. 훅 안에서 RTTI 를 푸는 것은 너무 비싸므로
+// 주소만 적어 두고 나중에 분석 스레드가 클래스를 붙인다.
+constexpr int kSeenCap = 16;
+std::uintptr_t g_seen[kSeenCap]{};
+std::atomic<int> g_seen_count{0};
+
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     const std::uintptr_t actor = g_orig_actor_getter(session);
     if (actor != 0) {
         g_last_actor.store(actor, std::memory_order_relaxed);
+        const int n = g_seen_count.load(std::memory_order_relaxed);
+        if (n < kSeenCap) {
+            const int now = remember_distinct(g_seen, n, kSeenCap, actor);
+            if (now != n) g_seen_count.store(now, std::memory_order_release);
+        }
     }
     return actor;
 }
@@ -94,6 +105,23 @@ void actor_hook_remove() {
 }
 
 bool actor_hook_installed() { return g_installed; }
+
+int remember_distinct(std::uintptr_t* slots, int count, int cap,
+                      std::uintptr_t value) {
+    if (slots == nullptr || count >= cap) return count;
+    for (int i = 0; i < count; ++i) {
+        if (slots[i] == value) return count;
+    }
+    slots[count] = value;
+    return count + 1;
+}
+
+int seen_actors(std::uintptr_t* out, int cap) {
+    const int n = g_seen_count.load(std::memory_order_acquire);
+    const int take = (n < cap) ? n : cap;
+    for (int i = 0; i < take; ++i) out[i] = g_seen[i];
+    return take;
+}
 
 std::uintptr_t last_actor() {
     return g_last_actor.load(std::memory_order_relaxed);

@@ -63,6 +63,25 @@ TEST(find_spawn_ground_fails_when_absent) {
     CHECK(!find_spawn_ground_rva(img, &rva));
 }
 
+// 조회 함수는 타입에 따라 다른 것을 돌려준다 - 클라이언트 쪽과
+// 서버 쪽 인벤토리 컴포넌트가 둘 다 살아 있다. 어느 쪽을 주는지
+// 알아야 해서 본 것을 전부 모은다.
+TEST(remember_distinct_adds_a_new_value) {
+    std::uintptr_t slots[4]{};
+    CHECK_EQ(cdtb::game::remember_distinct(slots, 0, 4, 0x1234u), 1);
+    CHECK_EQ(slots[0], std::uintptr_t{0x1234u});
+}
+
+TEST(remember_distinct_ignores_a_repeat) {
+    std::uintptr_t slots[4]{0x1234u, 0, 0, 0};
+    CHECK_EQ(cdtb::game::remember_distinct(slots, 1, 4, 0x1234u), 1);
+}
+
+TEST(remember_distinct_stops_when_full) {
+    std::uintptr_t slots[2]{0x11u, 0x22u};
+    CHECK_EQ(cdtb::game::remember_distinct(slots, 2, 2, 0x33u), 2);
+}
+
 TEST(no_actor_before_the_hook_sees_one) {
     CHECK_EQ(cdtb::game::last_actor(), std::uintptr_t{0});
 }
