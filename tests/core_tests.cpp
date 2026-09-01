@@ -39,7 +39,7 @@ TEST(config_returns_defaults_when_file_missing) {
     fs::remove(p);
     const cdtb::Config c = cdtb::config::load(p);
     CHECK_EQ(c.toggle_key, 0x2D);
-    CHECK_EQ(c.unload_key, 0x23);
+    CHECK_EQ(c.unload_key, 0x79);   // F10. 이동 키에서 멀리 뒀다
     CHECK_EQ(c.show_diagnostics, true);
 }
 
@@ -72,7 +72,7 @@ TEST(config_ignores_garbage_lines) {
     }
     const cdtb::Config c = cdtb::config::load(p);
     CHECK_EQ(c.toggle_key, 0x50);
-    CHECK_EQ(c.unload_key, 0x23);   // 기본값 유지
+    CHECK_EQ(c.unload_key, 0x79);   // 기본값 유지
     fs::remove(p);
 }
 

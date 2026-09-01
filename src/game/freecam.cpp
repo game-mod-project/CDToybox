@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstring>
 
@@ -76,25 +77,34 @@ constexpr int kFirstQuat = 0x38;
 constexpr int kWorldPos = 0x54;             // 쿼터니언 기준
 constexpr int kRebased[3] = {-0x30, -0x20, -0x10};
 
-void write_camera_position(std::uintptr_t script, const float pos[3]) {
-    for (int b = 0; b < kBlockCount; ++b) {
-        const auto q = script + kFirstQuat + b * kBlockStride;
-
-        float world[3]{};
-        if (!mem::safe_read_bytes(q + kWorldPos, world, sizeof(world))) continue;
-
-        // 재기준 좌표는 각자의 차이를 유지한 채 옮긴다. 먼저 차이를
-        // 구하고 나서 월드를 덮어야 한다 - 순서가 바뀌면 차이가 0이 된다.
-        for (const int off : kRebased) {
-            float r[3]{};
-            if (!mem::safe_read_bytes(q + off, r, sizeof(r))) continue;
-            const float moved[3] = {pos[0] + (r[0] - world[0]),
-                                    pos[1] + (r[1] - world[1]),
-                                    pos[2] + (r[2] - world[2])};
-            mem::safe_write_bytes(q + off, moved, sizeof(moved));
-        }
-        mem::safe_write_bytes(q + kWorldPos, pos, sizeof(float) * 3);
+// 값이 카메라 좌표로 말이 되는가.
+//
+// 렌더가 먹는 값에 NaN 이나 터무니없는 수를 넣으면 GPU 가 멈춘다.
+// 2026-09-01 실행에서 게임이 크래시 없이 정지했고, 덤프가 남지
+// 않았다. 원인이 이것인지는 아직 모르지만, 검사 없이 렌더 입력에
+// 쓰는 것은 어느 쪽이든 옳지 않다.
+bool sane_position(const float p[3]) {
+    for (int i = 0; i < 3; ++i) {
+        if (!std::isfinite(p[i])) return false;
+        if (std::fabs(p[i]) > 1.0e6f) return false;
     }
+    return true;
+}
+
+// 렌더가 읽는 카메라 좌표를 우리 값으로 덮는다.
+//
+// 최소한만 쓴다. 블록 0 의 월드 좌표 하나다.
+//
+// 처음에는 블록 두 벌의 월드 좌표와 재기준 좌표 세 벌씩, 모두 8곳을
+// 썼다. 그 뒤 게임이 정지했다. 재기준 좌표는 렌더가 직접 먹는 값이고
+// 블록 1 은 이전 프레임(모션 벡터·TAA)으로 보이므로, 그것들을 건드리는
+// 것은 위험 대비 얻는 것이 없다. 게임이 월드 좌표에서 나머지를
+// 파생시킨다면 이 하나로 충분하고, 아니라면 아무 일도 일어나지 않는다.
+// 어느 쪽인지는 화면이 알려 준다.
+void write_camera_position(std::uintptr_t script, const float pos[3]) {
+    if (!sane_position(pos)) return;
+    mem::safe_write_bytes(script + kFirstQuat + kWorldPos, pos,
+                          sizeof(float) * 3);
 }
 
 // 원본이 보간해 둔 값을 우리 값으로 덮는다.

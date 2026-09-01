@@ -142,13 +142,21 @@ void release_resources() {
 // ImGui와 D3D12 리소스를 전부 해체한다. g_visible은 건드리지 않으므로
 // 해상도 변경 후 재초기화해도 사용자가 열어둔 상태가 유지된다.
 void teardown(ID3D12CommandQueue* queue) {
+    // 단계마다 남긴다. 여기서 멈추면 어느 줄에서 멈췄는지
+    // 로그가 지목해야 한다. 2026-09-01 정지 때는 요청 줄만 남고
+    // 이 함수의 흔적이 전혀 없어, 렌더 스레드가 여기 오기도 전에
+    // 멈춰 있었음을 알 수 있었다.
+    log::infof("해체 1: 스캔 패널 정리");
     cdtb::render::shutdown_scan_panel();   // 워커 스레드를 먼저 정리한다
+    log::infof("해체 2: GPU 대기");
     wait_for_pending(queue);   // GPU가 우리 리소스를 놓을 때까지
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
     if (g_win32_ready) { ImGui_ImplWin32_Shutdown(); g_win32_ready = false; }
     if (g_ctx_created) { ImGui::DestroyContext(); g_ctx_created = false; }
+    log::infof("해체 3: ImGui 정리 완료");
     input::remove();
     release_resources();
+    log::infof("해체 4: 리소스 해제 완료");
     g_ready = false;
 }
 
