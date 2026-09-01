@@ -10,7 +10,10 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "remote.h"
@@ -187,6 +190,141 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     }
     std::printf("매니저   0x%llX\n", static_cast<unsigned long long>(mgr));
     std::printf("아이템   %zu개\n", items.size());
+
+    // items rec <키> [바이트]  : 레코드 한 개를 u32 격자로 뜬다.
+    // 카테고리·등급·가격이 어느 칸인지 찾는 정찰용이다.
+    if (argc > 3 && std::strcmp(argv[2], "rec") == 0) {
+        const std::uint32_t want =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        const std::size_t bytes =
+            (argc > 4) ? std::strtoull(argv[4], nullptr, 0) : 0x100;
+        std::vector<game::ItemEntry> raw;
+        game::read_item_table(reader, mgr, &raw, 0);
+        for (const auto& it : raw) {
+            if (it.key != want) continue;
+            std::string name;
+            game::resolve(reader, sys, it.name_key, &name, nullptr);
+            std::printf("\n키 %u  레코드 0x%llX  '%s'\n", it.key,
+                        static_cast<unsigned long long>(it.record),
+                        name.c_str());
+            std::vector<std::uint32_t> w(bytes / 4);
+            if (!reader.read(it.record, w.data(), w.size() * 4)) {
+                std::printf("레코드를 읽지 못했습니다\n");
+                return;
+            }
+            // 0 만 있는 줄은 건너뛴다. 레코드가 0x500 바이트라
+            // 전부 찍으면 읽을 수가 없다.
+            std::size_t skipped = 0;
+            for (std::size_t i = 0; i < w.size(); i += 4) {
+                bool all_zero = true;
+                for (std::size_t k = 0; k < 4 && i + k < w.size(); ++k) {
+                    if (w[i + k] != 0) all_zero = false;
+                }
+                if (all_zero) { ++skipped; continue; }
+                std::printf("+0x%03zX ", i * 4);
+                for (std::size_t k = 0; k < 4 && i + k < w.size(); ++k) {
+                    std::printf(" %10u(%08X)", w[i + k], w[i + k]);
+                }
+                std::printf("\n");
+            }
+            std::printf("(0 만 있는 줄 %zu개 생략)\n", skipped);
+            return;
+        }
+        std::printf("키 %u 를 표에서 찾지 못했습니다\n", want);
+        return;
+    }
+
+    // items diff <키A> <키B> [바이트]  : 두 레코드에서 다른 칸만 낸다.
+    // 등급·가격·카테고리가 어느 칸인지 좁히는 정찰용이다.
+    if (argc > 4 && std::strcmp(argv[2], "diff") == 0) {
+        const std::uint32_t ka =
+            static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+        const std::uint32_t kb =
+            static_cast<std::uint32_t>(std::strtoul(argv[4], nullptr, 0));
+        const std::size_t bytes =
+            (argc > 5) ? std::strtoull(argv[5], nullptr, 0) : 0x500;
+
+        std::vector<game::ItemEntry> raw;
+        game::read_item_table(reader, mgr, &raw, 0);
+        std::uintptr_t ra = 0, rb = 0;
+        std::string na, nb;
+        for (const auto& it : raw) {
+            if (it.key == ka && ra == 0) {
+                ra = it.record;
+                game::resolve(reader, sys, it.name_key, &na, nullptr);
+            }
+            if (it.key == kb && rb == 0) {
+                rb = it.record;
+                game::resolve(reader, sys, it.name_key, &nb, nullptr);
+            }
+        }
+        if (ra == 0 || rb == 0) {
+            std::printf("키를 찾지 못했습니다 (A=%s B=%s)\n",
+                        ra ? "있음" : "없음", rb ? "있음" : "없음");
+            return;
+        }
+        std::vector<std::uint32_t> a(bytes / 4), b(bytes / 4);
+        if (!reader.read(ra, a.data(), a.size() * 4) ||
+            !reader.read(rb, b.data(), b.size() * 4)) {
+            std::printf("레코드를 읽지 못했습니다\n");
+            return;
+        }
+        std::printf("\nA %u '%s'\nB %u '%s'\n\n", ka, na.c_str(), kb,
+                    nb.c_str());
+        std::printf("%-8s %22s %22s\n", "오프셋", "A", "B");
+        std::size_t same = 0;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (a[i] == b[i]) { ++same; continue; }
+            // 포인터로 보이는 칸은 건너뛴다. 값이 아니라 주소다.
+            const bool ptr_like =
+                (i + 1 < a.size() && a[i + 1] == 0x2F1 && b[i + 1] == 0x2F1) ||
+                (i > 0 && a[i] == b[i] && a[i] > 0x100);
+            if (ptr_like) { ++same; continue; }
+            std::printf("+0x%03zX  %10u(%08X) %10u(%08X)\n", i * 4, a[i], a[i],
+                        b[i], b[i]);
+        }
+        std::printf("\n같은 칸 %zu / %zu\n", same, a.size());
+        return;
+    }
+
+    // items hist <오프셋> [폭]  : 그 칸의 값 분포를 6,810개 전체에서 센다.
+    // 값 종류가 적으면 등급·분류 같은 열거형이고, 넓게 퍼지면 가격
+    // 이나 아이디다. 어느 칸이 무엇인지 좁히는 정찰용이다.
+    if (argc > 3 && std::strcmp(argv[2], "hist") == 0) {
+        const std::size_t off = std::strtoull(argv[3], nullptr, 0);
+        const int width = (argc > 4) ? std::atoi(argv[4]) : 4;
+        std::vector<game::ItemEntry> raw;
+        if (!game::read_item_table(reader, mgr, &raw, 0)) {
+            std::printf("표를 읽지 못했습니다\n");
+            return;
+        }
+        std::map<std::uint64_t, std::size_t> hist;
+        std::size_t failed = 0;
+        for (const auto& it : raw) {
+            std::uint64_t v = 0;
+            bool ok = false;
+            if (width == 1) { std::uint8_t x = 0; ok = reader.read_value(it.record + off, &x); v = x; }
+            else if (width == 2) { std::uint16_t x = 0; ok = reader.read_value(it.record + off, &x); v = x; }
+            else if (width == 8) { ok = reader.read_value(it.record + off, &v); }
+            else { std::uint32_t x = 0; ok = reader.read_value(it.record + off, &x); v = x; }
+            if (!ok) { ++failed; continue; }
+            ++hist[v];
+        }
+        std::printf("\n+0x%zX (%d바이트): 값 종류 %zu개, 읽기 실패 %zu\n\n",
+                    off, width, hist.size(), failed);
+        std::vector<std::pair<std::uint64_t, std::size_t>> rows(hist.begin(),
+                                                                hist.end());
+        std::sort(rows.begin(), rows.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (std::size_t i = 0; i < rows.size() && i < 24; ++i) {
+            std::printf("  %12llu (0x%llX)  x %zu\n",
+                        static_cast<unsigned long long>(rows[i].first),
+                        static_cast<unsigned long long>(rows[i].first),
+                        rows[i].second);
+        }
+        if (rows.size() > 24) std::printf("  ... 그 외 %zu종\n", rows.size() - 24);
+        return;
+    }
 
     // items [최대]  |  items find <문자열>
     std::string needle;
