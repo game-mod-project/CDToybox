@@ -18,6 +18,7 @@
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
+#include "game/items.h"
 #include "game/localization.h"
 
 using namespace cdtb;
@@ -47,6 +48,8 @@ void usage() {
         "  loc                         현지화 시스템 + 카테고리별 개수\n"
         "  loc <키>                    현지화 키 하나 조회 (10진/0x16진)\n"
         "  loc item <엔티티키>         이름(0x70)과 다음 칸(0x71)\n"
+        "  items [최대]                아이템 표를 키+이름으로 나열\n"
+        "  items find <문자열>         이름에 그 문자열이 든 것만\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
@@ -139,6 +142,85 @@ void cmd_loc(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
         std::printf("카테고리 %d\n'%s'\n", cat, text.c_str());
     } else {
         std::printf("찾지 못했습니다.\n");
+    }
+}
+
+// argv 는 시스템 ANSI 코드페이지로 온다(이 기계는 949). 게임의 문자열
+// 풀은 UTF-8 이므로 그대로 비교하면 한글이 절대 맞지 않는다 - 'items
+// find 화살' 이 0건으로 나왔다. 비교 전에 UTF-8 로 옮긴다.
+std::string ansi_to_utf8(const char* s) {
+    if (s == nullptr || *s == '\0') return {};
+    const int wn = ::MultiByteToWideChar(CP_ACP, 0, s, -1, nullptr, 0);
+    if (wn <= 0) return s;
+    std::wstring w(static_cast<std::size_t>(wn), L'\0');
+    ::MultiByteToWideChar(CP_ACP, 0, s, -1, w.data(), wn);
+    const int un = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, nullptr, 0,
+                                         nullptr, nullptr);
+    if (un <= 0) return s;
+    std::string u(static_cast<std::size_t>(un), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, u.data(), un, nullptr,
+                          nullptr);
+    u.resize(std::strlen(u.c_str()));   // 세었던 널 종단을 뗀다
+    return u;
+}
+
+// 아이템 표를 걸어 키와 이름을 낸다. 전부 읽기다.
+void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+               char** argv) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_item_manager(rt, reader, &mgr)) {
+        std::printf("ItemInfoManager 를 찾지 못했습니다.\n");
+        return;
+    }
+    std::vector<game::ItemEntry> items;
+    if (!game::read_item_table(reader, mgr, &items, 0)) {
+        std::printf("아이템 표를 읽지 못했습니다. (매니저 0x%llX)\n",
+                    static_cast<unsigned long long>(mgr));
+        return;
+    }
+    std::printf("매니저   0x%llX\n", static_cast<unsigned long long>(mgr));
+    std::printf("아이템   %zu개\n", items.size());
+
+    game::LocSystem sys;
+    const bool has_loc = game::find_loc_system(rt, reader, &sys);
+    if (!has_loc) {
+        std::printf("현지화 시스템을 찾지 못해 이름 없이 키만 냅니다.\n");
+    }
+
+    // items [최대]  |  items find <문자열>
+    std::string needle;
+    bool filtering = false;
+    std::size_t max = 40;
+    if (argc > 2) {
+        if (std::strcmp(argv[2], "find") == 0) {
+            if (argc < 4) { std::printf("사용법: items find <문자열>\n"); return; }
+            needle = ansi_to_utf8(argv[3]);
+            filtering = true;
+            max = 0;
+        } else {
+            max = std::strtoull(argv[2], nullptr, 10);
+        }
+    }
+
+    std::size_t named = 0, shown = 0;
+    std::printf("\n%-10s %-20s %s\n", "키", "이름키", "이름");
+    for (const auto& it : items) {
+        std::string name;
+        const bool ok = has_loc &&
+                        game::resolve(reader, sys, it.name_key, &name, nullptr);
+        if (ok) ++named;
+        if (filtering) {
+            if (!ok || name.find(needle) == std::string::npos) continue;
+        }
+        if (max != 0 && shown >= max) continue;
+        ++shown;
+        std::printf("%-10u %-20llu %s\n", it.key,
+                    static_cast<unsigned long long>(it.name_key),
+                    ok ? name.c_str() : "(이름 없음)");
+    }
+    std::printf("\n이름이 풀린 것 %zu / %zu\n", named, items.size());
+    if (max != 0 && items.size() > shown) {
+        std::printf("%zu개만 냈습니다. 전부 보려면 개수를 크게 주세요.\n", shown);
     }
 }
 
@@ -816,6 +898,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "loc") {
         cmd_loc(rt, reader, r, argc, argv);
+        return 0;
+    }
+    if (cmd == "items") {
+        cmd_items(rt, reader, argc, argv);
         return 0;
     }
 
