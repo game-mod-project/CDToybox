@@ -129,6 +129,23 @@ const char* category_name(std::uint8_t c) {
         case 102: return "어비스 장치"; // 전송 장치·유적 기둥·동력핵
         case 50: return "A.T.A.G.";
         case 54: return "가방·보금자리";
+        // --- 남은 것도 내용을 보고 붙였다. 번호만 남으면 무엇인지
+        //     알 수 없어 목록에서 쓸모가 없다. ---
+        case 1: return "양서류";        // 독개구리·청개구리·두꺼비
+        case 2: return "동물";          // 다람쥐·두더지·도마뱀·새
+        case 4: return "어비스 아티팩트";
+        case 7: return "기억";          // 망국의 기억
+        case 13: return "어비스 효과";  // 어비스의 숨결·생명 증폭
+        case 32: return "화폐·자원";    // 동화·캠프 자금·톱니
+        case 35: return "묶음·주머니";  // 화살 묶음·동화 주머니
+        case 36: return "편지·일지";
+        case 37: return "허가증";       // 에르난드 통행 허가증
+        case 42: return "의뢰서";       // 잃어버린 소·초대장
+        case 43: return "기록";         // 대서고의 기록·관찰일지
+        case 44: return "지역 열쇠";    // 저택·감옥·요새 열쇠
+        case 45: return "게시물";       // 토벌 소식·목격담·경고문
+        case 46: return "서신·장부";    // 영수증·보고서·증명서
+        case 103: return "제작 부품";   // 동력핵·드릴 부품
         // --- 도구·기타 ---
         case 6: return "가방";
         case 17: return "낚싯대";
@@ -230,19 +247,29 @@ void draw_filter_bar() {
         g_page = 0;
     }
 
-    const float grade_w = labeled_w(120.0f, "등급");
-    const float cat_w = labeled_w(190.0f, "분류");
+    // 라벨을 위젯 **앞**에 둔다. ImGui 기본은 뒤에 붙는데, 그러면
+    // "전체 ▼ 등급" 처럼 읽혀 무엇을 고르는 칸인지 헷갈린다.
+    const float grade_w = text_w("등급") + st.ItemInnerSpacing.x + 120.0f;
+    const float cat_w = text_w("분류") + st.ItemInnerSpacing.x + 230.0f;
 
     flow(grade_w);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("등급");
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::Combo("등급", &g_grade_idx, kGradeLabel)) {
+    // 목록이 길다. 잘리지 않도록 펼침 높이를 넉넉히 준다.
+    if (ImGui::Combo("##grade", &g_grade_idx, kGradeLabel, 12)) {
         g_dirty = true;
         g_page = 0;
     }
 
     flow(cat_w);
-    ImGui::SetNextItemWidth(190.0f);
-    if (ImGui::Combo("분류", &g_category_idx, g_category_labels.c_str())) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("분류");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(230.0f);
+    if (ImGui::Combo("##category", &g_category_idx,
+                     g_category_labels.c_str(), 20)) {
         g_dirty = true;
         g_page = 0;
     }
@@ -261,9 +288,12 @@ void draw_pager(std::size_t total) {
     const float nav_w = btn * 2.0f + text_w(label) + 70.0f +
                         st.ItemSpacing.x * 3.0f;
 
-    flow(labeled_w(70.0f, "쪽당"));
+    flow(text_w("쪽당") + st.ItemInnerSpacing.x + 70.0f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("쪽당");
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(70.0f);
-    if (ImGui::Combo("쪽당", &g_per_page_idx, kPerPageLabel)) g_page = 0;
+    if (ImGui::Combo("##perpage", &g_per_page_idx, kPerPageLabel)) g_page = 0;
 
     flow(nav_w);
     ImGui::BeginDisabled(g_page == 0);
