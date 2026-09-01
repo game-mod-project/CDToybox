@@ -441,6 +441,15 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     wait_for_frame(f);
 
     g_frame_stage = kStageNewFrame;
+
+    // 게임이 OS 커서를 숨겨 두므로 오버레이를 켜도 마우스가 보이지
+    // 않는다. ShowCursor 로 되살려도 게임이 다음 프레임에 다시 숨긴다.
+    // ImGui 가 자기 커서를 직접 그리게 한다 - 게임과 다투지 않는다.
+    //
+    // 백엔드의 NewFrame 이 이 값을 보고 OS 커서를 처리하므로 그보다
+    // 먼저 세운다.
+    ImGui::GetIO().MouseDrawCursor = true;
+
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
