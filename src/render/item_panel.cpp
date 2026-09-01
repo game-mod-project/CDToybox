@@ -51,14 +51,44 @@ ImVec4 grade_color(std::uint8_t grade) {
     }
 }
 
-// 분류 번호의 이름. 게임 툴팁으로 확인한 것만 이름을 붙이고 나머지는
-// 번호로 둔다. 추측으로 붙이면 조용히 틀린 표가 된다.
+// 분류 번호의 이름.
+//
+// 무기 20종은 crimsondb.gg 의 유형과 대조해 확정했다 - 유형마다
+// 표본 2~5개를 모아 +0xA3 값을 봤더니 전부 한 값으로 모였다.
+// 갑옷·장갑·도구는 게임 툴팁으로 확인했다.
+//
+// 세 값은 사이트 유형 여럿이 한 값을 쓴다. 게임의 분류가 사이트보다
+// 거칠기 때문이라 묶어서 적는다.
+//
+// **확인한 것만 이름을 붙인다.** 나머지 50여 종은 번호로 둔다 -
+// 추측으로 붙이면 조용히 틀린 표가 된다.
 const char* category_name(std::uint8_t c) {
     switch (c) {
+        // 게임 툴팁으로 확인
         case 3: return "갑옷";
         case 22: return "장갑";
-        case 56: return "한손 무기";
         case 58: return "도구";
+        // 사이트 유형과 대조해 확정
+        case 5: return "한손도끼";
+        case 10: return "활";
+        case 11: return "석궁";
+        case 12: return "단검";
+        case 18: return "한손 특수";      // 대포·드릴·건틀렛·부채·전기톱
+        case 23: return "양손대포";
+        case 29: return "한손둔기";
+        case 33: return "장총";
+        case 40: return "피스톨";
+        case 47: return "레이피어";
+        case 53: return "샷건";
+        case 56: return "한손검";
+        case 64: return "양손할버드";
+        case 65: return "양손도끼";
+        case 68: return "거대양손검";
+        case 69: return "양손망치";
+        case 70: return "양손창·파이크";
+        case 71: return "방사기·침봉";
+        case 72: return "양손검";
+        case 73: return "양손 워해머";
         default: return nullptr;
     }
 }
