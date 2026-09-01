@@ -9,6 +9,7 @@
 
 #include "core/log.h"
 #include "game/analysis.h"
+#include "game/grant.h"
 #include "game/items.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -159,6 +160,11 @@ void auto_analysis_loop() {
     }
     log::infof("자동 분석 시작 - 월드 진입을 기다린다");
 
+    // 세션에서 플레이어 액터를 꺼내는 게임 함수를 후킹해 둔다. 게임
+    // 안에서 647곳이 부르므로 가만 두어도 곧 값이 들어온다. 지금은
+    // 받아 적기만 한다 - 아무것도 쓰지 않는다.
+    actor_hook_install(rtti, reader);
+
     for (int attempt = 1; !g_stop.load(); ++attempt) {
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
@@ -191,6 +197,18 @@ void auto_analysis_loop() {
     }
     if (!items_named() && !g_stop.load()) {
         log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
+    }
+
+    // 액터가 잡혔는지 한 번 확인해 남긴다. 이 포인터가 치트 경로가
+    // 쓰는 바로 그 값이다.
+    for (int i = 0; i < 60 && !g_stop.load(); ++i) {
+        const std::uintptr_t actor = last_actor();
+        if (actor != 0) {
+            log::infof("플레이어 액터 0x{:X} ({})", actor,
+                       rtti.class_of_object(actor));
+            break;
+        }
+        for (int j = 0; j < 20 && !g_stop.load(); ++j) ::Sleep(100);
     }
 }
 

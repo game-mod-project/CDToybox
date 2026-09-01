@@ -67,6 +67,7 @@ add_library(cdtoybox SHARED
     src/game/items.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
+    src/game/grant.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/proxy/exports.def
@@ -94,7 +95,9 @@ add_executable(cdtb_tests
     tests/item_view_tests.cpp
     tests/icon_map_tests.cpp
     tests/cursor_tests.cpp
+    tests/grant_tests.cpp
     src/input/cursor.cpp
+    src/game/grant.cpp
     src/game/localization.cpp
     src/game/items.cpp
     src/game/item_view.cpp
@@ -125,6 +128,7 @@ add_executable(cdtb_probe
     src/game/items.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
+    src/game/grant.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)
