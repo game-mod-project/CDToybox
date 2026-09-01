@@ -71,6 +71,15 @@ void draw_grant_panel() {
                     static_cast<unsigned long long>(msg.handler));
     }
     ImGui::TextUnformatted("세션 - 호출이 가장 많은 것이 플레이어입니다");
+    // 손으로 고르면 자동 선택이 덮인다. 라벨이 붙기 전에 고른 채로
+    // 굳으면 엉뚱한 세션으로 부르게 된다 - 실제로 2회짜리로 불렀다.
+    // 언제든 되돌릴 수 있게 둔다.
+    if (g_picked_by_hand) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("자동으로 다시 고르기")) {
+            g_picked_by_hand = false;
+        }
+    }
     if (ImGui::BeginTable("actors", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         for (int i = 0; i < n; ++i) {
@@ -138,6 +147,20 @@ void draw_grant_panel() {
 
     if (blocked != nullptr) {
         ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f), "%s", blocked);
+    }
+
+    // 플레이어 세션은 게임플레이 코드가 끊임없이 부른다. 몇 번밖에
+    // 안 불린 것을 고르면 거의 확실히 다른 것이다.
+    if (blocked == nullptr && g_pick >= 0 && g_pick < n) {
+        std::uint32_t top = 0;
+        for (int i = 0; i < n; ++i) {
+            if (server[i] && hits[i] > top) top = hits[i];
+        }
+        if (hits[g_pick] * 10 < top) {
+            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                               "호출이 %u회뿐입니다 - 가장 많은 것은 %u회입니다",
+                               hits[g_pick], top);
+        }
     }
 
     ImGui::BeginDisabled(blocked != nullptr);

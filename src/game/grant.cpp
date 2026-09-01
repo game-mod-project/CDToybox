@@ -51,6 +51,8 @@ using SpawnFn = void*(__fastcall*)(void*, std::uint32_t*, const std::uint32_t*,
                                    const std::int64_t*, const std::uint16_t*,
                                    const float*);
 SpawnFn g_spawn = nullptr;
+SpawnFn g_orig_spawn = nullptr;
+bool g_trace = false;
 
 // 처리기. 역직렬화가 파싱을 마치고 부르는 그 함수다. 값이 아니라
 // 포인터를 받는다.
@@ -114,6 +116,25 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
         *seh_out = static_cast<std::uint32_t>(GetExceptionCode());
         return false;
     }
+}
+
+// 실제 작업 함수가 불릴 때마다 인자를 남긴다. 원본을 그대로 부른다.
+void* __fastcall det_spawn(void* actor, std::uint32_t* result,
+                           const std::uint32_t* key, const std::int64_t* count,
+                           const std::uint16_t* f3, const float* pos) {
+    log::infof("[추적] 바닥 떨구기 액터 0x{:X} 키 {} 개수 {} 필드3 {} "
+               "위치 {:.1f},{:.1f},{:.1f}",
+               reinterpret_cast<std::uintptr_t>(actor),
+               key != nullptr ? *key : 0,
+               count != nullptr ? *count : 0,
+               f3 != nullptr ? *f3 : 0,
+               pos != nullptr ? pos[0] : 0.0f,
+               pos != nullptr ? pos[1] : 0.0f,
+               pos != nullptr ? pos[2] : 0.0f);
+    void* r = g_orig_spawn(actor, result, key, count, f3, pos);
+    log::infof("[추적] 바닥 떨구기 결과 0x{:X}",
+               result != nullptr ? *result : 0);
+    return r;
 }
 
 bool find_one(const std::vector<std::uint8_t>& image, const char* pattern,
@@ -409,6 +430,27 @@ bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
         reader.module_base() + static_cast<std::uintptr_t>(rva));
     log::infof("바닥 스폰 함수 확보 (RVA 0x{:X})", rva);
     return true;
+}
+
+bool spawn_trace_install() {
+    if (g_trace) return true;
+    if (g_spawn == nullptr) return false;
+    if (!mem::hook_init()) return false;
+    if (!mem::hook_install(reinterpret_cast<void*>(g_spawn), &det_spawn,
+                           reinterpret_cast<void**>(&g_orig_spawn))) {
+        log::errorf("바닥 떨구기 추적 설치 실패");
+        return false;
+    }
+    g_trace = true;
+    log::infof("바닥 떨구기 추적 설치 - 인벤토리에서 아이템을 버려 보세요");
+    return true;
+}
+
+void spawn_trace_remove() {
+    if (!g_trace) return;
+    mem::hook_remove(reinterpret_cast<void*>(g_spawn));
+    g_orig_spawn = nullptr;
+    g_trace = false;
 }
 
 bool spawn_ready() {

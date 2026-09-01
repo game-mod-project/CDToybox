@@ -134,6 +134,13 @@ const CheatMessage& spawn_message();
 // 실제 작업 함수를 찾아 둔다.
 bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
 
+// 실제 작업 함수를 후킹해 불릴 때마다 인자를 로그로 남긴다. 우리가
+// 부른 것이 거기까지 갔는지 보고, 게임이 평소에 넣는 값(특히 뜻을
+// 모르는 필드3)을 그대로 볼 수 있다 - 인벤토리에서 아이템을 버리면
+// 같은 함수가 불린다.
+bool spawn_trace_install();
+void spawn_trace_remove();
+
 // 부를 준비가 됐는가.
 bool spawn_ready();
 

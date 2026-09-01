@@ -189,6 +189,7 @@ void auto_analysis_loop() {
     actor_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
+    spawn_trace_install();
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
