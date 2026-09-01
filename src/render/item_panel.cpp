@@ -19,24 +19,82 @@ namespace {
 char g_query[128] = "";
 bool g_hide_unnamed = false;
 int g_per_page_idx = 1;                      // 아래 표의 첨자
+int g_grade_idx = 0;                         // 0=전체, 1=없음, 2..6=T1..T5
+int g_category_idx = 0;                      // 0=전체, 그 뒤는 g_categories
 game::ItemSort g_sort = game::ItemSort::Key;
 bool g_ascending = true;
 std::size_t g_page = 0;
 
 std::vector<const game::ItemCatalogEntry*> g_view;
+std::vector<std::uint8_t> g_categories;      // 표에 실제로 있는 분류 값
+std::string g_category_labels;               // Combo 용 널 구분 문자열
 bool g_dirty = true;
 std::size_t g_built_from = 0;
 
 constexpr std::size_t kPerPage[] = {20, 40, 60, 100};
 constexpr const char* kPerPageLabel = "20\0" "40\0" "60\0" "100\0";
+constexpr const char* kGradeLabel = "전체\0" "등급 없음\0" "T1\0" "T2\0" "T3\0"
+                                    "T4\0" "T5\0";
 
 std::size_t per_page() { return kPerPage[g_per_page_idx]; }
+
+// 등급 색은 crimsondb.gg 의 배지 색을 그대로 쓴다. 게임 툴팁의
+// 보라색은 등급이 아니라 '중요물품' 표시였다.
+ImVec4 grade_color(std::uint8_t grade) {
+    switch (grade) {
+        case 1: return ImVec4(155 / 255.f, 155 / 255.f, 155 / 255.f, 1.f);
+        case 2: return ImVec4(94 / 255.f, 170 / 255.f, 94 / 255.f, 1.f);
+        case 3: return ImVec4(91 / 255.f, 141 / 255.f, 217 / 255.f, 1.f);
+        case 4: return ImVec4(168 / 255.f, 85 / 255.f, 247 / 255.f, 1.f);
+        case 5: return ImVec4(245 / 255.f, 158 / 255.f, 11 / 255.f, 1.f);
+        default: return ImVec4(0.55f, 0.55f, 0.55f, 1.f);
+    }
+}
+
+// 분류 번호의 이름. 게임 툴팁으로 확인한 것만 이름을 붙이고 나머지는
+// 번호로 둔다. 추측으로 붙이면 조용히 틀린 표가 된다.
+const char* category_name(std::uint8_t c) {
+    switch (c) {
+        case 3: return "갑옷";
+        case 22: return "장갑";
+        case 56: return "한손 무기";
+        case 58: return "도구";
+        default: return nullptr;
+    }
+}
+
+void rebuild_categories() {
+    const auto& all = game::item_catalog();
+    bool seen[256] = {};
+    for (const auto& e : all) seen[e.category] = true;
+    g_categories.clear();
+    g_category_labels.clear();
+    g_category_labels.append("전체").push_back('\0');
+    for (int c = 0; c < 256; ++c) {
+        if (!seen[c]) continue;
+        g_categories.push_back(static_cast<std::uint8_t>(c));
+        char buf[48];
+        const char* nm = category_name(static_cast<std::uint8_t>(c));
+        if (nm != nullptr) {
+            std::snprintf(buf, sizeof(buf), "%d (%s)", c, nm);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%d", c);
+        }
+        g_category_labels.append(buf).push_back('\0');
+    }
+    g_category_labels.push_back('\0');
+}
 
 void rebuild() {
     const auto& all = game::item_catalog();
     game::ItemFilter f;
     f.query = g_query;
     f.hide_unnamed = g_hide_unnamed;
+    f.grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
+    f.category = (g_category_idx == 0 ||
+                  g_category_idx > static_cast<int>(g_categories.size()))
+                     ? -1
+                     : g_categories[g_category_idx - 1];
     g_view = game::filter_items(all, f);
     game::sort_items(g_view, g_sort, g_ascending);
     g_built_from = all.size();
@@ -61,6 +119,18 @@ void draw_filter_bar() {
         g_dirty = true;
         g_page = 0;
     }
+
+    ImGui::SetNextItemWidth(110.0f);
+    if (ImGui::Combo("등급", &g_grade_idx, kGradeLabel)) {
+        g_dirty = true;
+        g_page = 0;
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150.0f);
+    if (ImGui::Combo("분류", &g_category_idx, g_category_labels.c_str())) {
+        g_dirty = true;
+        g_page = 0;
+    }
 }
 
 void draw_pager(std::size_t total) {
@@ -72,7 +142,7 @@ void draw_pager(std::size_t total) {
 
     ImGui::SameLine();
     ImGui::BeginDisabled(g_page == 0);
-    if (ImGui::Button("◀")) --g_page;
+    if (ImGui::Button("<")) --g_page;
     ImGui::EndDisabled();
 
     ImGui::SameLine();
@@ -80,7 +150,7 @@ void draw_pager(std::size_t total) {
 
     ImGui::SameLine();
     ImGui::BeginDisabled(g_page + 1 >= pages);
-    if (ImGui::Button("▶")) ++g_page;
+    if (ImGui::Button(">")) ++g_page;
     ImGui::EndDisabled();
 
     ImGui::SameLine();
@@ -98,7 +168,6 @@ void draw_pager(std::size_t total) {
     ImGui::TextDisabled("쪽 이동");
 }
 
-// 표의 정렬 지정이 바뀌었으면 받아 둔다.
 void apply_sort_specs() {
     ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
     if (specs == nullptr || !specs->SpecsDirty || specs->SpecsCount == 0) {
@@ -106,8 +175,9 @@ void apply_sort_specs() {
     }
     const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
     switch (s.ColumnIndex) {
-        case 1: g_sort = game::ItemSort::Name; break;
-        case 2: g_sort = game::ItemSort::NameKey; break;
+        case 1: g_sort = game::ItemSort::Grade; break;
+        case 2: g_sort = game::ItemSort::Category; break;
+        case 3: g_sort = game::ItemSort::Name; break;
         default: g_sort = game::ItemSort::Key; break;
     }
     g_ascending = (s.SortDirection == ImGuiSortDirection_Ascending);
@@ -118,7 +188,7 @@ void apply_sort_specs() {
 }  // namespace
 
 void draw_item_panel() {
-    ImGui::SetNextWindowSize(ImVec2(640, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(720, 520), ImGuiCond_FirstUseEver);
     ImGui::Begin("아이템 목록");
 
     if (!game::items_ready()) {
@@ -131,7 +201,10 @@ void draw_item_panel() {
     }
 
     const auto& all = game::item_catalog();
-    if (g_built_from != all.size()) g_dirty = true;
+    if (g_built_from != all.size()) {
+        rebuild_categories();
+        g_dirty = true;
+    }
     if (g_dirty) rebuild();
 
     draw_filter_bar();
@@ -146,13 +219,14 @@ void draw_item_panel() {
         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Sortable |
         ImGuiTableFlags_SortTristate;
-    if (ImGui::BeginTable("items", 3, kFlags)) {
+    if (ImGui::BeginTable("items", 4, kFlags)) {
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed |
                                           ImGuiTableColumnFlags_DefaultSort,
                                 90.0f);
+        ImGui::TableSetupColumn("등급", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,
+                                120.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("이름키", ImGuiTableColumnFlags_WidthFixed,
-                                160.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
@@ -175,15 +249,22 @@ void draw_item_panel() {
             ImGui::PopID();
 
             ImGui::TableSetColumnIndex(1);
+            ImGui::TextColored(grade_color(e.grade), "%s",
+                               game::grade_label(e.grade));
+
+            ImGui::TableSetColumnIndex(2);
+            if (const char* nm = category_name(e.category)) {
+                ImGui::TextUnformatted(nm);
+            } else {
+                ImGui::TextDisabled("%u", e.category);
+            }
+
+            ImGui::TableSetColumnIndex(3);
             if (e.name.empty()) {
                 ImGui::TextDisabled("(이름 없음)");
             } else {
-                ImGui::TextUnformatted(e.name.c_str());
+                ImGui::TextColored(grade_color(e.grade), "%s", e.name.c_str());
             }
-
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextDisabled("%llu",
-                                static_cast<unsigned long long>(e.name_key));
         }
         ImGui::EndTable();
     }
