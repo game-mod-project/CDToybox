@@ -270,6 +270,44 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
     std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
 }
 
+// 힙에서 어떤 주소를 담은 8바이트를 찾는다.
+//
+// findptr 은 모듈 이미지만 본다. 메시지 서술자를 가리키는 표는
+// 이미지에 없고 힙에 있어서 이게 필요했다.
+void cmd_heapptr(const Remote& r, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: heapptr <주소> [최대]\n");
+        return;
+    }
+    const std::uint64_t want =
+        std::strtoull(argv[2], nullptr, 16);
+    const std::size_t limit =
+        (argc > 3) ? static_cast<std::size_t>(std::atoi(argv[3])) : 40;
+
+    std::printf("힙에서 0x%llX 를 담은 곳을 찾습니다\n",
+                static_cast<unsigned long long>(want));
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size < 8 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        for (std::size_t i = 0; i + 8 <= buf.size(); i += 8) {
+            std::uint64_t v = 0;
+            std::memcpy(&v, buf.data() + i, 8);
+            if (v != want) continue;
+            std::printf("  0x%llX\n",
+                        static_cast<unsigned long long>(reg.base + i));
+            if (++found >= limit) {
+                std::printf("(%zu개에서 멈춥니다)\n", found);
+                return;
+            }
+        }
+    }
+    std::printf("모두 %zu곳\n", found);
+}
+
 // 값이 바뀌는 것을 따라가며 후보를 좁힌다. 치트엔진이 쓰는 방식이다.
 //
 // "키 옆에 개수가 있는 곳" 을 찾는 방법은 실패했다. 그런 구조가
@@ -1356,6 +1394,10 @@ int main(int argc, char** argv) {
                                    ? std::strtoull(argv[6], nullptr, 10)
                                    : 200;
         cmd_findvec3(r, x, y, z, eps, mx);
+        return 0;
+    }
+    if (cmd == "heapptr") {
+        cmd_heapptr(r, argc, argv);
         return 0;
     }
     if (cmd == "scan") {

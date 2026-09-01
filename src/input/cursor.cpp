@@ -131,7 +131,11 @@ void cursor_guard_sync(bool overlay_visible) {
     if (overlay_visible) {
         g_saved_count = probe_count();
         g_orig_clip(nullptr);      // 게임이 걸어 둔 가두기를 푼다
-        drive_to(-1);              // ImGui가 그리므로 OS 커서는 숨긴다
+        // OS 커서를 확실히 띄우고 그걸 쓴다. 숨겨 놓고 ImGui가
+        // 따로 그리게 했더니 게임이 다시 띄워 둘로 보였다.
+        // ShowCursor 는 후킹할 수 없으므로(게임이 멎는다) 게임과
+        // 다투는 대신 하나로 합친다.
+        drive_to(0);
         g_hidden_by_us = true;
     } else {
         drive_to(g_saved_count);

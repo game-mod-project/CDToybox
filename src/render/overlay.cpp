@@ -456,12 +456,13 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 
     g_frame_stage = kStageNewFrame;
 
-    // 커서는 ImGui 가 직접 그린다. 전체화면에서도 확실히 보이고,
-    // 커서 가드가 OS 커서를 숨겨 두므로 두 개로 보이지 않는다.
+    // 커서는 OS 것을 그대로 쓴다. ImGui 가 자기 것을 그리게 했더니
+    // 게임이 띄워 둔 OS 커서와 겹쳐 두 개로 보였다. 커서 가드가
+    // 중앙 되돌리기와 가두기를 막으므로 OS 커서만으로 충분하다.
     //
     // 백엔드의 NewFrame 이 이 값을 보고 OS 커서를 처리하므로 그보다
     // 먼저 세운다.
-    ImGui::GetIO().MouseDrawCursor = true;
+    ImGui::GetIO().MouseDrawCursor = false;
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
