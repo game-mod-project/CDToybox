@@ -47,7 +47,9 @@ CATEGORIES = ['weapons', 'armor', 'shields', 'accessories', 'mount-gear',
 CARD_RE = re.compile(
     r'<a href="(?P<href>/ko/[^"]+)"[^>]*class="item-card".*?'
     r'(?:<span class="tier-badge"[^>]*>(?P<tier>T\d)</span>)?.*?'
-    r'images/items/(?P<dir>[a-z-]+)/(?P<hash>[0-9a-f]+)\.webp.*?'
+    # 디렉터리에 밑줄이 섞인다(mount_gear). 하이픈만 허용하면 그
+    # 카테고리가 통째로 빠진다 - 실제로 114개를 놓쳤다.
+    r'images/items/(?P<dir>[a-z_-]+)/(?P<hash>[0-9a-f]+)\.webp.*?'
     r'class="card-name"[^>]*>(?P<name>[^<]+)<'
     r'(?:/span><span class="card-type"[^>]*>(?P<type>[^<]*)<)?', re.S)
 
