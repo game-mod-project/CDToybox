@@ -124,9 +124,21 @@ struct SpawnOutcome {
 // 잘못된 대상으로 부르면 게임 안에서 죽는다 - 실측에서 0xC0000005
 // 가 났고 오버레이가 통째로 내려갔다. 예외를 안에서 막고 결과로
 // 돌려준다. 돌려주는 값은 "부를 조건이 됐는가" 다.
-bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
-                          std::int64_t count, const float pos[3],
-                          SpawnOutcome* out);
+// 지금 이 스레드가 그 작업을 할 수 있는가.
+//
+// 작업 함수 안쪽이 TLS 를 쓴다 - gs:[0x58] 의 배열에서 슬롯을 꺼내
+// 거기에 쓴다. 렌더 스레드에는 그 블록이 없어서 널을 참조하고 죽는다.
+// 실측에서 RVA 0x25493D2 가 정확히 그 자리였다.
+bool thread_ready_for_spawn();
+
+// 요청을 걸어 둔다. 실제 호출은 TLS 가 준비된 게임 스레드에서 한다.
+// 렌더 스레드에서 부르면 죽는다.
+bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
+                   std::int64_t count, const float pos[3]);
+
+// 걸어 둔 요청이 처리됐는가. 아직이면 false.
+bool spawn_pending();
+const SpawnOutcome& last_outcome();
 
 // 바닥 스폰 메시지를 해석해 둔다.
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader);

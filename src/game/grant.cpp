@@ -63,9 +63,36 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
 CheatMessage g_spawn_msg;
 const mem::Reader* g_reader = nullptr;
 
+// 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
+// 집어 간다.
+struct Pending {
+    std::uintptr_t session = 0;
+    std::uint32_t key = 0;
+    std::int64_t count = 0;
+    float pos[3]{};
+};
+// 아래에서 정의한다. 후킹이 먼저 나온다.
+void run_spawn(std::uintptr_t session, std::uint32_t item_key,
+               std::int64_t count, const float pos[3], SpawnOutcome* out);
+
+Pending g_pending;
+std::atomic<bool> g_has_pending{false};
+SpawnOutcome g_outcome;
+
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     const std::uintptr_t actor = g_orig_actor_getter(session);
+
+    // 걸어 둔 요청을 여기서 집어 간다. 이 함수는 게임의 여러
+    // 스레드에서 불리므로 TLS 가 준비된 스레드도 곧 지나간다.
+    // 플래그를 먼저 내려 재진입을 막는다 - 처리기가 이 함수를 다시
+    // 부른다.
+    if (g_has_pending.load(std::memory_order_acquire) &&
+        thread_ready_for_spawn()) {
+        Pending req = g_pending;
+        g_has_pending.store(false, std::memory_order_release);
+        run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+    }
     if (session != nullptr) {
         const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
@@ -92,6 +119,16 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
 // 게임 함수를 부르다 죽으면 오버레이가 통째로 내려간다 - 실측에서
 // 그렇게 됐다. 예외를 여기서 막는다. 이 함수 안에는 소멸자를 가진
 // 객체를 두지 않는다(__try 가 허용하지 않는다).
+// TLS 사슬을 따라가다 죽지 않게 감싼다.
+bool safe_deref(std::uintptr_t at, std::uintptr_t* out) {
+    __try {
+        *out = *reinterpret_cast<std::uintptr_t*>(at);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool call_spawn_guarded(SpawnFn fn, void* actor, std::uint32_t* result,
                         const std::uint32_t* key, const std::int64_t* count,
                         const std::uint16_t* f3, const float* pos,
@@ -463,20 +500,31 @@ void spawn_trace_remove() {
     g_trace = false;
 }
 
+bool thread_ready_for_spawn() {
+    // gs:[0x58] 는 TEB 의 ThreadLocalStoragePointer 다. 작업 함수는
+    // 거기서 꺼낸 블록의 +0x250 를 다시 따라가 쓴다. 그 사슬이
+    // 서 있지 않은 스레드에서 부르면 널을 참조하고 죽는다.
+    const std::uintptr_t tls = static_cast<std::uintptr_t>(__readgsqword(0x58));
+    if (tls == 0) return false;
+    std::uintptr_t slot0 = 0;
+    if (!safe_deref(tls, &slot0) || slot0 == 0) return false;
+    std::uintptr_t block = 0;
+    if (!safe_deref(slot0 + 0x250, &block) || block == 0) return false;
+    return true;
+}
+
 bool spawn_ready() {
     return g_spawn_msg.handler != 0 && g_orig_actor_getter != nullptr;
 }
 
-bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
-                          std::int64_t count, const float pos[3],
-                          SpawnOutcome* out) {
+namespace {
+
+// TLS 가 준비된 스레드에서만 부른다.
+void run_spawn(std::uintptr_t session, std::uint32_t item_key,
+               std::int64_t count, const float pos[3],
+               SpawnOutcome* out) {
     SpawnOutcome o;
     if (out != nullptr) *out = o;
-    if (!spawn_ready() || pos == nullptr || g_reader == nullptr) {
-        return false;
-    }
-    if (!spawn_args_ok(item_key, count)) return false;
-    if (session == 0) return false;
 
     std::uint32_t key = item_key;
     std::int64_t n = count;
@@ -501,7 +549,7 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
         log::warnf("바닥 스폰: 세션 0x{:X} 는 사슬이 끊겼다 (클라이언트 세션)",
                    session);
         if (out != nullptr) *out = o;
-        return true;
+        return;
     }
     o.actor = g_orig_actor_getter(reinterpret_cast<void*>(session));
     std::uintptr_t avt = 0;
@@ -527,7 +575,35 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
         log::infof("바닥 스폰 끝 (처리기 경로)");
     }
     if (out != nullptr) *out = o;
+}
+
+}  // namespace
+
+bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
+                   std::int64_t count, const float pos[3]) {
+    if (!spawn_ready() || pos == nullptr || g_reader == nullptr) {
+        return false;
+    }
+    if (!spawn_args_ok(item_key, count) || session == 0) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+
+    g_pending.session = session;
+    g_pending.key = item_key;
+    g_pending.count = count;
+    g_pending.pos[0] = pos[0];
+    g_pending.pos[1] = pos[1];
+    g_pending.pos[2] = pos[2];
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("바닥 스폰 요청을 걸었다 - 게임 스레드를 기다린다");
     return true;
 }
+
+bool spawn_pending() {
+    return g_has_pending.load(std::memory_order_acquire);
+}
+
+const SpawnOutcome& last_outcome() { return g_outcome; }
+
 
 }  // namespace cdtb::game

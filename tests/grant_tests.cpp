@@ -215,12 +215,17 @@ TEST(spawn_args_accept_a_real_item) {
     CHECK(cdtb::game::spawn_args_ok(50001, 1));
 }
 
-// 액터를 아직 못 봤으면 아무것도 부르지 않는다.
-TEST(spawn_refuses_without_an_actor) {
-    cdtb::game::SpawnOutcome out;
+// 세션이 없으면 요청 자체를 걸지 않는다.
+TEST(request_refuses_without_a_session) {
     const float pos[3] = {0.0f, 0.0f, 0.0f};
-    CHECK(!cdtb::game::spawn_item_to_ground(0, 50001, 1, pos, &out));
-    CHECK(!out.called);
+    CHECK(!cdtb::game::request_spawn(0, 50001, 1, pos));
+    CHECK(!cdtb::game::spawn_pending());
+}
+
+// 렌더 스레드에서 직접 부르면 죽는다 - 작업 함수 안쪽이 TLS 를 쓰는데
+// 그 블록이 없다. 테스트 스레드에도 당연히 없다.
+TEST(test_thread_is_not_ready_for_spawn) {
+    CHECK(!cdtb::game::thread_ready_for_spawn());
 }
 
 TEST(no_actor_before_the_hook_sees_one) {

@@ -167,15 +167,22 @@ void draw_grant_panel() {
     if (ImGui::Button("발밑에 떨구기", ImVec2(160.0f, 0.0f))) {
         // 이 함수는 렌더 스레드에서 돈다. 게임 함수를 부르기에 맞는
         // 스레드다 - 다른 스레드에서 부르면 죽는다.
-        g_call_ok = game::spawn_item_to_ground(
-            seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos,
-            &g_outcome);
+        // 렌더 스레드에서 직접 부르면 죽는다. 작업 함수 안쪽이 TLS 를
+        // 쓰는데 이 스레드에는 그 블록이 없다 - 실측에서 RVA
+        // 0x25493D2 에서 널을 참조했다. 요청만 걸고 게임 스레드가
+        // 집어 가게 한다.
+        g_call_ok = game::request_spawn(
+            seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
         g_called = true;
     }
     ImGui::EndDisabled();
 
     if (g_called) {
+        g_outcome = game::last_outcome();
         ImGui::SameLine();
+        if (game::spawn_pending()) {
+            ImGui::TextDisabled("게임 스레드를 기다리는 중...");
+        } else
         if (!g_call_ok) {
             ImGui::TextDisabled("부르지 못했습니다");
         } else if (g_outcome.no_actor) {
