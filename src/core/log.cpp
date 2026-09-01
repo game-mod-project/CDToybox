@@ -1,6 +1,7 @@
 #include "core/log.h"
 
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <mutex>
 
@@ -28,7 +29,14 @@ void init(const std::wstring& path) {
 
 void write(Level level, std::string_view message) {
     std::lock_guard lock(g_mutex);
-    if (!g_file.is_open()) return;
+
+    // 파일이 없으면 표준 출력으로 낸다. 명령줄 도구(cdtb_probe)가
+    // 같은 코드를 돌릴 때 결과를 볼 수 있어야 한다.
+    if (!g_file.is_open()) {
+        std::printf("%s %.*s\n", level_tag(level),
+                    static_cast<int>(message.size()), message.data());
+        return;
+    }
 
     const auto now = std::chrono::system_clock::now();
     const auto local = std::chrono::current_zone()->to_local(now);

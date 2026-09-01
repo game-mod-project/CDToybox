@@ -37,6 +37,12 @@ add_library(cdtb_core STATIC
     src/mem/scanner.cpp
     src/mem/module.cpp
     src/mem/hook.cpp
+    src/mem/safe_read.cpp
+    src/mem/regions.cpp
+    src/mem/value_scanner.cpp
+    src/mem/reader.cpp
+    src/mem/rtti.cpp
+    src/mem/watchpoint.cpp
     src/core/log.cpp
     src/core/config.cpp
     src/core/guard.cpp
@@ -51,6 +57,10 @@ add_library(cdtoybox SHARED
     src/render/d3d12_hook.cpp
     src/render/overlay.cpp
     src/render/diagnostics.cpp
+    src/render/scan_panel.cpp
+    src/game/camera.cpp
+    src/game/analysis.cpp
+    src/game/freecam.cpp
     src/input/wndproc.cpp
     src/proxy/exports.def
 )
@@ -68,6 +78,10 @@ add_executable(cdtb_tests
     tests/module_tests.cpp
     tests/core_tests.cpp
     tests/hook_tests.cpp
+    tests/safe_read_tests.cpp
+    tests/regions_tests.cpp
+    tests/value_scanner_tests.cpp
+    tests/watchpoint_tests.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -80,3 +94,16 @@ target_link_options(cdtb_tests PRIVATE /OPT:NOICF)
 # 목적이므로 /Od로 재면 의미가 없다.
 add_executable(cdtb_bench tests/bench_scanner.cpp)
 target_link_libraries(cdtb_bench PRIVATE cdtb_core)
+
+# ------------------------------------------------------------------ Probe
+# 게임에 외부에서 붙는 분석 도구. 인게임 UI가 아니라 명령줄 도구인
+# 이유는 이 작업의 조작자가 사람이 아니라 에이전트이기 때문이다.
+add_executable(cdtb_probe
+    tools/probe/main.cpp
+    tools/probe/remote.cpp
+    tools/probe/findquat.cpp
+    src/game/camera.cpp
+    src/game/analysis.cpp
+)
+target_include_directories(cdtb_probe PRIVATE tools/probe)
+target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)

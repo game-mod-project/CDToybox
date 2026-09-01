@@ -23,10 +23,20 @@
 
 바이너리를 직접 조사해 확인한 사실이다.
 
+> **2026-08-31 정정.** 아래 표의 첫 두 줄은 처음에 정반대로 적혀 있었다.
+> `\.\?AV[A-Za-z0-9_]+@@` 정규식이 네임스페이스와 템플릿이 붙은 이름을
+> 전부 걸러내, Havok SDK 클래스 468개만 남은 것을 "게임 코드에 RTTI가
+> 없다"고 잘못 읽었다. 실제로는 RTTI가 완전히 살아 있다. 접근안 선택의
+> 근거가 바뀌었으므로 §3에 함께 반영했다.
+
 | 사실 | 확인 방법 | 함의 |
 |---|---|---|
-| 게임 코드에 RTTI 없음 | RTTI 클래스 468개 전수 확인 — 전부 `hk*`/`hkx*`/`hct*` (Havok SDK) | 클래스 열거로 카메라를 찾을 수 없다 |
-| `ReflectStrings` 클래스 존재 | `.?AVReflectStrings@@` — Havok이 아닌 유일한 게임 클래스 | 런타임 리플렉션 시스템의 단서 |
+| **RTTI 14,901개, 그중 `pa`(Pearl Abyss) 네임스페이스 5,025개** | `\.\?AV[A-Za-z0-9_@?$]+@@` 로 재조사 | **클래스 열거와 vtable 탐색이 가능하다** |
+| **리플렉션 시스템이 RTTI로 노출** | `ReflectMetaObjectBind`, `ReflectObjectPropertyBind`, `AutoReflectMetaObjectBind`, `ReflectPropertyBase`, `ReflectStringConverter`, `ReflectDerive`, `EnumReflectPropertyBind` | 이름→오프셋 매핑을 런타임에 얻을 가능성이 실재한다 |
+| **카메라 클래스가 이름으로 존재** | `CameraManager`, `CameraComponent`, `CameraShotPresetData`, `CameraBlendParam` (전부 `@pa@@`) | 값 스캔 없이도 접근 경로가 있을 수 있다 |
+| **게임에 개발자 프리카메라가 있다** | 문자열 테이블에 `PlayerCamera` / `FreeCamera` / `PhotoCamera`, 상태 변수 `DebugCameraState`, 전용 입력 `Debug_MouseDelta` · `Debug_MouseRbutton` · `Debug_ShiftDown`, DoF 파라미터 `_aperture` · `_focalLength` · `_focusDistance` · `_bokehKernelSize` | 카메라를 만들지 않고 **켜는** 길이 있을 수 있다 |
+| 디버그 시스템 전반이 리테일에 잔존 | `Debug_Quest_Main`, `Debug_AIActionDesc`, `Debug_Attack`, `Debug_Sequencer`, `DebugMode`, `IsDebug`, `EnableDebug`, `DebugCommand`, `DebugConsole` | 2단계 이후의 큰 지렛대 후보 |
+| `Pascript` 스크립팅 시스템 존재 | `PascriptComponentProperty_TYPE` | 미조사 |
 | 리플렉션 필드명이 문자열로 존재 | `_fov` `_fovDegree` `_cameraDistance` `_pitch` `_yaw` `_lookAt` `_isLinkZoomDistanceRateWithFov` `_enableFrameGeneration` `EngineOptionVideo` `_upscaleModeSelect` | 문자열 참조에서 코드를 역추적할 수 있다 |
 | Havok 정적 링크 | RTTI 목록 | 물리·애니메이션은 Havok 규약을 따른다 |
 | 실행 섹션이 313MB | 0단계 진단 (`.rdata` 73.4MB + `.sbss` 239.9MB) | 시그니처 스캔 범위가 넓다. 스캐너 최적화로 40ms 수준 |
@@ -42,14 +52,23 @@ Cheat Engine 방식이다. 쓰기 가능한 메모리 전체에서 특정 float�
 - **장점**: 게임 내부 지식이 전혀 필요 없다. 실패해도 안전하다(읽기만). 한 번 만들면 이후 모든 역공학에 재사용된다.
 - **단점**: 수동 반복이 필요하다. 주소가 실행마다 달라 시그니처로 안정화하는 후속 작업이 따로 필요하다.
 
-### B. 리플렉션 시스템 역공학 — 2단계 후보로 보류
+### B. 리플렉션 시스템 역공학 — 존재는 확인됨, 1단계에서는 착수하지 않음
 
-`ReflectStrings`를 파고들어 이름→오프셋 매핑을 얻는다. 성공하면 카메라뿐 아니라 **모든 구조체 레이아웃**이 열린다. ToyBox가 .NET 리플렉션에서 공짜로 얻는 것에 해당한다.
+RTTI로 클래스를 찾고 리플렉션 테이블에서 이름→오프셋 매핑을 얻는다. 성공하면 카메라뿐 아니라 **`pa` 네임스페이스 5,025개 클래스의 레이아웃**이 열린다. ToyBox가 .NET 리플렉션에서 공짜로 얻는 것에 해당한다.
 
 - **장점**: 성공 시 2단계 이후 전체를 바꾼다.
-- **단점**: 성공 여부를 지금 알 수 없다. 검증되지 않은 것에 1단계를 걸 수 없다.
+- **단점**: 시스템이 존재하는 것과 그것을 걸어 다닐 수 있는 것은 다르다. 테이블 구조를 역공학해야 하고 분량을 예측할 수 없다.
 
-**1단계에서는 착수하지 않는다.** A로 파이프라인을 증명한 뒤 별도로 탐색한다.
+**처음 이 문서를 쓸 때는 "존재 여부조차 불확실"이라고 적었으나, 위 정정대로 존재는 확인됐다.** 그럼에도 1단계에서는 착수하지 않는다. 값 스캔 도구가 이미 완성·배포돼 있어 A로 먼저 파이프라인을 닫는 것이 확실하고, B가 막혔을 때의 대안도 A가 되기 때문이다. B는 1단계를 닫은 뒤 별도 과제로 다룬다.
+
+### D. 게임 내장 프리카메라 활성화 — 유력하지만 미검증
+
+`FreeCamera` / `PhotoCamera` / `PlayerCamera` 모드와 `DebugCameraState`, 전용 디버그 입력이 리테일 빌드에 남아 있다. 이것을 켤 수 있다면 카메라를 직접 조종할 필요 없이 게임의 구현을 그대로 쓴다.
+
+- **장점**: 구현 부담이 사실상 사라진다. 입력·DoF·모드 전환이 이미 있다.
+- **단점**: 문자열이 남았다고 코드가 도달 가능한 것은 아니다. 게이트가 어디인지 모른다.
+
+M3 결정 시점에 후보로 함께 검토한다.
 
 ### C. 문자열 참조 역추적 — 보조
 

@@ -15,6 +15,8 @@
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
+#include "render/scan_panel.h"
+#include "game/freecam.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
 // 접근해야 하므로 익명 네임스페이스를 쓸 수 없다.
@@ -140,12 +142,21 @@ void release_resources() {
 // ImGui와 D3D12 리소스를 전부 해체한다. g_visible은 건드리지 않으므로
 // 해상도 변경 후 재초기화해도 사용자가 열어둔 상태가 유지된다.
 void teardown(ID3D12CommandQueue* queue) {
+    // 단계마다 남긴다. 여기서 멈추면 어느 줄에서 멈췄는지
+    // 로그가 지목해야 한다. 2026-09-01 정지 때는 요청 줄만 남고
+    // 이 함수의 흔적이 전혀 없어, 렌더 스레드가 여기 오기도 전에
+    // 멈춰 있었음을 알 수 있었다.
+    log::infof("해체 1: 스캔 패널 정리");
+    cdtb::render::shutdown_scan_panel();   // 워커 스레드를 먼저 정리한다
+    log::infof("해체 2: GPU 대기");
     wait_for_pending(queue);   // GPU가 우리 리소스를 놓을 때까지
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
     if (g_win32_ready) { ImGui_ImplWin32_Shutdown(); g_win32_ready = false; }
     if (g_ctx_created) { ImGui::DestroyContext(); g_ctx_created = false; }
+    log::infof("해체 3: ImGui 정리 완료");
     input::remove();
     release_resources();
+    log::infof("해체 4: 리소스 해제 완료");
     g_ready = false;
 }
 
@@ -337,6 +348,9 @@ void draw_ui() {
     ImGui::Separator();
     ImGui::Text("Insert 토글 · End 비활성화");
     ImGui::End();
+
+    // 분석 결과 표시. 버튼은 없다 - 분석은 백그라운드가 한다.
+    cdtb::render::draw_camera_panel();
 }
 
 }  // namespace cdtb::overlay::detail
@@ -377,6 +391,11 @@ namespace cdtb::render {
 
 void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     using namespace cdtb::overlay::detail;
+
+    // 오버레이 상태와 무관하게 매 프레임 돈다. 프리카메라는
+    // 오버레이를 꺼 둔 채로도 써야 하고, 아래의 조기 반환들에
+    // 걸리면 안 된다.
+    cdtb::game::freecam_tick();
 
     // 해체는 반드시 이 스레드에서 한다 (overlay::shutdown 주석 참조).
     if (g_teardown_requested) {
