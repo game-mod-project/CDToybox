@@ -140,6 +140,22 @@ TEST(find_handler_call_fails_without_the_marker) {
     CHECK(!cdtb::game::find_handler_call(body, sizeof(body), 0x1000, &handler));
 }
 
+// 함수 끝을 넘어가면 옆 함수에서도 맞는다 - 실측에서 0x600 을
+// 훑었더니 두 곳이 잡혀 해석이 통째로 실패했다. MSVC 는 함수 사이를
+// int3 로 채우므로 그 자리에서 멈춘다.
+TEST(find_handler_call_stops_at_function_padding) {
+    std::vector<std::uint8_t> body = {
+        0xE8, 0x10, 0x00, 0x00, 0x00,
+        0xC7, 0x03, 0x00, 0x00, 0x00, 0x00,
+        0xCC, 0xCC, 0xCC, 0xCC,              // 함수 끝
+        0xE8, 0x20, 0x00, 0x00, 0x00,        // 옆 함수의 같은 모양
+        0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
+    std::uint64_t handler = 0;
+    CHECK(cdtb::game::find_handler_call(body.data(), body.size(), 0x1000,
+                                        &handler));
+    CHECK_EQ(handler, std::uint64_t{0x1015});
+}
+
 // 두 곳에서 맞으면 고를 수 없다. 못 찾은 것으로 다룬다.
 TEST(find_handler_call_fails_when_ambiguous) {
     const std::uint8_t one[] = {0xE8, 0x10, 0x00, 0x00, 0x00,

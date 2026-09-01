@@ -225,6 +225,18 @@ bool actor_is_server(int index) {
 bool find_handler_call(const std::uint8_t* body, std::size_t n,
                        std::uint64_t body_rva, std::uint64_t* handler_rva) {
     if (body == nullptr || handler_rva == nullptr || n < 11) return false;
+
+    // 함수 끝에서 멈춘다. 넘어가면 옆 함수에서도 맞아 둘이 된다 -
+    // 실측에서 그렇게 실패했다. MSVC 는 함수 사이를 int3 로 채운다.
+    for (std::size_t i = 0; i + 4 <= n; ++i) {
+        if (body[i] == 0xCC && body[i + 1] == 0xCC && body[i + 2] == 0xCC &&
+            body[i + 3] == 0xCC) {
+            n = i;
+            break;
+        }
+    }
+    if (n < 11) return false;
+
     // "call rel32" 5바이트 + "C7 03 00 00 00 00" 6바이트
     static const std::uint8_t kMark[] = {0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
     std::uint64_t found = 0;
