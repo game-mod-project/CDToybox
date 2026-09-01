@@ -154,7 +154,7 @@ std::atomic<bool> g_stop{false};
 //
 // 카메라 확보 뒤에 두었더니 카메라를 못 찾는 동안 이 로그도 같이
 // 막혔다. 카메라와 무관하게 매 시도마다 낸다.
-void log_new_actors(const mem::Rtti& rtti) {
+void log_new_actors(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::uintptr_t seen[16]{};
     std::uint32_t hits[16]{};
     const int n = seen_sessions(seen, hits, 16);
@@ -166,6 +166,8 @@ void log_new_actors(const mem::Rtti& rtti) {
         set_session_class(i, cls.c_str());
         log::infof("세션 {} 0x{:X} -> 액터 0x{:X} ({})", i + 1, seen[i], actor,
                    cls);
+        // 치트 35개가 전부 지나는 문. 세션마다 한 번만 본다.
+        log_gate(rtti, reader, seen[i]);
     }
 }
 
@@ -193,7 +195,7 @@ void auto_analysis_loop() {
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
         discover_items(rtti, reader);
-        log_new_actors(rtti);
+        log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
             break;
@@ -228,7 +230,7 @@ void auto_analysis_loop() {
     // 붙지 않았다 - 실측에서 목록이 전부 "확인 중" 이었다. 종료할
     // 때까지 계속 붙인다. 아직 안 붙은 것만 보므로 값싸다.
     while (!g_stop.load()) {
-        log_new_actors(rtti);
+        log_new_actors(rtti, reader);
         for (int i = 0; i < 20 && !g_stop.load(); ++i) ::Sleep(100);
     }
 }

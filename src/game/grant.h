@@ -50,6 +50,20 @@ std::uintptr_t last_actor();
 // 컴포넌트를 고를 일이 없어진다.
 int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap);
 
+// 치트의 문. 35개 처리기가 전부 세션에서 이 사슬로 같은 객체를
+// 꺼내 가상 함수를 불러 보고, 거짓이면 조용히 반환한다.
+//
+//   세션 -> [+0xA0] -> [+0x68] -> [+0x130]
+//
+// 무리마다 슬롯이 다르다 - 대부분 +0xD0, 아이템 계열 +0x140,
+// 내구도·AI +0x160. 이 문 하나를 열면 전부 열린다.
+bool gate_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out);
+
+// 문 객체의 클래스와 문제의 가상 함수들을 로그로 남긴다. 읽기만 한다.
+void log_gate(const mem::Rtti& rtti, const mem::Reader& reader,
+              std::uintptr_t session);
+
 // 치트 메시지 하나를 해석한다. 주소는 하나도 박지 않는다.
 //   1. RTTI 로 클래스의 vtable 을 얻고
 //   2. 정적 초기화가 그 vtable 을 넣는 전역이 곧 메시지 서술자이며

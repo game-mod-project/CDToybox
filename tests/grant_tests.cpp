@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "game/grant.h"
+#include "fake_memory.h"
 #include "harness.h"
 
 namespace {
@@ -165,6 +166,40 @@ TEST(find_handler_call_fails_when_ambiguous) {
     std::uint64_t handler = 0;
     CHECK(!cdtb::game::find_handler_call(body.data(), body.size(), 0x1000,
                                          &handler));
+}
+
+// 35개 치트가 전부 같은 문 하나를 지난다. 처리기 앞머리가 세션에서
+// 이 사슬로 객체를 꺼내 가상 함수를 불러 보고, 거짓이면 조용히
+// 반환한다. 그 객체를 알아야 문을 열 수 있다.
+//
+//   세션 -> [+0xA0] -> [+0x68] -> [+0x130]
+TEST(gate_object_walks_the_chain) {
+    cdtb::tests::FakeMemory m;
+    m.heap.assign(0x400, 0);
+    const auto session = m.heap_addr(0x000);
+    const auto a = m.heap_addr(0x100);
+    const auto b = m.heap_addr(0x200);
+    const auto gate = m.heap_addr(0x300);
+    m.put_u64(0x000 + 0xA0, a);
+    m.put_u64(0x100 + 0x68, b);
+    m.put_u64(0x200 + 0x130, gate);
+
+    std::uintptr_t out = 0;
+    CHECK(cdtb::game::gate_object(m, session, &out));
+    CHECK_EQ(out, gate);
+}
+
+TEST(gate_object_fails_on_a_broken_chain) {
+    cdtb::tests::FakeMemory m;
+    m.heap.assign(0x400, 0);          // 전부 0 - 첫 칸에서 끊긴다
+    std::uintptr_t out = 0;
+    CHECK(!cdtb::game::gate_object(m, m.heap_addr(0), &out));
+}
+
+TEST(gate_object_fails_without_a_session) {
+    cdtb::tests::FakeMemory m;
+    std::uintptr_t out = 0;
+    CHECK(!cdtb::game::gate_object(m, 0, &out));
 }
 
 TEST(spawn_args_reject_zero_key) {

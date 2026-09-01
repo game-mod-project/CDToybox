@@ -288,6 +288,37 @@ bool spawn_args_ok(std::uint32_t item_key, std::int64_t count) {
     return item_key != 0 && count > 0;
 }
 
+bool gate_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out) {
+    if (out == nullptr || session == 0) return false;
+    std::uintptr_t p = 0;
+    if (!reader.read(session + 0xA0, &p, sizeof(p)) || p == 0) return false;
+    if (!reader.read(p + 0x68, &p, sizeof(p)) || p == 0) return false;
+    if (!reader.read(p + 0x130, &p, sizeof(p)) || p == 0) return false;
+    *out = p;
+    return true;
+}
+
+void log_gate(const mem::Rtti& rtti, const mem::Reader& reader,
+              std::uintptr_t session) {
+    std::uintptr_t obj = 0;
+    if (!gate_object(reader, session, &obj)) {
+        log::warnf("문: 세션 0x{:X} 에서 사슬이 끊겼다", session);
+        return;
+    }
+    std::uintptr_t vtable = 0;
+    if (!reader.read(obj, &vtable, sizeof(vtable))) return;
+    log::infof("문 객체 0x{:X} ({}) vtable 0x{:X}", obj,
+               rtti.class_of_object(obj), vtable);
+    // 무리별 슬롯. 이 셋만 보면 35개가 다 덮인다.
+    for (const std::uint32_t slot : {0xD0u, 0x140u, 0x160u}) {
+        std::uintptr_t fn = 0;
+        if (!reader.read(vtable + slot, &fn, sizeof(fn)) || fn == 0) continue;
+        log::infof("  +0x{:X} -> 0x{:X} (RVA 0x{:X})", slot, fn,
+                   fn - reader.module_base());
+    }
+}
+
 bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
                            const char* class_name, CheatMessage* out) {
     if (out == nullptr || class_name == nullptr) return false;
