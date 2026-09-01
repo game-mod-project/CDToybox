@@ -70,11 +70,17 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
 // 부르므로 횟수가 압도적이다 - 실측에서 17020회 대 1110회 대 1~3회.
 int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n);
 
-// 후보의 클래스 이름. 프레임마다 RTTI 를 푸는 것은 비싸므로 분석
-// 스레드가 한 번 붙여 준다. 아직 안 붙었으면 빈 문자열.
-void set_actor_class(int index, const char* name);
-const char* actor_class(int index);
-bool actor_is_server(int index);
+// 세션마다 게임이 돌려준 액터와 그 클래스. 프레임마다 RTTI 를 푸는
+// 것은 비싸므로 분석 스레드가 한 번 붙여 준다.
+//
+// 세션에 따라 클라이언트 쪽이 나오기도 하고 서버 쪽이 나오기도 한다
+// (조회 함수 안에 종류 바이트로 갈리는 분기가 있다). 실제 작업
+// 함수는 서버 쪽 코드라 클라이언트 쪽을 넘기면 죽는다 - 실측에서
+// 0xC0000005 로 죽었다. 그래서 어느 쪽이 나오는지를 봐야 한다.
+std::uintptr_t session_actor(int index);
+void set_session_class(int index, const char* name);
+const char* session_class(int index);
+bool session_is_server(int index);
 
 // 역직렬화 함수 본문에서 처리기 호출 자리를 찾는다. 파싱을 마치고
 // 성공했을 때만 부르므로 "call rel32" 뒤에 "mov dword ptr [rbx],0"

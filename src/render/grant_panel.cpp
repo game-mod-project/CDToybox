@@ -58,14 +58,12 @@ void draw_grant_panel() {
         return;
     }
 
-    // 가장 많이 쓰인 세션이 플레이어 것이다.
-    if (!g_picked_by_hand) {
-        int best = 0;
-        for (int i = 1; i < n; ++i) {
-            if (hits[i] > hits[best]) best = i;
-        }
-        g_pick = best;
-    }
+    // 세션에 따라 클라이언트 쪽 액터가 나오기도 한다. 실제 작업
+    // 함수는 서버 쪽 코드라 그걸 넘기면 죽는다 - 실측에서 그랬다.
+    // 서버 쪽이 나오는 세션 중 가장 많이 쓰인 것을 고른다.
+    bool server[16]{};
+    for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
+    if (!g_picked_by_hand) g_pick = game::best_actor_index(hits, server, n);
 
     const auto& msg = game::spawn_message();
     if (msg.handler != 0) {
@@ -73,7 +71,7 @@ void draw_grant_panel() {
                     static_cast<unsigned long long>(msg.handler));
     }
     ImGui::TextUnformatted("세션 - 호출이 가장 많은 것이 플레이어입니다");
-    if (ImGui::BeginTable("actors", 2,
+    if (ImGui::BeginTable("actors", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         for (int i = 0; i < n; ++i) {
             ImGui::TableNextRow();
@@ -89,6 +87,13 @@ void draw_grant_panel() {
             ImGui::Text("0x%llX", static_cast<unsigned long long>(seen[i]));
             ImGui::TableNextColumn();
             ImGui::Text("호출 %u회", hits[i]);
+            ImGui::TableNextColumn();
+            if (server[i]) {
+                ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
+                                   short_class(game::session_class(i)));
+            } else {
+                ImGui::TextDisabled("%s", short_class(game::session_class(i)));
+            }
         }
         ImGui::EndTable();
     }
@@ -112,7 +117,7 @@ void draw_grant_panel() {
     // 잘못됐는지 알 수 없다 - 실제로 그렇게 막혔다.
     const char* blocked = nullptr;
     if (g_pick < 0 || g_pick >= n) {
-        blocked = "세션을 고르세요";
+        blocked = "서버 쪽 액터가 나오는 세션이 아직 없습니다";
     } else if (!have_pos) {
         blocked = "플레이어 좌표를 아직 못 읽었습니다 (월드 진입 필요)";
     } else if (!game::spawn_args_ok(static_cast<std::uint32_t>(g_item_key),

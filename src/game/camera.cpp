@@ -155,14 +155,17 @@ std::atomic<bool> g_stop{false};
 // 카메라 확보 뒤에 두었더니 카메라를 못 찾는 동안 이 로그도 같이
 // 막혔다. 카메라와 무관하게 매 시도마다 낸다.
 void log_new_actors(const mem::Rtti& rtti) {
-    static int shown = 0;
     std::uintptr_t seen[16]{};
     std::uint32_t hits[16]{};
-    const int n = seen_actors(seen, hits, 16);
-    for (; shown < n; ++shown) {
-        const std::string cls = rtti.class_of_object(seen[shown]);
-        set_actor_class(shown, cls.c_str());
-        log::infof("액터 후보 {} 0x{:X} ({})", shown + 1, seen[shown], cls);
+    const int n = seen_sessions(seen, hits, 16);
+    for (int i = 0; i < n; ++i) {
+        const std::uintptr_t actor = session_actor(i);
+        if (actor == 0 || session_class(i)[0] != 0) continue;
+        const std::string cls = rtti.class_of_object(actor);
+        if (cls.empty()) continue;
+        set_session_class(i, cls.c_str());
+        log::infof("세션 {} 0x{:X} -> 액터 0x{:X} ({})", i + 1, seen[i], actor,
+                   cls);
     }
 }
 

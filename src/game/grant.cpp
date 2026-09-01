@@ -39,6 +39,9 @@ bool g_seen_server[kSeenCap]{};
 // 세션은 조회 함수의 인자다. 처리기에 넘길 것은 이쪽이다.
 std::uintptr_t g_sess[kSeenCap]{};
 std::uint32_t g_sess_hits[kSeenCap]{};
+std::uintptr_t g_sess_actor[kSeenCap]{};
+char g_sess_class[kSeenCap][96]{};
+bool g_sess_server[kSeenCap]{};
 std::atomic<int> g_sess_count{0};
 std::atomic<int> g_seen_count{0};
 
@@ -61,9 +64,17 @@ CheatMessage g_spawn_msg;
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     const std::uintptr_t actor = g_orig_actor_getter(session);
     if (session != nullptr) {
+        const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
-        const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap,
-                                   reinterpret_cast<std::uintptr_t>(session));
+        const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap, s);
+        // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
+        // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
+        for (int i = 0; i < now; ++i) {
+            if (g_sess[i] == s) {
+                g_sess_actor[i] = actor;
+                break;
+            }
+        }
         if (now != m) g_sess_count.store(now, std::memory_order_release);
     }
     if (actor != 0) {
@@ -214,25 +225,30 @@ int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n) {
     return best;
 }
 
-void set_actor_class(int index, const char* name) {
+std::uintptr_t session_actor(int index) {
+    if (index < 0 || index >= kSeenCap) return 0;
+    return g_sess_actor[index];
+}
+
+void set_session_class(int index, const char* name) {
     if (index < 0 || index >= kSeenCap || name == nullptr) return;
     std::size_t i = 0;
-    for (; i + 1 < sizeof(g_seen_class[0]) && name[i] != 0; ++i) {
-        g_seen_class[index][i] = name[i];
+    for (; i + 1 < sizeof(g_sess_class[0]) && name[i] != 0; ++i) {
+        g_sess_class[index][i] = name[i];
     }
-    g_seen_class[index][i] = 0;
+    g_sess_class[index][i] = 0;
     // 이름 안에 Server 가 들어 있으면 서버 쪽이다.
-    g_seen_server[index] = std::strstr(name, "Server") != nullptr;
+    g_sess_server[index] = std::strstr(name, "Server") != nullptr;
 }
 
-const char* actor_class(int index) {
+const char* session_class(int index) {
     if (index < 0 || index >= kSeenCap) return "";
-    return g_seen_class[index];
+    return g_sess_class[index];
 }
 
-bool actor_is_server(int index) {
+bool session_is_server(int index) {
     if (index < 0 || index >= kSeenCap) return false;
-    return g_seen_server[index];
+    return g_sess_server[index];
 }
 
 bool find_handler_call(const std::uint8_t* body, std::size_t n,
