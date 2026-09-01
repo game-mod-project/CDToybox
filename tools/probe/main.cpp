@@ -240,6 +240,133 @@ std::string ansi_to_utf8(const char* s) {
     return u;
 }
 
+// 힙에서 u32 값을 찾는다. 아이템 키가 어디 담겨 있는지 보는 용도다.
+//
+// 인벤토리 컴포넌트를 한 겹 따라가서는 못 찾았다. 값이 어디 있는지
+// 먼저 알아야 소유 구조를 거슬러 올라갈 수 있다.
+void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
+    const auto regs = r.regions();
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0, scanned = 0;
+    std::printf("힙에서 %u (0x%X) 를 찾습니다\n", value, value);
+    for (const auto& reg : regs) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size == 0 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        scanned += reg.size;
+        for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+            std::uint32_t v = 0;
+            std::memcpy(&v, buf.data() + i, 4);
+            if (v != value) continue;
+            std::printf("  0x%llX\n",
+                        static_cast<unsigned long long>(reg.base + i));
+            if (++found >= max) {
+                std::printf("(%zu개에서 멈춥니다)\n", max);
+                return;
+            }
+        }
+    }
+    std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
+}
+
+// 살아 있는 인벤토리 컴포넌트 중 플레이어 것을 가려낸다. 전부 읽기다.
+//
+// 판정 근거는 "아이템 표에 실재하는 키가 얼마나 들어 있는가" 다.
+// 인스턴스가 여럿이라 주소만 보고 고를 수 없고, 잘못 고른 채로
+// 쓰기로 넘어가면 무엇이 깨지는지도 모르게 된다.
+void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+             char** argv) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_item_manager(rt, reader, &mgr)) {
+        std::printf("ItemInfoManager 를 찾지 못했습니다.\n");
+        return;
+    }
+    game::LocSystem sys;
+    game::find_loc_system(rt, reader, &sys);
+    std::vector<game::ItemCatalogEntry> items;
+    if (!game::build_item_catalog(reader, mgr, sys, &items)) {
+        std::printf("아이템 표를 읽지 못했습니다.\n");
+        return;
+    }
+    std::map<std::uint32_t, const game::ItemCatalogEntry*> by_key;
+    for (const auto& e : items) by_key[e.key] = &e;
+
+    // 찾을 키를 주면 그것만 본다. 안 주면 작은 값을 걸러낸다 -
+    // 2 나 101 같은 값은 우연히 유효 키라서 어디서나 걸린다.
+    std::vector<std::uint32_t> want;
+    for (int i = 2; i < argc; ++i) {
+        const unsigned long v = std::strtoul(argv[i], nullptr, 0);
+        if (v != 0) want.push_back(static_cast<std::uint32_t>(v));
+    }
+    const char* cls = ".?AVClientInventoryActorComponent@pa@@";
+    if (!want.empty()) {
+        std::printf("찾는 키:");
+        for (const auto k : want) std::printf(" %u", k);
+        std::printf("\n");
+    }
+    const auto insts = rt.instances_of_class(cls, 32);
+    std::printf("%s\n인스턴스 %zu개\n\n", cls, insts.size());
+
+    // 객체 자체와, 객체가 가리키는 곳 한 겹까지 본다. 아이템 목록이
+    // 객체 안에 박혀 있을 수도, 따로 할당돼 있을 수도 있다.
+    constexpr std::size_t kSelf = 0x200;
+    constexpr std::size_t kDeep = 0x1000;
+    for (const auto base : insts) {
+        std::vector<std::uint8_t> self(kSelf);
+        if (!reader.read(base, self.data(), self.size())) continue;
+
+        struct Hit { std::uintptr_t at; std::uint32_t key; };
+        std::vector<Hit> hits;
+        auto scan = [&](const std::vector<std::uint8_t>& buf,
+                        std::uintptr_t origin) {
+            for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+                std::uint32_t v = 0;
+                std::memcpy(&v, buf.data() + i, 4);
+                if (!want.empty()) {
+                    if (std::find(want.begin(), want.end(), v) == want.end()) {
+                        continue;
+                    }
+                } else {
+                    // 작은 값은 어디서나 우연히 걸린다.
+                    if (v < 1000 || v > 0x7FFFFFFF) continue;
+                    if (by_key.find(v) == by_key.end()) continue;
+                }
+                if (hits.size() < 12) hits.push_back({origin + i, v});
+            }
+        };
+        scan(self, base);
+
+        std::size_t deep_hits = 0;
+        for (std::size_t i = 0; i + 8 <= self.size(); i += 8) {
+            std::uint64_t p = 0;
+            std::memcpy(&p, self.data() + i, 8);
+            if (p < 0x10000 || (p & 7) != 0) continue;
+            std::vector<std::uint8_t> deep(kDeep);
+            if (!reader.read(static_cast<std::uintptr_t>(p), deep.data(),
+                             deep.size())) {
+                continue;
+            }
+            const std::size_t before = hits.size();
+            scan(deep, static_cast<std::uintptr_t>(p));
+            deep_hits += hits.size() - before;
+        }
+
+        std::uint32_t a = 0, b = 0;
+        reader.read_value(base + 0x20, &a);
+        reader.read_value(base + 0x24, &b);
+        std::printf("0x%llX  +0x20=%u/%u  아이템키 %zu개 (그중 포인터 너머 %zu)\n",
+                    static_cast<unsigned long long>(base), a, b, hits.size(),
+                    deep_hits);
+        for (const auto& h : hits) {
+            const auto* e = by_key[h.key];
+            std::printf("    0x%llX  %-9u %s\n",
+                        static_cast<unsigned long long>(h.at), h.key,
+                        (e && !e->name.empty()) ? e->name.c_str() : "(이름 없음)");
+        }
+    }
+}
+
 // 아이템 표를 걸어 키와 이름을 낸다. 전부 읽기다.
 void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                char** argv) {
@@ -1055,6 +1182,15 @@ int main(int argc, char** argv) {
         cmd_findvec3(r, x, y, z, eps, mx);
         return 0;
     }
+    if (cmd == "findu32") {
+        if (argc < 3) { usage(); return 1; }
+        const std::uint32_t v =
+            static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 0));
+        const std::size_t mx = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
+                                          : 40;
+        cmd_findu32(r, v, mx);
+        return 0;
+    }
     if (cmd == "diff") {
         if (argc < 3) { usage(); return 1; }
         const std::size_t n = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
@@ -1222,6 +1358,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "items") {
         cmd_items(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "inv") {
+        cmd_inv(rt, reader, argc, argv);
         return 0;
     }
 
