@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "game/localization.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
 
@@ -48,5 +49,38 @@ bool find_item_manager(const mem::Rtti& rtti, const mem::Reader& reader,
 // 널 슬롯이나 읽기 실패한 레코드는 건너뛴다.
 bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
                      std::vector<ItemEntry>* out, std::size_t max);
+
+// --------------------------------------------------------------- 목록
+
+struct ItemCatalogEntry {
+    std::uint32_t key = 0;
+    std::uint64_t name_key = 0;
+    std::string name;   // 빈 문자열이면 현지화 표에 없는 것
+};
+
+// 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름
+// 없이 키만 채운다.
+//
+// 이름이 안 풀린 항목도 목록에서 빼지 않는다. 실측에서 6,810개 중
+// 72개가 그랬는데, 키는 있는 아이템이므로 지급 대상이 될 수 있다.
+bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
+                        const LocSystem& sys,
+                        std::vector<ItemCatalogEntry>* out);
+
+// --------------------------------------------------- 모드용 배경 탐색
+
+// 이미 이미지를 읽어 둔 Rtti 로 목록을 만들어 캐시한다. 350MB 이미지
+// 읽기와 힙 전수 조사를 두 번 하지 않도록, 이미 그것을 한 배경
+// 스레드가 호출자다.
+//
+// 표가 아직 안 올라왔으면 조용히 false 다. 재시도 루프에서 부르면
+// 된다 - 이미 준비됐으면 즉시 true 로 빠진다.
+bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 캐시가 준비됐는가. 준비된 뒤에는 목록이 다시 바뀌지 않는다.
+bool items_ready();
+
+// 준비되기 전에 부르면 빈 목록이다.
+const std::vector<ItemCatalogEntry>& item_catalog();
 
 }  // namespace cdtb::game

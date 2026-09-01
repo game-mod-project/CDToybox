@@ -1,5 +1,9 @@
 #include "game/items.h"
 
+#include <atomic>
+
+#include "core/log.h"
+
 namespace cdtb::game {
 namespace {
 
@@ -99,5 +103,75 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
     *out = std::move(items);
     return true;
 }
+
+bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
+                        const LocSystem& sys,
+                        std::vector<ItemCatalogEntry>* out) {
+    if (out == nullptr) return false;
+
+    std::vector<ItemEntry> raw;
+    if (!read_item_table(reader, manager, &raw, 0)) return false;
+
+    const bool has_loc = sys.valid();
+    std::vector<ItemCatalogEntry> catalog;
+    catalog.reserve(raw.size());
+    for (const auto& e : raw) {
+        ItemCatalogEntry entry;
+        entry.key = e.key;
+        entry.name_key = e.name_key;
+        if (has_loc) {
+            // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
+            resolve(reader, sys, e.name_key, &entry.name, nullptr);
+        }
+        catalog.push_back(std::move(entry));
+    }
+    *out = std::move(catalog);
+    return true;
+}
+
+// --------------------------------------------------- 모드용 배경 탐색
+
+namespace {
+
+std::vector<ItemCatalogEntry> g_catalog;
+std::atomic<bool> g_ready{false};
+
+}  // namespace
+
+bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_ready.load(std::memory_order_acquire)) return true;
+
+    // 표가 아직 안 올라왔을 수 있다. 재시도 루프에서 부르므로 못
+    // 찾은 것은 로그를 남기지 않는다 - 매번 남으면 잡음이 된다.
+    std::uintptr_t manager = 0;
+    if (!find_item_manager(rtti, reader, &manager)) return false;
+
+    LocSystem sys;
+    if (!find_loc_system(rtti, reader, &sys)) {
+        log::warnf("아이템 표: 현지화 시스템이 없다 - 이름 없이 키만 낸다");
+    }
+
+    std::vector<ItemCatalogEntry> catalog;
+    if (!build_item_catalog(reader, manager, sys, &catalog)) {
+        log::errorf("아이템 표: 목록을 만들지 못했다 (매니저 0x{:X})", manager);
+        return false;
+    }
+
+    std::size_t named = 0;
+    for (const auto& e : catalog) {
+        if (!e.name.empty()) ++named;
+    }
+
+    // 목록을 먼저 채우고 나서 준비 플래그를 세운다. 그리는 쪽은
+    // 플래그를 먼저 보므로 반쯤 채워진 목록을 읽지 않는다.
+    g_catalog = std::move(catalog);
+    g_ready.store(true, std::memory_order_release);
+    log::infof("아이템 표: {}개, 이름 풀린 것 {}개", g_catalog.size(), named);
+    return true;
+}
+
+bool items_ready() { return g_ready.load(std::memory_order_acquire); }
+
+const std::vector<ItemCatalogEntry>& item_catalog() { return g_catalog; }
 
 }  // namespace cdtb::game

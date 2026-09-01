@@ -3,11 +3,13 @@
 
 #include "fake_memory.h"
 #include "game/items.h"
+#include "game/localization.h"
 #include "harness.h"
 
 namespace {
 
 using cdtb::game::ItemEntry;
+using cdtb::game::LocSystem;
 using cdtb::tests::FakeMemory;
 
 // ItemInfoManager 를 흉내낸 가짜 힙.
@@ -56,9 +58,53 @@ struct Fixture {
             mem.put_u64(rec + 0x28,
                         (static_cast<std::uint64_t>(keys[i]) << 32) | 0x70ull);
         }
+        build_localization();
     }
 
     std::uintptr_t manager() const { return mem.heap_addr(kMgr); }
+
+    // --- 현지화 시스템도 같은 힙에 세운다 ---
+    //   0x0600 시스템 / 0x0700 카테고리 표 / 0x0A80 포인터 배열
+    //   0x0B00 항목 3개 / 0x0C00 문자열 풀
+    static constexpr std::size_t kLocSys = 0x0600;
+    static constexpr std::size_t kLocCats = 0x0700;
+    static constexpr std::size_t kLocPtrs = 0x0A80;
+    static constexpr std::size_t kLocEntries = 0x0B00;
+    static constexpr std::size_t kLocPool = 0x0C00;
+    static constexpr std::uint32_t kLocPoolSize = 0x40;
+    static constexpr int kLocCategory = 3;
+
+    void build_localization() {
+        mem.put_u64(kLocSys + 0x48, mem.heap_addr(kLocCats));
+        mem.put_u64(kLocSys + 0x58, mem.heap_addr(kLocPool));
+        mem.put_u32(kLocSys + 0x60, kLocPoolSize);
+
+        mem.put_u64(kLocCats + kLocCategory * 16 + 0, mem.heap_addr(kLocPtrs));
+        mem.put_u32(kLocCats + kLocCategory * 16 + 8, 3);
+
+        // 이름 키는 레코드가 든 것과 같아야 한다. 오름차순이어야
+        // 이분 탐색이 성립하는데 키 자체가 오름차순이므로 그대로다.
+        const std::uint32_t keys[3] = {kKeyA, kKeyB, kKeyC};
+        const std::uint32_t offs[3] = {0x00, 0x10, 0x20};
+        for (int i = 0; i < 3; ++i) {
+            const std::size_t e = kLocEntries + i * 0x20;
+            mem.put_u64(kLocPtrs + i * 8, mem.heap_addr(e));
+            mem.put_u64(e + 0x10,
+                        (static_cast<std::uint64_t>(keys[i]) << 32) | 0x70ull);
+            mem.put_u32(e + 0x18, offs[i]);
+        }
+        mem.put_str(kLocPool + 0x00, "편전");
+        mem.put_str(kLocPool + 0x10, "화살");
+        mem.put_str(kLocPool + 0x20, "지속 보급 화살");
+    }
+
+    LocSystem loc_system() const {
+        LocSystem s;
+        s.object = mem.heap_addr(kLocSys);
+        s.pool = mem.heap_addr(kLocPool);
+        s.pool_size = kLocPoolSize;
+        return s;
+    }
 };
 
 }  // namespace
@@ -122,6 +168,58 @@ TEST(read_item_table_rejects_zero_count) {
     f.mem.put_u32(Fixture::kMgr + 0x30, 0);
     std::vector<ItemEntry> out;
     CHECK(!cdtb::game::read_item_table(f.mem, f.manager(), &out, 0));
+}
+
+// ---------------------------------------------------------------- 목록
+
+TEST(build_item_catalog_fills_names_from_localization) {
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK_EQ(out[0].key, Fixture::kKeyA);
+        CHECK_EQ(out[0].name, std::string("편전"));
+        CHECK_EQ(out[1].name, std::string("화살"));
+        CHECK_EQ(out[2].name, std::string("지속 보급 화살"));
+    }
+}
+
+TEST(build_item_catalog_leaves_name_empty_when_key_is_absent) {
+    // 실측에서 6,810개 중 72개가 현지화 표에 없었다. 목록에서
+    // 빼지 않는다 - 키는 있는 아이템이므로 지급 대상이 될 수 있다.
+    Fixture f;
+    f.mem.put_u64(Fixture::kLocEntries + 0x10, 0xDEADBEEFull);
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK(out[0].name.empty());
+        CHECK_EQ(out[0].key, Fixture::kKeyA);
+        CHECK_EQ(out[1].name, std::string("화살"));
+    }
+}
+
+TEST(build_item_catalog_still_lists_keys_without_localization) {
+    // 현지화 시스템을 못 찾아도 키 목록은 낸다.
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), LocSystem{}, &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK_EQ(out[0].key, Fixture::kKeyA);
+        CHECK(out[0].name.empty());
+    }
+}
+
+TEST(build_item_catalog_fails_when_manager_is_bad) {
+    Fixture f;
+    f.mem.put_u64(Fixture::kMgr + 0x58, 0);
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(!cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                          &out));
 }
 
 // ------------------------------------------------------------ 후보 검증
