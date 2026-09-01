@@ -438,7 +438,6 @@ void draw_item_panel() {
         }
         ImGui::EndTable();
     }
-    draw_grant_panel();
     ImGui::End();
 }
 

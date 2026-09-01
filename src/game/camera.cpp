@@ -160,8 +160,9 @@ void log_new_actors(const mem::Rtti& rtti) {
     std::uint32_t hits[16]{};
     const int n = seen_actors(seen, hits, 16);
     for (; shown < n; ++shown) {
-        log::infof("액터 후보 {} 0x{:X} ({})", shown + 1, seen[shown],
-                   rtti.class_of_object(seen[shown]));
+        const std::string cls = rtti.class_of_object(seen[shown]);
+        set_actor_class(shown, cls.c_str());
+        log::infof("액터 후보 {} 0x{:X} ({})", shown + 1, seen[shown], cls);
     }
 }
 

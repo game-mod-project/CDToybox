@@ -17,6 +17,7 @@
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
 #include "render/icon_atlas.h"
+#include "render/grant_panel.h"
 #include "render/item_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
@@ -360,6 +361,7 @@ void draw_ui() {
     // 분석 결과 표시. 버튼은 없다 - 분석은 백그라운드가 한다.
     cdtb::render::draw_camera_panel();
     cdtb::render::draw_item_panel();
+    cdtb::render::draw_grant_panel();
 }
 
 }  // namespace cdtb::overlay::detail
@@ -456,13 +458,13 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 
     g_frame_stage = kStageNewFrame;
 
-    // 커서는 OS 것을 그대로 쓴다. ImGui 가 자기 것을 그리게 했더니
-    // 게임이 띄워 둔 OS 커서와 겹쳐 두 개로 보였다. 커서 가드가
-    // 중앙 되돌리기와 가두기를 막으므로 OS 커서만으로 충분하다.
+    // 커서는 ImGui 가 직접 그린다. OS 것만 쓰게 했더니 오버레이
+    // 위에서 아예 안 보였다 - 백엔드가 창 위에서 OS 커서를 끈다.
+    // 대신 wndproc 에서 오버레이 위의 OS 커서를 확실히 끈다.
     //
     // 백엔드의 NewFrame 이 이 값을 보고 OS 커서를 처리하므로 그보다
     // 먼저 세운다.
-    ImGui::GetIO().MouseDrawCursor = false;
+    ImGui::GetIO().MouseDrawCursor = true;
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();

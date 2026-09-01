@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstring>
 
 #include "core/log.h"
 #include "mem/hook.h"
@@ -30,6 +31,8 @@ bool g_installed = false;
 constexpr int kSeenCap = 16;
 std::uintptr_t g_seen[kSeenCap]{};
 std::uint32_t g_seen_hits[kSeenCap]{};
+char g_seen_class[kSeenCap][96]{};
+bool g_seen_server[kSeenCap]{};
 std::atomic<int> g_seen_count{0};
 
 // 바닥 스폰. 인자는 전부 포인터다 - 디스어셈블에서 확인했다.
@@ -141,6 +144,37 @@ std::uintptr_t last_actor() {
     return g_last_actor.load(std::memory_order_relaxed);
 }
 
+int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n) {
+    if (hits == nullptr || is_server == nullptr) return -1;
+    int best = -1;
+    for (int i = 0; i < n; ++i) {
+        if (!is_server[i]) continue;
+        if (best < 0 || hits[i] > hits[best]) best = i;
+    }
+    return best;
+}
+
+void set_actor_class(int index, const char* name) {
+    if (index < 0 || index >= kSeenCap || name == nullptr) return;
+    std::size_t i = 0;
+    for (; i + 1 < sizeof(g_seen_class[0]) && name[i] != 0; ++i) {
+        g_seen_class[index][i] = name[i];
+    }
+    g_seen_class[index][i] = 0;
+    // 이름 안에 Server 가 들어 있으면 서버 쪽이다.
+    g_seen_server[index] = std::strstr(name, "Server") != nullptr;
+}
+
+const char* actor_class(int index) {
+    if (index < 0 || index >= kSeenCap) return "";
+    return g_seen_class[index];
+}
+
+bool actor_is_server(int index) {
+    if (index < 0 || index >= kSeenCap) return false;
+    return g_seen_server[index];
+}
+
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count) {
     return item_key != 0 && count > 0;
 }
@@ -157,6 +191,8 @@ bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
     log::infof("바닥 스폰 함수 확보 (RVA 0x{:X})", rva);
     return true;
 }
+
+bool spawn_ready() { return g_spawn != nullptr; }
 
 bool spawn_item_to_ground(std::uintptr_t actor, std::uint32_t item_key,
                           std::int64_t count, const float pos[3],

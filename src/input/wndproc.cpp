@@ -21,6 +21,15 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
 
+    // 오버레이 위에서는 OS 커서를 끈다. ImGui 가 자기 것을 그리므로
+    // 그냥 두면 두 개로 보인다. ShowCursor 와 달리 SetCursor 는
+    // "될 때까지 다시 부르는" 관용구가 없어 게임을 가두지 않는다.
+    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT &&
+        overlay::is_visible() && ImGui::GetIO().WantCaptureMouse) {
+        ::SetCursor(nullptr);
+        return TRUE;
+    }
+
     // 오버레이가 열려 있을 때만 입력을 게임에 넘기지 않는다.
     // 항상 소비하면 게임 조작이 막힌다.
     if (overlay::is_visible()) {

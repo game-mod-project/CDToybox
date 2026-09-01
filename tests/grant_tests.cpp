@@ -91,6 +91,32 @@ TEST(note_actor_stops_when_full) {
 
 // 게임이 함수 앞머리에서 하는 검사와 같은 것을 우리도 먼저 한다.
 // 코드에 그대로 있다: 키가 0이면 실패, 개수가 0 이하면 실패.
+// 조회 함수는 서버 쪽과 클라이언트 쪽을 다 돌려주고, 서버 쪽만
+// 해도 여럿이다(NPC·상자). 실측에서 플레이어 것은 17020회, 다음이
+// 1110회, 나머지는 1~3회였다. 서버 쪽 중 가장 많이 불린 것을 고른다.
+TEST(best_actor_picks_the_busiest_server) {
+    const std::uint32_t hits[4] = {1110, 17020, 2, 3};
+    const bool server[4] = {true, true, false, true};
+    CHECK_EQ(cdtb::game::best_actor_index(hits, server, 4), 1);
+}
+
+TEST(best_actor_ignores_client_side) {
+    // 클라이언트 쪽이 더 많이 불려도 고르지 않는다. 치트는 Req 다.
+    const std::uint32_t hits[3] = {99999, 5, 7};
+    const bool server[3] = {false, true, true};
+    CHECK_EQ(cdtb::game::best_actor_index(hits, server, 3), 2);
+}
+
+TEST(best_actor_returns_none_without_a_server) {
+    const std::uint32_t hits[2] = {10, 20};
+    const bool server[2] = {false, false};
+    CHECK_EQ(cdtb::game::best_actor_index(hits, server, 2), -1);
+}
+
+TEST(best_actor_returns_none_when_empty) {
+    CHECK_EQ(cdtb::game::best_actor_index(nullptr, nullptr, 0), -1);
+}
+
 TEST(spawn_args_reject_zero_key) {
     CHECK(!cdtb::game::spawn_args_ok(0, 1));
 }

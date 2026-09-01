@@ -45,6 +45,19 @@ int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap);
 // 마지막으로 본 액터. 아직 못 봤으면 0.
 std::uintptr_t last_actor();
 
+// 서버 쪽 후보 중 호출이 가장 많은 자리. 없으면 -1.
+//
+// 치트는 Req(클라이언트->서버) 라 서버 쪽이어야 한다. 서버 쪽만 해도
+// NPC·상자 등 여럿이지만, 플레이어 것은 게임플레이 코드가 계속
+// 부르므로 횟수가 압도적이다 - 실측에서 17020회 대 1110회 대 1~3회.
+int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n);
+
+// 후보의 클래스 이름. 프레임마다 RTTI 를 푸는 것은 비싸므로 분석
+// 스레드가 한 번 붙여 준다. 아직 안 붙었으면 빈 문자열.
+void set_actor_class(int index, const char* name);
+const char* actor_class(int index);
+bool actor_is_server(int index);
+
 // 부르기 전에 게임이 하는 검사를 우리도 한다. 게임 코드에 그대로
 // 있다 - 키가 0이거나 개수가 0 이하면 게임이 실패로 돌려준다.
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count);
@@ -63,5 +76,8 @@ bool spawn_item_to_ground(std::uintptr_t actor, std::uint32_t item_key,
 // 스폰 함수를 찾아 둔다. 못 찾으면 spawn_item_to_ground 는 항상
 // false 를 돌려준다.
 bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 스폰 함수를 찾아 뒀는가.
+bool spawn_ready();
 
 }  // namespace cdtb::game
