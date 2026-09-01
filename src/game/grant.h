@@ -141,6 +141,17 @@ bool thread_ready_for_spawn();
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
                      std::int64_t count);
 
+// TrItemValue 를 담을 버퍼 크기.
+//
+// 생성자(RVA 0x20CE900)가 실제로 어디까지 쓰는지 디스어셈블해서
+// 쟀다 - +0x1A4 에 8바이트, +0x1B0 에 4바이트까지 쓴다. 즉 최소
+// 0x1B4 가 필요하다.
+//
+// 처음에 0x100 으로 잡았다가 생성자가 스택을 180바이트 넘겨 써서
+// 게임이 나중에 죽었다. 여유를 두고 잡는다.
+constexpr std::size_t kItemValueMinSize = 0x1B4;
+constexpr std::size_t kItemValueSize = 0x400;
+
 // 바닥이 아니라 인벤토리로 바로 넣는다.
 // (CreateItemFromTrItemValueCheatReq, ID 2944)
 bool request_give(std::uintptr_t session, std::uint32_t item_key,

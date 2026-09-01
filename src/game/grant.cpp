@@ -671,7 +671,7 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
     }
 
     // 구조체는 게임 생성자에게 맡긴다. 기본값을 흉내내지 않는다.
-    alignas(16) std::uint8_t value[0x100]{};
+    alignas(16) std::uint8_t value[kItemValueSize]{};
     o.called = true;
     if (!call_ctor_guarded(g_item_value_ctor, value, &o.seh, &o.fault)) {
         o.crashed = true;

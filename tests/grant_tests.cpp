@@ -231,6 +231,13 @@ TEST(item_value_puts_key_at_8_and_count_at_10) {
     CHECK_EQ(count, std::int64_t{7});
 }
 
+// 생성자가 +0x1B4 까지 쓴다. 그보다 작게 잡았다가 스택을 넘겨 써
+// 게임이 죽었다 - 버퍼가 그 아래로 내려가지 않게 못박는다.
+TEST(item_value_buffer_covers_what_the_ctor_writes) {
+    CHECK(cdtb::game::kItemValueSize >= cdtb::game::kItemValueMinSize);
+    CHECK_EQ(cdtb::game::kItemValueMinSize, std::size_t{0x1B4});
+}
+
 TEST(item_value_refuses_a_small_buffer) {
     std::uint8_t buf[8]{};
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
