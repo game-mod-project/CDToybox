@@ -59,6 +59,7 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
                                     const std::int64_t*, const std::uint16_t*,
                                     const float*);
 CheatMessage g_spawn_msg;
+const mem::Reader* g_reader = nullptr;
 
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
@@ -389,6 +390,7 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
 }
 
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
+    g_reader = &reader;
     if (g_spawn_msg.handler != 0) return true;
     return resolve_cheat_message(rtti, reader, "SpawnItemToGroundByCheatReq",
                                  &g_spawn_msg);
@@ -409,21 +411,20 @@ bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
     return true;
 }
 
-bool spawn_ready() { return g_spawn != nullptr && g_orig_actor_getter != nullptr; }
+bool spawn_ready() {
+    return g_spawn_msg.handler != 0 && g_orig_actor_getter != nullptr;
+}
 
 bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
                           std::int64_t count, const float pos[3],
                           SpawnOutcome* out) {
     SpawnOutcome o;
     if (out != nullptr) *out = o;
-    if (!spawn_ready() || pos == nullptr) return false;
+    if (!spawn_ready() || pos == nullptr || g_reader == nullptr) {
+        return false;
+    }
     if (!spawn_args_ok(item_key, count)) return false;
     if (session == 0) return false;
-
-    // 처리기는 패킷에서 세션만 꺼낸다 ([패킷+0]). 나머지는 건드리지
-    // 않지만 넉넉히 0으로 채워 둔다.
-    std::uint64_t packet[8]{};
-    packet[0] = static_cast<std::uint64_t>(session);
 
     std::uint32_t key = item_key;
     std::int64_t n = count;
@@ -434,27 +435,39 @@ bool spawn_item_to_ground(std::uintptr_t session, std::uint32_t item_key,
     log::infof("바닥 스폰: 세션 0x{:X} 키 {} 개수 {} 위치 {:.1f},{:.1f},{:.1f}",
                session, item_key, count, where[0], where[1], where[2]);
 
-    // 처리기를 통째로 부르면 앞단 권한 검사에서 조용히 빠져나간다 -
-    // 실측에서 죽지도 않고 아무 일도 없었다. 그래서 액터 조회만
-    // 게임에게 시키고(세션이 있으니 정확하다) 실제 작업은 직접
-    // 부른다. 우리가 인벤토리 컴포넌트를 고르는 일은 여전히 없다.
-    o.called = true;
-    o.actor = g_orig_actor_getter(reinterpret_cast<void*>(session));
-    if (o.actor == 0) {
+    // 처리기를 그대로 부른다. 앞단의 문(vtable +0x140)은 `mov al,1;
+    // ret` 이라 늘 열려 있다 - 막고 있던 것은 권한이 아니라 세션이었다.
+    // 클라이언트 세션은 [[[세션+0xA0]+0x68]+0x130] 이 비어 처리기가
+    // 조용히 되돌아간다. 서버 세션이어야 한다.
+    //
+    // 작업 함수를 직접 부르는 것도 해 봤지만 올바른 서버 액터로도
+    // 죽었다. 처리기가 하는 준비를 우리가 못 맞춘 것이다 - 그냥
+    // 처리기에 맡긴다.
+    std::uintptr_t gate = 0;
+    if (!gate_object(*g_reader, session, &gate)) {
         o.no_actor = true;
-        log::warnf("바닥 스폰: 그 세션에서 액터가 안 나왔다");
+        log::warnf("바닥 스폰: 세션 0x{:X} 는 사슬이 끊겼다 (클라이언트 세션)",
+                   session);
         if (out != nullptr) *out = o;
         return true;
     }
-    log::infof("바닥 스폰: 액터 0x{:X}", o.actor);
+    o.actor = g_orig_actor_getter(reinterpret_cast<void*>(session));
+    log::infof("바닥 스폰: 문 0x{:X} 액터 0x{:X}", gate, o.actor);
 
-    o.crashed = !call_spawn_guarded(g_spawn, reinterpret_cast<void*>(o.actor),
-                                    &o.result, &key, &n, &field3, where,
-                                    &o.seh);
+    // 처리기는 패킷에서 세션만 꺼낸다 ([패킷+0]). 나머지는 건드리지
+    // 않지만 넉넉히 0으로 채워 둔다.
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+
+    o.called = true;
+    o.crashed = !call_handler_guarded(
+        reinterpret_cast<HandlerFn>(g_spawn_msg.handler),
+        reinterpret_cast<void*>(g_spawn_msg.descriptor), packet, &key, &n,
+        &field3, where, &o.seh);
     if (o.crashed) {
         log::errorf("바닥 스폰이 게임 안에서 죽었다: 0x{:X}", o.seh);
     } else {
-        log::infof("바닥 스폰 결과 0x{:X}", o.result);
+        log::infof("바닥 스폰 끝 (처리기 경로)");
     }
     if (out != nullptr) *out = o;
     return true;
