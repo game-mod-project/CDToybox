@@ -186,6 +186,18 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
 // 인벤토리 직행을 쓸 수 있는가.
 bool give_ready();
 
+// 아이템 내구도를 바꾼다 (VaryEnduranceItemByCheatReq, ID 2736).
+//
+// 남은 치트 중 인자가 가장 단순하다 - u16 둘뿐이고, 문도 관리자
+// 사슬이 아니라 세션 자체의 vtable +0x160 이다.
+//
+//   rcx 서술자  rdx 패킷  r8 &u16  r9 &u16
+//
+// 두 칸의 뜻은 아직 모른다. 값을 바꿔 가며 화면으로 확인해야 한다.
+bool request_endurance(std::uintptr_t session, std::uint16_t a,
+                       std::uint16_t b);
+bool endurance_ready();
+
 // 요청을 걸어 둔다. 실제 호출은 TLS 가 준비된 게임 스레드에서 한다.
 // 렌더 스레드에서 부르면 죽는다.
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,

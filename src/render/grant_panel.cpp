@@ -26,6 +26,12 @@ bool g_let_game_pick_pos = false;
 bool g_called = false;
 bool g_call_ok = false;
 bool g_last_to_inventory = true;
+const char* g_last_what = "";
+
+// 내구도 치트의 인자 둘. 뜻을 아직 모른다 - 값을 바꿔 가며 화면으로
+// 확인해야 한다. 페이로드는 u16 둘뿐이다.
+int g_endur_a = 0;
+int g_endur_b = 0;
 game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
@@ -165,6 +171,7 @@ void draw_grant_panel() {
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count);
         g_called = true;
         g_last_to_inventory = true;
+        g_last_what = "";
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -183,6 +190,7 @@ void draw_grant_panel() {
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
         g_called = true;
         g_last_to_inventory = false;
+        g_last_what = "";
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -209,12 +217,46 @@ void draw_grant_panel() {
         } else if (g_outcome.crashed) {
             ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
                                "게임 안에서 죽었습니다 0x%X", g_outcome.seh);
+        } else if (g_last_what[0] != 0) {
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
+                               g_last_what);
         } else if (g_last_to_inventory) {
             ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
                                "인벤토리에 넣었습니다");
         } else {
             ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
                                "조준한 곳에 떨궜습니다");
+        }
+    }
+
+    // --- 내구도 (시험) ----------------------------------------------
+    // 인자 둘의 뜻을 모른다. 값을 바꿔 가며 장비 내구도가 변하는지
+    // 보는 용도다. 페이로드가 u16 둘뿐이라 시도 범위가 좁다.
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("내구도 (뜻 확인 중)")) {
+        ImGui::TextDisabled("인자 두 칸의 뜻을 아직 모릅니다. 값을 바꿔 보세요.");
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputInt("a", &g_endur_a, 1, 10);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputInt("b", &g_endur_b, 1, 10);
+        if (g_endur_a < 0) g_endur_a = 0;
+        if (g_endur_b < 0) g_endur_b = 0;
+        if (g_endur_a > 0xFFFF) g_endur_a = 0xFFFF;
+        if (g_endur_b > 0xFFFF) g_endur_b = 0xFFFF;
+
+        ImGui::BeginDisabled(blocked != nullptr || !game::endurance_ready());
+        if (ImGui::Button("내구도 적용", ImVec2(150.0f, 0.0f))) {
+            g_call_ok = game::request_endurance(
+                seen[g_pick], static_cast<std::uint16_t>(g_endur_a),
+                static_cast<std::uint16_t>(g_endur_b));
+            g_called = true;
+            g_last_what = "내구도를 보냈습니다";
+        }
+        ImGui::EndDisabled();
+        if (!game::endurance_ready()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(메시지 해석 실패)");
         }
     }
 

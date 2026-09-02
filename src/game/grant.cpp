@@ -70,7 +70,12 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
                                     const float*);
 CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
-CheatMessage g_stat_msg;      // VaryStat - 대상 ID 조회 함수를 여기서 유도한다
+CheatMessage g_stat_msg;
+CheatMessage g_endur_msg;
+
+// 내구도 처리기. 인자 넷뿐이다.
+using EndurFn = void(__fastcall*)(void*, void*, const std::uint16_t*,
+                                  const std::uint16_t*);      // VaryStat - 대상 ID 조회 함수를 여기서 유도한다
 
 // 엔티티 조회. (매니저, 결과, u32 ID)
 using EntityLookupFn = void*(__fastcall*)(void*, void*, std::uint32_t);
@@ -91,18 +96,25 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
+enum class Kind { Ground, Inventory, Endurance };
+
 struct Pending {
+    Kind kind = Kind::Inventory;
     bool to_inventory = false;   // true 면 바닥이 아니라 인벤토리
     std::uintptr_t session = 0;
     std::uint32_t key = 0;
     std::int64_t count = 0;
     float pos[3]{};
+    std::uint16_t a = 0;         // 내구도 인자
+    std::uint16_t b = 0;
 };
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
                std::int64_t count, const float pos[3], SpawnOutcome* out);
 void run_give(std::uintptr_t session, std::uint32_t item_key,
               std::int64_t count, SpawnOutcome* out);
+void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
+                   SpawnOutcome* out);
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
@@ -156,10 +168,16 @@ void run_pending_if_any() {
     if (g_running.exchange(true, std::memory_order_acq_rel)) return;
     if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
         const Pending req = g_pending;
-        if (req.to_inventory) {
-            run_give(req.session, req.key, req.count, &g_outcome);
-        } else {
-            run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+        switch (req.kind) {
+            case Kind::Inventory:
+                run_give(req.session, req.key, req.count, &g_outcome);
+                break;
+            case Kind::Endurance:
+                run_endurance(req.session, req.a, req.b, &g_outcome);
+                break;
+            case Kind::Ground:
+                run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+                break;
         }
     }
     g_last_done.store(GetTickCount64(), std::memory_order_release);
@@ -285,6 +303,17 @@ int seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
     *addr = reinterpret_cast<std::uintptr_t>(
         ep->ExceptionRecord->ExceptionAddress);
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+bool call_endur_guarded(EndurFn fn, void* self, void* packet,
+                        const std::uint16_t* a, const std::uint16_t* b,
+                        std::uint32_t* seh_out, std::uintptr_t* addr_out) {
+    __try {
+        fn(self, packet, a, b);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
 }
 
 bool call_give_guarded(GiveFn fn, void* self, void* packet, void* value,
@@ -726,6 +755,11 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
         }
     }
 
+    if (g_endur_msg.handler == 0) {
+        resolve_cheat_message(rtti, reader, "VaryEnduranceItemByCheatReq",
+                              &g_endur_msg);
+    }
+
     if (g_spawn_msg.handler != 0) return true;
     return resolve_cheat_message(rtti, reader, "SpawnItemToGroundByCheatReq",
                                  &g_spawn_msg);
@@ -888,7 +922,56 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
     if (out != nullptr) *out = o;
 }
 
+// 내구도. 문이 세션 자체의 vtable +0x160 이라 관리자 사슬 검사가
+// 필요 없다. 그래도 세션은 서버 쪽이어야 한다.
+void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
+                   SpawnOutcome* out) {
+    SpawnOutcome o;
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+    std::uint16_t va = a;
+    std::uint16_t vb = b;
+
+    log::infof("내구도: 세션 0x{:X} a={} b={}", session, a, b);
+    o.called = true;
+    o.crashed = !call_endur_guarded(
+        reinterpret_cast<EndurFn>(g_endur_msg.handler),
+        reinterpret_cast<void*>(g_endur_msg.descriptor), packet, &va, &vb,
+        &o.seh, &o.fault);
+    if (o.crashed) {
+        log::errorf("내구도가 게임 안에서 죽었다: 0x{:X} (RVA 0x{:X})", o.seh,
+                    o.fault - g_reader->module_base());
+    } else {
+        log::infof("내구도 끝");
+    }
+    if (out != nullptr) *out = o;
+}
+
 }  // namespace
+
+bool endurance_ready() {
+    return g_endur_msg.handler != 0 && g_reader != nullptr;
+}
+
+bool request_endurance(std::uintptr_t session, std::uint16_t a,
+                       std::uint16_t b) {
+    if (!endurance_ready() || session == 0) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+    g_pending = Pending{};
+    g_pending.kind = Kind::Endurance;
+    g_pending.session = session;
+    g_pending.a = a;
+    g_pending.b = b;
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("내구도 요청을 걸었다");
+    return true;
+}
 
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
                      std::int64_t count) {
@@ -916,6 +999,7 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     }
 
     g_pending = Pending{};
+    g_pending.kind = Kind::Inventory;
     g_pending.to_inventory = true;
     g_pending.session = session;
     g_pending.key = item_key;
@@ -940,6 +1024,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     }
 
     g_pending = Pending{};
+    g_pending.kind = Kind::Ground;
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;
