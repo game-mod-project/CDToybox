@@ -8,6 +8,7 @@
 #include <imgui_impl_win32.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "core/guard.h"
@@ -36,6 +37,32 @@ struct FrameCtx {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv{};
     UINT64 fence_value = 0;
 };
+
+// DLL 이 있는 폴더. ImGui 설정 파일을 여기 둔다.
+std::string self_dir_utf8() {
+    HMODULE self = nullptr;
+    if (!::GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&self_dir_utf8), &self)) {
+        return {};
+    }
+    wchar_t path[MAX_PATH]{};
+    const DWORD n = ::GetModuleFileNameW(self, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    std::wstring w(path, n);
+    const auto slash = w.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return {};
+    w = w.substr(0, slash + 1);
+
+    const int need = ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr,
+                                           0, nullptr, nullptr);
+    if (need <= 1) return {};
+    std::string out(static_cast<std::size_t>(need - 1), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), need, nullptr,
+                          nullptr);
+    return out;
+}
 
 Config g_cfg;
 bool g_visible = false;
@@ -251,7 +278,14 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     ImGui::CreateContext();
     g_ctx_created = true;
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
+
+    // 창 위치와 크기를 기억한다. ImGui 가 알아서 저장·복원하므로
+    // 경로만 잡아 주면 된다. 게임의 작업 디렉터리는 어디가 될지
+    // 모르므로 DLL 옆에 둔다.
+    //
+    // 문자열 수명은 우리가 진다 - ImGui 는 포인터만 들고 있는다.
+    static std::string ini_path = detail::self_dir_utf8() + "cdtoybox_ui.ini";
+    io.IniFilename = ini_path.empty() ? nullptr : ini_path.c_str();
 
     // 기본 폰트(ProggyClean)에는 한글 글리프가 없어 ??로 표시된다.
     // 1.92부터 글리프는 필요할 때 동적으로 래스터화되므로 범위를 지정할
