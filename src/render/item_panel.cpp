@@ -294,27 +294,31 @@ void draw_item_panel() {
             const auto& e = *g_view[i];
             ImGui::TableNextRow();
 
-            ImGui::PushID(static_cast<int>(i));
-
             // 첫 칸: 별표. 줄 선택과 겹치지 않는 자리다.
+            //
+            // 별표와 줄 선택은 서로 다른 ID 범위에 둔다. 한 범위에
+            // 같이 넣었더니 ImGui 가 ID 충돌을 경고했다.
             ImGui::TableSetColumnIndex(0);
             const bool fav = stash_is_favorite(e.key);
+            ImGui::PushID(static_cast<int>(e.key));
             if (ImGui::SmallButton(fav ? "★" : "☆")) {
                 stash_toggle_favorite(e.key);
             }
+            ImGui::PopID();
 
             ImGui::TableSetColumnIndex(1);
-            char key[32];
-            std::snprintf(key, sizeof(key), "%u", e.key);
+            char key[40];
+            std::snprintf(key, sizeof(key), "%u##row%zu", e.key, i);
             // 줄 전체를 눌러 고를 수 있게 하되, 별표 위에서는 별표가
             // 이긴다 - AllowOverlap 이 그 뜻이다.
             if (ImGui::Selectable(key, false,
                                   ImGuiSelectableFlags_SpanAllColumns |
                                       ImGuiSelectableFlags_AllowOverlap)) {
-                ImGui::SetClipboardText(key);
+                char just_key[32];
+                std::snprintf(just_key, sizeof(just_key), "%u", e.key);
+                ImGui::SetClipboardText(just_key);
                 set_grant_item_key(e.key);   // 지급 칸에도 넣는다
             }
-            ImGui::PopID();
 
             ImGui::TableSetColumnIndex(2);
             ImGui::TextColored(grade_color(e.grade), "%s",
