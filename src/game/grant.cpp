@@ -234,15 +234,20 @@ void* __fastcall det_entity_lookup(void* mgr, void* out, std::uint32_t id) {
 }
 
 void* __fastcall det_table_lookup(void* table, const std::uint32_t* key) {
+    // 정확히 그 키 하나가 아니라 근처 범위를 본다. 인벤토리
+    // 식별자(5915)는 이 함수로 조회되지 않았다 - 변환이 먼저
+    // 일어나고 그 결과가 여기로 온다면 아이템 키 자리에서 잡힌다.
     const std::uint32_t want = g_watch_key.load(std::memory_order_relaxed);
-    if (want != 0 && key != nullptr && *key == want &&
-        g_watch_left.load(std::memory_order_relaxed) > 0) {
+    const bool in_range =
+        want != 0 && key != nullptr &&
+        (*key == want || (*key > want - 5000 && *key < want + 5000));
+    if (in_range && g_watch_left.load(std::memory_order_relaxed) > 0) {
         g_watch_left.fetch_sub(1, std::memory_order_relaxed);
         void* ret = _ReturnAddress();
         const std::uintptr_t base = (g_reader != nullptr)
                                         ? g_reader->module_base()
                                         : 0;
-        log::infof("표 조회: 키 {} 표 0x{:X} 부른 곳 모듈+0x{:X}", want,
+        log::infof("표 조회: 키 {} 표 0x{:X} 부른 곳 모듈+0x{:X}", *key,
                    reinterpret_cast<std::uintptr_t>(table),
                    reinterpret_cast<std::uintptr_t>(ret) - base);
     }
