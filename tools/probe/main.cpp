@@ -391,10 +391,11 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
             if (key == 0 || count <= 0 || count > 1000000) break;
             ++total;
 
-            // 아랫 u16 이 순번이다. 윗 u16 은 아직 뜻을 모른다 - 0 이
-            // 아닌 값(1, 3)이 섞여 있다.
+            // 아랫 u16 이 순번, 윗 u16 이 담금질이다. 화면과 대조해
+            // 확인했다 - 바르그란 방패의 윗값이 3 이고 툴팁의 담금질
+            // 게이지가 10칸 중 3칸이었다.
             const std::uint32_t index = key & 0xFFFFu;
-            const std::uint32_t high = key >> 16;
+            const std::uint32_t temper = key >> 16;
             std::uint32_t item_key = 0;
             const char* name = "(대응표에 없음)";
             const auto f = id_to_key.find(index);
@@ -408,8 +409,9 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                     }
                 }
             }
-            std::printf("  [%2u] 순번 %-6u+%-2u 키 %-11u x%-4lld ID %-9llu %s\n",
-                        k, index, high, item_key,
+            std::printf("  [%2u] 순번 %-6u 담금질 %-2u 키 %-11u x%-4lld "
+                        "ID %-9llu %s\n",
+                        k, index, temper, item_key,
                         static_cast<long long>(count),
                         static_cast<unsigned long long>(id), name);
         }
