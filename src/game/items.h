@@ -56,6 +56,79 @@ bool find_item_manager(const mem::Rtti& rtti, const mem::Reader& reader,
 bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
                      std::vector<ItemEntry>* out, std::size_t max);
 
+// ------------------------------------- 아이템 키 <-> 짧은 식별자 대응표
+
+// 인벤토리 레코드가 저장하는 것은 아이템 표 키가 아니라 **표에서의
+// 순번**이다. 게임은 변환 함수 안에서 전역이 가리키는 객체의 `+0x68`
+// 표를 키로 조회해 그 순번을 u16 으로 얻는다.
+//
+// 실측 구조 (docs/superpowers/specs/2026-09-02-inventory.md):
+//
+//   전역 [RVA 0x6331358] -> 객체
+//   객체 +0x68  표
+//   표   +0x00  u32 ?             307
+//        +0x04  u32 개수          6810 (아이템 표 개수와 같다)
+//        +0x08  u32 해시 용량     8088
+//        +0x0C  u32 레코드 개수   6810
+//        +0x10  ptr 해시 슬롯 배열
+//        +0x18  ptr 레코드 포인터 배열
+//   슬롯 {u32 아이템 키, u32 순번} 8바이트. 빈 칸은 키가 0xFFFFFFFF
+//        다 - 배열 끝이 그 값으로 차 있다.
+//   레코드 (16바이트)
+//        +0x00  u32 ?   순번이 아니다 (순번 5915 의 레코드가 946)
+//        +0x04  u32 아이템 키
+//
+// 레코드 순서는 `ItemInfoManager` 의 순서와 같다 - 실측에서 0번이
+// 편전(2200), 1번이 화살(50001), 5915번이 그로테반트 판금 투구로
+// 양쪽이 같았다.
+//
+// RVA 는 박아 두지 않는다. Denuvo 가 빌드마다 섹션을 뒤섞으므로
+// 현지화 전역과 같이 함수 본문 패턴에서 disp32 를 읽어 구한다.
+struct ItemKeyMap {
+    std::uintptr_t global = 0;       // 전역의 주소
+    std::uintptr_t object = 0;       // 전역이 가리키는 객체
+    std::uintptr_t table = 0;        // object + 0x68
+    std::uintptr_t slots = 0;        // 해시 슬롯 배열
+    std::uintptr_t records = 0;      // 레코드 포인터 배열
+    std::uint32_t count = 0;         // 표가 말하는 항목 수
+    std::uint32_t capacity = 0;      // 해시 슬롯 칸 수
+    std::uint32_t record_count = 0;  // 레코드 개수
+};
+
+struct ItemKeyPair {
+    std::uint32_t key = 0;  // 아이템 표 키 (1955057078)
+    std::uint32_t id = 0;   // 인벤토리가 저장하는 순번 (5915)
+};
+
+// 변환 함수 본문이 일치하는 곳을 전부 모아, 그 disp32 가 가리키는
+// 전역의 RVA 를 낸다. 같은 꼴의 조회 코드가 표마다 있어 한 곳만
+// 일치하지 않는다 - 실측에서 여러 곳이 걸렸다. 이미지 밖을 가리키는
+// disp 는 뺀다.
+std::vector<std::uint64_t> find_item_key_map_rvas(
+    const std::vector<std::uint8_t>& image, std::size_t max);
+
+// 후보를 하나씩 따라가 표의 개수가 expected_count 인 것을 고른다.
+// 아이템 표 개수(실측 6,810)를 주면 아이템 대응표가 잡힌다.
+//
+// 개수가 판별자인 이유: 실측 후보 34곳 중 용량이 8,088 인 것만도
+// 셋이었지만(6810 / 7251 / 6703), 개수가 6,810 인 것은 하나뿐이었다.
+//
+// 조건에 맞는 후보가 없거나 둘 이상이면 false 다 - 둘 이상이면
+// 무엇이 아이템 표인지 고를 수 없다. 표가 아직 안 올라왔을 때도
+// 조용히 false 이므로 재시도 루프에서 부르면 된다.
+bool find_item_key_map(const mem::Reader& reader,
+                       const std::vector<std::uint8_t>& image,
+                       std::uint32_t expected_count, ItemKeyMap* out);
+
+// 레코드 배열을 걸어 {아이템 키, 순번} 을 모은다. 순번은 배열에서의
+// 위치 그대로다 - 널 슬롯을 건너뛰어도 앞으로 당기지 않는다.
+//
+// 해시 슬롯이 아니라 레코드를 걷는 이유는 이쪽이 전수이기 때문이다.
+// 해시 슬롯은 8,088칸 중 빈 칸이 섞여 있어 순번을 얻으려면 결국
+// 레코드를 봐야 한다.
+bool read_item_key_map(const mem::Reader& reader, const ItemKeyMap& map,
+                       std::vector<ItemKeyPair>* out);
+
 // --------------------------------------------------------------- 목록
 
 struct ItemCatalogEntry {

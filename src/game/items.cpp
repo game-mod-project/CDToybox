@@ -1,9 +1,11 @@
 #include "game/items.h"
 
 #include <atomic>
+#include <cstring>
 #include <memory>
 
 #include "core/log.h"
+#include "mem/scanner.h"
 
 namespace cdtb::game {
 namespace {
@@ -219,6 +221,162 @@ bool items_named() { return g_named.load(std::memory_order_acquire); }
 
 const std::vector<ItemCatalogEntry>& item_catalog() {
     return *g_catalog.load(std::memory_order_acquire);
+}
+
+// ------------------------------------- 아이템 키 <-> 짧은 식별자 대응표
+
+namespace {
+
+// --- 표 (전역이 가리키는 객체의 +0x68) ---
+constexpr std::size_t kMapAtObject = 0x68;
+constexpr std::size_t kMapCountField = 0x04;      // u32 개수
+constexpr std::size_t kMapCapacityField = 0x08;   // u32 해시 용량
+constexpr std::size_t kMapRecCountField = 0x0C;   // u32 레코드 개수
+constexpr std::size_t kMapSlotsPtr = 0x10;        // 해시 슬롯 배열
+constexpr std::size_t kMapRecordsPtr = 0x18;      // 레코드 포인터 배열
+
+// --- 레코드 (16바이트) ---
+// +0x00 의 u32 는 순번이 아니다(실측: 순번 5915 의 레코드가 946).
+// 무엇인지 모르므로 읽지 않는다.
+constexpr std::size_t kRecItemKey = 0x04;  // u32 아이템 키
+
+// 변환 함수 본문 40바이트. ?? 는 disp32 두 개다.
+//
+//   8B 44 24 30           mov   eax,[rsp+0x30]      스트림에서 읽은 키
+//   48 8D 54 24 40        lea   rdx,[rsp+0x40]
+//   48 8B 0D ?? ?? ?? ??  mov   rcx,[rip+disp]      <- 전역
+//   48 83 C1 68           add   rcx,0x68            표는 객체의 +0x68
+//   89 44 24 40           mov   [rsp+0x40],eax
+//   E8 ?? ?? ?? ??        call  조회
+//   48 85 C0              test  rax,rax
+//   74 0E                 jz    없음
+//   0F B7 00              movzx eax,word ptr [rax]  레코드의 첫 u16
+//   66 89 03              mov   [rbx],ax            그것이 짧은 식별자
+constexpr const char* kConvertBodyPattern =
+    "8B 44 24 30 48 8D 54 24 40 48 8B 0D ?? ?? ?? ?? 48 83 C1 68 "
+    "89 44 24 40 E8 ?? ?? ?? ?? 48 85 C0 74 0E 0F B7 00 66 89 03";
+
+// 패턴 안에서 전역을 가리키는 disp32 의 위치와, 그 명령의 끝.
+constexpr std::size_t kMapGlobalDispAt = 12;
+constexpr std::size_t kMapGlobalInsnEnd = 16;
+
+}  // namespace
+
+std::vector<std::uint64_t> find_item_key_map_rvas(
+    const std::vector<std::uint8_t>& image, std::size_t max) {
+    std::vector<std::uint64_t> out;
+    if (image.size() < kMapGlobalInsnEnd) return out;
+
+    const auto pattern = mem::parse_pattern(kConvertBodyPattern);
+    if (!pattern) return out;
+
+    const mem::Range range{image.data(), image.size()};
+    for (const auto* hit : mem::find_all(range, *pattern, max)) {
+        const std::size_t off = static_cast<std::size_t>(hit - image.data());
+        std::int32_t disp = 0;
+        std::memcpy(&disp, image.data() + off + kMapGlobalDispAt, sizeof(disp));
+
+        const std::int64_t rva =
+            static_cast<std::int64_t>(off + kMapGlobalInsnEnd) + disp;
+        // 이미지 밖을 가리키면 후보가 아니다.
+        if (rva < 0 || static_cast<std::uint64_t>(rva) + 8 > image.size()) {
+            continue;
+        }
+        out.push_back(static_cast<std::uint64_t>(rva));
+    }
+    return out;
+}
+
+namespace {
+
+// 후보 하나를 따라가 표의 앞뒤가 맞는지 본다.
+bool read_candidate(const mem::Reader& reader, std::uint64_t rva,
+                    ItemKeyMap* out) {
+    ItemKeyMap m;
+    m.global = reader.module_base() + static_cast<std::uintptr_t>(rva);
+
+    // 전역은 실행 중에 채워진다. 캐시한 이미지가 아니라 실제
+    // 메모리에서 읽는다. 비어 있으면 표가 아직 없는 것이다.
+    std::uint64_t object = 0;
+    if (!reader.read_value(m.global, &object) || object == 0) return false;
+    m.object = static_cast<std::uintptr_t>(object);
+    m.table = m.object + kMapAtObject;
+
+    std::uint64_t slots = 0, records = 0;
+    if (!reader.read_value(m.table + kMapCountField, &m.count)) return false;
+    if (!reader.read_value(m.table + kMapCapacityField, &m.capacity)) {
+        return false;
+    }
+    if (!reader.read_value(m.table + kMapRecCountField, &m.record_count)) {
+        return false;
+    }
+    if (!reader.read_value(m.table + kMapSlotsPtr, &slots)) return false;
+    if (!reader.read_value(m.table + kMapRecordsPtr, &records)) return false;
+
+    // 잘못 집으면 용량이 쓰레기값이 된다. 그대로 믿고 할당하면
+    // 메모리를 통째로 먹는다. 실측은 6,810 / 8,088 이다.
+    if (m.capacity == 0 || m.capacity > kMaxItemCount) return false;
+    if (m.count == 0 || m.count > m.capacity) return false;
+    if (m.record_count == 0 || m.record_count > kMaxItemCount) return false;
+    if (slots == 0 || records == 0) return false;
+
+    m.slots = static_cast<std::uintptr_t>(slots);
+    m.records = static_cast<std::uintptr_t>(records);
+    *out = m;
+    return true;
+}
+
+// 후보 상한. 실측 34곳이라 넉넉하다.
+constexpr std::size_t kMaxCandidates = 512;
+
+}  // namespace
+
+bool find_item_key_map(const mem::Reader& reader,
+                       const std::vector<std::uint8_t>& image,
+                       std::uint32_t expected_count, ItemKeyMap* out) {
+    if (out == nullptr || expected_count == 0) return false;
+
+    ItemKeyMap found;
+    std::size_t hits = 0;
+    for (const auto rva : find_item_key_map_rvas(image, kMaxCandidates)) {
+        ItemKeyMap m;
+        if (!read_candidate(reader, rva, &m)) continue;
+        if (m.count != expected_count) continue;
+        // 둘 이상이면 고를 수 없다. 첫 번째로 만족하고 끝내지 않는다.
+        if (++hits > 1) return false;
+        found = m;
+    }
+    if (hits != 1) return false;
+    *out = found;
+    return true;
+}
+
+bool read_item_key_map(const mem::Reader& reader, const ItemKeyMap& map,
+                       std::vector<ItemKeyPair>* out) {
+    if (out == nullptr || map.records == 0) return false;
+    if (map.record_count == 0 || map.record_count > kMaxItemCount) return false;
+
+    std::vector<std::uint64_t> ptrs(map.record_count, 0);
+    if (!reader.read(map.records, ptrs.data(), ptrs.size() * 8)) return false;
+
+    std::vector<ItemKeyPair> pairs;
+    pairs.reserve(map.record_count);
+    for (std::size_t i = 0; i < ptrs.size(); ++i) {
+        if (ptrs[i] == 0) continue;   // 널 슬롯. 나머지는 계속 읽는다.
+        const auto rec = static_cast<std::uintptr_t>(ptrs[i]);
+
+        std::uint32_t key = 0;
+        if (!reader.read_value(rec + kRecItemKey, &key)) continue;
+
+        ItemKeyPair p;
+        p.key = key;
+        // 순번이 곧 인벤토리가 저장하는 값이다. 건너뛴 칸이 있어도
+        // 앞으로 당기지 않는다 - 당기면 뒤가 통째로 어긋난다.
+        p.id = static_cast<std::uint32_t>(i);
+        pairs.push_back(p);
+    }
+    *out = std::move(pairs);
+    return true;
 }
 
 }  // namespace cdtb::game
