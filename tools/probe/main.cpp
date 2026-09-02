@@ -44,6 +44,7 @@ void usage() {
         "  floats <주소> [개수]        float 격자 덤프\n"
         "  regions                     메모리 영역 요약\n"
         "  setf <주소> <값>            float 쓰기 (실행 중 게임에 반영)\n"
+        "  poke <주소> <16진바이트>    바이트를 그대로 쓴다\n"
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
         "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
         "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
@@ -70,6 +71,14 @@ std::string ansi_to_utf8(const char* s);
 
 std::uintptr_t parse_addr(const char* s) {
     return static_cast<std::uintptr_t>(std::strtoull(s, nullptr, 16));
+}
+
+// 16진 한 글자. 아니면 -1.
+int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
 }
 
 // 현지화 표를 읽어 이름을 푼다. 전부 읽기다.
@@ -1571,6 +1580,67 @@ void cmd_setf(const Remote& r, std::uintptr_t addr, float v) {
                 (after == v) ? "" : "  [게임이 되돌렸거나 다른 값]");
 }
 
+// 바이트를 그대로 쓴다.
+//
+//   poke <주소> <16진 바이트들>       poke 0x123 24 0D FF FF 00 FF
+//
+// 게임 함수를 거치지 않는 쓰기다. 되돌릴 수 있도록 **원본을 먼저
+// 낸다** - 그 줄을 그대로 다시 주면 되돌아간다.
+void cmd_poke(const Remote& r, int argc, char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: poke <주소> <16진 바이트들>\n");
+        return;
+    }
+    const std::uintptr_t addr = parse_addr(argv[2]);
+
+    // 인자를 이어 붙여 16진만 남긴다. "24 0D" 도 "240D" 도 받는다.
+    std::string hex;
+    for (int i = 3; i < argc; ++i) {
+        for (const char* p = argv[i]; *p != '\0'; ++p) {
+            if (*p != ' ' && *p != ',') hex += *p;
+        }
+    }
+    if (hex.empty() || (hex.size() % 2) != 0) {
+        std::printf("16진 바이트가 짝이 안 맞습니다: %zu 글자\n", hex.size());
+        return;
+    }
+
+    std::vector<std::uint8_t> bytes;
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const auto hi = hex_digit(hex[i]);
+        const auto lo = hex_digit(hex[i + 1]);
+        if (hi < 0 || lo < 0) {
+            std::printf("16진이 아닌 글자가 있습니다: %c%c\n", hex[i],
+                        hex[i + 1]);
+            return;
+        }
+        bytes.push_back(static_cast<std::uint8_t>((hi << 4) | lo));
+    }
+
+    std::vector<std::uint8_t> before(bytes.size());
+    if (!r.read(addr, before.data(), before.size())) {
+        std::printf("읽지 못했습니다: 0x%llX\n",
+                    static_cast<unsigned long long>(addr));
+        return;
+    }
+    std::printf("원본  ");
+    for (const auto b : before) std::printf("%02X ", b);
+    std::printf("\n되돌리려면: poke 0x%llX",
+                static_cast<unsigned long long>(addr));
+    for (const auto b : before) std::printf(" %02X", b);
+    std::printf("\n");
+
+    if (!r.write(addr, bytes.data(), bytes.size())) {
+        std::printf("쓰기 실패\n");
+        return;
+    }
+    std::vector<std::uint8_t> after(bytes.size());
+    r.read(addr, after.data(), after.size());
+    std::printf("쓴 뒤  ");
+    for (const auto b : after) std::printf("%02X ", b);
+    std::printf("%s\n", (after == bytes) ? "" : "  [게임이 되돌렸다]");
+}
+
 // 같은 영역을 두 번 읽어 달라진 float 슬롯을 찾는다.
 // 게임이 매 프레임 갱신하는 값을 사람 조작 없이 골라낼 수 있다.
 void cmd_diff(const Remote& r, std::uintptr_t addr, std::size_t count,
@@ -1850,6 +1920,10 @@ int main(int argc, char** argv) {
         const std::size_t n = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
                                          : 32;
         cmd_floats(r, parse_addr(argv[2]), n);
+        return 0;
+    }
+    if (cmd == "poke") {
+        cmd_poke(r, argc, argv);
         return 0;
     }
     if (cmd == "setf") {
