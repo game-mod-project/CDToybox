@@ -270,6 +270,176 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
     std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
 }
 
+// 플레이어 인벤토리를 나열한다.
+//
+// 서버 인벤토리 컴포넌트를 직접 뜯어 찾았다. 힙 전체를 서명으로
+// 훑는 것보다 이쪽이 확실하다 - 서명은 소켓 플래그를 0xFF 로
+// 못박았다가 실제 값(0x00)과 어긋나 거의 아무것도 못 찾았다.
+//
+//   컴포넌트 +0x78  레코드 배열 (0x190 바이트 간격)
+//   컴포넌트 +0x80  u32 사용 개수, u32 용량
+//
+// 레코드는 TrItemValue 와 같은 배치다.
+//   +0x00 u64 인스턴스 ID   +0x08 u32 키   +0x10 i64 개수
+//   +0x40 부터 {u32, u8} x 5  소켓
+void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
+                 const Remote& r, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: invlist <서버인벤토리컴포넌트주소>\n");
+        return;
+    }
+    const std::uintptr_t comp = std::strtoull(argv[2], nullptr, 16);
+
+    std::uintptr_t arr = 0;
+    std::uint32_t used = 0, cap = 0;
+    if (!r.read(comp + 0x78, &arr, sizeof(arr)) ||
+        !r.read(comp + 0x80, &used, sizeof(used)) ||
+        !r.read(comp + 0x84, &cap, sizeof(cap))) {
+        std::printf("컴포넌트를 읽지 못했습니다\n");
+        return;
+    }
+    std::printf("배열 0x%llX  사용 %u / 용량 %u\n",
+                static_cast<unsigned long long>(arr), used, cap);
+    if (arr == 0 || used == 0 || used > 4096) return;
+
+    // 이름을 붙이려고 아이템 표를 읽는다.
+    std::uintptr_t manager = 0;
+    std::vector<cdtb::game::ItemCatalogEntry> cat;
+    if (cdtb::game::find_item_manager(rt, reader, &manager)) {
+        cdtb::game::LocSystem sys;
+        cdtb::game::find_loc_system(rt, reader, &sys);
+        cdtb::game::build_item_catalog(reader, manager, sys, &cat);
+    }
+
+    constexpr std::size_t kStride = 0x190;
+    std::vector<std::uint8_t> rec(kStride);
+    for (std::uint32_t i = 0; i < used && i < cap; ++i) {
+        const std::uintptr_t at = arr + i * kStride;
+        if (!r.read(at, rec.data(), rec.size())) continue;
+        std::uint64_t id = 0;
+        std::uint32_t key = 0;
+        std::int64_t count = 0;
+        std::memcpy(&id, rec.data(), 8);
+        std::memcpy(&key, rec.data() + 8, 4);
+        std::memcpy(&count, rec.data() + 0x10, 8);
+        if (key == 0) continue;
+
+        const char* name = "";
+        for (const auto& e : cat) {
+            if (e.key == key) { name = e.name.c_str(); break; }
+        }
+        // 소켓 다섯 칸. 0xFFFF 면 비어 있다.
+        char sock[64];
+        int at2 = 0;
+        for (int s2 = 0; s2 < 5; ++s2) {
+            std::uint32_t v = 0;
+            std::memcpy(&v, rec.data() + 0x40 + s2 * 6, 4);
+            at2 += std::snprintf(sock + at2, sizeof(sock) - at2, "%s%u",
+                                 (s2 ? "," : ""), v);
+        }
+        std::printf("  [%2u] 0x%llX  키 %-9u x%-5lld ID %-8llu 소켓 %s  %s\n",
+                    i, static_cast<unsigned long long>(at), key,
+                    static_cast<long long>(count),
+                    static_cast<unsigned long long>(id), sock, name);
+    }
+}
+
+// 인벤토리 안의 아이템 인스턴스(TrItemValue)를 찾는다.
+//
+// 담금질·소켓이 반영된 장비를 게임 밖으로 빼내려면 이 구조를 읽어야
+// 한다. 예전에는 "키 옆에 개수가 있는 곳" 으로 찾다가 실패했다 -
+// 그런 구조가 여럿이었다. 지금은 구조 전체를 알아서 서명이 훨씬
+// 강하다.
+//
+//   +0x08  u32  아이템 키   (실제 표에 있는 키여야 한다)
+//   +0x10  i64  개수        (1 이상, 터무니없지 않아야)
+//   +0x40..+0x5E  {u32, u8} x 5   생성자가 0xFFFF/0xFF 로 채우는 소켓
+//
+// 소켓이 비었으면 0xFFFF 가 그대로 남고, 박혀 있으면 다른 값이다.
+// 둘 다 허용하되 자리 수가 맞는지를 본다.
+void cmd_itemvalue(const mem::Rtti& rt, const mem::Reader& reader,
+                   const Remote& r, int argc, char** argv) {
+    const std::size_t limit =
+        (argc > 2) ? static_cast<std::size_t>(std::atoi(argv[2])) : 40;
+
+    // 아이템 키 집합을 먼저 만든다. 표에 없는 키는 버린다.
+    std::uintptr_t manager = 0;
+    std::vector<std::uint32_t> keys;
+    {
+        if (cdtb::game::find_item_manager(rt, reader, &manager)) {
+            std::vector<cdtb::game::ItemEntry> items;
+            if (cdtb::game::read_item_table(reader, manager, &items, 0)) {
+                keys.reserve(items.size());
+                for (const auto& e : items) keys.push_back(e.key);
+                std::sort(keys.begin(), keys.end());
+            }
+        }
+    }
+    if (keys.empty()) {
+        std::printf("아이템 표를 못 읽었습니다\n");
+        return;
+    }
+    std::printf("아이템 키 %zu개를 기준으로 찾습니다\n", keys.size());
+
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size < 0x200 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+
+        for (std::size_t i = 0; i + 0x60 <= buf.size(); i += 8) {
+            std::uint32_t key = 0;
+            std::memcpy(&key, buf.data() + i + 0x08, 4);
+            if (key == 0) continue;
+            if (!std::binary_search(keys.begin(), keys.end(), key)) continue;
+
+            std::int64_t count = 0;
+            std::memcpy(&count, buf.data() + i + 0x10, 8);
+            if (count <= 0 || count > 1000000) continue;
+
+            // 소켓 자리. 생성자가 {u32 0xFFFF, u8 0xFF} 를 다섯 벌
+            // 깔아 둔다. 비어 있으면 그 모양 그대로고, 박혀 있으면
+            // 다른 값이다. 한 칸만 맞는 것은 우연이므로 셋 이상을
+            // 요구한다 - 실측에서 한 칸 기준은 온갖 것이 걸렸다.
+            int exact = 0;
+            for (int s = 0; s < 5; ++s) {
+                std::uint32_t v = 0;
+                std::memcpy(&v, buf.data() + i + 0x40 + s * 6, 4);
+                const std::uint8_t f = buf[i + 0x40 + s * 6 + 4];
+                if (v == 0xFFFFu && f == 0xFFu) ++exact;
+            }
+            if (exact < 5) continue;   // 다섯 칸 전부 기본 모양이어야
+
+            // 인스턴스 ID. 생성자는 -1 을 넣고, 게임이 만들 때 진짜
+            // 값을 넣는다. -1 이면 아직 발급 안 된 템플릿이다.
+            std::uint64_t inst0 = 0;
+            std::memcpy(&inst0, buf.data() + i, 8);
+            if (inst0 == 0xFFFFFFFFFFFFFFFFull) continue;
+            if (inst0 == 0) continue;
+            // 자기 근처를 가리키는 포인터는 다른 구조다.
+            const std::uintptr_t here = reg.base + i;
+            if (inst0 > here - 0x1000 && inst0 < here + 0x1000) continue;
+
+            std::uint16_t f0c = 0, f28 = 0, f2a = 0;
+            std::memcpy(&f0c, buf.data() + i + 0x0C, 2);
+            std::memcpy(&f28, buf.data() + i + 0x28, 2);
+            std::memcpy(&f2a, buf.data() + i + 0x2A, 2);
+            std::printf("  0x%llX  키 %-9u 개수 %-5lld ID 0x%llX  "
+                        "+0C %u +28 %u +2A %u\n",
+                        static_cast<unsigned long long>(here), key,
+                        static_cast<long long>(count),
+                        static_cast<unsigned long long>(inst0), f0c, f28, f2a);
+            if (++found >= limit) {
+                std::printf("(%zu개에서 멈춥니다)\n", found);
+                return;
+            }
+        }
+    }
+    std::printf("모두 %zu곳\n", found);
+}
+
 // 힙에서 어떤 주소를 담은 8바이트를 찾는다.
 //
 // findptr 은 모듈 이미지만 본다. 메시지 서술자를 가리키는 표는
@@ -1580,6 +1750,14 @@ int main(int argc, char** argv) {
     }
     if (cmd == "loc") {
         cmd_loc(rt, reader, r, argc, argv);
+        return 0;
+    }
+    if (cmd == "invlist") {
+        cmd_invlist(rt, reader, r, argc, argv);
+        return 0;
+    }
+    if (cmd == "itemvalue") {
+        cmd_itemvalue(rt, reader, r, argc, argv);
         return 0;
     }
     if (cmd == "items") {
