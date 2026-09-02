@@ -45,6 +45,7 @@ void usage() {
         "  regions                     메모리 영역 요약\n"
         "  setf <주소> <값>            float 쓰기 (실행 중 게임에 반영)\n"
         "  poke <주소> <16진바이트>    바이트를 그대로 쓴다\n"
+        "  heapfind <16진바이트>       힙에서 바이트 서명 찾기\n"
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
         "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
         "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
@@ -650,6 +651,73 @@ void cmd_itemvalue(const mem::Rtti& rt, const mem::Reader& reader,
 
 // 힙에서 어떤 주소를 담은 8바이트를 찾는다.
 //
+// 힙에서 바이트 서명을 찾는다.
+//
+//   heapfind <16진 바이트들> [최대]
+//
+// 같은 값을 들고 있는 곳이 여럿일 때 원본을 찾으려고 쓴다. 소켓처럼
+// 우리가 읽는 레코드가 사본이고 게임이 되쓰는 경우, 원본도 같은
+// 바이트를 들고 있을 것이므로 여기서 후보가 나온다.
+//
+// 하드웨어 워치포인트를 못 쓰는 대신이다 - 이 게임은 보호 코드가
+// 250ms 마다 디버그 레지스터를 지운다
+// (docs/superpowers/specs 의 카메라 조사 참고).
+void cmd_heapfind(const Remote& r, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: heapfind <16진 바이트들> [최대]\n");
+        return;
+    }
+
+    std::string hex;
+    for (int i = 2; i < argc; ++i) {
+        for (const char* p = argv[i]; *p != '\0'; ++p) {
+            if (*p != ' ' && *p != ',') hex += *p;
+        }
+    }
+    if (hex.empty() || (hex.size() % 2) != 0) {
+        std::printf("16진 바이트가 짝이 안 맞습니다: %zu 글자\n", hex.size());
+        return;
+    }
+
+    std::vector<std::uint8_t> want;
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const auto hi = hex_digit(hex[i]);
+        const auto lo = hex_digit(hex[i + 1]);
+        if (hi < 0 || lo < 0) {
+            std::printf("16진이 아닌 글자: %c%c\n", hex[i], hex[i + 1]);
+            return;
+        }
+        want.push_back(static_cast<std::uint8_t>((hi << 4) | lo));
+    }
+
+    std::printf("힙에서 %zu바이트 서명을 찾습니다:", want.size());
+    for (const auto b : want) std::printf(" %02X", b);
+    std::printf("\n");
+
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0, scanned = 0;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size < want.size() || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        scanned += reg.size;
+        for (std::size_t i = 0; i + want.size() <= buf.size(); ++i) {
+            if (std::memcmp(buf.data() + i, want.data(), want.size()) != 0) {
+                continue;
+            }
+            std::printf("  0x%llX\n",
+                        static_cast<unsigned long long>(reg.base + i));
+            if (++found >= 200) {
+                std::printf("(200개에서 멈춥니다)\n");
+                return;
+            }
+        }
+    }
+    std::printf("모두 %zu곳, 훑은 양 %.1f GB\n", found,
+                scanned / 1073741824.0);
+}
+
 // findptr 은 모듈 이미지만 본다. 메시지 서술자를 가리키는 표는
 // 이미지에 없고 힙에 있어서 이게 필요했다.
 void cmd_heapptr(const Remote& r, int argc, char** argv) {
@@ -2008,6 +2076,10 @@ int main(int argc, char** argv) {
                                    ? std::strtoull(argv[6], nullptr, 10)
                                    : 200;
         cmd_findvec3(r, x, y, z, eps, mx);
+        return 0;
+    }
+    if (cmd == "heapfind") {
+        cmd_heapfind(r, argc, argv);
         return 0;
     }
     if (cmd == "heapptr") {
