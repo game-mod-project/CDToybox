@@ -1,0 +1,74 @@
+#pragma once
+
+#include <cstdint>
+#include <vector>
+
+#include "mem/reader.h"
+
+namespace cdtb::game {
+
+// 서버 인벤토리 컴포넌트(`pa::ServerInventoryActorComponent`)를 읽는다.
+//
+// 실측 구조 (docs/superpowers/specs/2026-09-02-inventory.md):
+//
+//   컴포넌트 +0x18  ptr 컨테이너 포인터 배열
+//            +0x20  u32 개수 / +0x24 u32 용량   (실측 18 / 18)
+//   컨테이너 +0x00  ptr 레코드 배열
+//            +0x08  u32 배열 칸 수 (실측 1460)
+//            +0x0C  u32 같은 값
+//            +0x10  u16 종류 / +0x12 u16 사용 / +0x14 u16 용량
+//   레코드   0xC8 간격
+//            +0x00  u64 인스턴스 ID   (빈 칸은 전부 0xFF)
+//            +0x08  u16 순번 / +0x0A u16 담금질
+//            +0x10  i64 개수
+//            +0x60  ptr 소켓 배열 / +0x68 u32 5 / u32 5
+//
+// 컴포넌트 앞부분을 훑어 `{포인터, 사용, 용량}` 꼴을 찾는 방식은
+// 쓰지 않는다. 그렇게 하면 엉뚱한 컨테이너가 걸리고 정작 플레이어
+// 가방은 못 잡는다 - 가방은 `+0x18` 의 포인터 배열 너머에 있다.
+//
+// 컨테이너의 `용량`은 화면에 나오는 값과 같다. 실측에서 종류 1 이
+// 97/130, 종류 4 가 144/300 이었고 화면 표시와 일치했다.
+
+struct InventoryContainer {
+    std::uintptr_t address = 0;   // 컨테이너 자신
+    std::uintptr_t records = 0;   // 레코드 배열
+    std::uint32_t slots = 0;      // 배열 칸 수
+    std::uint16_t kind = 0;       // 종류 (실측 0~4)
+    std::uint16_t used = 0;       // 사용 개수 (믿지 않는다, 아래 참고)
+    std::uint16_t capacity = 0;   // 화면에 나오는 용량
+};
+
+struct InventoryRecord {
+    std::uintptr_t address = 0;      // 레코드 주소
+    std::uint32_t slot = 0;          // 배열에서의 칸 번호
+    std::uint64_t instance_id = 0;
+    std::uint32_t index = 0;         // 아이템 표에서의 순번
+    std::uint32_t temper = 0;        // 담금질
+    std::int64_t count = 0;
+};
+
+// 배열 칸 수가 이보다 크면 컨테이너를 잘못 집은 것으로 본다.
+// 실측 1,460칸이다.
+inline constexpr std::uint32_t kMaxInventorySlots = 1u << 15;
+
+// 컨테이너가 이보다 많으면 컴포넌트를 잘못 집은 것으로 본다.
+// 실측 18개다.
+inline constexpr std::uint32_t kMaxInventoryContainers = 256;
+
+// `+0x18` 의 포인터 배열을 따라 컨테이너를 모은다. 널 슬롯과 읽기
+// 실패한 것은 건너뛴다.
+bool read_inventory_containers(const mem::Reader& reader,
+                               std::uintptr_t component,
+                               std::vector<InventoryContainer>* out);
+
+// 레코드 배열을 통째로 읽어 빈 칸을 뺀 것을 모은다.
+//
+// `used` 에서 멈추지 않고 칸 전체를 본다. 실측에서 144 라고 하는데
+// 실제 레코드는 143개였다 - 중간에 빈 칸이 섞여 있어 그 값으로
+// 자르면 뒤가 잘린다.
+bool read_inventory_records(const mem::Reader& reader,
+                            const InventoryContainer& container,
+                            std::vector<InventoryRecord>* out);
+
+}  // namespace cdtb::game
