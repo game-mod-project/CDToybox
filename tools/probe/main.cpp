@@ -308,7 +308,11 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
     //
     // 컨테이너는 {포인터, u32 사용, u32 용량} 꼴이다. 앞을 훑어
     // 그 모양이면서 대상이 실제 아이템 레코드인 것을 모은다.
-    constexpr std::size_t kStride = 0x190;
+    // 간격은 0xC8 이다. 0x190 으로 읽었더니 한 칸씩 건너뛰어 37개 중
+    // 19개만 보였다 - 0x190 이 정확히 0xC8 의 두 배라 그럴듯해
+    // 보였다. 레코드 +0xC8 에 다음 레코드의 ID 가 있는 것을 보고
+    // 알았다.
+    constexpr std::size_t kStride = 0xC8;
     std::vector<std::uint8_t> head(0x200);
     if (!r.read(comp, head.data(), head.size())) {
         std::printf("컴포넌트를 읽지 못했습니다\n");
@@ -371,12 +375,72 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                 if (e.key == key) { name = e.name.c_str(); break; }
             }
             ++total;
-            std::printf("  [%2u] 키 %-9u x%-5lld ID %-10llu %s\n", k, key,
-                        static_cast<long long>(count),
-                        static_cast<unsigned long long>(id), name);
+            // +0x94 는 아이템 표 쪽 키로 보인다 - 인벤토리의 +0x08
+            // 키(5915 등)는 6810개 표에 없다. 둘 다 낸다.
+            std::uint32_t alt = 0;
+            std::memcpy(&alt, rec.data() + 0x94, 4);
+            const char* alt_name = "";
+            for (const auto& e : cat) {
+                if (e.key == alt) { alt_name = e.name.c_str(); break; }
+            }
+            std::printf("  [%2u] 키 %-7u x%-4lld ID %-9llu +94 %-9u %s%s\n",
+                        k, key, static_cast<long long>(count),
+                        static_cast<unsigned long long>(id), alt, name,
+                        alt_name);
         }
     }
     std::printf("\n컨테이너 %d개, 아이템 %lld개\n", containers, total);
+
+    // 레코드 +0x08 의 값(5915 등)은 6810개 아이템 표에 없다. 진짜
+    // 표 키가 레코드 어디에 있는지 통계로 찾는다 - 여러 레코드에서
+    // 같은 자리가 계속 표에 있는 키라면 그 자리가 키 칸이다.
+    if (!cat.empty() && containers > 0) {
+        std::vector<std::uint32_t> keys;
+        keys.reserve(cat.size());
+        for (const auto& e : cat) keys.push_back(e.key);
+        std::sort(keys.begin(), keys.end());
+
+        // 첫 컨테이너를 다시 찾아 훑는다.
+        for (std::size_t off = 0x10; off + 0x10 <= head.size(); off += 8) {
+            std::uintptr_t arr = 0;
+            std::uint32_t used = 0, cap = 0;
+            std::memcpy(&arr, head.data() + off, 8);
+            std::memcpy(&used, head.data() + off + 8, 4);
+            std::memcpy(&cap, head.data() + off + 12, 4);
+            if (arr < 0x10000 || used == 0 || used > cap || cap > 4096) continue;
+            std::uint32_t k0 = 0;
+            std::int64_t c0 = 0;
+            if (!r.read(arr, rec.data(), rec.size())) continue;
+            std::memcpy(&k0, rec.data() + 8, 4);
+            std::memcpy(&c0, rec.data() + 0x10, 8);
+            if (k0 == 0 || c0 <= 0 || c0 > 1000000) continue;
+
+            int tally[0xC8 / 4]{};
+            int rows = 0;
+            for (std::uint32_t k = 0; k < used && k < 40; ++k) {
+                if (!r.read(arr + k * kStride, rec.data(), rec.size())) break;
+                ++rows;
+                for (std::size_t q = 0; q + 4 <= kStride; q += 4) {
+                    std::uint32_t v = 0;
+                    std::memcpy(&v, rec.data() + q, 4);
+                    // 표에는 키 1·2 같은 작은 값도 있어서 개수나
+                    // 플래그가 그냥 걸린다. 큰 키만 센다.
+                    if (v > 1000 &&
+                        std::binary_search(keys.begin(), keys.end(), v)) {
+                        ++tally[q / 4];
+                    }
+                }
+            }
+            std::printf("\n표에 있는 키가 자주 나오는 자리 (레코드 %d개 기준)\n",
+                        rows);
+            for (std::size_t q = 0; q < sizeof(tally) / sizeof(tally[0]); ++q) {
+                if (tally[q] * 2 >= rows && tally[q] > 1) {
+                    std::printf("  +0x%02zX  %d/%d\n", q * 4, tally[q], rows);
+                }
+            }
+            break;
+        }
+    }
 }
 
 // 인벤토리 안의 아이템 인스턴스(TrItemValue)를 찾는다.
