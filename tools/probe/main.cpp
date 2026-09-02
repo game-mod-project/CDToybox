@@ -25,6 +25,7 @@
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/localization.h"
+#include "game/stash.h"
 
 using namespace cdtb;
 using namespace cdtb::probe;
@@ -60,6 +61,7 @@ void usage() {
         "  itemmap key <아이템키> ...  아이템 키의 짧은 식별자\n"
         "  itemmap cand                변환 함수 패턴 후보 전부\n"
         "  invlist [주소]              인벤토리를 이름·담금질까지\n"
+        "  invexport [파일]            인벤토리를 보관함 파일로\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
@@ -288,62 +290,77 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
 // 레코드는 TrItemValue 와 같은 배치다.
 //   +0x00 u64 인스턴스 ID   +0x08 u32 키   +0x10 i64 개수
 //   +0x40 부터 {u32, u8} x 5  소켓
-void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
-                 const Remote& r, int argc, char** argv) {
-    // 주소를 안 주면 RTTI 로 찾는다. 살아 있는 인스턴스가 여럿이고
-    // 대부분 비어 있어서, 내용이 있는 첫 컴포넌트를 쓴다.
-    std::uintptr_t comp = 0;
-    if (argc >= 3) {
-        comp = std::strtoull(argv[2], nullptr, 16);
+// 인벤토리를 다루는 명령이 공통으로 필요한 것들.
+struct InvContext {
+    std::uintptr_t component = 0;
+    std::vector<game::ItemCatalogEntry> cat;
+    std::map<std::uint32_t, std::uint32_t> id_to_key;   // 순번 -> 아이템 키
+};
+
+// 주소를 안 주면(want_hex 가 널) RTTI 로 찾는다. 살아 있는 인스턴스가
+// 여럿이고 대부분 비어 있어서, 내용이 있는 첫 컴포넌트를 쓴다.
+bool build_inv_context(const mem::Rtti& rt, const mem::Reader& reader,
+                       const char* want_hex, InvContext* out) {
+    if (want_hex != nullptr) {
+        out->component = std::strtoull(want_hex, nullptr, 16);
     } else {
         constexpr const char* kClass =
             ".?AVServerInventoryActorComponent@pa@@";
         for (const auto addr : rt.instances_of_class(kClass, 64)) {
-            std::vector<game::InventoryContainer> probe_conts;
-            if (!game::read_inventory_containers(reader, addr, &probe_conts)) {
-                continue;
-            }
+            std::vector<game::InventoryContainer> cs;
+            if (!game::read_inventory_containers(reader, addr, &cs)) continue;
             bool any = false;
-            for (const auto& c : probe_conts) {
+            for (const auto& c : cs) {
                 if (c.used > 0) { any = true; break; }
             }
             if (!any) continue;
-            comp = addr;
+            out->component = addr;
             break;
         }
-        if (comp == 0) {
+        if (out->component == 0) {
             std::printf("내용이 있는 서버 인벤토리 컴포넌트를 찾지"
                         " 못했습니다.\n");
-            return;
+            return false;
         }
         std::printf("컴포넌트 0x%llX\n",
-                    static_cast<unsigned long long>(comp));
+                    static_cast<unsigned long long>(out->component));
     }
 
     // 이름을 붙이려고 아이템 표를 읽는다.
     std::uintptr_t manager = 0;
-    std::vector<cdtb::game::ItemCatalogEntry> cat;
-    if (cdtb::game::find_item_manager(rt, reader, &manager)) {
-        cdtb::game::LocSystem sys;
-        cdtb::game::find_loc_system(rt, reader, &sys);
-        cdtb::game::build_item_catalog(reader, manager, sys, &cat);
+    if (game::find_item_manager(rt, reader, &manager)) {
+        game::LocSystem sys;
+        game::find_loc_system(rt, reader, &sys);
+        game::build_item_catalog(reader, manager, sys, &out->cat);
     }
-    if (cat.empty()) {
+    if (out->cat.empty()) {
         std::printf("아이템 표를 못 읽었습니다\n");
-        return;
+        return false;
     }
 
     // 인벤토리 레코드의 +0x08 은 아이템 키가 아니라 표에서의 순번이다.
     // 순번 -> 키 대응표를 만들어 이름을 붙인다.
-    std::map<std::uint32_t, std::uint32_t> id_to_key;
     game::ItemKeyMap km;
     if (game::find_item_key_map(reader, rt.image(),
-                                static_cast<std::uint32_t>(cat.size()), &km)) {
+                                static_cast<std::uint32_t>(out->cat.size()),
+                                &km)) {
         std::vector<game::ItemKeyPair> pairs;
         if (game::read_item_key_map(reader, km, &pairs)) {
-            for (const auto& p : pairs) id_to_key.emplace(p.id, p.key);
+            for (const auto& p : pairs) out->id_to_key.emplace(p.id, p.key);
         }
     }
+    return true;
+}
+
+void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
+                 const Remote& r, int argc, char** argv) {
+    InvContext ctx;
+    if (!build_inv_context(rt, reader, argc >= 3 ? argv[2] : nullptr, &ctx)) {
+        return;
+    }
+    const std::uintptr_t comp = ctx.component;
+    const auto& cat = ctx.cat;
+    const auto& id_to_key = ctx.id_to_key;
     if (id_to_key.empty()) {
         std::printf("대응표를 못 읽었습니다. 순번만 냅니다.\n");
     }
@@ -417,6 +434,113 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
     std::printf("\n컨테이너 %zu개 중 내용이 있는 것 %d개, 아이템 %lld개,"
                 " 박힌 소켓 %lld개\n",
                 conts.size(), shown, total, filled);
+}
+
+// 인벤토리를 보관함 파일로 빼낸다.
+//
+//   invexport [파일경로]
+//
+// 담금질·소켓까지 실어 둔다. 되돌리는 쪽(import)은 아직 없다 -
+// 지금은 읽어서 쓰기만 한다.
+//
+// 순번은 표에서의 위치라 게임이 패치되면 달라진다. 파일에는 게임
+// 자신의 식별자인 **아이템 키**를 쓴다.
+//
+// 기본 파일은 우리가 만드는 것이라 덮어쓴다. 경로를 직접 준 경우에는
+// 이미 있으면 거절한다 - 모드의 보관함 파일을 가리켰다가 세트를
+// 통째로 날리는 일을 막는다.
+void cmd_invexport(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                   char** argv) {
+    const char* path = (argc >= 3) ? argv[2] : "cdtoybox_export.txt";
+    if (argc >= 3) {
+        if (std::FILE* exists = std::fopen(path, "rb")) {
+            std::fclose(exists);
+            std::printf("이미 있는 파일입니다: %s\n"
+                        "덮어쓰지 않습니다. 다른 이름을 주거나 지우고"
+                        " 다시 부르세요.\n",
+                        path);
+            return;
+        }
+    }
+
+    InvContext ctx;
+    if (!build_inv_context(rt, reader, nullptr, &ctx)) return;
+    if (ctx.id_to_key.empty()) {
+        std::printf("대응표를 못 읽었습니다. 순번을 아이템 키로 바꿀 수"
+                    " 없어 빼내지 않습니다.\n");
+        return;
+    }
+
+    std::vector<game::InventoryContainer> conts;
+    if (!game::read_inventory_containers(reader, ctx.component, &conts)) {
+        std::printf("컨테이너 배열을 읽지 못했습니다\n");
+        return;
+    }
+
+    game::Stash stash;
+    long long items = 0, sockets = 0, skipped = 0;
+    for (const auto& c : conts) {
+        std::vector<game::InventoryRecord> recs;
+        if (!game::read_inventory_records(reader, c, &recs)) continue;
+        if (recs.empty()) continue;
+
+        const int set = stash.add_set("가방 종류" + std::to_string(c.kind));
+        for (const auto& rec : recs) {
+            const auto f = ctx.id_to_key.find(rec.index);
+            if (f == ctx.id_to_key.end()) {
+                ++skipped;   // 키를 모르면 되돌릴 수 없다
+                continue;
+            }
+
+            game::StashEntry e;
+            e.key = f->second;
+            e.count = rec.count;
+            e.temper = rec.temper;
+
+            std::vector<game::InventorySocket> socks;
+            if (game::read_inventory_sockets(reader, rec, &socks)) {
+                for (const auto& s : socks) {
+                    if (s.empty()) continue;
+                    const auto g = ctx.id_to_key.find(s.index);
+                    if (g == ctx.id_to_key.end()) continue;
+                    game::StashSocket ss;
+                    ss.slot = s.slot;
+                    ss.key = g->second;
+                    std::memcpy(ss.raw, s.raw, sizeof(ss.raw));
+                    e.sockets.push_back(ss);
+                    ++sockets;
+                }
+            }
+            stash.set_at(set)->items.push_back(std::move(e));
+            ++items;
+        }
+    }
+
+    if (items == 0) {
+        std::printf("빼낼 것이 없습니다.\n");
+        return;
+    }
+
+    const std::string text = stash.serialize();
+    std::FILE* f = std::fopen(path, "wb");
+    if (f == nullptr) {
+        std::printf("파일을 열지 못했습니다: %s\n", path);
+        return;
+    }
+    const std::size_t wrote = std::fwrite(text.data(), 1, text.size(), f);
+    std::fclose(f);
+    if (wrote != text.size()) {
+        std::printf("쓰다 말았습니다 (%zu / %zu 바이트): %s\n", wrote,
+                    text.size(), path);
+        return;
+    }
+
+    std::printf("%s 에 썼습니다\n", path);
+    std::printf("  세트 %d개, 아이템 %lld개, 박힌 소켓 %lld개\n",
+                stash.set_count(), items, sockets);
+    if (skipped > 0) {
+        std::printf("  대응표에 없어 건너뛴 것 %lld개\n", skipped);
+    }
 }
 
 // 인벤토리 안의 아이템 인스턴스(TrItemValue)를 찾는다.
@@ -1996,6 +2120,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "loc") {
         cmd_loc(rt, reader, r, argc, argv);
+        return 0;
+    }
+    if (cmd == "invexport") {
+        cmd_invexport(rt, reader, argc, argv);
         return 0;
     }
     if (cmd == "invlist") {

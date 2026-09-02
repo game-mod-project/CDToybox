@@ -14,9 +14,22 @@ namespace cdtb::game {
 // 사실상 단방향 창고다. 게임의 슬롯 제한과 무관하고 캐릭터를
 // 새로 시작해도 남는다.
 
+// 박힌 소켓 한 칸. 빈 칸은 담지 않는다 - 지급으로 새로 만든 아이템은
+// 생성자가 빈 칸 기본값을 이미 깔아 둔다.
+//
+// 뜻을 모르는 네 바이트가 있어 원본을 그대로 들고 있는다
+// (docs/superpowers/specs/2026-09-02-inventory.md 의 "소켓" 절).
+struct StashSocket {
+    std::uint32_t slot = 0;   // 소켓 번호
+    std::uint32_t key = 0;    // 박힌 보석의 아이템 키
+    std::uint8_t raw[6]{};    // 원본 6바이트
+};
+
 struct StashEntry {
     std::uint32_t key = 0;
     std::int64_t count = 1;
+    std::uint32_t temper = 0;              // 담금질
+    std::vector<StashSocket> sockets;      // 박힌 것만
 };
 
 struct StashSet {
@@ -46,7 +59,10 @@ public:
     //   # 주석
     //   fav <키>
     //   set <이름 - 줄 끝까지>
-    //   item <키> <개수>
+    //   item <키> <개수> [t<담금질>] [s<슬롯>:<보석키>:<원본12hex>]...
+    //
+    // 담금질과 소켓은 있을 때만 붙는다. 옛 파일(`item <키> <개수>`)이
+    // 그대로 읽힌다.
     std::string serialize() const;
     bool parse(const std::string& text);
 

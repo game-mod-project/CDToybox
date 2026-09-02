@@ -208,6 +208,7 @@ probe itemmap [최대]                       순번 <-> 아이템 키 대응표
 probe itemmap id <순번> ...                순번으로 아이템 되찾기
 probe itemmap key <아이템키> ...           아이템 키의 순번
 probe itemmap cand                         변환 함수 패턴 후보 전부
+probe invexport [파일]                     인벤토리를 보관함 파일로
 ```
 
 주소를 안 주면 RTTI 로 찾아 내용이 있는 첫 컴포넌트를 쓴다.
