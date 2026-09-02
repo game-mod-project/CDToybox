@@ -97,6 +97,12 @@ void set_grant_item_key(unsigned int key) {
     g_called = false;      // 새 아이템을 고르면 이전 결과는 지운다
 }
 
+unsigned int grant_item_key() {
+    return (g_item_key > 0) ? static_cast<unsigned int>(g_item_key) : 0u;
+}
+
+long long grant_item_count() { return g_count; }
+
 void draw_grant_panel() {
     ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("아이템 지급")) {

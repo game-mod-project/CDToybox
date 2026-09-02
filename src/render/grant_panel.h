@@ -10,4 +10,8 @@ void draw_grant_panel();
 // 중에서 키를 손으로 찾아 넣는 것은 쓸 수 없다.
 void set_grant_item_key(unsigned int key);
 
+// 보관함이 "지금 고른 것" 을 세트에 담을 때 쓴다.
+unsigned int grant_item_key();
+long long grant_item_count();
+
 }  // namespace cdtb::render

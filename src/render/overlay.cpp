@@ -19,6 +19,7 @@
 #include "render/icon_atlas.h"
 #include "render/grant_panel.h"
 #include "render/item_panel.h"
+#include "render/stash_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
 
@@ -362,6 +363,7 @@ void draw_ui() {
     cdtb::render::draw_camera_panel();
     cdtb::render::draw_item_panel();
     cdtb::render::draw_grant_panel();
+    cdtb::render::draw_stash_panel();
 }
 
 }  // namespace cdtb::overlay::detail

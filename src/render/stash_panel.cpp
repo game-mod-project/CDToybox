@@ -1,0 +1,272 @@
+#include "render/stash_panel.h"
+
+#include <windows.h>
+
+#include <imgui.h>
+
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include "core/log.h"
+#include "game/grant.h"
+#include "game/items.h"
+#include "game/stash.h"
+#include "render/grant_panel.h"
+#include "render/icon_atlas.h"
+#include "render/item_style.h"
+
+namespace cdtb::render {
+namespace {
+
+game::Stash g_stash;
+bool g_loaded = false;
+bool g_dirty = false;
+int g_open_set = -1;
+char g_new_name[64] = "";
+
+// 일괄 지급은 쿨다운(2초) 때문에 한 번에 다 못 보낸다. 큐에 넣고
+// 한 개씩 흘려보낸다.
+std::vector<game::StashEntry> g_queue;
+std::size_t g_queue_at = 0;
+
+constexpr float kIconSize = 22.0f;
+
+// DLL 옆에 둔다. 아이콘 아틀라스와 같은 자리다.
+std::wstring stash_path() {
+    HMODULE self = nullptr;
+    if (!::GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&stash_path), &self)) {
+        return {};
+    }
+    wchar_t path[MAX_PATH]{};
+    const DWORD n = ::GetModuleFileNameW(self, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    std::wstring s(path, n);
+    const auto slash = s.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return {};
+    return s.substr(0, slash + 1) + L"cdtoybox_stash.txt";
+}
+
+void load() {
+    g_loaded = true;
+    const std::wstring p = stash_path();
+    if (p.empty()) return;
+    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;      // 아직 없는 것은 정상이다
+    LARGE_INTEGER size{};
+    std::string text;
+    if (::GetFileSizeEx(h, &size) && size.QuadPart > 0 &&
+        size.QuadPart < (4 << 20)) {
+        text.resize(static_cast<std::size_t>(size.QuadPart));
+        DWORD got = 0;
+        if (!::ReadFile(h, text.data(), static_cast<DWORD>(text.size()), &got,
+                        nullptr)) {
+            text.clear();
+        } else {
+            text.resize(got);
+        }
+    }
+    ::CloseHandle(h);
+    if (!text.empty()) {
+        g_stash.parse(text);
+        log::infof("보관함 읽음: 즐겨찾기 {}개, 세트 {}개",
+                   g_stash.favorites().size(), g_stash.set_count());
+    }
+}
+
+void save() {
+    const std::wstring p = stash_path();
+    if (p.empty()) return;
+    const std::string text = g_stash.serialize();
+    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        log::warnf("보관함을 저장하지 못했다");
+        return;
+    }
+    DWORD wrote = 0;
+    ::WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &wrote,
+                nullptr);
+    ::CloseHandle(h);
+    g_dirty = false;
+}
+
+const game::ItemCatalogEntry* find_item(std::uint32_t key) {
+    if (!game::items_ready()) return nullptr;
+    for (const auto& e : game::item_catalog()) {
+        if (e.key == key) return &e;
+    }
+    return nullptr;
+}
+
+// 아이콘 + 이름을 한 줄로. 목록과 같은 색을 쓴다.
+void draw_item_line(std::uint32_t key) {
+    const IconRef ico = icon_for(key);
+    if (ico.valid) {
+        ImGui::Image(ico.tex, ImVec2(kIconSize, kIconSize), ico.uv0, ico.uv1);
+    } else {
+        ImGui::Dummy(ImVec2(kIconSize, kIconSize));
+    }
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    const game::ItemCatalogEntry* it = find_item(key);
+    if (it == nullptr || it->name.empty()) {
+        ImGui::TextDisabled("키 %u", key);
+    } else {
+        ImGui::TextColored(grade_color(it->grade), "%s", it->name.c_str());
+    }
+}
+
+}  // namespace
+
+void stash_toggle_favorite(unsigned int key) {
+    if (!g_loaded) load();
+    g_stash.toggle_favorite(key);
+    g_dirty = true;
+}
+
+bool stash_is_favorite(unsigned int key) {
+    if (!g_loaded) load();
+    return g_stash.is_favorite(key);
+}
+
+void draw_stash_panel() {
+    if (!g_loaded) load();
+
+    // 큐가 남아 있으면 한 개씩 흘려보낸다. request_give 가 쿨다운에
+    // 걸리면 false 를 주므로 다음 프레임에 다시 시도한다.
+    if (g_queue_at < g_queue.size() && !game::spawn_pending()) {
+        std::uintptr_t seen[16]{};
+        std::uint32_t hits[16]{};
+        const int n = game::seen_sessions(seen, hits, 16);
+        bool server[16]{};
+        for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
+        const int pick = game::best_actor_index(hits, server, n);
+        if (pick >= 0) {
+            const auto& e = g_queue[g_queue_at];
+            if (game::request_give(seen[pick], e.key, e.count)) ++g_queue_at;
+        } else {
+            g_queue.clear();     // 세션이 없으면 접는다
+            g_queue_at = 0;
+        }
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 400.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("보관함")) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextDisabled("게임 밖에 두는 목록입니다. 슬롯 제한과 무관합니다.");
+    if (g_queue_at < g_queue.size()) {
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
+                           "지급 중 %zu / %zu (2초 간격)", g_queue_at,
+                           g_queue.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("중단")) {
+            g_queue.clear();
+            g_queue_at = 0;
+        }
+    }
+    ImGui::Separator();
+
+    // --- 즐겨찾기 ---------------------------------------------------
+    if (ImGui::CollapsingHeader("즐겨찾기", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto favs = g_stash.favorites();   // 지우면서 도니 복사한다
+        if (favs.empty()) {
+            ImGui::TextDisabled("아이템 목록에서 별표를 눌러 담으세요");
+        }
+        for (const auto key : favs) {
+            ImGui::PushID(static_cast<int>(key));
+            if (ImGui::SmallButton("빼기")) {
+                g_stash.toggle_favorite(key);
+                g_dirty = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("지급")) {
+                set_grant_item_key(key);
+                g_queue.assign(1, game::StashEntry{key, 1});
+                g_queue_at = 0;
+            }
+            ImGui::SameLine();
+            draw_item_line(key);
+            ImGui::PopID();
+        }
+    }
+
+    // --- 세트 -------------------------------------------------------
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputTextWithHint("##newset", "새 세트 이름", g_new_name,
+                             sizeof(g_new_name));
+    ImGui::SameLine();
+    if (ImGui::Button("세트 만들기") && g_new_name[0] != 0) {
+        g_open_set = g_stash.add_set(g_new_name);
+        g_new_name[0] = 0;
+        g_dirty = true;
+    }
+
+    for (int i = 0; i < g_stash.set_count(); ++i) {
+        game::StashSet* set = g_stash.set_at(i);
+        ImGui::PushID(1000 + i);
+        char label[96];
+        std::snprintf(label, sizeof(label), "%s (%zu개)", set->name.c_str(),
+                      set->items.size());
+        if (ImGui::CollapsingHeader(label)) {
+            if (ImGui::SmallButton("전부 지급")) {
+                g_queue = set->items;
+                g_queue_at = 0;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("세트 지우기")) {
+                g_stash.remove_set(i);
+                g_dirty = true;
+                ImGui::PopID();
+                break;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("지급 칸의 아이템을 담으려면 ↓");
+            if (ImGui::SmallButton("지금 고른 아이템 담기")) {
+                const unsigned int k = grant_item_key();
+                if (k != 0) {
+                    set->items.push_back(
+                        game::StashEntry{k, grant_item_count()});
+                    g_dirty = true;
+                }
+            }
+            for (std::size_t j = 0; j < set->items.size(); ++j) {
+                ImGui::PushID(static_cast<int>(j));
+                if (ImGui::SmallButton("빼기")) {
+                    set->items.erase(set->items.begin() +
+                                     static_cast<std::ptrdiff_t>(j));
+                    g_dirty = true;
+                    ImGui::PopID();
+                    break;
+                }
+                ImGui::SameLine();
+                draw_item_line(set->items[j].key);
+                ImGui::SameLine();
+                ImGui::TextDisabled("x%lld",
+                                    static_cast<long long>(set->items[j].count));
+                ImGui::PopID();
+            }
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::Separator();
+    if (g_dirty) {
+        if (ImGui::Button("저장")) save();
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "저장하지 않은 변경");
+    } else {
+        ImGui::TextDisabled("cdtoybox_stash.txt 에 저장됩니다");
+    }
+    ImGui::End();
+}
+
+}  // namespace cdtb::render

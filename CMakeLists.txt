@@ -62,6 +62,7 @@ add_library(cdtoybox SHARED
     src/render/icon_atlas.cpp
     src/render/grant_panel.cpp
     src/render/item_style.cpp
+    src/render/stash_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -70,6 +71,7 @@ add_library(cdtoybox SHARED
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/grant.cpp
+    src/game/stash.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/proxy/exports.def
@@ -98,8 +100,10 @@ add_executable(cdtb_tests
     tests/icon_map_tests.cpp
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
+    tests/stash_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
+    src/game/stash.cpp
     src/game/localization.cpp
     src/game/items.cpp
     src/game/item_view.cpp
@@ -131,6 +135,7 @@ add_executable(cdtb_probe
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/grant.cpp
+    src/game/stash.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)

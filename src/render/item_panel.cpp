@@ -2,6 +2,7 @@
 
 #include "render/grant_panel.h"
 #include "render/item_style.h"
+#include "render/stash_panel.h"
 
 #include <imgui.h>
 
@@ -296,6 +297,15 @@ void draw_item_panel() {
                 ImGui::SetClipboardText(key);
                 set_grant_item_key(e.key);   // 지급 칸에도 넣는다
             }
+            // 별표로 보관함 즐겨찾기에 담는다. 줄 클릭과 겹치지
+            // 않게 작은 버튼을 따로 둔다.
+            ImGui::SameLine();
+            ImGui::PushID(static_cast<int>(e.key));
+            const bool fav = stash_is_favorite(e.key);
+            if (ImGui::SmallButton(fav ? "★" : "☆")) {
+                stash_toggle_favorite(e.key);
+            }
+            ImGui::PopID();
             ImGui::PopID();
 
             ImGui::TableSetColumnIndex(1);
