@@ -22,6 +22,7 @@
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
+#include "game/inventory.h"
 #include "game/items.h"
 #include "game/localization.h"
 
@@ -58,6 +59,7 @@ void usage() {
         "  itemmap id <짧은id> ...     짧은 식별자로 아이템 되찾기\n"
         "  itemmap key <아이템키> ...  아이템 키의 짧은 식별자\n"
         "  itemmap cand                변환 함수 패턴 후보 전부\n"
+        "  invlist [주소]              인벤토리를 이름·담금질까지\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
@@ -288,11 +290,35 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
 //   +0x40 부터 {u32, u8} x 5  소켓
 void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                  const Remote& r, int argc, char** argv) {
-    if (argc < 3) {
-        std::printf("사용법: invlist <서버인벤토리컴포넌트주소>\n");
-        return;
+    // 주소를 안 주면 RTTI 로 찾는다. 살아 있는 인스턴스가 여럿이고
+    // 대부분 비어 있어서, 내용이 있는 첫 컴포넌트를 쓴다.
+    std::uintptr_t comp = 0;
+    if (argc >= 3) {
+        comp = std::strtoull(argv[2], nullptr, 16);
+    } else {
+        constexpr const char* kClass =
+            ".?AVServerInventoryActorComponent@pa@@";
+        for (const auto addr : rt.instances_of_class(kClass, 64)) {
+            std::vector<game::InventoryContainer> probe_conts;
+            if (!game::read_inventory_containers(reader, addr, &probe_conts)) {
+                continue;
+            }
+            bool any = false;
+            for (const auto& c : probe_conts) {
+                if (c.used > 0) { any = true; break; }
+            }
+            if (!any) continue;
+            comp = addr;
+            break;
+        }
+        if (comp == 0) {
+            std::printf("내용이 있는 서버 인벤토리 컴포넌트를 찾지"
+                        " 못했습니다.\n");
+            return;
+        }
+        std::printf("컴포넌트 0x%llX\n",
+                    static_cast<unsigned long long>(comp));
     }
-    const std::uintptr_t comp = std::strtoull(argv[2], nullptr, 16);
 
     // 이름을 붙이려고 아이템 표를 읽는다.
     std::uintptr_t manager = 0;
@@ -322,102 +348,55 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
         std::printf("대응표를 못 읽었습니다. 순번만 냅니다.\n");
     }
 
-    // 컴포넌트는 컨테이너를 여럿 들고 있다. 화면의 "99 / 130" 은 UI 가
-    // 합산한 값이라 메모리에 그대로 있지 않다 - 찾아봤지만 없었다.
-    //
-    // 컨테이너는 {포인터, u32 사용, u32 용량} 꼴이다. 앞을 훑어
-    // 그 모양이면서 대상이 실제 아이템 레코드인 것을 모은다.
-    // 간격은 0xC8 이다. 0x190 으로 읽었더니 한 칸씩 건너뛰어 37개 중
-    // 19개만 보였다 - 0x190 이 정확히 0xC8 의 두 배라 그럴듯해
-    // 보였다. 레코드 +0xC8 에 다음 레코드의 ID 가 있는 것을 보고
-    // 알았다.
-    constexpr std::size_t kStride = 0xC8;
-    std::vector<std::uint8_t> head(0x200);
-    if (!r.read(comp, head.data(), head.size())) {
-        std::printf("컴포넌트를 읽지 못했습니다\n");
+    // 컴포넌트 앞부분을 훑어 컨테이너 꼴을 찾던 방식은 걷어냈다.
+    // 엉뚱한 것이 걸리면서 정작 플레이어 가방은 못 잡았다 - 가방은
+    // +0x18 의 포인터 배열 너머에 있다.
+    std::vector<game::InventoryContainer> conts;
+    if (!game::read_inventory_containers(reader, comp, &conts)) {
+        std::printf("컨테이너 배열을 읽지 못했습니다 (컴포넌트 0x%llX)\n",
+                    static_cast<unsigned long long>(comp));
         return;
     }
 
-    std::vector<std::uint8_t> rec(kStride);
-    int containers = 0;
-    long long total = 0;
-    for (std::size_t off = 0x10; off + 0x10 <= head.size(); off += 8) {
-        std::uintptr_t arr = 0;
-        std::uint32_t used = 0, cap = 0;
-        std::memcpy(&arr, head.data() + off, 8);
-        std::memcpy(&used, head.data() + off + 8, 4);
-        std::memcpy(&cap, head.data() + off + 12, 4);
-        if (arr < 0x10000 || used == 0 || cap == 0) continue;
-        if (used > cap || cap > 4096) continue;
-
-        // 레코드 하나만 보면 오탐이 걸린다 - 실측에서 개수가
-        // 300억인 것이 통과했다. 연속 두 개를 본다. 우연히 둘 다
-        // 실제 키에 말이 되는 개수일 확률은 낮다.
-        bool ok = true;
-        for (std::uint32_t k = 0; k < 2 && k < used; ++k) {
-            if (!r.read(arr + k * kStride, rec.data(), rec.size())) {
-                ok = false;
-                break;
+    auto name_of = [&](std::uint32_t item_key) -> const char* {
+        for (const auto& e : cat) {
+            if (e.key == item_key) {
+                return e.name.empty() ? "(이름 없음)" : e.name.c_str();
             }
-            std::uint32_t k0 = 0;
-            std::int64_t c0 = 0;
-            std::memcpy(&k0, rec.data() + 8, 4);
-            std::memcpy(&c0, rec.data() + 0x10, 8);
-            if (k0 == 0 || c0 <= 0 || c0 > 1000000) {
-                ok = false;
-                break;
-            }
-            // 카탈로그에 있어야 한다는 조건은 뺐다. 인벤토리의 키
-            // (5915, 202518 등)가 6810개 아이템 표에 없다 - 키 공간이
-            // 다르다. 이름을 못 붙이는 것은 그 때문이다.
         }
-        if (!ok) continue;
+        return "(표에 없음)";
+    };
 
-        ++containers;
-        std::printf("\n[컨테이너 +0x%zX] 0x%llX  %u / %u\n", off,
-                    static_cast<unsigned long long>(arr), used, cap);
+    long long total = 0;
+    int shown = 0;
+    for (const auto& c : conts) {
+        std::vector<game::InventoryRecord> recs;
+        if (!game::read_inventory_records(reader, c, &recs)) continue;
+        if (recs.empty()) continue;
 
-        // +0x80 의 값은 사용 개수가 아니다 - 37 이라고 하는데 실제
-        // 레코드는 19개였고 그 뒤는 쓰레기다. 말이 안 되는 레코드가
-        // 나오면 거기서 끝난 것으로 본다.
-        for (std::uint32_t k = 0; k < cap; ++k) {
-            if (!r.read(arr + k * kStride, rec.data(), rec.size())) break;
-            std::uint64_t id = 0;
-            std::uint32_t key = 0;
-            std::int64_t count = 0;
-            std::memcpy(&id, rec.data(), 8);
-            std::memcpy(&key, rec.data() + 8, 4);
-            std::memcpy(&count, rec.data() + 0x10, 8);
-            if (key == 0 || count <= 0 || count > 1000000) break;
+        ++shown;
+        std::printf("\n[종류 %u] 0x%llX  %zu개  (표시 %u / %u, 칸 %u)\n",
+                    c.kind, static_cast<unsigned long long>(c.records),
+                    recs.size(), c.used, c.capacity, c.slots);
+
+        for (const auto& rec : recs) {
             ++total;
-
-            // 아랫 u16 이 순번, 윗 u16 이 담금질이다. 화면과 대조해
-            // 확인했다 - 바르그란 방패의 윗값이 3 이고 툴팁의 담금질
-            // 게이지가 10칸 중 3칸이었다.
-            const std::uint32_t index = key & 0xFFFFu;
-            const std::uint32_t temper = key >> 16;
             std::uint32_t item_key = 0;
             const char* name = "(대응표에 없음)";
-            const auto f = id_to_key.find(index);
+            const auto f = id_to_key.find(rec.index);
             if (f != id_to_key.end()) {
                 item_key = f->second;
-                name = "(이름 없음)";
-                for (const auto& e : cat) {
-                    if (e.key == item_key) {
-                        if (!e.name.empty()) name = e.name.c_str();
-                        break;
-                    }
-                }
+                name = name_of(item_key);
             }
-            std::printf("  [%2u] 순번 %-6u 담금질 %-2u 키 %-11u x%-4lld "
+            std::printf("  [%4u] 순번 %-6u 담금질 %-2u 키 %-11u x%-4lld "
                         "ID %-9llu %s\n",
-                        k, index, temper, item_key,
-                        static_cast<long long>(count),
-                        static_cast<unsigned long long>(id), name);
+                        rec.slot, rec.index, rec.temper, item_key,
+                        static_cast<long long>(rec.count),
+                        static_cast<unsigned long long>(rec.instance_id), name);
         }
     }
-    std::printf("\n컨테이너 %d개, 아이템 %lld개\n", containers, total);
-
+    std::printf("\n컨테이너 %zu개 중 내용이 있는 것 %d개, 아이템 %lld개\n",
+                conts.size(), shown, total);
 }
 
 // 인벤토리 안의 아이템 인스턴스(TrItemValue)를 찾는다.
