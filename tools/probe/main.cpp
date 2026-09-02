@@ -54,6 +54,10 @@ void usage() {
         "  loc item <엔티티키>         이름(0x70)과 다음 칸(0x71)\n"
         "  items [최대]                아이템 표를 키+이름으로 나열\n"
         "  items find <문자열>         이름에 그 문자열이 든 것만\n"
+        "  itemmap [최대]              아이템키 <-> 짧은 식별자 대응표\n"
+        "  itemmap id <짧은id> ...     짧은 식별자로 아이템 되찾기\n"
+        "  itemmap key <아이템키> ...  아이템 키의 짧은 식별자\n"
+        "  itemmap cand                변환 함수 패턴 후보 전부\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
@@ -303,6 +307,21 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
         return;
     }
 
+    // 인벤토리 레코드의 +0x08 은 아이템 키가 아니라 표에서의 순번이다.
+    // 순번 -> 키 대응표를 만들어 이름을 붙인다.
+    std::map<std::uint32_t, std::uint32_t> id_to_key;
+    game::ItemKeyMap km;
+    if (game::find_item_key_map(reader, rt.image(),
+                                static_cast<std::uint32_t>(cat.size()), &km)) {
+        std::vector<game::ItemKeyPair> pairs;
+        if (game::read_item_key_map(reader, km, &pairs)) {
+            for (const auto& p : pairs) id_to_key.emplace(p.id, p.key);
+        }
+    }
+    if (id_to_key.empty()) {
+        std::printf("대응표를 못 읽었습니다. 순번만 냅니다.\n");
+    }
+
     // 컴포넌트는 컨테이너를 여럿 들고 있다. 화면의 "99 / 130" 은 UI 가
     // 합산한 값이라 메모리에 그대로 있지 않다 - 찾아봤지만 없었다.
     //
@@ -370,77 +389,33 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
             std::memcpy(&key, rec.data() + 8, 4);
             std::memcpy(&count, rec.data() + 0x10, 8);
             if (key == 0 || count <= 0 || count > 1000000) break;
-            const char* name = "";
-            for (const auto& e : cat) {
-                if (e.key == key) { name = e.name.c_str(); break; }
-            }
             ++total;
-            // +0x94 는 아이템 표 쪽 키로 보인다 - 인벤토리의 +0x08
-            // 키(5915 등)는 6810개 표에 없다. 둘 다 낸다.
-            std::uint32_t alt = 0;
-            std::memcpy(&alt, rec.data() + 0x94, 4);
-            const char* alt_name = "";
-            for (const auto& e : cat) {
-                if (e.key == alt) { alt_name = e.name.c_str(); break; }
+
+            // 아랫 u16 이 순번이다. 윗 u16 은 아직 뜻을 모른다 - 0 이
+            // 아닌 값(1, 3)이 섞여 있다.
+            const std::uint32_t index = key & 0xFFFFu;
+            const std::uint32_t high = key >> 16;
+            std::uint32_t item_key = 0;
+            const char* name = "(대응표에 없음)";
+            const auto f = id_to_key.find(index);
+            if (f != id_to_key.end()) {
+                item_key = f->second;
+                name = "(이름 없음)";
+                for (const auto& e : cat) {
+                    if (e.key == item_key) {
+                        if (!e.name.empty()) name = e.name.c_str();
+                        break;
+                    }
+                }
             }
-            std::printf("  [%2u] 키 %-7u x%-4lld ID %-9llu +94 %-9u %s%s\n",
-                        k, key, static_cast<long long>(count),
-                        static_cast<unsigned long long>(id), alt, name,
-                        alt_name);
+            std::printf("  [%2u] 순번 %-6u+%-2u 키 %-11u x%-4lld ID %-9llu %s\n",
+                        k, index, high, item_key,
+                        static_cast<long long>(count),
+                        static_cast<unsigned long long>(id), name);
         }
     }
     std::printf("\n컨테이너 %d개, 아이템 %lld개\n", containers, total);
 
-    // 레코드 +0x08 의 값(5915 등)은 6810개 아이템 표에 없다. 진짜
-    // 표 키가 레코드 어디에 있는지 통계로 찾는다 - 여러 레코드에서
-    // 같은 자리가 계속 표에 있는 키라면 그 자리가 키 칸이다.
-    if (!cat.empty() && containers > 0) {
-        std::vector<std::uint32_t> keys;
-        keys.reserve(cat.size());
-        for (const auto& e : cat) keys.push_back(e.key);
-        std::sort(keys.begin(), keys.end());
-
-        // 첫 컨테이너를 다시 찾아 훑는다.
-        for (std::size_t off = 0x10; off + 0x10 <= head.size(); off += 8) {
-            std::uintptr_t arr = 0;
-            std::uint32_t used = 0, cap = 0;
-            std::memcpy(&arr, head.data() + off, 8);
-            std::memcpy(&used, head.data() + off + 8, 4);
-            std::memcpy(&cap, head.data() + off + 12, 4);
-            if (arr < 0x10000 || used == 0 || used > cap || cap > 4096) continue;
-            std::uint32_t k0 = 0;
-            std::int64_t c0 = 0;
-            if (!r.read(arr, rec.data(), rec.size())) continue;
-            std::memcpy(&k0, rec.data() + 8, 4);
-            std::memcpy(&c0, rec.data() + 0x10, 8);
-            if (k0 == 0 || c0 <= 0 || c0 > 1000000) continue;
-
-            int tally[0xC8 / 4]{};
-            int rows = 0;
-            for (std::uint32_t k = 0; k < used && k < 40; ++k) {
-                if (!r.read(arr + k * kStride, rec.data(), rec.size())) break;
-                ++rows;
-                for (std::size_t q = 0; q + 4 <= kStride; q += 4) {
-                    std::uint32_t v = 0;
-                    std::memcpy(&v, rec.data() + q, 4);
-                    // 표에는 키 1·2 같은 작은 값도 있어서 개수나
-                    // 플래그가 그냥 걸린다. 큰 키만 센다.
-                    if (v > 1000 &&
-                        std::binary_search(keys.begin(), keys.end(), v)) {
-                        ++tally[q / 4];
-                    }
-                }
-            }
-            std::printf("\n표에 있는 키가 자주 나오는 자리 (레코드 %d개 기준)\n",
-                        rows);
-            for (std::size_t q = 0; q < sizeof(tally) / sizeof(tally[0]); ++q) {
-                if (tally[q] * 2 >= rows && tally[q] > 1) {
-                    std::printf("  +0x%02zX  %d/%d\n", q * 4, tally[q], rows);
-                }
-            }
-            break;
-        }
-    }
 }
 
 // 인벤토리 안의 아이템 인스턴스(TrItemValue)를 찾는다.
@@ -1154,6 +1129,177 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     }
 }
 
+// 아이템 키 <-> 짧은 식별자 대응표를 읽는다.
+//
+//   itemmap                표 요약 + 앞 20칸
+//   itemmap id <값> ...    짧은 식별자로 아이템을 되찾는다 (역조회)
+//   itemmap key <값> ...   아이템 키의 짧은 식별자 (정조회)
+//
+// export/import 에 필요한 것은 역조회다. 인벤토리 레코드에는 짧은
+// 식별자만 있고, 지급은 아이템 키로 한다.
+// 패턴 후보를 전부 낸다. 같은 꼴의 조회 코드가 표마다 있어 한 곳만
+// 일치하지 않는다 - 실측 34곳이다. 어느 것이 아이템 표인지는 표의
+// 개수로 가른다.
+void dump_itemmap_candidates(const mem::Rtti& rt, const mem::Reader& reader) {
+    const auto rvas = game::find_item_key_map_rvas(rt.image(), 512);
+    std::printf("변환 함수 패턴 후보 %zu곳\n", rvas.size());
+    for (const auto rva : rvas) {
+        const std::uintptr_t g =
+            reader.module_base() + static_cast<std::uintptr_t>(rva);
+        std::uint64_t obj = 0, slots = 0;
+        std::uint32_t cnt = 0, cap = 0;
+        reader.read_value(g, &obj);
+        if (obj != 0) {
+            const std::uintptr_t t = static_cast<std::uintptr_t>(obj) + 0x68;
+            reader.read_value(t + 0x04, &cnt);
+            reader.read_value(t + 0x08, &cap);
+            reader.read_value(t + 0x10, &slots);
+        }
+        std::printf("  RVA 0x%-8llX 객체 0x%-13llX 개수 %-6u 용량 %-6u 슬롯 0x%llX\n",
+                    static_cast<unsigned long long>(rva),
+                    static_cast<unsigned long long>(obj), cnt, cap,
+                    static_cast<unsigned long long>(slots));
+    }
+}
+
+void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc > 2 && std::strcmp(argv[2], "cand") == 0) {
+        dump_itemmap_candidates(rt, reader);
+        return;
+    }
+
+    // 이름을 붙이고 후보를 가려내려면 아이템 표가 먼저 있어야 한다 -
+    // 대응표는 표의 개수(실측 6,810)로 찾는다.
+    std::vector<game::ItemCatalogEntry> items;
+    std::uintptr_t mgr = 0;
+    if (game::find_item_manager(rt, reader, &mgr)) {
+        game::LocSystem sys;
+        game::find_loc_system(rt, reader, &sys);
+        game::build_item_catalog(reader, mgr, sys, &items);
+    }
+    if (items.empty()) {
+        std::printf("아이템 표를 읽지 못했습니다. 개수를 몰라 대응표를\n"
+                    "가려낼 수 없습니다.\n");
+        return;
+    }
+    std::printf("아이템 표 %zu개\n", items.size());
+
+    game::ItemKeyMap m;
+    if (!game::find_item_key_map(reader, rt.image(),
+                                 static_cast<std::uint32_t>(items.size()),
+                                 &m)) {
+        std::printf("대응표를 찾지 못했습니다 - 개수가 %zu 인 후보가\n"
+                    "없거나 둘 이상입니다. 후보를 냅니다.\n\n",
+                    items.size());
+        dump_itemmap_candidates(rt, reader);
+        return;
+    }
+    std::vector<game::ItemKeyPair> pairs;
+    if (!game::read_item_key_map(reader, m, &pairs)) {
+        std::printf("슬롯 배열을 읽지 못했습니다 (0x%llX, %u칸).\n",
+                    static_cast<unsigned long long>(m.slots), m.capacity);
+        return;
+    }
+
+    std::printf("전역     0x%llX  (RVA 0x%llX)\n",
+                static_cast<unsigned long long>(m.global),
+                static_cast<unsigned long long>(m.global - reader.module_base()));
+    std::printf("객체     0x%llX\n", static_cast<unsigned long long>(m.object));
+    std::printf("표       0x%llX   개수 %u / 용량 %u\n",
+                static_cast<unsigned long long>(m.table), m.count, m.capacity);
+    std::printf("슬롯     0x%llX\n", static_cast<unsigned long long>(m.slots));
+    std::printf("채워진 칸 %zu개\n", pairs.size());
+
+    std::map<std::uint32_t, const game::ItemCatalogEntry*> by_key;
+    for (const auto& it : items) by_key[it.key] = &it;
+
+    auto name_of = [&](std::uint32_t key) -> const char* {
+        const auto it = by_key.find(key);
+        if (it == by_key.end()) return "(아이템 표에 없음)";
+        return it->second->name.empty() ? "(이름 없음)"
+                                        : it->second->name.c_str();
+    };
+
+    // 역조회가 유일해야 export/import 가 성립한다. 실제로 그런지 센다.
+    std::map<std::uint32_t, std::uint32_t> by_id;   // 순번 -> 아이템 키
+    std::map<std::uint32_t, std::uint32_t> fwd;     // 아이템 키 -> 순번
+    std::size_t dup_id = 0, dup_key = 0, missing = 0;
+    std::uint32_t max_id = 0;
+    for (const auto& p : pairs) {
+        if (!by_id.emplace(p.id, p.key).second) ++dup_id;
+        if (!fwd.emplace(p.key, p.id).second) ++dup_key;
+        if (by_key.find(p.key) == by_key.end()) ++missing;
+        if (p.id > max_id) max_id = p.id;
+    }
+    std::printf("순번 최대 %u, 중복 %zu건\n", max_id, dup_id);
+    std::printf("아이템 키 중복 %zu건, 아이템 표에 없는 키 %zu건\n",
+                dup_key, missing);
+
+    // 대응표의 순서가 아이템 표(ItemInfoManager)의 순서와 같은지 전수로
+    // 본다. 같다면 순번은 곧 목록에서의 위치라 별도 표 없이도 풀린다.
+    std::size_t order_diff = 0;
+    std::size_t first_diff = 0;
+    const std::size_t n = pairs.size() < items.size() ? pairs.size()
+                                                     : items.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        if (pairs[i].key == items[i].key) continue;
+        if (order_diff == 0) first_diff = i;
+        ++order_diff;
+    }
+    if (pairs.size() != items.size()) {
+        std::printf("아이템 표와 개수가 다릅니다 (%zu / %zu)\n", pairs.size(),
+                    items.size());
+    }
+    if (order_diff == 0) {
+        std::printf("아이템 표와 순서가 %zu칸 전부 같습니다\n", n);
+    } else {
+        std::printf("아이템 표와 순서가 다른 칸 %zu개 (처음 %zu번)\n",
+                    order_diff, first_diff);
+    }
+
+    // itemmap id <값> ...   역조회
+    if (argc > 3 && std::strcmp(argv[2], "id") == 0) {
+        std::printf("\n%-8s %-11s %s\n", "순번", "아이템키", "이름");
+        for (int i = 3; i < argc; ++i) {
+            const std::uint32_t id = static_cast<std::uint32_t>(
+                std::strtoul(argv[i], nullptr, 10));
+            const auto it = by_id.find(id);
+            if (it == by_id.end()) {
+                std::printf("%-8u %-11s %s\n", id, "-", "(대응표에 없음)");
+                continue;
+            }
+            std::printf("%-8u %-11u %s\n", id, it->second,
+                        name_of(it->second));
+        }
+        return;
+    }
+
+    // itemmap key <값> ...  정조회
+    if (argc > 3 && std::strcmp(argv[2], "key") == 0) {
+        std::printf("\n%-11s %-8s %s\n", "아이템키", "순번", "이름");
+        for (int i = 3; i < argc; ++i) {
+            const std::uint32_t key = static_cast<std::uint32_t>(
+                std::strtoul(argv[i], nullptr, 10));
+            const auto it = fwd.find(key);
+            if (it == fwd.end()) {
+                std::printf("%-11u %-8s %s\n", key, "-", "(대응표에 없음)");
+                continue;
+            }
+            std::printf("%-11u %-8u %s\n", key, it->second, name_of(key));
+        }
+        return;
+    }
+
+    std::size_t max = 20;
+    if (argc > 2) max = std::strtoull(argv[2], nullptr, 10);
+    std::printf("\n%-8s %-11s %s\n", "순번", "아이템키", "이름");
+    for (std::size_t i = 0; i < pairs.size() && i < max; ++i) {
+        std::printf("%-8u %-11u %s\n", pairs[i].id, pairs[i].key,
+                    name_of(pairs[i].key));
+    }
+}
+
 void cmd_info(const Remote& r) {
     std::printf("PID          %lu\n", r.pid());
     std::printf("모듈 베이스  0x%llX\n",
@@ -1861,6 +2007,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "items") {
         cmd_items(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "itemmap") {
+        cmd_itemmap(rt, reader, argc, argv);
         return 0;
     }
     if (cmd == "inv") {

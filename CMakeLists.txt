@@ -96,6 +96,7 @@ add_executable(cdtb_tests
     tests/watchpoint_tests.cpp
     tests/localization_tests.cpp
     tests/items_tests.cpp
+    tests/item_key_map_tests.cpp
     tests/item_view_tests.cpp
     tests/icon_map_tests.cpp
     tests/cursor_tests.cpp
