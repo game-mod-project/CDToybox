@@ -118,3 +118,114 @@ TEST(parse_drops_a_nonpositive_count) {
 }
 
 }  // namespace
+
+// ------------------------------------------------- 담금질과 소켓
+
+// 지급은 담금질·소켓이 빈 장비를 준다. 캐릭터가 손댄 장비를 그대로
+// 보관했다 꺼내려면 그 둘을 파일에 실어야 한다.
+//
+// 줄 형식은 기존 것을 늘린다 - 뒤에 토큰을 붙일 뿐이라 옛 파일이
+// 그대로 읽힌다.
+//
+//   item <키> <개수> [t<담금질>] [s<슬롯>:<보석키>:<원본12자리hex>]...
+
+TEST(serialize_writes_temper_and_sockets) {
+    cdtb::game::Stash s;
+    const int i = s.add_set("군주의 검");
+    cdtb::game::StashEntry e{200914, 1};
+    e.temper = 1;
+    e.sockets.push_back(
+        cdtb::game::StashSocket{0, 1002569, {0x24, 0x0D, 0xFF, 0xFF, 0x00, 0xFF}});
+    s.set_at(i)->items.push_back(e);
+
+    const std::string text = s.serialize();
+    CHECK(text.find("item 200914 1 t1 s0:1002569:240DFFFF00FF\n") !=
+          std::string::npos);
+}
+
+TEST(serialize_omits_temper_zero_and_empty_sockets) {
+    // 대부분의 아이템은 둘 다 없다. 그런 줄까지 길어지면 옛 파일과
+    // 달라 보이고 눈으로 읽기도 나빠진다.
+    cdtb::game::Stash s;
+    const int i = s.add_set("잡동사니");
+    s.set_at(i)->items.push_back(cdtb::game::StashEntry{50001, 100});
+
+    CHECK(s.serialize().find("item 50001 100\n") != std::string::npos);
+}
+
+TEST(parse_reads_temper_and_sockets) {
+    cdtb::game::Stash s;
+    CHECK(s.parse("set 군주의 검\n"
+                  "item 200914 1 t1 s0:1002569:240DFFFF00FF"
+                  " s2:1002810:900CFFFF02FF\n"));
+    CHECK_EQ(s.set_count(), 1);
+    if (s.set_count() != 1) return;
+    const auto& items = s.set_at(0)->items;
+    CHECK_EQ(items.size(), std::size_t{1});
+    if (items.empty()) return;
+    CHECK_EQ(items[0].key, std::uint32_t{200914});
+    CHECK_EQ(items[0].temper, std::uint32_t{1});
+    CHECK_EQ(items[0].sockets.size(), std::size_t{2});
+    if (items[0].sockets.size() < 2) return;
+    CHECK_EQ(items[0].sockets[0].slot, std::uint32_t{0});
+    CHECK_EQ(items[0].sockets[0].key, std::uint32_t{1002569});
+    CHECK_EQ(items[0].sockets[0].raw[0], std::uint8_t{0x24});
+    CHECK_EQ(items[0].sockets[0].raw[5], std::uint8_t{0xFF});
+    CHECK_EQ(items[0].sockets[1].slot, std::uint32_t{2});
+    CHECK_EQ(items[0].sockets[1].key, std::uint32_t{1002810});
+}
+
+TEST(parse_still_reads_an_item_line_without_extras) {
+    // 옛 파일이 그대로 읽혀야 한다.
+    cdtb::game::Stash s;
+    CHECK(s.parse("set 옛 세트\nitem 50001 100\n"));
+    CHECK_EQ(s.set_count(), 1);
+    if (s.set_count() != 1) return;
+    const auto& items = s.set_at(0)->items;
+    CHECK_EQ(items.size(), std::size_t{1});
+    if (items.empty()) return;
+    CHECK_EQ(items[0].count, std::int64_t{100});
+    CHECK_EQ(items[0].temper, std::uint32_t{0});
+    CHECK(items[0].sockets.empty());
+}
+
+TEST(parse_drops_a_broken_socket_token) {
+    // 손으로 고치다 깨질 수 있다. 그 토큰만 버리고 줄은 살린다.
+    cdtb::game::Stash s;
+    CHECK(s.parse("set 깨진 줄\n"
+                  "item 200914 1 t2 s0:1002569 sXYZ s1:1002785:8E0CFFFF01FF\n"));
+    CHECK_EQ(s.set_count(), 1);
+    if (s.set_count() != 1) return;
+    const auto& items = s.set_at(0)->items;
+    CHECK_EQ(items.size(), std::size_t{1});
+    if (items.empty()) return;
+    CHECK_EQ(items[0].temper, std::uint32_t{2});
+    CHECK_EQ(items[0].sockets.size(), std::size_t{1});
+    if (items[0].sockets.empty()) return;
+    CHECK_EQ(items[0].sockets[0].key, std::uint32_t{1002785});
+}
+
+TEST(round_trip_keeps_temper_and_sockets) {
+    cdtb::game::Stash a;
+    const int i = a.add_set("가방 export");
+    cdtb::game::StashEntry e{121054, 1};
+    e.temper = 2;
+    e.sockets.push_back(
+        cdtb::game::StashSocket{1, 1002791, {0x8F, 0x0C, 0xFF, 0xFF, 0x01, 0xFF}});
+    a.set_at(i)->items.push_back(e);
+
+    cdtb::game::Stash b;
+    CHECK(b.parse(a.serialize()));
+    CHECK_EQ(b.set_count(), 1);
+    if (b.set_count() != 1) return;
+    const auto& items = b.set_at(0)->items;
+    CHECK_EQ(items.size(), std::size_t{1});
+    if (items.empty()) return;
+    CHECK_EQ(items[0].key, std::uint32_t{121054});
+    CHECK_EQ(items[0].temper, std::uint32_t{2});
+    CHECK_EQ(items[0].sockets.size(), std::size_t{1});
+    if (items[0].sockets.empty()) return;
+    CHECK_EQ(items[0].sockets[0].slot, std::uint32_t{1});
+    CHECK_EQ(items[0].sockets[0].key, std::uint32_t{1002791});
+    CHECK_EQ(items[0].sockets[0].raw[4], std::uint8_t{0x01});
+}

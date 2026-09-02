@@ -22,6 +22,78 @@ bool starts_with(const std::string& s, const char* p) {
     return s.size() >= n && s.compare(0, n, p) == 0;
 }
 
+int hex_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+std::string to_hex(const std::uint8_t* p, std::size_t n) {
+    static const char* kDigits = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(n * 2);
+    for (std::size_t i = 0; i < n; ++i) {
+        out += kDigits[p[i] >> 4];
+        out += kDigits[p[i] & 0x0F];
+    }
+    return out;
+}
+
+// `s<슬롯>:<보석키>:<원본12hex>` 하나를 읽는다. 어디든 어긋나면
+// false 다 - 그 토큰만 버리고 줄은 살린다.
+bool parse_socket(const std::string& tok, StashSocket* out) {
+    const std::size_t c1 = tok.find(':', 1);
+    if (c1 == std::string::npos) return false;
+    const std::size_t c2 = tok.find(':', c1 + 1);
+    if (c2 == std::string::npos) return false;
+
+    const std::string hex = tok.substr(c2 + 1);
+    if (hex.size() != sizeof(out->raw) * 2) return false;
+
+    StashSocket s;
+    s.slot = static_cast<std::uint32_t>(
+        std::strtoul(tok.c_str() + 1, nullptr, 10));
+    s.key = static_cast<std::uint32_t>(
+        std::strtoul(tok.c_str() + c1 + 1, nullptr, 10));
+    if (s.key == 0) return false;
+
+    for (std::size_t i = 0; i < sizeof(s.raw); ++i) {
+        const int hi = hex_value(hex[i * 2]);
+        const int lo = hex_value(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return false;
+        s.raw[i] = static_cast<std::uint8_t>((hi << 4) | lo);
+    }
+    *out = s;
+    return true;
+}
+
+// `item` 줄의 개수 뒤에 붙은 토큰들을 읽는다. 모르는 토큰은 버린다.
+void parse_item_extras(const char* rest, StashEntry* e) {
+    if (rest == nullptr) return;
+    std::string text(rest);
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t')) {
+            ++pos;
+        }
+        const std::size_t start = pos;
+        while (pos < text.size() && text[pos] != ' ' && text[pos] != '\t') {
+            ++pos;
+        }
+        if (start == pos) break;
+        const std::string tok = text.substr(start, pos - start);
+
+        if (tok[0] == 't') {
+            e->temper = static_cast<std::uint32_t>(
+                std::strtoul(tok.c_str() + 1, nullptr, 10));
+        } else if (tok[0] == 's') {
+            StashSocket s;
+            if (parse_socket(tok, &s)) e->sockets.push_back(s);
+        }
+    }
+}
+
 }  // namespace
 
 bool Stash::is_favorite(std::uint32_t key) const {
@@ -66,7 +138,16 @@ std::string Stash::serialize() const {
         out += "set " + s.name + "\n";
         for (const auto& e : s.items) {
             out += "item " + std::to_string(e.key) + " " +
-                   std::to_string(e.count) + "\n";
+                   std::to_string(e.count);
+            // 없는 것은 안 쓴다. 대부분의 아이템은 둘 다 없어서, 붙이면
+            // 옛 파일과 달라 보이고 눈으로 읽기도 나빠진다.
+            if (e.temper != 0) out += " t" + std::to_string(e.temper);
+            for (const auto& k : e.sockets) {
+                out += " s" + std::to_string(k.slot) + ":" +
+                       std::to_string(k.key) + ":" +
+                       to_hex(k.raw, sizeof(k.raw));
+            }
+            out += "\n";
         }
     }
     return out;
@@ -101,10 +182,15 @@ bool Stash::parse(const std::string& text) {
             char* end = nullptr;
             const auto k = static_cast<std::uint32_t>(
                 std::strtoul(line.c_str() + 5, &end, 10));
+            char* rest = nullptr;
             const auto n =
-                static_cast<std::int64_t>(std::strtoll(end, nullptr, 10));
+                static_cast<std::int64_t>(std::strtoll(end, &rest, 10));
             if (k != 0 && n > 0) {
-                sets_.back().items.push_back(StashEntry{k, n});
+                StashEntry e;
+                e.key = k;
+                e.count = n;
+                parse_item_extras(rest, &e);
+                sets_.back().items.push_back(std::move(e));
             }
         }
         // 모르는 줄은 조용히 버린다.
