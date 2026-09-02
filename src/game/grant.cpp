@@ -154,15 +154,19 @@ void run_pending_if_any() {
     g_running.store(false, std::memory_order_release);
 }
 
-// 작업 콜백을 부르기 **전에** 우리 일을 한다. 그 자리는 스레드
-// 본체가 막 넘어온 지점이라 락을 쥐고 있지 않다.
+// 작업 콜백이 **끝난 뒤에** 우리 일을 한다.
+//
+// 진입 시점에 해 봤더니 요청이 실행되지 않았다 - 그때는 TLS 블록이
+// 아직 서 있지 않다. 작업이 돌면서 늦게 잡히는 구조다. 콜백이
+// 돌아온 자리는 그 작업이 쥐었던 락을 이미 놓았고 TLS 는 서 있다.
+// 스택도 여전히 얕다(스레드 본체 -> 이 함수).
 void __fastcall det_task_dispatch(void* self) {
+    g_orig_dispatch(self);
     if (g_detour_depth == 0) {
         ++g_detour_depth;
         run_pending_if_any();
         --g_detour_depth;
     }
-    g_orig_dispatch(self);
 }
 
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
@@ -193,10 +197,16 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         if (now != n) g_seen_count.store(now, std::memory_order_release);
     }
 
-    // 예전에는 여기서 요청을 실행했다. 그 자리는 게임 코드 한복판이라
-    // 락을 쥐고 있을 수 있고, 실측에서 교착해 게임 조작이 통째로
-    // 멈췄다. 지금은 작업 디스패처에서만 실행한다. 이 훅은 세션을
-    // 모으는 일만 한다.
+    // 실행 지점이 둘이다. 작업 디스패처가 더 안전하지만 그 자리에는
+    // TLS 가 서 있지 않아 - 두 번 실측했다 - 요청이 실행되지 않았다.
+    // 작업이 도는 동안에만 잡히고 끝나면 정리되는 모양이다.
+    //
+    // 그래서 여기서도 집어 간다. 이 자리는 게임 코드 한복판이라
+    // 위험하지만 실제로 동작이 확인된 유일한 자리다. 깊이가 1일
+    // 때만, 한 번에 하나만, 2초 간격으로 - 그 셋을 넣은 뒤로는
+    // 교착이 재발하지 않았다.
+    if (g_detour_depth == 1) run_pending_if_any();
+
     if (g_detour_depth == 1 && g_reader != nullptr &&
         !g_traced.load(std::memory_order_acquire) && thread_ready_for_spawn()) {
         if (!g_traced.exchange(true, std::memory_order_acq_rel)) {
