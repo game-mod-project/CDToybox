@@ -46,7 +46,39 @@ struct InventoryRecord {
     std::uint32_t index = 0;         // 아이템 표에서의 순번
     std::uint32_t temper = 0;        // 담금질
     std::int64_t count = 0;
+    std::uintptr_t sockets = 0;      // 소켓 배열 (레코드 +0x60)
+    std::uint32_t socket_count = 0;  // 소켓 칸 수 (실측 5)
 };
+
+// 소켓 한 칸. 실측 6바이트다.
+//
+//   FF FF 00 00 FF 03    빈 칸 (첫 칸)
+//   FF FF 00 00 FF 00    빈 칸 (나머지)
+//
+//   +0x00  u16  박힌 것의 아이템 표 순번. 0xFFFF 면 빈 칸
+//   +0x02  u16  뜻 모름 (실측 전부 0)
+//   +0x04  u8   뜻 모름 (실측 전부 0xFF)
+//   +0x05  u8   뜻 모름 (첫 칸만 3, 나머지 0)
+//
+// 뜻을 다 모르므로 원본 바이트를 그대로 들고 있는다. export 는 모르는
+// 칸까지 되돌려야 하기 때문이다.
+inline constexpr std::size_t kSocketSize = 6;
+
+struct InventorySocket {
+    std::uint32_t slot = 0;
+    std::uint16_t index = 0xFFFF;
+    std::uint8_t raw[kSocketSize]{};
+
+    bool empty() const { return index == 0xFFFF; }
+};
+
+// 소켓 칸이 이보다 많으면 레코드를 잘못 집은 것으로 본다. 실측 5칸이다.
+inline constexpr std::uint32_t kMaxSockets = 64;
+
+// 레코드의 소켓 배열을 읽는다. 배열이 없으면 false 다.
+bool read_inventory_sockets(const mem::Reader& reader,
+                            const InventoryRecord& record,
+                            std::vector<InventorySocket>* out);
 
 // 배열 칸 수가 이보다 크면 컨테이너를 잘못 집은 것으로 본다.
 // 실측 1,460칸이다.

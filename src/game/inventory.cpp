@@ -23,6 +23,8 @@ constexpr std::size_t kRecInstanceId = 0x00;    // u64
 constexpr std::size_t kRecIndex = 0x08;         // u16 아이템 표 순번
 constexpr std::size_t kRecTemper = 0x0A;        // u16 담금질
 constexpr std::size_t kRecCount = 0x10;         // i64
+constexpr std::size_t kRecSockets = 0x60;       // ptr 소켓 배열
+constexpr std::size_t kRecSocketCount = 0x68;   // u32 (실측 5)
 
 constexpr std::uint16_t kEmptyIndex = 0xFFFF;
 constexpr std::uint64_t kEmptyInstance = ~0ull;
@@ -95,13 +97,16 @@ bool read_inventory_records(const mem::Reader& reader,
         const std::uint8_t* p =
             raw.data() + static_cast<std::size_t>(i) * kRecStride;
 
-        std::uint64_t instance = 0;
+        std::uint64_t instance = 0, sockets = 0;
         std::uint16_t index = 0, temper = 0;
+        std::uint32_t socket_count = 0;
         std::int64_t count = 0;
         std::memcpy(&instance, p + kRecInstanceId, sizeof(instance));
         std::memcpy(&index, p + kRecIndex, sizeof(index));
         std::memcpy(&temper, p + kRecTemper, sizeof(temper));
         std::memcpy(&count, p + kRecCount, sizeof(count));
+        std::memcpy(&sockets, p + kRecSockets, sizeof(sockets));
+        std::memcpy(&socket_count, p + kRecSocketCount, sizeof(socket_count));
 
         // 빈 칸은 인스턴스 ID 가 전부 0xFF 이고 순번도 0xFFFF 다.
         if (instance == kEmptyInstance || index == kEmptyIndex) continue;
@@ -114,9 +119,41 @@ bool read_inventory_records(const mem::Reader& reader,
         r.index = index;
         r.temper = temper;
         r.count = count;
+        r.sockets = static_cast<std::uintptr_t>(sockets);
+        r.socket_count = socket_count;
         rs.push_back(r);
     }
     *out = std::move(rs);
+    return true;
+}
+
+bool read_inventory_sockets(const mem::Reader& reader,
+                            const InventoryRecord& record,
+                            std::vector<InventorySocket>* out) {
+    if (out == nullptr || record.sockets == 0) return false;
+    if (record.socket_count == 0 || record.socket_count > kMaxSockets) {
+        return false;
+    }
+
+    std::vector<std::uint8_t> raw(
+        static_cast<std::size_t>(record.socket_count) * kSocketSize);
+    if (!reader.read(record.sockets, raw.data(), raw.size())) return false;
+
+    std::vector<InventorySocket> ss;
+    ss.reserve(record.socket_count);
+    for (std::uint32_t i = 0; i < record.socket_count; ++i) {
+        const std::uint8_t* p =
+            raw.data() + static_cast<std::size_t>(i) * kSocketSize;
+
+        InventorySocket s;
+        s.slot = i;
+        std::memcpy(&s.index, p, sizeof(s.index));
+        // 뜻을 다 모르므로 원본을 그대로 들고 있는다. export 는 모르는
+        // 칸까지 되돌려야 한다.
+        std::memcpy(s.raw, p, kSocketSize);
+        ss.push_back(s);
+    }
+    *out = std::move(ss);
     return true;
 }
 
