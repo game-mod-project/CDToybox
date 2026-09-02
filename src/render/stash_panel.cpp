@@ -148,7 +148,21 @@ void draw_stash_panel() {
         const int pick = game::best_actor_index(hits, server, n);
         if (pick >= 0) {
             const auto& e = g_queue[g_queue_at];
-            if (game::request_give(seen[pick], e.key, e.count)) ++g_queue_at;
+            // 담금질은 아이템마다 상한이 있고 넘으면 게임이 조용히
+            // 거절한다 - 그러면 큐가 그 자리에서 영영 멈춘다. 파일에
+            // 큰 값이 있으면 깎아서 보낸다.
+            std::uint32_t cap = 0;
+            for (const auto& c : game::item_catalog()) {
+                if (c.key == e.key) {
+                    cap = c.max_temper;
+                    break;
+                }
+            }
+            const auto temper =
+                static_cast<std::uint16_t>(e.temper > cap ? cap : e.temper);
+            if (game::request_give(seen[pick], e.key, e.count, temper)) {
+                ++g_queue_at;
+            }
         } else {
             g_queue.clear();     // 세션이 없으면 접는다
             g_queue_at = 0;
