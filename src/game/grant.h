@@ -129,6 +129,17 @@ bool find_entity_lookup(const std::uint8_t* body, std::size_t n,
 bool entity_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap);
 
+// 표 조회 함수를 후킹해 "이 키를 어느 표에서 찾는지" 를 잡는다.
+//
+// 인벤토리 레코드 +0x08 의 값(5915 등)은 아이템 표에도 현지화에도
+// 없다. 별도 표가 있다는 뜻인데, 같은 조회 함수를 쓰는 표가 82개라
+// 눈으로 고를 수 없다. UI 가 이름을 그릴 때 반드시 조회하므로
+// 그 순간을 잡는다.
+//
+// 찾는 키가 들어올 때만 남긴다 - 이 함수는 아주 자주 불린다.
+bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
+                         std::uint32_t watch_key);
+
 // 부르기 전에 게임이 하는 검사를 우리도 한다. 게임 코드에 그대로
 // 있다 - 키가 0이거나 개수가 0 이하면 게임이 실패로 돌려준다.
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count);

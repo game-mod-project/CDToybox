@@ -1,6 +1,7 @@
 #include "game/grant.h"
 
 #include <windows.h>
+#include <intrin.h>
 
 #include <atomic>
 #include <cstddef>
@@ -12,6 +13,11 @@
 
 namespace cdtb::game {
 namespace {
+
+// 표 조회 함수. 아이템 표를 비롯해 82개 표가 이걸 쓴다.
+//   rcx = 표 + 0x68,  rdx = &키
+constexpr const char* kTableLookupPattern =
+    "48 83 EC 08 83 79 04 00 4C 8B D1 75";
 
 // 함수 앞머리 그대로다. 주소를 박아 두면 패치마다 밀리므로 바이트로
 // 찾는다. 둘 다 349MB 이미지 안에서 유일한 것을 확인했다.
@@ -72,6 +78,14 @@ CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
+
+// 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
+using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
+TableLookupFn g_orig_lookup = nullptr;
+void* g_lookup_target = nullptr;
+bool g_lookup_installed = false;
+std::atomic<std::uint32_t> g_watch_key{0};
+std::atomic<int> g_watch_left{0};
 
 // 내구도 처리기. 인자 넷뿐이다.
 using EndurFn = void(__fastcall*)(void*, void*, const std::uint16_t*,
@@ -217,6 +231,22 @@ void* __fastcall det_entity_lookup(void* mgr, void* out, std::uint32_t id) {
         }
     }
     return g_orig_entity(mgr, out, id);
+}
+
+void* __fastcall det_table_lookup(void* table, const std::uint32_t* key) {
+    const std::uint32_t want = g_watch_key.load(std::memory_order_relaxed);
+    if (want != 0 && key != nullptr && *key == want &&
+        g_watch_left.load(std::memory_order_relaxed) > 0) {
+        g_watch_left.fetch_sub(1, std::memory_order_relaxed);
+        void* ret = _ReturnAddress();
+        const std::uintptr_t base = (g_reader != nullptr)
+                                        ? g_reader->module_base()
+                                        : 0;
+        log::infof("표 조회: 키 {} 표 0x{:X} 부른 곳 모듈+0x{:X}", want,
+                   reinterpret_cast<std::uintptr_t>(table),
+                   reinterpret_cast<std::uintptr_t>(ret) - base);
+    }
+    return g_orig_lookup(table, key);
 }
 
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
@@ -452,6 +482,32 @@ int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap) {
         if (hits_out != nullptr) hits_out[i] = g_ent_hits[i];
     }
     return take;
+}
+
+bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
+                         std::uint32_t watch_key) {
+    g_watch_key.store(watch_key, std::memory_order_relaxed);
+    g_watch_left.store(8, std::memory_order_relaxed);
+    if (g_lookup_installed) return true;
+
+    std::uint64_t rva = 0;
+    if (!find_one(rtti.image(), kTableLookupPattern, &rva)) {
+        log::warnf("표 조회 함수를 못 찾았다");
+        return false;
+    }
+    if (!mem::hook_init()) return false;
+    g_lookup_target = reinterpret_cast<void*>(
+        reader.module_base() + static_cast<std::uintptr_t>(rva));
+    if (!mem::hook_install(g_lookup_target, &det_table_lookup,
+                           reinterpret_cast<void**>(&g_orig_lookup))) {
+        log::errorf("표 조회 후킹 실패 (RVA 0x{:X})", rva);
+        g_lookup_target = nullptr;
+        return false;
+    }
+    g_lookup_installed = true;
+    log::infof("표 조회 후킹 설치 (RVA 0x{:X}) - 키 {} 을 지켜본다", rva,
+               watch_key);
+    return true;
 }
 
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,

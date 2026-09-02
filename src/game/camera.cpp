@@ -193,6 +193,8 @@ void auto_analysis_loop() {
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
+    // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
+    table_probe_install(rtti, reader, 5915);
     spawn_trace_install();
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
