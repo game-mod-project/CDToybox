@@ -269,6 +269,35 @@ TEST(find_task_dispatcher_fails_when_absent) {
     CHECK(!cdtb::game::find_task_dispatcher_rva(img, &rva));
 }
 
+// 능력치·처치 치트는 대상 엔티티 ID 를 페이로드로 받는다. 그 ID 를
+// 엔티티로 바꾸는 함수는 앞머리가 세 곳에서 겹쳐 바이트 패턴으로
+// 찍을 수 없다. 대신 처리기 본문에서 호출 자리를 찾는다.
+//
+//   44 8B 03           mov r8d, dword ptr [rbx]   대상 ID
+//   48 8D 54 24 60     lea rdx, [rsp+0x60]
+//   48 8B 08           mov rcx, qword ptr [rax]
+//   E8 rel32           call 엔티티 조회
+//
+// 실측에서 처리기 본문(1964바이트) 안에 딱 한 곳이었다.
+TEST(find_entity_lookup_reads_the_relative_target) {
+    std::vector<std::uint8_t> body = {
+        0x90, 0x90,
+        0x44, 0x8B, 0x03, 0x48, 0x8D, 0x54, 0x24, 0x60, 0x48, 0x8B, 0x08,
+        0xE8, 0x10, 0x00, 0x00, 0x00};
+    std::uint64_t fn = 0;
+    CHECK(cdtb::game::find_entity_lookup(body.data(), body.size(), 0x1000,
+                                         &fn));
+    // call 은 0x100D, 다음 명령은 0x1012, 대상은 0x1022
+    CHECK_EQ(fn, std::uint64_t{0x1022});
+}
+
+TEST(find_entity_lookup_fails_without_the_anchor) {
+    const std::vector<std::uint8_t> body(64, 0x90);
+    std::uint64_t fn = 0;
+    CHECK(!cdtb::game::find_entity_lookup(body.data(), body.size(), 0x1000,
+                                          &fn));
+}
+
 // 세션이 없으면 요청 자체를 걸지 않는다.
 TEST(request_refuses_without_a_session) {
     const float pos[3] = {0.0f, 0.0f, 0.0f};

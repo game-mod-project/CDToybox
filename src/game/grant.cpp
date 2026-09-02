@@ -70,6 +70,18 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
                                     const float*);
 CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
+CheatMessage g_stat_msg;      // VaryStat - 대상 ID 조회 함수를 여기서 유도한다
+
+// 엔티티 조회. (매니저, 결과, u32 ID)
+using EntityLookupFn = void*(__fastcall*)(void*, void*, std::uint32_t);
+EntityLookupFn g_orig_entity = nullptr;
+void* g_entity_target = nullptr;
+bool g_entity_installed = false;
+
+constexpr int kEntCap = 32;
+std::uint32_t g_ent[kEntCap]{};
+std::uint32_t g_ent_hits[kEntCap]{};
+std::atomic<int> g_ent_count{0};
 
 // TrItemValue 생성자와 인벤토리 직행 처리기.
 using CtorFn = void*(__fastcall*)(void*);
@@ -167,6 +179,26 @@ void __fastcall det_task_dispatch(void* self) {
         run_pending_if_any();
         --g_detour_depth;
     }
+}
+
+// 지나가는 엔티티 ID 를 모은다. 원본을 그대로 부른다.
+void* __fastcall det_entity_lookup(void* mgr, void* out, std::uint32_t id) {
+    if (id != 0) {
+        const int n = g_ent_count.load(std::memory_order_relaxed);
+        int i = 0;
+        for (; i < n; ++i) {
+            if (g_ent[i] == id) {
+                ++g_ent_hits[i];
+                break;
+            }
+        }
+        if (i == n && n < kEntCap) {
+            g_ent[n] = id;
+            g_ent_hits[n] = 1;
+            g_ent_count.store(n + 1, std::memory_order_release);
+        }
+    }
+    return g_orig_entity(mgr, out, id);
 }
 
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
@@ -331,6 +363,66 @@ bool find_actor_getter_rva(const std::vector<std::uint8_t>& image,
 bool find_spawn_ground_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out) {
     return find_one(image, kSpawnGroundPattern, rva_out);
+}
+
+bool find_entity_lookup(const std::uint8_t* body, std::size_t n,
+                        std::uint64_t body_rva, std::uint64_t* fn_rva) {
+    if (body == nullptr || fn_rva == nullptr) return false;
+    static const std::uint8_t kAnchor[] = {0x44, 0x8B, 0x03, 0x48, 0x8D, 0x54,
+                                           0x24, 0x60, 0x48, 0x8B, 0x08, 0xE8};
+    std::uint64_t found = 0;
+    int hits = 0;
+    if (n < sizeof(kAnchor) + 4) return false;
+    for (std::size_t i = 0; i + sizeof(kAnchor) + 4 <= n; ++i) {
+        if (std::memcmp(body + i, kAnchor, sizeof(kAnchor)) != 0) continue;
+        std::int32_t rel = 0;
+        std::memcpy(&rel, body + i + sizeof(kAnchor), sizeof(rel));
+        found = body_rva + i + sizeof(kAnchor) + 4 +
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(rel));
+        if (++hits > 1) return false;
+    }
+    if (hits != 1) return false;
+    *fn_rva = found;
+    return true;
+}
+
+bool entity_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_entity_installed) return true;
+    if (g_stat_msg.handler == 0 &&
+        !resolve_cheat_message(rtti, reader, "VaryStatCheatReq", &g_stat_msg)) {
+        return false;
+    }
+    const auto& img = rtti.image();
+    const std::uint64_t hrva = g_stat_msg.handler - reader.module_base();
+    if (hrva + 0x900 > img.size()) return false;
+
+    std::uint64_t fn = 0;
+    if (!find_entity_lookup(img.data() + hrva, 0x900, hrva, &fn)) {
+        log::warnf("엔티티 조회 함수를 못 찾았다");
+        return false;
+    }
+    if (!mem::hook_init()) return false;
+    g_entity_target = reinterpret_cast<void*>(
+        reader.module_base() + static_cast<std::uintptr_t>(fn));
+    if (!mem::hook_install(g_entity_target, &det_entity_lookup,
+                           reinterpret_cast<void**>(&g_orig_entity))) {
+        log::errorf("엔티티 조회 후킹 실패 (RVA 0x{:X})", fn);
+        g_entity_target = nullptr;
+        return false;
+    }
+    g_entity_installed = true;
+    log::infof("엔티티 조회 후킹 설치 (RVA 0x{:X})", fn);
+    return true;
+}
+
+int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap) {
+    const int n = g_ent_count.load(std::memory_order_acquire);
+    const int take = (n < cap) ? n : cap;
+    for (int i = 0; i < take; ++i) {
+        out[i] = g_ent[i];
+        if (hits_out != nullptr) hits_out[i] = g_ent_hits[i];
+    }
+    return take;
 }
 
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,

@@ -116,6 +116,19 @@ bool session_is_server(int index);
 bool find_handler_call(const std::uint8_t* body, std::size_t n,
                        std::uint64_t body_rva, std::uint64_t* handler_rva);
 
+// 능력치·처치 치트는 대상 엔티티 ID 를 페이로드로 받는다. 그 ID 를
+// 엔티티로 바꾸는 함수는 앞머리가 세 곳에서 겹쳐 바이트 패턴으로
+// 찍을 수 없다. 처리기 본문에서 호출 자리를 찾는다.
+//
+//   44 8B 03 / 48 8D 54 24 60 / 48 8B 08 / E8 rel32
+bool find_entity_lookup(const std::uint8_t* body, std::size_t n,
+                        std::uint64_t body_rva, std::uint64_t* fn_rva);
+
+// 엔티티 조회를 후킹해 지나가는 ID 를 모은다. 플레이어 것은 게임이
+// 계속 조회하므로 횟수로 가린다 - 세션 때와 같은 수법이다.
+bool entity_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
+int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap);
+
 // 부르기 전에 게임이 하는 검사를 우리도 한다. 게임 코드에 그대로
 // 있다 - 키가 0이거나 개수가 0 이하면 게임이 실패로 돌려준다.
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count);

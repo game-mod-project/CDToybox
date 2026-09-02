@@ -9,6 +9,8 @@
 
 #include "core/log.h"
 #include "game/analysis.h"
+#include <string>
+
 #include "game/grant.h"
 #include "game/items.h"
 #include "mem/reader.h"
@@ -190,6 +192,7 @@ void auto_analysis_loop() {
     tick_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
+    entity_hook_install(rtti, reader);
     spawn_trace_install();
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
@@ -231,8 +234,39 @@ void auto_analysis_loop() {
     // 아이템 이름을 얻으면 끝나므로, 그 뒤에 잡힌 세션에는 이름표가
     // 붙지 않았다 - 실측에서 목록이 전부 "확인 중" 이었다. 종료할
     // 때까지 계속 붙인다. 아직 안 붙은 것만 보므로 값싸다.
+    // 엔티티 ID 는 처음 30초만 봐도 충분히 갈린다. 플레이어 것은
+    // 게임이 계속 조회하므로 횟수가 압도적이다.
+    int ent_reports = 0;
     while (!g_stop.load()) {
         log_new_actors(rtti, reader);
+
+        if (ent_reports < 6) {
+            std::uint32_t ids[32]{};
+            std::uint32_t hits[32]{};
+            const int n = seen_entities(ids, hits, 32);
+            if (n > 0) {
+                // 많이 불린 순으로 위쪽 몇 개만 낸다.
+                int order[32];
+                for (int i = 0; i < n; ++i) order[i] = i;
+                for (int i = 0; i < n; ++i) {
+                    for (int j = i + 1; j < n; ++j) {
+                        if (hits[order[j]] > hits[order[i]]) {
+                            const int t = order[i];
+                            order[i] = order[j];
+                            order[j] = t;
+                        }
+                    }
+                }
+                std::string line;
+                for (int i = 0; i < n && i < 6; ++i) {
+                    line += std::to_string(ids[order[i]]) + "(" +
+                            std::to_string(hits[order[i]]) + "회) ";
+                }
+                log::infof("엔티티 ID 후보 {}개: {}", n, line);
+                ++ent_reports;
+            }
+        }
+
         for (int i = 0; i < 20 && !g_stop.load(); ++i) ::Sleep(100);
     }
 }
