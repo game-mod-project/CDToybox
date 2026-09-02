@@ -21,6 +21,7 @@ constexpr std::size_t kRecMaxStack = 0x18;  // u32 최대 스택
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
 constexpr std::size_t kRecCategory = 0xA3;  // u8  분류 (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  등급 (0=없음, 1..5)
+constexpr std::size_t kRecTemperCap = 0x250;  // u32 담금질 상한+1
 
 constexpr const char* kManagerClass = ".?AVItemInfoManager@pa@@";
 
@@ -120,6 +121,14 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         reader.read_value(e.record + kRecGrade, &e.grade);
         reader.read_value(e.record + kRecMaxStack, &e.max_stack);
         reader.read_value(e.record + kRecCategory, &e.category);
+
+        // 게임은 담금질을 "상한 - 1" 까지만 받는다. 상한이 0 인
+        // 아이템(재료 등)은 그대로 빼면 0xFFFFFFFF 가 되므로 0 으로
+        // 둔다 - 담금질이 없는 것이다.
+        std::uint32_t cap = 0;
+        reader.read_value(e.record + kRecTemperCap, &cap);
+        e.max_temper = (cap == 0) ? 0 : cap - 1;
+
         items.push_back(e);
     }
     *out = std::move(items);
@@ -144,6 +153,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.grade = e.grade;
         entry.category = e.category;
         entry.max_stack = e.max_stack;
+        entry.max_temper = e.max_temper;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);

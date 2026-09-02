@@ -30,6 +30,12 @@ struct ItemEntry {
     std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
     std::uint8_t category = 0;    // 74종. 이름은 아직 못 붙였다
     std::uint32_t max_stack = 0;  // 한 칸에 쌓이는 최대 개수
+    // 담금질로 올릴 수 있는 최고 값. 0 이면 담금질이 없는 아이템이다.
+    //
+    // 레코드 +0x250 은 상한 자체가 아니라 그것보다 하나 큰 값이다 -
+    // 게임이 `담금질 <= [+0x250] - 1` 로 검사한다. 실측에서 장비는
+    // 11 이라 0..10 이고 툴팁 게이지가 정확히 10칸이다.
+    std::uint32_t max_temper = 0;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -138,6 +144,7 @@ struct ItemCatalogEntry {
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
     std::uint32_t max_stack = 0;
+    std::uint32_t max_temper = 0;  // ItemEntry 의 같은 칸
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름

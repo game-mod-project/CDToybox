@@ -119,6 +119,7 @@ struct Pending {
     std::uint32_t key = 0;
     std::int64_t count = 0;
     float pos[3]{};
+    std::uint16_t temper = 0;    // 담금질 (TrItemValue +0x0C)
     std::uint16_t a = 0;         // 내구도 인자
     std::uint16_t b = 0;
 };
@@ -126,7 +127,7 @@ struct Pending {
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
                std::int64_t count, const float pos[3], SpawnOutcome* out);
 void run_give(std::uintptr_t session, std::uint32_t item_key,
-              std::int64_t count, SpawnOutcome* out);
+              std::int64_t count, std::uint16_t temper, SpawnOutcome* out);
 void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
                    SpawnOutcome* out);
 
@@ -184,7 +185,8 @@ void run_pending_if_any() {
         const Pending req = g_pending;
         switch (req.kind) {
             case Kind::Inventory:
-                run_give(req.session, req.key, req.count, &g_outcome);
+                run_give(req.session, req.key, req.count, req.temper,
+                         &g_outcome);
                 break;
             case Kind::Endurance:
                 run_endurance(req.session, req.a, req.b, &g_outcome);
@@ -941,7 +943,7 @@ void run_spawn(std::uintptr_t session, std::uint32_t item_key,
 
 // 인벤토리로 바로 넣는다. TLS 가 준비된 스레드에서만 부른다.
 void run_give(std::uintptr_t session, std::uint32_t item_key,
-              std::int64_t count, SpawnOutcome* out) {
+              std::int64_t count, std::uint16_t temper, SpawnOutcome* out) {
     SpawnOutcome o;
     std::uintptr_t gate = 0;
     if (!gate_object(*g_reader, session, &gate)) {
@@ -960,7 +962,7 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
         if (out != nullptr) *out = o;
         return;
     }
-    if (!fill_item_value(value, sizeof(value), item_key, count)) {
+    if (!fill_item_value(value, sizeof(value), item_key, count, temper)) {
         if (out != nullptr) *out = o;
         return;
     }
@@ -968,8 +970,8 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
     std::uint64_t packet[8]{};
     packet[0] = static_cast<std::uint64_t>(session);
 
-    log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {}", session, item_key,
-               count);
+    log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {} 담금질 {}", session,
+               item_key, count, temper);
     o.crashed = !call_give_guarded(
         reinterpret_cast<GiveFn>(g_give_msg.handler),
         reinterpret_cast<void*>(g_give_msg.descriptor), packet, value, &o.seh,
@@ -1035,10 +1037,11 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
 }
 
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
-                     std::int64_t count) {
+                     std::int64_t count, std::uint16_t temper) {
     if (buf == nullptr || n < 0x18) return false;
     auto* p = static_cast<std::uint8_t*>(buf);
     std::memcpy(p + 0x08, &item_key, sizeof(item_key));
+    std::memcpy(p + 0x0C, &temper, sizeof(temper));
     std::memcpy(p + 0x10, &count, sizeof(count));
     return true;
 }
@@ -1049,7 +1052,7 @@ bool give_ready() {
 }
 
 bool request_give(std::uintptr_t session, std::uint32_t item_key,
-                  std::int64_t count) {
+                  std::int64_t count, std::uint16_t temper) {
     if (!give_ready()) return false;
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     if (g_has_pending.load(std::memory_order_acquire)) return false;
@@ -1065,9 +1068,11 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;
+    g_pending.temper = temper;
     g_outcome = SpawnOutcome{};
     g_has_pending.store(true, std::memory_order_release);
-    log::infof("인벤토리 지급 요청을 걸었다 - 게임 스레드를 기다린다");
+    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {}) - 게임 스레드를 기다린다",
+               temper);
     return true;
 }
 

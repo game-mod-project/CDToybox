@@ -314,3 +314,50 @@ TEST(grade_label_names_the_five_tiers) {
     // 표에 없는 값이 나와도 죽지 않는다.
     CHECK_EQ(std::string(cdtb::game::grade_label(9)), std::string("?"));
 }
+
+// -------------------------------------------------------- 담금질 상한
+
+// 지급으로 담금질을 실어 보내려면 상한을 알아야 한다. 게임의 작업
+// 함수가 `담금질 <= [레코드+0x250] - 1` 을 검사하고 넘으면 거절한다
+// (docs/superpowers/specs/2026-09-02-inventory.md).
+//
+// 실측: 장비는 +0x250 이 11 이라 0..10 이고 툴팁 게이지가 10칸이다.
+// 재료(스콜레사이트광석)는 0 이라 담금질이 없다.
+
+TEST(read_item_table_turns_the_cap_into_the_highest_level) {
+    Fixture f;
+    f.mem.put_u32(Fixture::kRecords + 0x250, 11);
+
+    std::vector<ItemEntry> items;
+    CHECK(cdtb::game::read_item_table(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                      &items, 0));
+    CHECK(!items.empty());
+    if (items.empty()) return;
+    CHECK_EQ(items[0].max_temper, std::uint32_t{10});
+}
+
+TEST(read_item_table_reports_no_temper_when_the_cap_is_zero) {
+    // 재료 아이템이다. 0 을 그대로 빼면 0xFFFFFFFF 가 된다.
+    Fixture f;
+    f.mem.put_u32(Fixture::kRecords + 0x250, 0);
+
+    std::vector<ItemEntry> items;
+    CHECK(cdtb::game::read_item_table(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                      &items, 0));
+    CHECK(!items.empty());
+    if (items.empty()) return;
+    CHECK_EQ(items[0].max_temper, std::uint32_t{0});
+}
+
+TEST(build_item_catalog_carries_the_temper_cap) {
+    Fixture f;
+    f.mem.put_u32(Fixture::kRecords + 0x250, 11);
+
+    std::vector<cdtb::game::ItemCatalogEntry> cat;
+    LocSystem sys;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                         sys, &cat));
+    CHECK(!cat.empty());
+    if (cat.empty()) return;
+    CHECK_EQ(cat[0].max_temper, std::uint32_t{10});
+}

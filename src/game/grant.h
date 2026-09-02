@@ -169,14 +169,23 @@ struct SpawnOutcome {
 // 실측에서 RVA 0x25493D2 가 정확히 그 자리였다.
 bool thread_ready_for_spawn();
 
-// TrItemValue 의 키와 개수 칸을 채운다. 나머지 칸은 게임 생성자가
-// 채우므로 여기서는 건드리지 않는다.
+// TrItemValue 의 키·개수·담금질 칸을 채운다. 나머지 칸은 게임
+// 생성자가 채우므로 여기서는 건드리지 않는다.
 //
 // 작업 함수(0x26A2600)가 검사하는 자리가 코드에 그대로 있다.
 //   mov eax, [r8+8]; test eax,eax; je 실패        아이템 키
 //   cmp qword [r8+0x10], 0; jle 실패              개수
+//
+// 담금질은 `+0x0C` 의 u16 이다. 변환 함수(0x2094050)가
+// `movzx eax,word [r14+0x0C]; mov [rdi+0x0A],ax` 로 레코드에 옮긴다.
+// 지금까지 지급이 담금질 0 인 장비만 준 것은 이 칸을 안 채웠기
+// 때문이다 - 생성자는 `+0x08` 만 0 으로 만들고 `+0x0C` 는 건드리지
+// 않는데 버퍼가 0 으로 초기화된다.
+//
+// **상한을 넘으면 게임이 조용히 거절한다.** 아이템 표의
+// `ItemCatalogEntry::max_temper` 로 미리 걸러야 한다.
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
-                     std::int64_t count);
+                     std::int64_t count, std::uint16_t temper = 0);
 
 // TrItemValue 를 담을 버퍼 크기.
 //
@@ -191,8 +200,11 @@ constexpr std::size_t kItemValueSize = 0x400;
 
 // 바닥이 아니라 인벤토리로 바로 넣는다.
 // (CreateItemFromTrItemValueCheatReq, ID 2944)
+//
+// `temper` 는 담금질이다. 아이템 표의 `max_temper` 를 넘으면 게임이
+// 조용히 거절하므로 부르는 쪽에서 먼저 걸러야 한다.
 bool request_give(std::uintptr_t session, std::uint32_t item_key,
-                  std::int64_t count);
+                  std::int64_t count, std::uint16_t temper = 0);
 
 // 인벤토리 직행을 쓸 수 있는가.
 bool give_ready();

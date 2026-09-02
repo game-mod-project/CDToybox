@@ -327,3 +327,48 @@ TEST(no_actor_before_the_hook_sees_one) {
 }
 
 }  // namespace
+
+// -------------------------------------------------------- 담금질 싣기
+
+// TrItemValue +0x0C 가 u16 담금질이다. 변환 함수(RVA 0x2094050)가
+// `movzx eax,word [r14+0x0C]; mov [rdi+0x0A],ax` 로 레코드에 옮긴다
+// (docs/superpowers/specs/2026-09-02-inventory.md).
+//
+// 지금까지 지급이 담금질 0 인 장비만 준 것은 이 칸을 안 채웠기
+// 때문이다 - 생성자는 +0x08 만 0 으로 만들고 +0x0C 는 건드리지 않는데
+// 버퍼가 0 으로 초기화된다.
+
+TEST(fill_item_value_writes_the_temper_at_0x0C) {
+    std::uint8_t buf[0x40]{};
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, 3));
+    std::uint16_t temper = 0;
+    std::memcpy(&temper, buf + 0x0C, sizeof(temper));
+    CHECK_EQ(temper, std::uint16_t{3});
+}
+
+TEST(fill_item_value_leaves_the_temper_zero_by_default) {
+    // 옛 호출자가 그대로 동작해야 한다.
+    std::uint8_t buf[0x40]{};
+    std::memset(buf, 0xAB, sizeof(buf));
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 7));
+    std::uint16_t temper = 0xFFFF;
+    std::memcpy(&temper, buf + 0x0C, sizeof(temper));
+    CHECK_EQ(temper, std::uint16_t{0});
+}
+
+TEST(fill_item_value_keeps_the_key_and_count) {
+    std::uint8_t buf[0x40]{};
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 5, 2));
+    std::uint32_t key = 0;
+    std::int64_t count = 0;
+    std::memcpy(&key, buf + 0x08, sizeof(key));
+    std::memcpy(&count, buf + 0x10, sizeof(count));
+    CHECK_EQ(key, std::uint32_t{200914});
+    CHECK_EQ(count, std::int64_t{5});
+}
+
+TEST(fill_item_value_refuses_a_buffer_too_small_for_the_temper) {
+    // 키와 개수만 쓰던 시절의 하한(0x18)은 담금질 칸을 포함한다.
+    std::uint8_t buf[0x10]{};
+    CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1, 3));
+}
