@@ -221,10 +221,11 @@ void apply_sort_specs() {
         return;
     }
     const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
+    // 0번은 별표 칸이다(정렬 없음). 나머지가 한 칸씩 밀렸다.
     switch (s.ColumnIndex) {
-        case 1: g_sort = game::ItemSort::Grade; break;
-        case 2: g_sort = game::ItemSort::Category; break;
-        case 3: g_sort = game::ItemSort::Name; break;
+        case 2: g_sort = game::ItemSort::Grade; break;
+        case 3: g_sort = game::ItemSort::Category; break;
+        case 4: g_sort = game::ItemSort::Name; break;
         default: g_sort = game::ItemSort::Key; break;
     }
     g_ascending = (s.SortDirection == ImGuiSortDirection_Ascending);
@@ -269,7 +270,12 @@ void draw_item_panel() {
         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Sortable |
         ImGuiTableFlags_SortTristate;
-    if (ImGui::BeginTable("items", 4, kFlags)) {
+    if (ImGui::BeginTable("items", 5, kFlags)) {
+        // 별표는 첫 칸에 따로 둔다. 키 칸에 겹쳐 놓았더니 줄 전체를
+        // 덮는 Selectable 이 클릭을 가져가 눌리지 않았다.
+        ImGui::TableSetupColumn("★", ImGuiTableColumnFlags_WidthFixed |
+                                         ImGuiTableColumnFlags_NoSort,
+                                26.0f);
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed |
                                           ImGuiTableColumnFlags_DefaultSort,
                                 90.0f);
@@ -288,38 +294,40 @@ void draw_item_panel() {
             const auto& e = *g_view[i];
             ImGui::TableNextRow();
 
-            ImGui::TableSetColumnIndex(0);
-            char key[32];
-            std::snprintf(key, sizeof(key), "%u", e.key);
             ImGui::PushID(static_cast<int>(i));
-            if (ImGui::Selectable(key, false,
-                                  ImGuiSelectableFlags_SpanAllColumns)) {
-                ImGui::SetClipboardText(key);
-                set_grant_item_key(e.key);   // 지급 칸에도 넣는다
-            }
-            // 별표로 보관함 즐겨찾기에 담는다. 줄 클릭과 겹치지
-            // 않게 작은 버튼을 따로 둔다.
-            ImGui::SameLine();
-            ImGui::PushID(static_cast<int>(e.key));
+
+            // 첫 칸: 별표. 줄 선택과 겹치지 않는 자리다.
+            ImGui::TableSetColumnIndex(0);
             const bool fav = stash_is_favorite(e.key);
             if (ImGui::SmallButton(fav ? "★" : "☆")) {
                 stash_toggle_favorite(e.key);
             }
-            ImGui::PopID();
-            ImGui::PopID();
 
             ImGui::TableSetColumnIndex(1);
+            char key[32];
+            std::snprintf(key, sizeof(key), "%u", e.key);
+            // 줄 전체를 눌러 고를 수 있게 하되, 별표 위에서는 별표가
+            // 이긴다 - AllowOverlap 이 그 뜻이다.
+            if (ImGui::Selectable(key, false,
+                                  ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowOverlap)) {
+                ImGui::SetClipboardText(key);
+                set_grant_item_key(e.key);   // 지급 칸에도 넣는다
+            }
+            ImGui::PopID();
+
+            ImGui::TableSetColumnIndex(2);
             ImGui::TextColored(grade_color(e.grade), "%s",
                                game::grade_label(e.grade));
 
-            ImGui::TableSetColumnIndex(2);
+            ImGui::TableSetColumnIndex(3);
             if (const char* nm = category_name(e.category)) {
                 ImGui::TextUnformatted(nm);
             } else {
                 ImGui::TextDisabled("%u", e.category);
             }
 
-            ImGui::TableSetColumnIndex(3);
+            ImGui::TableSetColumnIndex(4);
             // 아이콘은 있으면 그리고 없으면 자리만 비운다. 줄 높이가
             // 들쭉날쭉하지 않도록 없을 때도 같은 크기를 차지시킨다.
             const IconRef ico = icon_for(e.key);
