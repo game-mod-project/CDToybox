@@ -327,24 +327,37 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
         if (arr < 0x10000 || used == 0 || cap == 0) continue;
         if (used > cap || cap > 4096) continue;
 
-        // 첫 레코드가 진짜 아이템이어야 컨테이너로 친다.
-        if (!r.read(arr, rec.data(), rec.size())) continue;
-        std::uint32_t key0 = 0;
-        std::int64_t cnt0 = 0;
-        std::memcpy(&key0, rec.data() + 8, 4);
-        std::memcpy(&cnt0, rec.data() + 0x10, 8);
-        if (key0 == 0 || cnt0 <= 0) continue;
-        bool known = false;
-        for (const auto& e : cat) {
-            if (e.key == key0) { known = true; break; }
+        // 레코드 하나만 보면 오탐이 걸린다 - 실측에서 개수가
+        // 300억인 것이 통과했다. 연속 두 개를 본다. 우연히 둘 다
+        // 실제 키에 말이 되는 개수일 확률은 낮다.
+        bool ok = true;
+        for (std::uint32_t k = 0; k < 2 && k < used; ++k) {
+            if (!r.read(arr + k * kStride, rec.data(), rec.size())) {
+                ok = false;
+                break;
+            }
+            std::uint32_t k0 = 0;
+            std::int64_t c0 = 0;
+            std::memcpy(&k0, rec.data() + 8, 4);
+            std::memcpy(&c0, rec.data() + 0x10, 8);
+            if (k0 == 0 || c0 <= 0 || c0 > 1000000) {
+                ok = false;
+                break;
+            }
+            // 카탈로그에 있어야 한다는 조건은 뺐다. 인벤토리의 키
+            // (5915, 202518 등)가 6810개 아이템 표에 없다 - 키 공간이
+            // 다르다. 이름을 못 붙이는 것은 그 때문이다.
         }
-        if (!known) continue;
+        if (!ok) continue;
 
         ++containers;
         std::printf("\n[컨테이너 +0x%zX] 0x%llX  %u / %u\n", off,
                     static_cast<unsigned long long>(arr), used, cap);
 
-        for (std::uint32_t k = 0; k < used; ++k) {
+        // +0x80 의 값은 사용 개수가 아니다 - 37 이라고 하는데 실제
+        // 레코드는 19개였고 그 뒤는 쓰레기다. 말이 안 되는 레코드가
+        // 나오면 거기서 끝난 것으로 본다.
+        for (std::uint32_t k = 0; k < cap; ++k) {
             if (!r.read(arr + k * kStride, rec.data(), rec.size())) break;
             std::uint64_t id = 0;
             std::uint32_t key = 0;
@@ -352,7 +365,7 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
             std::memcpy(&id, rec.data(), 8);
             std::memcpy(&key, rec.data() + 8, 4);
             std::memcpy(&count, rec.data() + 0x10, 8);
-            if (key == 0) continue;
+            if (key == 0 || count <= 0 || count > 1000000) break;
             const char* name = "";
             for (const auto& e : cat) {
                 if (e.key == key) { name = e.name.c_str(); break; }
