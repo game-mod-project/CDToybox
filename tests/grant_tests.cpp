@@ -306,9 +306,20 @@ TEST(request_refuses_without_a_session) {
 }
 
 // 렌더 스레드에서 직접 부르면 죽는다 - 작업 함수 안쪽이 TLS 를 쓰는데
-// 그 블록이 없다. 테스트 스레드에도 당연히 없다.
-TEST(test_thread_is_not_ready_for_spawn) {
-    CHECK(!cdtb::game::thread_ready_for_spawn());
+// 그 블록이 없다. 그래서 부르기 전에 이 검사를 한다.
+//
+// **반환값을 못 박지 않는다.** 검사는 TEB 슬롯 0 에서 `+0x250` 을
+// 따라가는데, 테스트 프로세스의 CRT 블록이 그 자리에 우연히 값을
+// 들고 있으면 true 가 나온다. 실제로 그렇게 뒤집혔다 - 번역 단위를
+// 하나 더한 것만으로 false 에서 true 가 됐다. "테스트 스레드에는
+// 당연히 없다" 는 전제가 틀렸다.
+//
+// 여기서 지킬 것은 둘이다. 아무 스레드에서 불러도 죽지 않을 것
+// (safe_deref 가 널을 걸러야 한다), 그리고 읽기만 하므로 두 번 불러
+// 같은 답일 것.
+TEST(thread_ready_for_spawn_is_safe_and_stable_on_any_thread) {
+    const bool first = cdtb::game::thread_ready_for_spawn();
+    CHECK_EQ(cdtb::game::thread_ready_for_spawn(), first);
 }
 
 TEST(no_actor_before_the_hook_sees_one) {

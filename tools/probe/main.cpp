@@ -367,7 +367,7 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
         return "(표에 없음)";
     };
 
-    long long total = 0;
+    long long total = 0, filled = 0;
     int shown = 0;
     for (const auto& c : conts) {
         std::vector<game::InventoryRecord> recs;
@@ -393,10 +393,30 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                         rec.slot, rec.index, rec.temper, item_key,
                         static_cast<long long>(rec.count),
                         static_cast<unsigned long long>(rec.instance_id), name);
+
+            // 박힌 소켓이 있을 때만 낸다. 실측에서 대부분 비어 있다.
+            std::vector<game::InventorySocket> socks;
+            if (!game::read_inventory_sockets(reader, rec, &socks)) continue;
+            for (const auto& s : socks) {
+                if (s.empty()) continue;
+                ++filled;
+                std::uint32_t gem_key = 0;
+                const char* gem = "(대응표에 없음)";
+                const auto g = id_to_key.find(s.index);
+                if (g != id_to_key.end()) {
+                    gem_key = g->second;
+                    gem = name_of(gem_key);
+                }
+                std::printf("         소켓[%u] 순번 %-6u 키 %-11u %s"
+                            "  (%02X %02X %02X %02X %02X %02X)\n",
+                            s.slot, s.index, gem_key, gem, s.raw[0], s.raw[1],
+                            s.raw[2], s.raw[3], s.raw[4], s.raw[5]);
+            }
         }
     }
-    std::printf("\n컨테이너 %zu개 중 내용이 있는 것 %d개, 아이템 %lld개\n",
-                conts.size(), shown, total);
+    std::printf("\n컨테이너 %zu개 중 내용이 있는 것 %d개, 아이템 %lld개,"
+                " 박힌 소켓 %lld개\n",
+                conts.size(), shown, total, filled);
 }
 
 // 인벤토리 안의 아이템 인스턴스(TrItemValue)를 찾는다.

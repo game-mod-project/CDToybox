@@ -207,3 +207,139 @@ TEST(read_inventory_records_rejects_a_bogus_slot_count) {
     std::vector<InventoryRecord> rs;
     CHECK(!cdtb::game::read_inventory_records(f.mem, cs[0], &rs));
 }
+
+// -------------------------------------------------------------- 소켓
+
+// 소켓 배열을 갖춘 레코드. 실측 구조는 6바이트 항목 다섯이고 빈 칸은
+// 순번이 0xFFFF 다 (`FF FF 00 00 FF 03` / `FF FF 00 00 FF 00`).
+struct SocketFixture : Fixture {
+    static constexpr std::size_t kSockA0 = 0x0A00;
+    static constexpr std::size_t kSockA2 = 0x0A40;
+
+    SocketFixture() {
+        put_socket_array(kRecsA, 0, kSockA0, 5);
+        put_socket_array(kRecsA, 2, kSockA2, 5);
+        for (std::uint32_t i = 0; i < 5; ++i) {
+            put_empty_socket(kSockA0, i);
+            put_empty_socket(kSockA2, i);
+        }
+        // 박힌 칸 하나. 실측에서 빈 것만 봤으므로 값 자체는 지어냈다 -
+        // 확인한 것은 배치(6바이트, 순번이 앞 u16)뿐이다.
+        put_socket(kSockA2, 1, 1234, 0x0007);
+    }
+
+    void put_socket_array(std::size_t recs, std::uint32_t i,
+                          std::size_t sockets, std::uint32_t count) {
+        const std::size_t r = recs + i * kStride;
+        mem.put_u64(r + 0x60, mem.heap_addr(sockets));
+        mem.put_u32(r + 0x68, count);
+        mem.put_u32(r + 0x6C, count);
+    }
+    void put_empty_socket(std::size_t sockets, std::uint32_t i) {
+        const std::size_t s = sockets + i * 6;
+        mem.put_u32(s + 0, 0x0000FFFFu);
+        mem.put_u8(s + 4, 0xFF);
+        mem.put_u8(s + 5, i == 0 ? 0x03 : 0x00);
+    }
+    void put_socket(std::size_t sockets, std::uint32_t i, std::uint16_t index,
+                    std::uint16_t extra) {
+        const std::size_t s = sockets + i * 6;
+        mem.put_u32(s + 0, static_cast<std::uint32_t>(index) |
+                               (static_cast<std::uint32_t>(extra) << 16));
+        mem.put_u8(s + 4, 0x00);
+        mem.put_u8(s + 5, 0x01);
+    }
+};
+
+TEST(read_inventory_records_picks_up_the_socket_array) {
+    SocketFixture f;
+    std::vector<InventoryContainer> cs;
+    CHECK(cdtb::game::read_inventory_containers(f.mem, f.component(), &cs));
+    if (cs.empty()) return;
+
+    std::vector<InventoryRecord> rs;
+    CHECK(cdtb::game::read_inventory_records(f.mem, cs[0], &rs));
+    if (rs.size() < 2) return;
+    CHECK_EQ(rs[0].sockets, f.mem.heap_addr(SocketFixture::kSockA0));
+    CHECK_EQ(rs[0].socket_count, 5u);
+    CHECK_EQ(rs[1].sockets, f.mem.heap_addr(SocketFixture::kSockA2));
+}
+
+TEST(read_inventory_sockets_reads_six_byte_entries) {
+    SocketFixture f;
+    std::vector<InventoryContainer> cs;
+    CHECK(cdtb::game::read_inventory_containers(f.mem, f.component(), &cs));
+    if (cs.empty()) return;
+    std::vector<InventoryRecord> rs;
+    CHECK(cdtb::game::read_inventory_records(f.mem, cs[0], &rs));
+    if (rs.size() < 2) return;
+
+    std::vector<cdtb::game::InventorySocket> ss;
+    CHECK(cdtb::game::read_inventory_sockets(f.mem, rs[1], &ss));
+    CHECK_EQ(ss.size(), std::size_t{5});
+    if (ss.size() < 2) return;
+    CHECK_EQ(ss[1].slot, 1u);
+    CHECK_EQ(ss[1].index, 1234u);
+    CHECK(!ss[1].empty());
+}
+
+TEST(read_inventory_sockets_marks_empty_slots) {
+    // 빈 칸은 순번이 0xFFFF 다. 실측 배열은 그것으로만 차 있었다.
+    SocketFixture f;
+    std::vector<InventoryContainer> cs;
+    CHECK(cdtb::game::read_inventory_containers(f.mem, f.component(), &cs));
+    if (cs.empty()) return;
+    std::vector<InventoryRecord> rs;
+    CHECK(cdtb::game::read_inventory_records(f.mem, cs[0], &rs));
+    if (rs.empty()) return;
+
+    std::vector<cdtb::game::InventorySocket> ss;
+    CHECK(cdtb::game::read_inventory_sockets(f.mem, rs[0], &ss));
+    CHECK_EQ(ss.size(), std::size_t{5});
+    for (const auto& s : ss) CHECK(s.empty());
+}
+
+TEST(read_inventory_sockets_keeps_the_raw_bytes) {
+    // export 는 뜻을 모르는 칸까지 그대로 되돌려야 한다.
+    SocketFixture f;
+    std::vector<InventoryContainer> cs;
+    CHECK(cdtb::game::read_inventory_containers(f.mem, f.component(), &cs));
+    if (cs.empty()) return;
+    std::vector<InventoryRecord> rs;
+    CHECK(cdtb::game::read_inventory_records(f.mem, cs[0], &rs));
+    if (rs.empty()) return;
+
+    std::vector<cdtb::game::InventorySocket> ss;
+    CHECK(cdtb::game::read_inventory_sockets(f.mem, rs[0], &ss));
+    if (ss.empty()) return;
+    const std::uint8_t want[6] = {0xFF, 0xFF, 0x00, 0x00, 0xFF, 0x03};
+    CHECK(std::memcmp(ss[0].raw, want, 6) == 0);
+}
+
+TEST(read_inventory_sockets_fails_without_the_array) {
+    SocketFixture f;
+    std::vector<InventoryContainer> cs;
+    CHECK(cdtb::game::read_inventory_containers(f.mem, f.component(), &cs));
+    if (cs.empty()) return;
+    std::vector<InventoryRecord> rs;
+    CHECK(cdtb::game::read_inventory_records(f.mem, cs[1], &rs));
+    if (rs.empty()) return;
+
+    // B 의 레코드에는 소켓 배열을 안 깔았다.
+    std::vector<cdtb::game::InventorySocket> ss;
+    CHECK(!cdtb::game::read_inventory_sockets(f.mem, rs[0], &ss));
+}
+
+TEST(read_inventory_sockets_rejects_a_bogus_count) {
+    SocketFixture f;
+    std::vector<InventoryContainer> cs;
+    CHECK(cdtb::game::read_inventory_containers(f.mem, f.component(), &cs));
+    if (cs.empty()) return;
+    std::vector<InventoryRecord> rs;
+    CHECK(cdtb::game::read_inventory_records(f.mem, cs[0], &rs));
+    if (rs.empty()) return;
+
+    rs[0].socket_count = 0x7FFFFFFFu;
+    std::vector<cdtb::game::InventorySocket> ss;
+    CHECK(!cdtb::game::read_inventory_sockets(f.mem, rs[0], &ss));
+}
