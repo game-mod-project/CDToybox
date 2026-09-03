@@ -144,6 +144,18 @@ bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
 // 있다 - 키가 0이거나 개수가 0 이하면 게임이 실패로 돌려준다.
 bool spawn_args_ok(std::uint32_t item_key, std::int64_t count);
 
+// 지급 칸의 개수를 아이템의 최대 스택으로 자른다. 1 아래로는 안
+// 내려간다.
+//
+// `max_stack` 은 아이템 표의 u32 다. **int 로 좁혀 견주면 안 된다** -
+// 실측에서 캠프 목재(키 13)가 3,800,301,568 이라 int 로는
+// -494,665,728 이 되고, 개수가 그 음수로 못박혀 화면에서 고칠 수도
+// 없었다. 넘겨서 자를 일이 있으려면 max_stack 이 개수(int)보다
+// 작아야 하므로, 그때의 형변환은 안전하다.
+//
+// `max_stack` 이 0 인 아이템이 있다. 자를 근거가 없으니 그대로 둔다.
+int clamp_count_to_stack(int count, std::uint32_t max_stack);
+
 struct SpawnOutcome {
     bool called = false;        // 게임 함수를 실제로 불렀는가
     bool crashed = false;       // 부르다 예외가 났는가

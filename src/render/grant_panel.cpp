@@ -302,13 +302,11 @@ void draw_grant_panel() {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputInt("##count", &g_count, 1, 10);
-    if (g_count < 1) g_count = 1;
-
     // 최대 스택을 넘기면 게임이 조용히 거절한다. 미리 자른다.
-    if (item != nullptr && item->max_stack > 0 &&
-        g_count > static_cast<int>(item->max_stack)) {
-        g_count = static_cast<int>(item->max_stack);
-    }
+    // 형변환은 game::clamp_count_to_stack 안에서 다룬다 - 여기서
+    // int 로 좁혔다가 개수가 음수로 못박힌 적이 있다.
+    g_count = game::clamp_count_to_stack(
+        g_count, item != nullptr ? item->max_stack : 0);
     if (item != nullptr && item->max_stack > 0) {
         ImGui::SameLine();
         ImGui::TextDisabled("(최대 %u)", item->max_stack);
