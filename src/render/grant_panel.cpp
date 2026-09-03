@@ -110,7 +110,7 @@ void draw_extras(const game::ItemCatalogEntry* item) {
     if (g_sharpness > cap_s) g_sharpness = cap_s;
     for (int i = rows; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
 
-    if (!ImGui::CollapsingHeader("담금질 · 소켓 · 예리도")) return;
+    if (!ImGui::CollapsingHeader("담금질 · 소켓 · 장비 연마")) return;
     ImGui::Indent();
 
     if (cap_t > 0) {
@@ -127,7 +127,7 @@ void draw_extras(const game::ItemCatalogEntry* item) {
     if (cap_s > 0) {
         // 인벤토리 507개가 전부 0 이다. 화면에 무엇이 달라지는지는
         // 아직 못 봤다 - 넣어 보고 툴팁을 확인하려고 낸 칸이다.
-        ImGui::TextUnformatted("예리도");
+        ImGui::TextUnformatted("연마");
         ImGui::SameLine(80.0f);
         ImGui::SetNextItemWidth(110.0f);
         ImGui::InputInt("##sharp", &g_sharpness, 1, 10);
@@ -255,6 +255,10 @@ long long grant_item_count() { return g_count; }
 
 unsigned int grant_temper() {
     return static_cast<unsigned int>(g_temper < 0 ? 0 : g_temper);
+}
+
+unsigned int grant_sharpness() {
+    return static_cast<unsigned int>(g_sharpness < 0 ? 0 : g_sharpness);
 }
 
 int grant_socket_keys(unsigned int* out, int cap) {

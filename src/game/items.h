@@ -236,6 +236,9 @@ std::uint32_t item_id_for_key(std::uint32_t key);
 // 표가 아직 없으면 0 이다.
 std::uint16_t full_endurance_for(std::uint32_t item_key);
 
+// 이 아이템의 장비 연마 상한. 표가 없거나 그런 칸이 없으면 0.
+std::int16_t max_sharpness_for(std::uint32_t item_key);
+
 // 소켓에 박는 보석의 분류(`_itemType`). 실측으로 확인했다 - 바람
 // 가르기와 파괴 I 이 74 이고 한손검이 56 이다. 표에 190개 있고
 // `category_name` 이 "심연 장비" 로 부른다.

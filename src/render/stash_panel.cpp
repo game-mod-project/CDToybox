@@ -170,6 +170,14 @@ void draw_stash_panel() {
             //
             // 파일에 적힌 값이 있으면 그것을 쓴다 - 닳은 상태까지
             // 그대로 되살린다. 없으면(옛 파일) 최대치다.
+            // 장비 연마도 표의 상한으로 자른다.
+            const std::int16_t sharp_cap = game::max_sharpness_for(e.key);
+            extras.sharpness = static_cast<std::uint16_t>(
+                (sharp_cap > 0 && e.sharpness >
+                     static_cast<std::uint32_t>(sharp_cap))
+                    ? sharp_cap
+                    : e.sharpness);
+
             const std::uint16_t full = game::full_endurance_for(e.key);
             if (e.endurance == game::kStashNoEndurance) {
                 extras.endurance = full;
@@ -291,6 +299,7 @@ void draw_stash_panel() {
                     // 칸에서 고른 담금질과 소켓도 함께 담는다.
                     game::StashEntry e{k, grant_item_count()};
                     e.temper = grant_temper();
+                    e.sharpness = grant_sharpness();
                     unsigned int gems[game::kGiveMaxSockets]{};
                     const int gn =
                         grant_socket_keys(gems, game::kGiveMaxSockets);

@@ -493,6 +493,14 @@ bool socket_bytes_for_key(std::uint32_t gem_key, std::uint8_t out[6]) {
     return true;
 }
 
+std::int16_t max_sharpness_for(std::uint32_t item_key) {
+    if (!items_ready()) return 0;
+    for (const auto& e : item_catalog()) {
+        if (e.key == item_key) return e.max_sharpness;
+    }
+    return 0;
+}
+
 std::uint16_t full_endurance_for(std::uint32_t item_key) {
     if (!items_ready()) return 0;
     for (const auto& e : item_catalog()) {

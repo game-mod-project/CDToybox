@@ -16,6 +16,7 @@ void set_grant_item_key(unsigned int key);
 unsigned int grant_item_key();
 long long grant_item_count();
 unsigned int grant_temper();
+unsigned int grant_sharpness();
 
 // 지급 칸에 고른 보석의 **아이템 키**를 앞에서부터 채워 준다.
 // 돌려주는 것은 채운 개수다.

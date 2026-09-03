@@ -46,6 +46,10 @@ struct InventoryRecord {
     std::uint32_t index = 0;         // 아이템 표에서의 순번
     std::uint32_t temper = 0;        // 담금질
 
+    // 장비 연마 (레코드 +0x58). 게임 툴팁의 "장비 연마 100/100" 이다.
+    // 상한은 아이템 표의 `_SharpnessData`(+0x2E8).
+    std::uint32_t sharpness = 0;
+
     // 현재 내구도 (레코드 +0x40). **0xFFFF 면 내구도가 없는
     // 아이템**이다 - 아이템 표의 `_maxEndurance` 와 같은 표기다.
     // 갓 지급한 것은 게임이 저장을 한 바퀴 돌기 전까지 0 이다.

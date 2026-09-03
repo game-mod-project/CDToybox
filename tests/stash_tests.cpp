@@ -301,3 +301,50 @@ TEST(stash_reads_the_endurance_token_in_any_order) {
     CHECK_EQ(a.set_at(0)->items[0].temper, std::uint32_t{3});
     CHECK_EQ(a.set_at(0)->items[0].endurance, std::uint32_t{12});
 }
+
+// --- 장비 연마 (`w` 토큰) ----------------------------------------------
+//
+// 레코드 +0x58 이다. 게임 툴팁은 "장비 연마 100/100" 으로 부르고
+// 아이템 표의 필드 이름은 `_SharpnessData`(+0x2E8) 다.
+//
+// 담금질처럼 0 이 기본이라 0 이면 토큰을 안 쓴다 - 내구도와 다르다.
+// 내구도는 0 이 "부서진" 이라 "없음" 과 갈라야 했다.
+
+TEST(stash_round_trip_keeps_the_sharpness) {
+    cdtb::game::Stash a;
+    const int i = a.add_set("가방");
+    cdtb::game::StashEntry e{200914, 1};
+    e.sharpness = 100;
+    a.set_at(i)->items.push_back(e);
+
+    cdtb::game::Stash b;
+    CHECK(b.parse(a.serialize()));
+    if (b.set_count() != 1 || b.set_at(0)->items.empty()) return;
+    CHECK_EQ(b.set_at(0)->items[0].sharpness, std::uint32_t{100});
+}
+
+TEST(stash_writes_no_sharpness_token_when_zero) {
+    cdtb::game::Stash a;
+    const int i = a.add_set("가방");
+    a.set_at(i)->items.push_back(cdtb::game::StashEntry{105, 1});
+    CHECK(a.serialize().find(" w") == std::string::npos);
+}
+
+TEST(stash_reads_an_old_line_without_the_sharpness) {
+    cdtb::game::Stash a;
+    CHECK(a.parse("set 가방\nitem 200914 1 t3\n"));
+    if (a.set_count() != 1 || a.set_at(0)->items.empty()) return;
+    CHECK_EQ(a.set_at(0)->items[0].sharpness, std::uint32_t{0});
+}
+
+TEST(stash_reads_every_token_together) {
+    cdtb::game::Stash a;
+    CHECK(a.parse("set 가방\nitem 200914 1 t7 e12 w100"
+                  " s0:1002569:240DFFFF00FF\n"));
+    if (a.set_count() != 1 || a.set_at(0)->items.empty()) return;
+    const auto& e = a.set_at(0)->items[0];
+    CHECK_EQ(e.temper, std::uint32_t{7});
+    CHECK_EQ(e.endurance, std::uint32_t{12});
+    CHECK_EQ(e.sharpness, std::uint32_t{100});
+    CHECK_EQ(e.sockets.size(), std::size_t{1});
+}
