@@ -228,6 +228,32 @@ std::uint32_t item_id_for_key(std::uint32_t key);
 // 표가 아직 없으면 0 이다.
 std::uint16_t full_endurance_for(std::uint32_t item_key);
 
+// 소켓에 박는 보석의 분류(`_itemType`). 실측으로 확인했다 - 바람
+// 가르기와 파괴 I 이 74 이고 한손검이 56 이다. 표에 190개 있고
+// `category_name` 이 "심연 장비" 로 부른다.
+inline constexpr std::uint8_t kSocketGemCategory = 74;
+
+// 소켓 한 칸의 6바이트를 조립한다.
+//
+// 게임의 복사 루프(RVA 0x2094324)가 `TrItemValue +0x40 + i*6` 을
+// 그대로 옮기고 **다섯 번째 바이트만 슬롯 번호로 덮어쓴다.** 그래서
+// 순번과 꼬리 상수만 채우면 된다. 실측한 박힌 소켓이 전부 이 꼴이다.
+//
+//   24 0D FF FF 00 FF   바람 가르기 (순번 3364, 슬롯 0)
+//   8E 0C FF FF 01 FF   파괴 I      (순번 3214, 슬롯 1)
+//   [u16 순번][FF FF][슬롯][FF]
+//
+// 가운데 두 칸과 마지막 칸의 뜻은 모른다 - 표본 다섯 개가 전부
+// 같았으므로 그대로 쓴다.
+void make_socket_bytes(std::uint16_t gem_id, std::uint8_t out[6]);
+
+// 보석의 **아이템 키**로 위를 조립한다. 대응표를 아직 못 읽었거나
+// 키가 표에 없으면 false 다.
+//
+// 조용히 넘기지 않고 거절하는 이유: 순번을 틀리면 엉뚱한 보석이
+// 박힌다. 안 박히는 것이 낫다.
+bool socket_bytes_for_key(std::uint32_t gem_key, std::uint8_t out[6]);
+
 // 이름이 실제로 풀렸는가.
 bool items_named();
 

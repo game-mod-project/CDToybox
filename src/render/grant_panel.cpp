@@ -32,6 +32,17 @@ const char* g_last_what = "";
 // 확인해야 한다. 페이로드는 u16 둘뿐이다.
 int g_endur_a = 0;
 int g_endur_b = 0;
+
+// 담금질과 소켓. 아이템을 바꾸면 상한에 맞춰 잘린다.
+//
+// 소켓은 **앞 칸부터** 채워야 한다. 게임의 복사 루프가 0..개수-1 만
+// 돌기 때문에 2번 칸만 채우는 것은 불가능하다. 그래서 고르거나
+// 비울 때마다 앞으로 당겨 붙인다.
+int g_temper = 0;
+std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};   // 0 = 비어 있음
+int g_socket_picking = -1;       // 팝업이 채울 칸
+bool g_open_gem_popup = false;
+char g_gem_search[64]{};
 game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
@@ -61,6 +72,129 @@ const game::ItemCatalogEntry* selected_item() {
         if (e.key == key) return &e;
     }
     return nullptr;
+}
+
+// 키로 표에서 찾는다. 없으면 nullptr.
+const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
+    if (key == 0 || !game::items_ready()) return nullptr;
+    for (const auto& e : game::item_catalog()) {
+        if (e.key == key) return &e;
+    }
+    return nullptr;
+}
+
+// 빈 칸을 없애 앞으로 당겨 붙인다. 게임이 앞에서부터만 읽는다.
+void compact_sockets() {
+    int w = 0;
+    for (int r = 0; r < game::kGiveMaxSockets; ++r) {
+        if (g_socket_keys[r] != 0) g_socket_keys[w++] = g_socket_keys[r];
+    }
+    for (; w < game::kGiveMaxSockets; ++w) g_socket_keys[w] = 0;
+}
+
+// 담금질과 소켓을 정해 준다. 아이템이 그 값을 가질 때만 낸다.
+//
+// 상한은 아이템 표에서 온다 - 담금질은 `max_temper`, 소켓 칸 수는
+// `max_sockets` 다. 넘겨 보내면 게임이 조용히 거절한다.
+void draw_extras(const game::ItemCatalogEntry* item) {
+    if (item == nullptr) return;
+    const int cap_t = static_cast<int>(item->max_temper);
+    int rows = static_cast<int>(item->max_sockets);
+    if (rows > game::kGiveMaxSockets) rows = game::kGiveMaxSockets;
+    if (cap_t == 0 && rows == 0) return;
+
+    // 아이템이 바뀌면 상한 밖의 값이 남아 있을 수 있다.
+    if (g_temper > cap_t) g_temper = cap_t;
+    for (int i = rows; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
+
+    if (!ImGui::CollapsingHeader("담금질 · 소켓")) return;
+    ImGui::Indent();
+
+    if (cap_t > 0) {
+        ImGui::TextUnformatted("담금질");
+        ImGui::SameLine(80.0f);
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::InputInt("##temper", &g_temper, 1, 1);
+        if (g_temper < 0) g_temper = 0;
+        if (g_temper > cap_t) g_temper = cap_t;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(0 ~ %d)", cap_t);
+    }
+
+    if (rows > 0) {
+        if (!game::item_ids_ready()) {
+            ImGui::TextDisabled("대응표를 아직 못 읽었습니다 - 잠시 뒤에 됩니다");
+        } else {
+            for (int i = 0; i < rows; ++i) {
+                ImGui::PushID(i);
+                ImGui::Text("소켓 %d", i);
+                ImGui::SameLine(80.0f);
+                const auto* gem = entry_of(g_socket_keys[i]);
+                if (g_socket_keys[i] == 0) {
+                    ImGui::TextDisabled("비어 있음");
+                } else if (gem != nullptr && !gem->name.empty()) {
+                    ImGui::TextColored(grade_color(gem->grade), "%s",
+                                       gem->name.c_str());
+                } else {
+                    ImGui::Text("%u", g_socket_keys[i]);
+                }
+                ImGui::SameLine(260.0f);
+                if (ImGui::SmallButton("고르기")) {
+                    g_socket_picking = i;
+                    g_gem_search[0] = 0;
+                    g_open_gem_popup = true;
+                }
+                if (g_socket_keys[i] != 0) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("비우기")) {
+                        g_socket_keys[i] = 0;
+                        compact_sockets();
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::TextDisabled("게임이 앞 칸부터 읽습니다 - 빈 칸은 당겨집니다");
+        }
+    }
+
+    ImGui::Unindent();
+}
+
+// 보석 고르기. 분류 74(심연 장비)만 낸다 - 실측으로 확인한 값이고
+// 표에 190개 있다.
+void draw_gem_popup() {
+    if (g_open_gem_popup) {
+        ImGui::OpenPopup("보석 고르기");
+        g_open_gem_popup = false;
+    }
+    if (!ImGui::BeginPopup("보석 고르기")) return;
+
+    ImGui::SetNextItemWidth(280.0f);
+    ImGui::InputTextWithHint("##gemsearch", "이름으로 찾기", g_gem_search,
+                             sizeof(g_gem_search));
+    ImGui::BeginChild("gemlist", ImVec2(320.0f, 280.0f));
+    int shown = 0;
+    for (const auto& e : game::item_catalog()) {
+        if (e.category != game::kSocketGemCategory || e.name.empty()) continue;
+        if (g_gem_search[0] != 0 &&
+            e.name.find(g_gem_search) == std::string::npos) {
+            continue;
+        }
+        ++shown;
+        ImGui::PushID(static_cast<int>(e.key));
+        if (ImGui::Selectable(e.name.c_str())) {
+            if (g_socket_picking >= 0 &&
+                g_socket_picking < game::kGiveMaxSockets) {
+                g_socket_keys[g_socket_picking] = e.key;
+                compact_sockets();
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopID();
+    }
+    if (shown == 0) ImGui::TextDisabled("맞는 것이 없습니다");
+    ImGui::EndChild();
+    ImGui::EndPopup();
 }
 
 // 고른 아이템을 아이콘·이름·등급·분류로 보여 준다. 키 숫자만
@@ -151,6 +285,9 @@ void draw_grant_panel() {
     }
     ImGui::TextDisabled("아이템 목록에서 줄을 누르면 여기로 들어옵니다");
 
+    draw_extras(item);
+    draw_gem_popup();
+
     // --- 막힌 이유는 항상 적는다 ------------------------------------
     const char* blocked = nullptr;
     if (g_pick < 0 || g_pick >= n) {
@@ -178,6 +315,24 @@ void draw_grant_panel() {
         // 내구도가 있는 아이템은 가득 채워 준다. 안 그러면 툴팁에
         // 0/30 이 빨갛게 뜨고 공격력에 벌점이 붙는다.
         extras.endurance = game::full_endurance_for(key);
+        if (item != nullptr) {
+            // 상한은 여기서도 다시 자른다. 화면에서 자른 값과
+            // 보내는 값이 갈리면 게임이 조용히 거절한다.
+            const int cap_t = static_cast<int>(item->max_temper);
+            const int t = (g_temper > cap_t) ? cap_t : g_temper;
+            extras.temper = static_cast<std::uint16_t>(t < 0 ? 0 : t);
+
+            int room = static_cast<int>(item->max_sockets);
+            if (room > game::kGiveMaxSockets) room = game::kGiveMaxSockets;
+            for (int i = 0; i < room; ++i) {
+                if (g_socket_keys[i] == 0) break;   // 앞에서부터만 찬다
+                std::uint8_t raw[game::kGiveSocketBytes]{};
+                if (!game::socket_bytes_for_key(g_socket_keys[i], raw)) break;
+                std::memcpy(extras.sockets[extras.socket_count].raw, raw,
+                            game::kGiveSocketBytes);
+                ++extras.socket_count;
+            }
+        }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;
         g_last_to_inventory = true;
