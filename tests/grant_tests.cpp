@@ -536,3 +536,37 @@ TEST(fill_item_value_refuses_a_buffer_that_stops_before_the_sharpness) {
     std::uint8_t buf[0x100]{};
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1));
 }
+
+// --- 개수 자르기 (최대 스택) -------------------------------------------
+//
+// 아이템 표의 `_maxStackCount` 는 u32 다. int 로 좁혀 견주면 큰 값이
+// 음수가 되고, 그러면 개수가 음수로 못박혀 화면에서 고칠 수도 없다.
+// 실측: 캠프 목재(키 13)가 3,800,301,568 이고 int 로는 -494,665,728
+// 이라 지급 칸이 그 값에서 안 움직였다.
+
+TEST(clamp_count_keeps_a_value_under_the_stack) {
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(5, 10), 5);
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(10, 10), 10);
+}
+
+TEST(clamp_count_cuts_a_value_over_the_stack) {
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(20, 10), 10);
+}
+
+TEST(clamp_count_survives_a_stack_bigger_than_int) {
+    // 이것이 버그였다. 음수가 나오면 안 된다.
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(5, 3800301568u), 5);
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(2000000000, 3800301568u),
+             2000000000);
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(1, 0xFFFFFFFFu), 1);
+}
+
+TEST(clamp_count_treats_zero_stack_as_no_limit) {
+    // 표가 0 인 아이템이 있다. 자를 근거가 없으니 그대로 둔다.
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(999, 0), 999);
+}
+
+TEST(clamp_count_never_goes_below_one) {
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(0, 10), 1);
+    CHECK_EQ(cdtb::game::clamp_count_to_stack(-494665728, 3800301568u), 1);
+}

@@ -1040,6 +1040,17 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
     return true;
 }
 
+int clamp_count_to_stack(int count, std::uint32_t max_stack) {
+    if (count < 1) count = 1;
+    if (max_stack == 0) return count;
+    if (static_cast<std::int64_t>(count) >
+        static_cast<std::int64_t>(max_stack)) {
+        // 여기 왔다면 max_stack < count <= INT_MAX 이므로 좁혀도 된다.
+        return static_cast<int>(max_stack);
+    }
+    return count;
+}
+
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
                      std::int64_t count, const GiveExtras& extras) {
     // 예리도 칸이 +0x1AE 까지 가므로 그만큼은 있어야 한다.
