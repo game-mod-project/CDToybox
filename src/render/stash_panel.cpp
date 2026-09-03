@@ -124,6 +124,20 @@ void draw_item_line(std::uint32_t key) {
 
 }  // namespace
 
+namespace {
+
+// 이 아이템이 한 칸에 몇 개까지 쌓이는가. 표에 없으면 0 - 그때는
+// 개수를 고칠 근거가 없으므로 손대지 않는다.
+std::uint32_t max_stack_of(std::uint32_t key) {
+    if (!game::items_ready()) return 0;
+    for (const auto& c : game::item_catalog()) {
+        if (c.key == key) return c.max_stack;
+    }
+    return 0;
+}
+
+}  // namespace
+
 void stash_toggle_favorite(unsigned int key) {
     if (!g_loaded) load();
     g_stash.toggle_favorite(key);
@@ -336,8 +350,30 @@ void draw_stash_panel() {
                 ImGui::SameLine();
                 draw_item_line(set->items[j].key);
                 ImGui::SameLine();
-                ImGui::TextDisabled("x%lld",
-                                    static_cast<long long>(set->items[j].count));
+
+                // 겹쳐 쌓이는 아이템은 개수를 고칠 수 있어야 한다.
+                // 지금까지는 담을 때의 값이 그대로 굳어 있었다.
+                // 겹치지 않는 것(장비)은 1 뿐이라 글자로만 낸다.
+                auto& item = set->items[j];
+                const std::uint32_t cap = max_stack_of(item.key);
+                if (cap > 1) {
+                    int n = (item.count > 0x7FFFFFFF)
+                                ? 0x7FFFFFFF
+                                : static_cast<int>(item.count);
+                    ImGui::SetNextItemWidth(110.0f);
+                    if (ImGui::InputInt("##cnt", &n, 1, 10)) {
+                        n = game::clamp_count_to_stack(n, cap);
+                        if (n != item.count) {
+                            item.count = n;
+                            g_dirty = true;
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("/ %u", cap);
+                } else {
+                    ImGui::TextDisabled("x%lld",
+                                        static_cast<long long>(item.count));
+                }
                 ImGui::PopID();
             }
         }
