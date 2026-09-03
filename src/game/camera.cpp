@@ -259,8 +259,11 @@ void auto_analysis_loop() {
         // 캐시를 비우면 여기서 다시 잡는다.
         //
         // 못 찾은 동안에만 훑는다. RTTI 인스턴스 탐색은 힙 전수라
-        // 값싸지 않아 10초에 한 번으로 줄인다.
-        if (!inventory_ready() && (spin % 5) == 0) {
+        // 값싸지 않아 10초에 한 번으로 줄인다. 다만 화면에서 "다시
+        // 찾기" 를 누른 사람에게 10초는 "눌렀는데 아무 일도 안 난다"
+        // 라, 요청이 남아 있으면 주기를 기다리지 않고 지금 훑는다.
+        const bool asked = take_inventory_rescan();
+        if (!inventory_ready() && (asked || (spin % 5) == 0)) {
             discover_inventory(rtti, reader);
         }
         ++spin;

@@ -175,6 +175,7 @@ constexpr const char* kInventoryClass =
     ".?AVServerInventoryActorComponent@pa@@";
 
 std::atomic<std::uintptr_t> g_component{0};
+std::atomic<bool> g_rescan{false};
 
 }  // namespace
 
@@ -209,6 +210,15 @@ std::uintptr_t inventory_component() {
 
 void forget_inventory() {
     g_component.store(0, std::memory_order_release);
+    request_inventory_rescan();
+}
+
+void request_inventory_rescan() {
+    g_rescan.store(true, std::memory_order_release);
+}
+
+bool take_inventory_rescan() {
+    return g_rescan.exchange(false, std::memory_order_acq_rel);
 }
 
 // --------------------------------------------------------- 표시용 변환

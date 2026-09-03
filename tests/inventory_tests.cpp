@@ -381,3 +381,27 @@ TEST(inventory_row_skips_empty_socket_names) {
         cdtb::game::kNoEndurance, 0, {"", "파괴 I", ""});
     CHECK(t.sockets == std::string("파괴 I"));
 }
+
+// "컴포넌트 다시 찾기" 는 캐시를 버리기만 했다. 실제로 찾는 것은
+// 배경 루프이고, 그 루프는 10초에 한 번만 본다. 그래서 누르면
+// 창이 "찾는 중" 으로 바뀌고 사용자는 언제 다시 눌러야 하는지
+// 모른 채 기다렸다. 요청을 남겨 루프가 곧바로 집어가게 한다.
+TEST(rescan_request_starts_unset) {
+    cdtb::game::take_inventory_rescan();   // 앞선 테스트의 잔여를 비운다
+    CHECK(!cdtb::game::take_inventory_rescan());
+}
+
+TEST(rescan_request_is_taken_once) {
+    cdtb::game::request_inventory_rescan();
+    CHECK(cdtb::game::take_inventory_rescan());
+    CHECK(!cdtb::game::take_inventory_rescan());
+}
+
+TEST(forgetting_the_component_asks_for_a_rescan) {
+    // 캐시를 버리는 쪽과 다시 찾으라고 알리는 쪽이 따로 놀면
+    // 한쪽만 부르는 자리가 생긴다. 버리면 곧 찾는다.
+    cdtb::game::take_inventory_rescan();
+    cdtb::game::forget_inventory();
+    CHECK(!cdtb::game::inventory_ready());
+    CHECK(cdtb::game::take_inventory_rescan());
+}
