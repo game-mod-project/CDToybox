@@ -12,7 +12,9 @@
 #include "game/inventory.h"
 #include "mem/reader.h"
 #include "game/items.h"
+#include "game/stash.h"
 #include "render/grant_panel.h"
+#include "render/stash_panel.h"
 #include "render/item_style.h"
 
 namespace cdtb::render {
@@ -32,6 +34,7 @@ struct Row {
     std::uint32_t sharpness = 0;
     std::uint32_t socket_count = 0;
     std::uint32_t endurance = 0;     // 정렬용 원값. 0xFFFF 면 없는 것
+    std::uint32_t max_endurance = 0xFFFF;   // 표의 값. 담기에 쓴다
     std::vector<std::uint32_t> gem_keys;
     game::InventoryRowText text;
 };
@@ -119,6 +122,7 @@ void refresh(const mem::Reader& reader) {
                 r.name = e->name;
                 r.grade = e->grade;
                 r.category = e->category;
+                r.max_endurance = e->max_endurance;
             }
             if (r.name.empty()) {
                 char buf[48];
@@ -314,7 +318,7 @@ void draw_inventory_panel() {
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
                                         ImGuiTableColumnFlags_NoSort,
-                                110.0f);
+                                190.0f);
         ImGui::TableHeadersRow();
         apply_sort();
 
@@ -363,11 +367,42 @@ void draw_inventory_panel() {
                                static_cast<int>(r.gem_keys.size()));
             }
             ImGui::EndDisabled();
+
+            // 보관함으로 담기. 어디에 담을지는 보관함에서 펼쳐 둔
+            // 세트로 정한다 - 인벤토리 창에 세트 고르기를 또 두면
+            // 두 곳이 어긋난다.
+            ImGui::SameLine();
+            const int set = stash_open_set();
+            ImGui::BeginDisabled(r.key == 0 || set < 0);
+            if (ImGui::SmallButton("보관함에")) {
+                game::StashEntry e;
+                e.key = r.key;
+                e.count = r.count;
+                e.temper = r.temper;
+                e.sharpness = r.sharpness;
+                // 내구도가 없는 아이템은 안 적는다 - 적어 봐야
+                // 뜻이 없고, 꺼낼 때 최대치를 받게 두면 된다.
+                if (r.max_endurance != 0xFFFF) e.endurance = r.endurance;
+                for (std::size_t g = 0; g < r.gem_keys.size(); ++g) {
+                    game::StashSocket ss;
+                    ss.slot = static_cast<std::uint32_t>(g);
+                    ss.key = r.gem_keys[g];
+                    // 파일에 남길 6바이트도 지급 때와 같은 조립기로.
+                    game::socket_bytes_for_key(ss.key, ss.raw);
+                    e.sockets.push_back(ss);
+                }
+                stash_add_entry(set, e);
+            }
+            ImGui::EndDisabled();
             ImGui::PopID();
         }
         ImGui::EndTable();
     }
 
+    if (stash_open_set() < 0) {
+        ImGui::TextDisabled("보관함에 담으려면 보관함 창에서 세트를 먼저"
+                            " 펼치세요");
+    }
     ImGui::TextDisabled("제자리 수정은 게임이 되쓴다 - 값을 지급 칸으로"
                         " 옮겨 고친 뒤 새로 지급하고 원본은 버린다");
     ImGui::End();
