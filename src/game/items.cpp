@@ -1,5 +1,6 @@
 #include "game/items.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -405,6 +406,67 @@ bool read_item_key_map(const mem::Reader& reader, const ItemKeyMap& map,
     }
     *out = std::move(pairs);
     return true;
+}
+
+// ------------------------------------- 모드용 대응표 캐시 (키 -> 순번)
+//
+// 소켓 지급에 쓴다. 보관함 파일은 보석의 아이템 키를 들고 있는데
+// 게임에 보내는 6바이트는 순번으로 시작한다. 순번은 표에서의 위치라
+// 게임이 갱신되면 달라지므로, 지급할 때 지금 표에서 다시 찾는다.
+
+std::uint32_t find_item_id(const std::vector<ItemKeyPair>& sorted,
+                           std::uint32_t key) {
+    const auto it = std::lower_bound(
+        sorted.begin(), sorted.end(), key,
+        [](const ItemKeyPair& a, std::uint32_t k) { return a.key < k; });
+    if (it == sorted.end() || it->key != key) return kNoItemId;
+    return it->id;
+}
+
+namespace {
+
+const std::vector<ItemKeyPair> kEmptyIds;
+
+// 목록과 같은 이유로 바꿔 끼우기만 한다. 그리는 쪽이 참조를 쥔 채
+// 프레임을 도는데 그 밑에서 vector 를 갈아엎으면 죽는다.
+std::atomic<const std::vector<ItemKeyPair>*> g_ids{&kEmptyIds};
+std::vector<std::unique_ptr<std::vector<ItemKeyPair>>> g_id_versions;
+std::atomic<bool> g_ids_ready{false};
+
+}  // namespace
+
+bool discover_item_ids(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_ids_ready.load(std::memory_order_acquire)) return true;
+    // 후보를 개수로 가리므로 아이템 표가 먼저 있어야 한다.
+    if (!items_ready()) return false;
+    const auto count = static_cast<std::uint32_t>(item_catalog().size());
+    if (count == 0) return false;
+
+    ItemKeyMap map;
+    if (!find_item_key_map(reader, rtti.image(), count, &map)) return false;
+
+    auto built = std::make_unique<std::vector<ItemKeyPair>>();
+    if (!read_item_key_map(reader, map, built.get()) || built->empty()) {
+        return false;
+    }
+    std::sort(built->begin(), built->end(),
+              [](const ItemKeyPair& a, const ItemKeyPair& b) {
+                  return a.key < b.key;
+              });
+
+    const std::size_t n = built->size();
+    const auto* p = built.get();
+    g_id_versions.push_back(std::move(built));
+    g_ids.store(p, std::memory_order_release);
+    g_ids_ready.store(true, std::memory_order_release);
+    log::infof("아이템 대응표: {}개 (키 -> 순번)", n);
+    return true;
+}
+
+bool item_ids_ready() { return g_ids_ready.load(std::memory_order_acquire); }
+
+std::uint32_t item_id_for_key(std::uint32_t key) {
+    return find_item_id(*g_ids.load(std::memory_order_acquire), key);
 }
 
 }  // namespace cdtb::game
