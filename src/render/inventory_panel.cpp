@@ -42,6 +42,9 @@ struct Row {
 std::vector<Row> g_rows;
 std::string g_status = "아직 안 읽었습니다";
 
+// 컴포넌트가 생기기를 기다리는 중인가. 생기는 순간 스스로 읽는다.
+bool g_waiting = false;
+
 // 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류.
 // 헬퍼는 item_style 에 함께 둔다. 한쪽만 고치면 두 창이 달라진다.
 char g_query[64]{};
@@ -68,7 +71,10 @@ void refresh(const mem::Reader& reader) {
     g_rows.clear();
 
     if (!game::inventory_ready()) {
-        g_status = "컴포넌트를 찾는 중입니다 - 월드에 들어간 뒤 잠시";
+        // 실패로 끝내지 않는다 - 찾으라고 알리고, 생기면 저절로 읽는다.
+        game::request_inventory_rescan();
+        g_waiting = true;
+        g_status = "컴포넌트를 찾는 중입니다 - 찾으면 저절로 읽습니다";
         return;
     }
     if (!game::item_ids_ready()) {
@@ -284,9 +290,19 @@ void draw_inventory_panel(bool* open) {
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("컴포넌트 다시 찾기")) {
-        game::forget_inventory();
+        game::forget_inventory();   // 요청까지 함께 남는다
         g_rows.clear();
-        g_status = "다시 찾는 중입니다 - 10초쯤 뒤 '다시 읽기'";
+        g_waiting = true;
+        g_status = "다시 찾는 중입니다 - 찾으면 저절로 읽습니다";
+    }
+
+    // 컴포넌트를 기다리는 중이면 생기는 순간 스스로 읽는다. 예전에는
+    // 사람이 "10초쯤 뒤에 다시 읽기를 눌러" 야 했는데, 언제가 그때인지
+    // 알 방법이 없었다.
+    if (g_waiting && game::inventory_ready()) {
+        g_waiting = false;
+        const mem::LocalReader reader;
+        refresh(reader);
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
