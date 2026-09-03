@@ -43,6 +43,15 @@ struct ItemEntry {
     // 를 검사하고, 넘으면 조용히 거절한다. 실측에서 한손 무기 3,
     // 방패 2, 재료 0 이고 툴팁의 원 개수와 같다.
     std::uint32_t max_sockets = 0;
+
+    // 이 아이템 종류의 최대 내구도. 레코드 +0x400 의 `_maxEndurance`
+    // 이고, **0xFFFF 면 내구도가 없는 아이템**이다.
+    //
+    // 게임이 아이템을 쓸 때 이렇게 본다 (RVA 0x1D9CBB0).
+    //
+    //   _maxEndurance != 0xFFFF && 인스턴스 내구도 <= 0 &&
+    //   _isDestoryWhenBroken(+0x1FC) != 0   -> 오류 0x36
+    std::uint16_t max_endurance = 0xFFFF;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -153,6 +162,7 @@ struct ItemCatalogEntry {
     std::uint32_t max_stack = 0;
     std::uint32_t max_temper = 0;   // ItemEntry 의 같은 칸
     std::uint32_t max_sockets = 0;  // ItemEntry 의 같은 칸
+    std::uint16_t max_endurance = 0xFFFF;  // ItemEntry 의 같은 칸
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름

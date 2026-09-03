@@ -16,13 +16,21 @@ constexpr std::size_t kCountField = 0x30;   // u32 개수
 constexpr std::size_t kRecordsPtr = 0x58;   // 레코드 포인터 배열
 
 // --- 레코드 (0x500 바이트) ---
+//
+// 이름은 게임이 스스로 알려 준다. 역직렬화 함수의 실패 메시지가
+// "ItemInfo의 _maxEndurance를 읽어들이는데 실패했다" 꼴이라
+// 필드 이름과 오프셋을 짝지을 수 있다 - `tools/rtti/fields.py` 가
+// 그것을 뽑는다. 실측 109개.
 constexpr std::size_t kRecKey = 0x00;       // u32 키
-constexpr std::size_t kRecMaxStack = 0x18;  // u32 최대 스택
+constexpr std::size_t kRecMaxStack = 0x18;  // u32 _maxStackCount
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
-constexpr std::size_t kRecCategory = 0xA3;  // u8  분류 (74종)
-constexpr std::size_t kRecGrade = 0x210;    // u8  등급 (0=없음, 1..5)
-constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수
+constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
+constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
+constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없음)
+// _enchantDataList 는 {ptr +0x248, u32 개수 +0x250} 다. 담금질은
+// 0..개수-1 이라 게임이 `담금질 <= [+0x250] - 1` 로 검사한다.
 constexpr std::size_t kRecTemperCap = 0x250;  // u32 담금질 상한+1
+constexpr std::size_t kRecMaxEndurance = 0x400;  // u16 _maxEndurance
 
 constexpr const char* kManagerClass = ".?AVItemInfoManager@pa@@";
 
@@ -133,6 +141,10 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         // 담금질과 달리 상한 그대로다 - 게임이 `>=` 로 검사한다.
         reader.read_value(e.record + kRecSockets, &e.max_sockets);
 
+        // 0xFFFF 면 내구도가 없는 아이템이다 - 담금질의 _equipTypeInfo
+        // (+0x42) 와 같은 표기법이다.
+        reader.read_value(e.record + kRecMaxEndurance, &e.max_endurance);
+
         items.push_back(e);
     }
     *out = std::move(items);
@@ -159,6 +171,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.max_stack = e.max_stack;
         entry.max_temper = e.max_temper;
         entry.max_sockets = e.max_sockets;
+        entry.max_endurance = e.max_endurance;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
