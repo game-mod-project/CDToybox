@@ -138,6 +138,22 @@ std::uint32_t max_stack_of(std::uint32_t key) {
 
 }  // namespace
 
+int stash_open_set() {
+    if (!g_loaded) load();
+    return (g_open_set >= 0 && g_open_set < g_stash.set_count()) ? g_open_set
+                                                                 : -1;
+}
+
+bool stash_add_entry(int set, const game::StashEntry& entry) {
+    if (!g_loaded) load();
+    if (set < 0 || set >= g_stash.set_count()) return false;
+    game::StashSet* s = g_stash.set_at(set);
+    if (s == nullptr) return false;
+    s->items.push_back(entry);
+    g_dirty = true;
+    return true;
+}
+
 void stash_toggle_favorite(unsigned int key) {
     if (!g_loaded) load();
     g_stash.toggle_favorite(key);
@@ -293,6 +309,8 @@ void draw_stash_panel() {
         std::snprintf(label, sizeof(label), "%s (%zu개)", set->name.c_str(),
                       set->items.size());
         if (ImGui::CollapsingHeader(label)) {
+            // 인벤토리 창이 "어디에 담을지" 를 이걸로 안다.
+            g_open_set = i;
             if (ImGui::SmallButton("전부 지급")) {
                 g_queue = set->items;
                 g_queue_at = 0;
