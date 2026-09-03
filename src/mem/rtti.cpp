@@ -11,7 +11,9 @@ constexpr std::size_t kNameOffset = 16;
 
 }  // namespace
 
-bool Rtti::load_image() {
+bool Rtti::load_image(ImageLoad* stats) {
+    if (stats != nullptr) *stats = ImageLoad{};
+
     const std::uintptr_t base = r_.module_base();
     const std::size_t size = r_.module_size();
     if (base == 0 || size == 0) return false;
@@ -22,7 +24,13 @@ bool Rtti::load_image() {
     constexpr std::size_t kChunk = 0x10000;
     for (std::size_t off = 0; off < size; off += kChunk) {
         const std::size_t n = (off + kChunk <= size) ? kChunk : size - off;
-        r_.read(base + off, image_.data() + off, n);
+        const bool ok = r_.read(base + off, image_.data() + off, n);
+        if (stats == nullptr) continue;
+        ++stats->chunks;
+        if (!ok) {
+            ++stats->failed_chunks;
+            stats->failed_bytes += n;
+        }
     }
     return true;
 }

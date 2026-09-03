@@ -36,6 +36,13 @@ struct ItemEntry {
     // 게임이 `담금질 <= [+0x250] - 1` 로 검사한다. 실측에서 장비는
     // 11 이라 0..10 이고 툴팁 게이지가 정확히 10칸이다.
     std::uint32_t max_temper = 0;
+
+    // 이 아이템 종류에 박을 수 있는 소켓 칸 수. 레코드 +0x238 이다.
+    //
+    // 지급 작업 함수(0x26A2600)가 `표 +0x238 >= TrItemValue +0x5E`
+    // 를 검사하고, 넘으면 조용히 거절한다. 실측에서 한손 무기 3,
+    // 방패 2, 재료 0 이고 툴팁의 원 개수와 같다.
+    std::uint32_t max_sockets = 0;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -144,7 +151,8 @@ struct ItemCatalogEntry {
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
     std::uint32_t max_stack = 0;
-    std::uint32_t max_temper = 0;  // ItemEntry 의 같은 칸
+    std::uint32_t max_temper = 0;   // ItemEntry 의 같은 칸
+    std::uint32_t max_sockets = 0;  // ItemEntry 의 같은 칸
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름

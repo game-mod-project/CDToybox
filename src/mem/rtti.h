@@ -26,8 +26,25 @@ public:
     explicit Rtti(const Reader& reader) : r_(reader) {}
 
     // 모듈 이미지를 읽어 캐시한다. 나머지 조회는 전부 캐시에서 한다.
-    bool load_image();
+    //
+    // 접근 불가 페이지가 섞여 있으면 그 자리는 0 으로 남는다. 얼마나
+    // 남았는지는 stats 로 받는다 - 구멍이 크면 스캔 결과를 그대로
+    // 믿으면 안 된다.
+    struct ImageLoad {
+        std::size_t chunks = 0;         // 시도한 청크 수
+        std::size_t failed_chunks = 0;  // 읽지 못해 0 으로 남은 청크
+        std::size_t failed_bytes = 0;
+    };
+    bool load_image(ImageLoad* stats = nullptr);
     bool loaded() const { return !image_.empty(); }
+
+    // 캐시한 이미지를 넘겨준다. 부른 뒤에는 loaded() 가 거짓이다.
+    // 이미지를 고쳐 파일로 낼 때 364MB 복사를 피하려고 둔다.
+    std::vector<std::uint8_t> take_image() {
+        std::vector<std::uint8_t> out = std::move(image_);
+        image_.clear();
+        return out;
+    }
     const std::vector<std::uint8_t>& image() const { return image_; }
 
     struct TypeInfo {

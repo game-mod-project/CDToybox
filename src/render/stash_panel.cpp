@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -152,15 +153,31 @@ void draw_stash_panel() {
             // 거절한다 - 그러면 큐가 그 자리에서 영영 멈춘다. 파일에
             // 큰 값이 있으면 깎아서 보낸다.
             std::uint32_t cap = 0;
+            std::uint32_t socket_cap = 0;
             for (const auto& c : game::item_catalog()) {
                 if (c.key == e.key) {
                     cap = c.max_temper;
+                    socket_cap = c.max_sockets;
                     break;
                 }
             }
-            const auto temper =
+
+            game::GiveExtras extras;
+            extras.temper =
                 static_cast<std::uint16_t>(e.temper > cap ? cap : e.temper);
-            if (game::request_give(seen[pick], e.key, e.count, temper)) {
+
+            // 소켓도 같다. 아이템 표의 칸 수를 넘기면 게임이 조용히
+            // 거절한다. 배열 자체도 다섯 칸이다.
+            std::size_t room = socket_cap;
+            if (room > game::kGiveMaxSockets) room = game::kGiveMaxSockets;
+            for (const auto& sk : e.sockets) {
+                if (extras.socket_count >= room) break;
+                std::memcpy(extras.sockets[extras.socket_count].raw, sk.raw,
+                            game::kGiveSocketBytes);
+                ++extras.socket_count;
+            }
+
+            if (game::request_give(seen[pick], e.key, e.count, extras)) {
                 ++g_queue_at;
             }
         } else {

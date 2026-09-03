@@ -169,23 +169,60 @@ struct SpawnOutcome {
 // 실측에서 RVA 0x25493D2 가 정확히 그 자리였다.
 bool thread_ready_for_spawn();
 
-// TrItemValue 의 키·개수·담금질 칸을 채운다. 나머지 칸은 게임
-// 생성자가 채우므로 여기서는 건드리지 않는다.
+// 지급에 실을 것들. 전부 `TrItemValue` 의 칸이다.
+//
+// 변환 함수(RVA 0x2094050)가 이 구조를 인벤토리 레코드로 옮긴다.
+// 무엇이 실리고 무엇이 안 실리는지는 그 함수에 그대로 있다 -
+// docs/superpowers/specs/2026-09-03-static-analysis.md 에 표로 옮겼다.
+inline constexpr std::size_t kGiveSocketBytes = 6;
+inline constexpr int kGiveMaxSockets = 5;
+
+// 소켓 한 칸. 인벤토리에서 읽은 6바이트를 그대로 넘긴다.
+//
+// 게임의 복사 루프(0x2094324)가 `TrItemValue +0x40` 부터 6바이트씩
+// 다섯 칸을 레코드 소켓 배열로 **그대로** 옮긴다. 다섯 번째 바이트만
+// 슬롯 번호로 덮어쓰므로 우리가 맞출 필요가 없다.
+//
+// 첫 u16 은 아이템 표에서의 **순번**이지 아이템 키가 아니다 - 복사
+// 루프는 키->순번 변환을 하지 않는다. 그래서 게임이 갱신되면
+// 어긋난다. 보관함 파일은 키도 함께 들고 있으므로 나중에 대응표를
+// 물리면 고칠 수 있다.
+struct GiveSocket {
+    std::uint8_t raw[kGiveSocketBytes]{};
+};
+
+struct GiveExtras {
+    std::uint16_t temper = 0;    // +0x0C  -> 레코드 +0x0A
+
+    // +0x5E (u8) -> 레코드 +0x70. 개수가 0 이면 복사 루프가 한 칸도
+    // 안 돈다 - 지금까지 지급분에 소켓이 하나도 없던 이유가 이것이다.
+    //
+    // **상한을 넘기면 게임이 조용히 거절한다.** 장비는 아이템 표의
+    // `max_sockets` 이하, 겹치는 아이템은 0 이어야 한다. 부르는 쪽에서
+    // 미리 잘라야 큐가 멈추지 않는다.
+    std::uint8_t socket_count = 0;
+    GiveSocket sockets[kGiveMaxSockets]{};   // +0x40 .. +0x5D
+};
+
+// TrItemValue 의 칸을 채운다. 나머지는 게임 생성자가 채우므로
+// 여기서는 건드리지 않는다.
 //
 // 작업 함수(0x26A2600)가 검사하는 자리가 코드에 그대로 있다.
 //   mov eax, [r8+8]; test eax,eax; je 실패        아이템 키
 //   cmp qword [r8+0x10], 0; jle 실패              개수
+//   cmp byte [r8+0x5e], 0 / 표 +0x238 과 비교      소켓 개수
 //
 // 담금질은 `+0x0C` 의 u16 이다. 변환 함수(0x2094050)가
 // `movzx eax,word [r14+0x0C]; mov [rdi+0x0A],ax` 로 레코드에 옮긴다.
-// 지금까지 지급이 담금질 0 인 장비만 준 것은 이 칸을 안 채웠기
-// 때문이다 - 생성자는 `+0x08` 만 0 으로 만들고 `+0x0C` 는 건드리지
-// 않는데 버퍼가 0 으로 초기화된다.
+// 지급이 담금질 0 인 장비만 준 것은 이 칸을 안 채웠기 때문이다 -
+// 생성자는 `+0x08` 만 0 으로 만들고 `+0x0C` 는 건드리지 않는데
+// 버퍼가 0 으로 초기화된다. 소켓 개수도 같은 이유로 0 이었다.
 //
-// **상한을 넘으면 게임이 조용히 거절한다.** 아이템 표의
-// `ItemCatalogEntry::max_temper` 로 미리 걸러야 한다.
+// **상한을 넘으면 게임이 조용히 거절한다.** 담금질은
+// `ItemCatalogEntry::max_temper`, 소켓은 `max_sockets` 로 미리
+// 걸러야 한다.
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
-                     std::int64_t count, std::uint16_t temper = 0);
+                     std::int64_t count, const GiveExtras& extras = {});
 
 // TrItemValue 를 담을 버퍼 크기.
 //
@@ -201,10 +238,10 @@ constexpr std::size_t kItemValueSize = 0x400;
 // 바닥이 아니라 인벤토리로 바로 넣는다.
 // (CreateItemFromTrItemValueCheatReq, ID 2944)
 //
-// `temper` 는 담금질이다. 아이템 표의 `max_temper` 를 넘으면 게임이
+// `extras` 는 담금질과 소켓이다. 아이템 표의 상한을 넘으면 게임이
 // 조용히 거절하므로 부르는 쪽에서 먼저 걸러야 한다.
 bool request_give(std::uintptr_t session, std::uint32_t item_key,
-                  std::int64_t count, std::uint16_t temper = 0);
+                  std::int64_t count, const GiveExtras& extras = {});
 
 // 인벤토리 직행을 쓸 수 있는가.
 bool give_ready();
