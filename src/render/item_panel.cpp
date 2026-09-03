@@ -42,8 +42,6 @@ std::size_t g_built_from = 0;
 constexpr float kIconSize = 22.0f;
 constexpr std::size_t kPerPage[] = {20, 40, 60, 100};
 constexpr const char* kPerPageLabel = "20\0" "40\0" "60\0" "100\0";
-constexpr const char* kGradeLabel = "전체\0" "등급 없음\0" "T1\0" "T2\0" "T3\0"
-                                    "T4\0" "T5\0";
 
 std::size_t per_page() { return kPerPage[g_per_page_idx]; }
 
@@ -51,25 +49,7 @@ std::size_t per_page() { return kPerPage[g_per_page_idx]; }
 // 보라색은 등급이 아니라 '중요물품' 표시였다.
 
 void rebuild_categories() {
-    const auto& all = game::item_catalog();
-    bool seen[256] = {};
-    for (const auto& e : all) seen[e.category] = true;
-    g_categories.clear();
-    g_category_labels.clear();
-    g_category_labels.append("전체").push_back('\0');
-    for (int c = 0; c < 256; ++c) {
-        if (!seen[c]) continue;
-        g_categories.push_back(static_cast<std::uint8_t>(c));
-        char buf[48];
-        const char* nm = category_name(static_cast<std::uint8_t>(c));
-        if (nm != nullptr) {
-            std::snprintf(buf, sizeof(buf), "%d (%s)", c, nm);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%d", c);
-        }
-        g_category_labels.append(buf).push_back('\0');
-    }
-    g_category_labels.push_back('\0');
+    build_category_labels(&g_categories, &g_category_labels);
 }
 
 void rebuild() {
@@ -88,30 +68,16 @@ void rebuild() {
     g_dirty = false;
 }
 
-// 다음 항목이 창 오른쪽을 넘지 않으면 같은 줄에 이어 붙인다.
-//
-// ImGui 데모의 줄바꿈 관용구다. SameLine 을 무조건 걸면 창을 좁혔을 때
-// 오른쪽이 잘려 나가고, 무조건 줄을 바꾸면 넓은 창에서 빈 줄이 남는다.
-// 남은 폭을 보고 정한다.
-void flow(float next_width) {
-    const float right = ImGui::GetWindowPos().x +
-                        ImGui::GetWindowContentRegionMax().x;
-    const float end = ImGui::GetItemRectMax().x +
-                      ImGui::GetStyle().ItemSpacing.x + next_width;
-    if (end < right) ImGui::SameLine();
-}
-
-float text_w(const char* s) { return ImGui::CalcTextSize(s).x; }
 
 // 라벨이 오른쪽에 붙는 위젯(Combo 등)이 실제로 차지하는 폭.
 float labeled_w(float item_w, const char* label) {
-    return item_w + ImGui::GetStyle().ItemInnerSpacing.x + text_w(label);
+    return item_w + ImGui::GetStyle().ItemInnerSpacing.x + text_width(label);
 }
 
 void draw_filter_bar() {
     const ImGuiStyle& st = ImGui::GetStyle();
-    const float clear_w = text_w("지우기") + st.FramePadding.x * 2.0f;
-    const float check_w = text_w("이름 없는 것 감추기") +
+    const float clear_w = text_width("지우기") + st.FramePadding.x * 2.0f;
+    const float check_w = text_width("이름 없는 것 감추기") +
                           ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
 
     // 검색창은 남은 폭을 쓰되 상한을 둔다. 상한이 없으면 창을 넓혔을
@@ -127,14 +93,14 @@ void draw_filter_bar() {
         g_page = 0;
     }
 
-    flow(clear_w);
+    flow_same_line(clear_w);
     if (ImGui::Button("지우기")) {
         g_query[0] = '\0';
         g_dirty = true;
         g_page = 0;
     }
 
-    flow(check_w);
+    flow_same_line(check_w);
     if (ImGui::Checkbox("이름 없는 것 감추기", &g_hide_unnamed)) {
         g_dirty = true;
         g_page = 0;
@@ -142,21 +108,21 @@ void draw_filter_bar() {
 
     // 라벨을 위젯 **앞**에 둔다. ImGui 기본은 뒤에 붙는데, 그러면
     // "전체 ▼ 등급" 처럼 읽혀 무엇을 고르는 칸인지 헷갈린다.
-    const float grade_w = text_w("등급") + st.ItemInnerSpacing.x + 120.0f;
-    const float cat_w = text_w("분류") + st.ItemInnerSpacing.x + 230.0f;
+    const float grade_w = text_width("등급") + st.ItemInnerSpacing.x + 120.0f;
+    const float cat_w = text_width("분류") + st.ItemInnerSpacing.x + 230.0f;
 
-    flow(grade_w);
+    flow_same_line(grade_w);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("등급");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
     // 목록이 길다. 잘리지 않도록 펼침 높이를 넉넉히 준다.
-    if (ImGui::Combo("##grade", &g_grade_idx, kGradeLabel, 12)) {
+    if (ImGui::Combo("##grade", &g_grade_idx, kGradeLabels, 12)) {
         g_dirty = true;
         g_page = 0;
     }
 
-    flow(cat_w);
+    flow_same_line(cat_w);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("분류");
     ImGui::SameLine();
@@ -178,17 +144,17 @@ void draw_pager(std::size_t total) {
     std::snprintf(label, sizeof(label), "%zu / %zu 쪽", g_page + 1, pages);
     const ImGuiStyle& st = ImGui::GetStyle();
     const float btn = ImGui::GetFrameHeight();
-    const float nav_w = btn * 2.0f + text_w(label) + 70.0f +
+    const float nav_w = btn * 2.0f + text_width(label) + 70.0f +
                         st.ItemSpacing.x * 3.0f;
 
-    flow(text_w("쪽당") + st.ItemInnerSpacing.x + 70.0f);
+    flow_same_line(text_width("쪽당") + st.ItemInnerSpacing.x + 70.0f);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("쪽당");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(70.0f);
     if (ImGui::Combo("##perpage", &g_per_page_idx, kPerPageLabel)) g_page = 0;
 
-    flow(nav_w);
+    flow_same_line(nav_w);
     ImGui::BeginDisabled(g_page == 0);
     if (ImGui::Button("<")) --g_page;
     ImGui::EndDisabled();

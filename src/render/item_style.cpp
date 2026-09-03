@@ -1,5 +1,9 @@
 #include "render/item_style.h"
 
+#include <cstdio>
+
+#include "game/items.h"
+
 namespace cdtb::render {
 
 ImVec4 grade_color(std::uint8_t grade) {
@@ -112,6 +116,46 @@ const char* category_name(std::uint8_t c) {
         case 55: return "분무기 등짐";
         default: return nullptr;
     }
+}
+
+
+// --- 필터 줄 ---------------------------------------------------------
+
+const char* const kGradeLabels = "전체\0" "등급 없음\0" "T1\0" "T2\0"
+                                 "T3\0" "T4\0" "T5\0";
+
+float text_width(const char* s) { return ImGui::CalcTextSize(s).x; }
+
+void flow_same_line(float next_width) {
+    const float right = ImGui::GetWindowPos().x +
+                        ImGui::GetWindowContentRegionMax().x;
+    const float end = ImGui::GetItemRectMax().x +
+                      ImGui::GetStyle().ItemSpacing.x + next_width;
+    if (end < right) ImGui::SameLine();
+}
+
+void build_category_labels(std::vector<std::uint8_t>* values,
+                           std::string* labels) {
+    if (values == nullptr || labels == nullptr) return;
+    values->clear();
+    labels->clear();
+    labels->append("전체").push_back('\0');
+
+    bool seen[256] = {};
+    for (const auto& e : game::item_catalog()) seen[e.category] = true;
+    for (int c = 0; c < 256; ++c) {
+        if (!seen[c]) continue;
+        values->push_back(static_cast<std::uint8_t>(c));
+        char buf[48];
+        const char* nm = category_name(static_cast<std::uint8_t>(c));
+        if (nm != nullptr) {
+            std::snprintf(buf, sizeof(buf), "%d (%s)", c, nm);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%d", c);
+        }
+        labels->append(buf).push_back('\0');
+    }
+    labels->push_back('\0');
 }
 
 }  // namespace cdtb::render

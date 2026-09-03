@@ -25,6 +25,7 @@ struct Row {
     std::uint32_t key = 0;           // 0 이면 대응표에 없다
     std::string name;
     std::uint8_t grade = 0;
+    std::uint8_t category = 0;
     std::int64_t count = 0;
     std::uint32_t temper = 0;
     std::uint32_t sharpness = 0;
@@ -35,9 +36,15 @@ struct Row {
 
 std::vector<Row> g_rows;
 std::string g_status = "아직 안 읽었습니다";
-char g_filter[64]{};
-int g_kind_idx = 0;                  // 0 = 전체
-std::vector<std::uint32_t> g_kinds;
+
+// 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류.
+// 헬퍼는 item_style 에 함께 둔다. 한쪽만 고치면 두 창이 달라진다.
+char g_query[64]{};
+int g_grade_idx = 0;                 // 0 = 전체
+int g_category_idx = 0;              // 0 = 전체
+std::vector<std::uint8_t> g_categories;
+std::string g_category_labels;
+int g_containers = 0;
 
 const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
     if (key == 0 || !game::items_ready()) return nullptr;
@@ -49,7 +56,6 @@ const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
 
 void refresh(const mem::Reader& reader) {
     g_rows.clear();
-    g_kinds.clear();
 
     if (!game::inventory_ready()) {
         g_status = "인벤토리 컴포넌트를 아직 못 찾았습니다";
@@ -91,7 +97,6 @@ void refresh(const mem::Reader& reader) {
         if (!game::read_inventory_records(reader, c, &recs)) continue;
         if (recs.empty()) continue;
         ++containers;
-        g_kinds.push_back(c.kind);
 
         for (const auto& rec : recs) {
             Row r;
@@ -106,6 +111,7 @@ void refresh(const mem::Reader& reader) {
             if (const auto* e = entry_of(r.key)) {
                 r.name = e->name;
                 r.grade = e->grade;
+                r.category = e->category;
             }
             if (r.name.empty()) {
                 char buf[48];
@@ -135,10 +141,56 @@ void refresh(const mem::Reader& reader) {
         }
     }
 
+    g_containers = containers;
+    build_category_labels(&g_categories, &g_category_labels);
+
     char buf[128];
     std::snprintf(buf, sizeof(buf), "가방 %d개, 아이템 %zu개", containers,
                   g_rows.size());
     g_status = buf;
+}
+
+// 아이템 목록과 같은 줄 구성이다 - 검색 · 지우기 · 등급 · 분류.
+// 폭 계산과 줄바꿈도 같은 헬퍼를 쓴다. 한쪽만 고치면 두 창이
+// 서로 다르게 생긴다.
+void draw_filter_bar() {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float clear_w = text_width("지우기") + st.FramePadding.x * 2.0f;
+    const float grade_w = text_width("등급") + st.ItemInnerSpacing.x + 120.0f;
+    const float cat_w = text_width("분류") + st.ItemInnerSpacing.x + 230.0f;
+
+    // 검색창은 남은 폭을 쓰되 상한을 둔다. 상한이 없으면 창을 넓혔을
+    // 때 검색창만 늘어나 오른쪽 항목이 밀려 잘린다.
+    float query_w = ImGui::GetContentRegionAvail().x - clear_w -
+                    st.ItemSpacing.x;
+    if (query_w > 420.0f) query_w = 420.0f;
+    if (query_w < 140.0f) query_w = 140.0f;
+    ImGui::SetNextItemWidth(query_w);
+    ImGui::InputTextWithHint("##invquery", "이름으로 검색", g_query,
+                             sizeof(g_query));
+
+    flow_same_line(clear_w);
+    if (ImGui::Button("지우기")) g_query[0] = 0;
+
+    // 라벨을 위젯 앞에 둔다. ImGui 기본은 뒤에 붙는데 그러면
+    // "전체 ▼ 등급" 처럼 읽혀 무엇을 고르는 칸인지 헷갈린다.
+    flow_same_line(grade_w);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("등급");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::Combo("##invgrade", &g_grade_idx, kGradeLabels, 12);
+
+    // 분류는 읽은 뒤에야 만들어진다.
+    if (!g_category_labels.empty()) {
+        flow_same_line(cat_w);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("분류");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(230.0f);
+        ImGui::Combo("##invcategory", &g_category_idx,
+                     g_category_labels.c_str(), 20);
+    }
 }
 
 }  // namespace
@@ -163,28 +215,15 @@ void draw_inventory_panel() {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
 
-    ImGui::SetNextItemWidth(200.0f);
-    ImGui::InputTextWithHint("##invfilter", "이름으로 찾기", g_filter,
-                             sizeof(g_filter));
+    draw_filter_bar();
 
-    // 가방 종류 고르기. 읽은 뒤에만 뜻이 있다.
-    if (!g_kinds.empty()) {
-        ImGui::SameLine();
-        std::string labels = "전체";
-        labels.push_back('\0');
-        for (const auto k : g_kinds) {
-            labels += "종류 " + std::to_string(k);
-            labels.push_back('\0');
-        }
-        labels.push_back('\0');
-        ImGui::SetNextItemWidth(120.0f);
-        ImGui::Combo("##invkind", &g_kind_idx, labels.c_str(), 12);
-    }
-
-    const std::uint32_t want_kind =
-        (g_kind_idx > 0 && g_kind_idx <= static_cast<int>(g_kinds.size()))
-            ? g_kinds[static_cast<std::size_t>(g_kind_idx - 1)]
-            : 0xFFFFFFFFu;
+    const int want_grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
+    const int want_cat =
+        (g_category_idx == 0 ||
+         g_category_idx > static_cast<int>(g_categories.size()))
+            ? -1
+            : static_cast<int>(g_categories[static_cast<std::size_t>(
+                  g_category_idx - 1)]);
 
     if (ImGui::BeginTable("inv", 7,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -203,9 +242,10 @@ void draw_inventory_panel() {
 
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
-            if (want_kind != 0xFFFFFFFFu && r.kind != want_kind) continue;
-            if (g_filter[0] != 0 &&
-                r.name.find(g_filter) == std::string::npos) {
+            if (want_grade >= 0 && r.grade != want_grade) continue;
+            if (want_cat >= 0 && r.category != want_cat) continue;
+            if (g_query[0] != 0 &&
+                r.name.find(g_query) == std::string::npos) {
                 continue;
             }
 
