@@ -327,6 +327,13 @@ void draw_stash_panel() {
                     break;
                 }
                 ImGui::SameLine();
+                // 한 줄만 꺼낸다. 큐에 하나만 넣으면 "전부 지급" 과
+                // 같은 길을 타므로 상한 자르기 · 소켓 조립이 그대로다.
+                if (ImGui::SmallButton("지급")) {
+                    g_queue.assign(1, set->items[j]);
+                    g_queue_at = 0;
+                }
+                ImGui::SameLine();
                 draw_item_line(set->items[j].key);
                 ImGui::SameLine();
                 ImGui::TextDisabled("x%lld",

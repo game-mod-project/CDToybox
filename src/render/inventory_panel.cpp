@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -30,6 +31,7 @@ struct Row {
     std::uint32_t temper = 0;
     std::uint32_t sharpness = 0;
     std::uint32_t socket_count = 0;
+    std::uint32_t endurance = 0;     // 정렬용 원값. 0xFFFF 면 없는 것
     std::vector<std::uint32_t> gem_keys;
     game::InventoryRowText text;
 };
@@ -45,6 +47,11 @@ int g_category_idx = 0;              // 0 = 전체
 std::vector<std::uint8_t> g_categories;
 std::string g_category_labels;
 int g_containers = 0;
+
+// 헤더를 눌러 정렬한다. 정렬은 그리기 전에 한 번만 하고, 그린
+// 뒤에는 g_rows 를 건드리지 않는다.
+int g_sort_col = -1;
+bool g_sort_asc = true;
 
 const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
     if (key == 0 || !game::items_ready()) return nullptr;
@@ -135,6 +142,7 @@ void refresh(const mem::Reader& reader) {
                 }
             }
             r.socket_count = filled;
+            r.endurance = rec.endurance;
             r.text = game::format_inventory_row(rec.endurance, rec.sharpness,
                                                 gems);
             g_rows.push_back(std::move(r));
@@ -148,6 +156,69 @@ void refresh(const mem::Reader& reader) {
     std::snprintf(buf, sizeof(buf), "가방 %d개, 아이템 %zu개", containers,
                   g_rows.size());
     g_status = buf;
+}
+
+// ImGui 가 알려 준 정렬 상태를 g_rows 에 적용한다.
+//
+// 열마다 무엇으로 견주는지 다르다 - 이름 · 분류는 글자, 나머지는
+// 숫자다. 내구도가 없는 아이템(0xFFFF)은 늘 뒤로 보낸다. 그대로
+// 견주면 65535 라 가장 큰 값이 되어 목록 맨 앞에 몰린다.
+void apply_sort() {
+    ImGuiTableSortSpecs* spec = ImGui::TableGetSortSpecs();
+    if (spec == nullptr || spec->SpecsCount == 0) return;
+    const int col = spec->Specs[0].ColumnIndex;
+    const bool asc = spec->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
+    if (!spec->SpecsDirty && col == g_sort_col && asc == g_sort_asc) return;
+    g_sort_col = col;
+    g_sort_asc = asc;
+    spec->SpecsDirty = false;
+
+    const auto endu_key = [](const Row& r) -> long long {
+        // 없는 것은 맨 뒤로.
+        return (r.endurance == game::kNoEndurance)
+                   ? 0x7FFFFFFFLL
+                   : static_cast<long long>(r.endurance);
+    };
+    std::stable_sort(g_rows.begin(), g_rows.end(),
+                     [&](const Row& a, const Row& b) {
+                         int c = 0;
+                         switch (col) {
+                             case 0: c = a.name.compare(b.name); break;
+                             case 1:
+                                 c = (a.category < b.category)   ? -1
+                                     : (a.category > b.category) ? 1
+                                                                 : 0;
+                                 break;
+                             case 2:
+                                 c = (a.count < b.count)   ? -1
+                                     : (a.count > b.count) ? 1
+                                                           : 0;
+                                 break;
+                             case 3:
+                                 c = (a.temper < b.temper)   ? -1
+                                     : (a.temper > b.temper) ? 1
+                                                             : 0;
+                                 break;
+                             case 4: {
+                                 const long long x = endu_key(a);
+                                 const long long y = endu_key(b);
+                                 c = (x < y) ? -1 : (x > y) ? 1 : 0;
+                                 break;
+                             }
+                             case 5:
+                                 c = (a.sharpness < b.sharpness)   ? -1
+                                     : (a.sharpness > b.sharpness) ? 1
+                                                                   : 0;
+                                 break;
+                             case 6:
+                                 c = (a.socket_count < b.socket_count)   ? -1
+                                     : (a.socket_count > b.socket_count) ? 1
+                                                                         : 0;
+                                 break;
+                             default: return false;
+                         }
+                         return asc ? (c < 0) : (c > 0);
+                     });
 }
 
 // 아이템 목록과 같은 줄 구성이다 - 검색 · 지우기 · 등급 · 분류.
@@ -225,20 +296,27 @@ void draw_inventory_panel() {
             : static_cast<int>(g_categories[static_cast<std::size_t>(
                   g_category_idx - 1)]);
 
-    if (ImGui::BeginTable("inv", 7,
+    if (ImGui::BeginTable("inv", 8,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY)) {
+                              ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_Sortable |
+                              ImGuiTableFlags_SortMulti)) {
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("개수", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,
+                                120.0f);
+        ImGui::TableSetupColumn("개수", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableSetupColumn("담금질", ImGuiTableColumnFlags_WidthFixed,
-                                50.0f);
+                                55.0f);
         ImGui::TableSetupColumn("내구도", ImGuiTableColumnFlags_WidthFixed,
-                                50.0f);
+                                55.0f);
         ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed,
                                 45.0f);
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
+                                        ImGuiTableColumnFlags_NoSort,
+                                110.0f);
         ImGui::TableHeadersRow();
+        apply_sort();
 
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
@@ -253,6 +331,12 @@ void draw_inventory_panel() {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextColored(grade_color(r.grade), "%s", r.name.c_str());
+            ImGui::TableNextColumn();
+            if (const char* nm = category_name(r.category)) {
+                ImGui::TextUnformatted(nm);
+            } else if (r.category != 0) {
+                ImGui::TextDisabled("%u", r.category);
+            }
             ImGui::TableNextColumn();
             ImGui::Text("%lld", static_cast<long long>(r.count));
             ImGui::TableNextColumn();
