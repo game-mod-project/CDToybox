@@ -567,6 +567,7 @@ void cmd_invexport(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             if (max_endurance_of(f->second) != 0xFFFF) {
                 e.endurance = rec.endurance;
             }
+            e.sharpness = rec.sharpness;
 
             std::vector<game::InventorySocket> socks;
             if (game::read_inventory_sockets(reader, rec, &socks)) {
@@ -1402,7 +1403,7 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                                 it.repair_entries);
         }
         if (it.max_sharpness != 0) {
-            std::snprintf(extra + at, sizeof(extra) - at, "  예리도 %d",
+            std::snprintf(extra + at, sizeof(extra) - at, "  연마 %d",
                           it.max_sharpness);
         }
         std::printf("%-10u %-20llu %s%s\n", it.key,

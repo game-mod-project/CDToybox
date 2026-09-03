@@ -87,6 +87,9 @@ void parse_item_extras(const char* rest, StashEntry* e) {
         if (tok[0] == 't') {
             e->temper = static_cast<std::uint32_t>(
                 std::strtoul(tok.c_str() + 1, nullptr, 10));
+        } else if (tok[0] == 'w') {
+            e->sharpness = static_cast<std::uint32_t>(
+                std::strtoul(tok.c_str() + 1, nullptr, 10));
         } else if (tok[0] == 'e') {
             e->endurance = static_cast<std::uint32_t>(
                 std::strtoul(tok.c_str() + 1, nullptr, 10));
@@ -149,6 +152,7 @@ std::string Stash::serialize() const {
             if (e.endurance != kStashNoEndurance) {
                 out += " e" + std::to_string(e.endurance);
             }
+            if (e.sharpness != 0) out += " w" + std::to_string(e.sharpness);
             for (const auto& k : e.sockets) {
                 out += " s" + std::to_string(k.slot) + ":" +
                        std::to_string(k.key) + ":" +

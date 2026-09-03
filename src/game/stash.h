@@ -34,6 +34,10 @@ struct StashEntry {
     std::int64_t count = 1;
     std::uint32_t temper = 0;              // 담금질
 
+    // 장비 연마. 담금질처럼 0 이 기본이라 0 이면 안 적는다 -
+    // 내구도와 다르다(그쪽은 0 이 "부서진" 이라 "없음" 과 갈라야 했다).
+    std::uint32_t sharpness = 0;
+
     // 현재 내구도. kStashNoEndurance 면 파일에 안 적혀 있던 것이다.
     // 내구도가 없는 아이템(레코드 +0x40 이 0xFFFF)은 적지 않는다 -
     // 적어 봐야 뜻이 없다.
