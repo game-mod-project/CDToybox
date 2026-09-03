@@ -121,6 +121,10 @@ void draw_extras(const game::ItemCatalogEntry* item) {
         if (g_temper < 0) g_temper = 0;
         if (g_temper > cap_t) g_temper = cap_t;
         ImGui::SameLine();
+        if (ImGui::SmallButton("최소##t")) g_temper = 0;
+        ImGui::SameLine();
+        if (ImGui::SmallButton("최대##t")) g_temper = cap_t;
+        ImGui::SameLine();
         ImGui::TextDisabled("(0 ~ %d)", cap_t);
     }
 
@@ -133,6 +137,10 @@ void draw_extras(const game::ItemCatalogEntry* item) {
         ImGui::InputInt("##sharp", &g_sharpness, 1, 10);
         if (g_sharpness < 0) g_sharpness = 0;
         if (g_sharpness > cap_s) g_sharpness = cap_s;
+        ImGui::SameLine();
+        if (ImGui::SmallButton("최소##s")) g_sharpness = 0;
+        ImGui::SameLine();
+        if (ImGui::SmallButton("최대##s")) g_sharpness = cap_s;
         ImGui::SameLine();
         ImGui::TextDisabled("(0 ~ %d)", cap_s);
     }
@@ -453,7 +461,11 @@ void draw_grant_panel() {
     // 보는 용도다. 페이로드가 u16 둘뿐이라 시도 범위가 좁다.
     ImGui::Separator();
     if (ImGui::CollapsingHeader("내구도 (뜻 확인 중)")) {
-        ImGui::TextDisabled("인자 두 칸의 뜻을 아직 모릅니다. 값을 바꿔 보세요.");
+        // 뜻은 정적 분석으로 밝혔다. 그런데 대상에 내구도가 없어
+        // 이 캐릭터에서는 아무 일도 일어나지 않는다.
+        ImGui::TextDisabled("a = 장비 슬롯 번호(0~20), b = 개수입니다.");
+        ImGui::TextDisabled("장착 중인 것에만 듣는데, 지금 장착품에는"
+                            " 내구도가 없어 변화가 없습니다.");
         ImGui::SetNextItemWidth(100.0f);
         ImGui::InputInt("a", &g_endur_a, 1, 10);
         ImGui::SameLine();
