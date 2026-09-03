@@ -12,6 +12,7 @@
 #include <string>
 
 #include "game/grant.h"
+#include "game/inventory.h"
 #include "game/items.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -206,6 +207,8 @@ void auto_analysis_loop() {
         // 소켓 지급이 키 -> 순번 대응표를 쓴다. 아이템 표가 선 뒤에
         // 한 번만 읽고 스스로 빠진다.
         discover_item_ids(rtti, reader);
+        // 인벤토리 창이 쓴다. 찾으면 스스로 빠진다.
+        discover_inventory(rtti, reader);
         log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);

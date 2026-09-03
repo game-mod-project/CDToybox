@@ -257,6 +257,24 @@ unsigned int grant_temper() {
     return static_cast<unsigned int>(g_temper < 0 ? 0 : g_temper);
 }
 
+void set_grant_item(unsigned int key, long long count, unsigned int temper,
+                    unsigned int sharpness, const unsigned int* gems,
+                    int gem_count) {
+    g_item_key = static_cast<int>(key);
+    g_count = (count < 1) ? 1 : (count > 0x7FFFFFFF)
+                                    ? 0x7FFFFFFF
+                                    : static_cast<int>(count);
+    g_temper = static_cast<int>(temper);
+    g_sharpness = static_cast<int>(sharpness);
+    for (int i = 0; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
+    if (gems != nullptr) {
+        for (int i = 0; i < gem_count && i < game::kGiveMaxSockets; ++i) {
+            g_socket_keys[i] = gems[i];
+        }
+    }
+    compact_sockets();
+}
+
 unsigned int grant_sharpness() {
     return static_cast<unsigned int>(g_sharpness < 0 ? 0 : g_sharpness);
 }

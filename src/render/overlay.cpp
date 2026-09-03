@@ -19,6 +19,7 @@
 #include "render/diagnostics.h"
 #include "render/icon_atlas.h"
 #include "render/grant_panel.h"
+#include "render/inventory_panel.h"
 #include "render/item_panel.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
@@ -398,6 +399,7 @@ void draw_ui() {
     cdtb::render::draw_item_panel();
     cdtb::render::draw_grant_panel();
     cdtb::render::draw_stash_panel();
+    cdtb::render::draw_inventory_panel();
 }
 
 }  // namespace cdtb::overlay::detail

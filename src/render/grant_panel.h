@@ -10,6 +10,16 @@ void draw_grant_panel();
 // 중에서 키를 손으로 찾아 넣는 것은 쓸 수 없다.
 void set_grant_item_key(unsigned int key);
 
+// 인벤토리 창이 고른 아이템의 값을 통째로 지급 칸에 채운다.
+//
+// 제자리 수정은 게임이 되쓴다. 대신 값을 여기로 옮겨 놓고 고친 뒤
+// 새로 지급하고, 원본은 게임에서 버리게 한다.
+//
+// `gems` 는 보석의 아이템 키다. 앞에서부터 최대 5칸까지 받는다.
+void set_grant_item(unsigned int key, long long count, unsigned int temper,
+                    unsigned int sharpness, const unsigned int* gems,
+                    int gem_count);
+
 // 보관함이 "지금 고른 것" 을 세트에 담을 때 쓴다. 지급 칸에서
 // 고른 담금질과 소켓도 함께 담아야 세트가 온전하다 - 키만 담으면
 // 꺼낼 때 맨 아이템이 나온다.

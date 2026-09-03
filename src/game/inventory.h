@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <vector>
 
+#include <string>
+#include <vector>
+
 #include "mem/reader.h"
+#include "mem/rtti.h"
 
 namespace cdtb::game {
 
@@ -111,5 +115,39 @@ bool read_inventory_containers(const mem::Reader& reader,
 bool read_inventory_records(const mem::Reader& reader,
                             const InventoryContainer& container,
                             std::vector<InventoryRecord>* out);
+
+
+// --------------------------------------------------- 모드용 배경 탐색
+
+// 서버 인벤토리 컴포넌트를 RTTI 로 찾아 캐시한다. 찾으면 그다음부터
+// 즉시 참을 돌려주므로 재시도 루프에서 부르면 된다.
+//
+// **내용이 있는 첫 컴포넌트**를 고른다. 빈 것이 여럿 살아 있어서
+// (NPC · 상자 등) 그냥 첫 번째를 잡으면 늘 비어 보인다. probe 가
+// 쓰는 기준과 같다.
+bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader);
+bool inventory_ready();
+std::uintptr_t inventory_component();
+
+// 캐시를 버린다. 게임이 인벤토리를 새로 만들면(재접속 등) 옛 주소가
+// 남으므로 화면에서 다시 찾을 수 있어야 한다.
+void forget_inventory();
+
+// --------------------------------------------------------- 표시용 변환
+
+// 인벤토리 한 줄의 표시용 문자열. 규칙을 화면 코드에서 떼어 낸다.
+struct InventoryRowText {
+    std::string endurance;   // 비면 내구도가 없는 아이템이다
+    std::string sharpness;   // 비면 0
+    std::string sockets;     // 비면 박힌 것이 없다
+};
+
+// 내구도가 없는 아이템은 레코드에 0xFFFF 가 들어 있다. 그대로 내면
+// 65535 로 보이므로 빈칸이어야 한다.
+inline constexpr std::uint32_t kNoEndurance = 0xFFFF;
+
+InventoryRowText format_inventory_row(std::uint32_t endurance,
+                                      std::uint32_t sharpness,
+                                      const std::vector<std::string>& gems);
 
 }  // namespace cdtb::game
