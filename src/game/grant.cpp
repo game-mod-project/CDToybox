@@ -972,7 +972,7 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
     packet[0] = static_cast<std::uint64_t>(session);
 
     log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {} 담금질 {} 소켓 {}"
-               " 내구도 {} 예리도 {}",
+               " 내구도 {} 연마 {}",
                session, item_key, count, extras.temper,
                static_cast<int>(extras.socket_count), extras.endurance,
                extras.sharpness);
@@ -1053,7 +1053,7 @@ int clamp_count_to_stack(int count, std::uint32_t max_stack) {
 
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
                      std::int64_t count, const GiveExtras& extras) {
-    // 예리도 칸이 +0x1AE 까지 가므로 그만큼은 있어야 한다.
+    // 장비 연마 칸이 +0x1AE 까지 가므로 그만큼은 있어야 한다.
     // (소켓만 보고 0x60 으로 잡았다가 그 뒤를 쓰게 됐다.)
     if (buf == nullptr || n < 0x1B0) return false;
     if (extras.socket_count > kGiveMaxSockets) return false;
