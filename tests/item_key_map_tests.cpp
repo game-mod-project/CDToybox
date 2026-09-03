@@ -337,3 +337,49 @@ TEST(find_item_id_treats_zero_as_a_real_id) {
     const std::vector<cdtb::game::ItemKeyPair> v = {{100, 0}, {200, 5}};
     CHECK_EQ(cdtb::game::find_item_id(v, 100), std::uint32_t{0});
 }
+
+// --- 소켓 6바이트 조립 -------------------------------------------------
+//
+// 게임의 복사 루프(RVA 0x2094324)가 `TrItemValue +0x40 + i*6` 을 그대로
+// 옮기고 **다섯 번째 바이트만 슬롯 번호로 덮어쓴다**. 그래서 우리는
+// 순번과 꼬리 상수만 채우면 된다.
+//
+// 실측한 박힌 소켓이 전부 이 꼴이었다.
+//
+//   24 0D FF FF 00 FF   바람 가르기 (순번 3364, 슬롯 0)
+//   8E 0C FF FF 01 FF   파괴 I      (순번 3214, 슬롯 1)
+//   90 0C FF FF 02 FF   질풍 I      (순번 3216, 슬롯 2)
+
+TEST(make_socket_bytes_matches_a_measured_entry) {
+    std::uint8_t raw[6]{};
+    cdtb::game::make_socket_bytes(3364, raw);
+    const std::uint8_t want[6] = {0x24, 0x0D, 0xFF, 0xFF, 0x00, 0xFF};
+    CHECK(std::memcmp(raw, want, sizeof(want)) == 0);
+}
+
+TEST(make_socket_bytes_leaves_the_slot_byte_zero) {
+    // 실측본은 슬롯 1 이라 다섯 번째가 0x01 이었다. 게임이 덮어쓰므로
+    // 우리는 0 으로 둔다 - 나머지 다섯 칸이 맞으면 된다.
+    std::uint8_t raw[6]{};
+    cdtb::game::make_socket_bytes(3214, raw);
+    const std::uint8_t want[6] = {0x8E, 0x0C, 0xFF, 0xFF, 0x00, 0xFF};
+    CHECK(std::memcmp(raw, want, sizeof(want)) == 0);
+}
+
+TEST(make_socket_bytes_writes_the_id_little_endian) {
+    std::uint8_t raw[6]{};
+    cdtb::game::make_socket_bytes(0x0102, raw);
+    CHECK_EQ(raw[0], std::uint8_t{0x02});
+    CHECK_EQ(raw[1], std::uint8_t{0x01});
+}
+
+// 대응표가 없으면 조립하지 않는다. 엉뚱한 순번을 보내면 다른 보석이
+// 박히므로 조용히 넘기지 않고 거절한다.
+TEST(socket_bytes_for_key_refuses_without_the_map) {
+    std::uint8_t raw[6]{};
+    CHECK(!cdtb::game::socket_bytes_for_key(1002569, raw));
+}
+
+TEST(socket_bytes_for_key_refuses_a_null_buffer) {
+    CHECK(!cdtb::game::socket_bytes_for_key(1002569, nullptr));
+}

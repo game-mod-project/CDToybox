@@ -473,6 +473,23 @@ std::uint32_t item_id_for_key(std::uint32_t key) {
     return find_item_id(*g_ids.load(std::memory_order_acquire), key);
 }
 
+void make_socket_bytes(std::uint16_t gem_id, std::uint8_t out[6]) {
+    if (out == nullptr) return;
+    std::memcpy(out, &gem_id, sizeof(gem_id));
+    out[2] = 0xFF;
+    out[3] = 0xFF;
+    out[4] = 0x00;   // 게임이 슬롯 번호로 덮어쓴다
+    out[5] = 0xFF;
+}
+
+bool socket_bytes_for_key(std::uint32_t gem_key, std::uint8_t out[6]) {
+    if (out == nullptr) return false;
+    const std::uint32_t id = item_id_for_key(gem_key);
+    if (id == kNoItemId || id > 0xFFFF) return false;
+    make_socket_bytes(static_cast<std::uint16_t>(id), out);
+    return true;
+}
+
 std::uint16_t full_endurance_for(std::uint32_t item_key) {
     if (!items_ready()) return 0;
     for (const auto& e : item_catalog()) {
