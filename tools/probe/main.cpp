@@ -529,6 +529,15 @@ void cmd_invexport(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         return;
     }
 
+    // 키 -> 표의 최대 내구도. 아이템마다 목록을 훑지 않으려고 미리
+    // 만든다.
+    std::map<std::uint32_t, std::uint16_t> max_endu;
+    for (const auto& c : ctx.cat) max_endu[c.key] = c.max_endurance;
+    const auto max_endurance_of = [&](std::uint32_t key) -> std::uint16_t {
+        const auto it = max_endu.find(key);
+        return (it == max_endu.end()) ? 0xFFFF : it->second;
+    };
+
     game::Stash stash;
     long long items = 0, sockets = 0, skipped = 0;
     for (const auto& c : conts) {
@@ -548,6 +557,16 @@ void cmd_invexport(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             e.key = f->second;
             e.count = rec.count;
             e.temper = rec.temper;
+
+            // 내구도는 **아이템 종류가 가진 것일 때만** 적는다.
+            //
+            // 레코드 값(0xFFFF = 없음)으로 가르면 안 된다 - 갓 지급한
+            // 것은 게임이 저장을 한 바퀴 돌기 전까지 0 이라, 내구도가
+            // 없는 아이템도 `e0` 으로 적히고 다시 꺼내면 부서진 것이
+            // 된다. 실측에서 칠흑의 사수 판금 망토가 그랬다.
+            if (max_endurance_of(f->second) != 0xFFFF) {
+                e.endurance = rec.endurance;
+            }
 
             std::vector<game::InventorySocket> socks;
             if (game::read_inventory_sockets(reader, rec, &socks)) {

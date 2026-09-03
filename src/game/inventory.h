@@ -45,6 +45,11 @@ struct InventoryRecord {
     std::uint64_t instance_id = 0;
     std::uint32_t index = 0;         // 아이템 표에서의 순번
     std::uint32_t temper = 0;        // 담금질
+
+    // 현재 내구도 (레코드 +0x40). **0xFFFF 면 내구도가 없는
+    // 아이템**이다 - 아이템 표의 `_maxEndurance` 와 같은 표기다.
+    // 갓 지급한 것은 게임이 저장을 한 바퀴 돌기 전까지 0 이다.
+    std::uint32_t endurance = 0;
     std::int64_t count = 0;
     std::uintptr_t sockets = 0;      // 소켓 배열 (레코드 +0x60)
     std::uint32_t socket_count = 0;  // 소켓 칸 수 (실측 5)
