@@ -53,6 +53,20 @@ bool pump_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 void pump_hook_remove();
 bool pump_hook_installed();
 
+// 작업 실행 래퍼 (RVA 0xB1D2DE0). 작업 본체 직전에 불려 TLS+0x250 에
+// 현재 작업 컨텍스트를 세운다(0xB1D2E26). 펌프·디스패처와 달리 특정
+// 메시지가 아니라 **모든 작업**을 감싸므로 매 프레임 후보다. 실행
+// 지점으로 쓰기 전에 이 계측으로 호출 빈도·스레드 분포부터 잰다 -
+// 펌프처럼 안 도는 함수인지 먼저 확인한다(2026-09-04 규율).
+//
+// 앞머리 24바이트는 이미지에 15곳이라 부족하다. 함수 고유 바이트까지
+// 34바이트로 유일하다.
+bool find_task_run_rva(const std::vector<std::uint8_t>& image,
+                       std::uint64_t* rva_out);
+bool taskrun_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
+void taskrun_hook_remove();
+bool taskrun_hook_installed();
+
 // 액터 조회 함수를 후킹한다. 그 함수는 게임 안에서 647곳이 부르므로
 // 가만 두어도 곧 값이 들어온다 - 우리가 세션에서 액터를 꺼내는
 // 복잡한 경로를 흉내 낼 필요가 없다. 훅은 값을 적어 두기만 하고

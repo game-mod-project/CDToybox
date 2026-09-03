@@ -46,6 +46,14 @@ constexpr const char* kMessagePumpPattern =
     "48 8B C4 48 89 58 10 48 89 68 18 48 89 70 20 48 89 48 08 57 41 54 41 "
     "55 41 56 41 57 48 83 EC 50 4D 8B F9 4D 8B E0 4C 8B";
 
+// 작업 실행 래퍼 (RVA 0xB1D2DE0). 앞 24바이트(save rbx,rsi; push rdi;
+// sub rsp,0x20; mov rax,gs:[0x58])는 흔해 15곳이 겹친다. 함수 고유
+// 바이트(mov rbx,rcx; mov [rcx+0x70],1; mov rsi,[rax])까지 34바이트로
+// 유일하다.
+constexpr const char* kTaskRunPattern =
+    "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 65 48 8B 04 25 58 00 00 "
+    "00 48 89 CB C6 41 70 01 48 8B 30";
+
 using ActorGetterFn = std::uintptr_t(__fastcall*)(void*);
 
 ActorGetterFn g_orig_actor_getter = nullptr;
@@ -192,6 +200,75 @@ using MessagePumpFn = void(__fastcall*)(void*, void*, void*, void*, void*);
 MessagePumpFn g_orig_pump = nullptr;
 void* g_pump_target = nullptr;
 std::atomic<bool> g_pump_installed{false};
+
+// 작업 실행 래퍼. 인자 하나(작업 객체). 계측 전용.
+using TaskRunFn = void(__fastcall*)(void*);
+TaskRunFn g_orig_taskrun = nullptr;
+void* g_taskrun_target = nullptr;
+std::atomic<bool> g_taskrun_installed{false};
+std::atomic<std::uint32_t> g_taskrun_calls{0};
+// 어느 스레드가 작업을 실행하는지. 훅 안이라 값싼 것만 한다 -
+// 스레드 ID 최대 16개와 각각의 횟수.
+constexpr int kTRThreads = 16;
+std::uint32_t g_tr_tid[kTRThreads]{};
+std::atomic<std::uint32_t> g_tr_hits[kTRThreads]{};
+std::atomic<int> g_tr_nthreads{0};
+
+// 시간 기반 덤프. 카운트 기반(N회마다)은 빈도를 못 읽는다 - 20000회가
+// 1초 만인지 10분 만인지 알 수 없다. 5초마다 한 스레드만 선점해
+// 총계·최근 구간 비율·스레드별 횟수를 남긴다.
+constexpr unsigned long long kTRDumpMs = 5000;
+std::atomic<unsigned long long> g_tr_next_dump{0};
+std::atomic<unsigned long long> g_tr_last_tick{0};
+std::atomic<std::uint32_t> g_tr_last_total{0};
+
+void __fastcall det_task_run(void* task) {
+    const std::uint32_t tid = GetCurrentThreadId();
+    const int n = g_tr_nthreads.load(std::memory_order_acquire);
+    int idx = -1;
+    for (int i = 0; i < n; ++i) {
+        if (g_tr_tid[i] == tid) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0 && n < kTRThreads) {
+        g_tr_tid[n] = tid;
+        g_tr_nthreads.store(n + 1, std::memory_order_release);
+        idx = n;
+    }
+    if (idx >= 0) g_tr_hits[idx].fetch_add(1, std::memory_order_relaxed);
+    const std::uint32_t total =
+        g_taskrun_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    const unsigned long long now = GetTickCount64();
+    unsigned long long due = g_tr_next_dump.load(std::memory_order_acquire);
+    if (now >= due &&
+        g_tr_next_dump.compare_exchange_strong(due, now + kTRDumpMs,
+                                               std::memory_order_acq_rel)) {
+        const unsigned long long last_tick =
+            g_tr_last_tick.exchange(now, std::memory_order_acq_rel);
+        const std::uint32_t last_total =
+            g_tr_last_total.exchange(total, std::memory_order_acq_rel);
+        if (last_tick != 0 && now > last_tick) {
+            const std::uint32_t dc = total - last_total;
+            const unsigned long long dt = now - last_tick;
+            log::infof("작업 실행 래퍼: 총 {}회, 최근 {}ms 에 {}회 ({}/초), "
+                       "스레드 {}개",
+                       total, dt, dc, dc * 1000ULL / dt,
+                       g_tr_nthreads.load(std::memory_order_acquire));
+        } else {
+            log::infof("작업 실행 래퍼: 총 {}회, 스레드 {}개 (첫 덤프)", total,
+                       g_tr_nthreads.load(std::memory_order_acquire));
+        }
+        const int nn = g_tr_nthreads.load(std::memory_order_acquire);
+        for (int i = 0; i < nn; ++i) {
+            log::infof("  스레드 {} : {}회", g_tr_tid[i],
+                       g_tr_hits[i].load(std::memory_order_relaxed));
+        }
+    }
+    g_orig_taskrun(task);
+}
 // 펌프가 어느 스레드·어느 작업 컨텍스트에서 도는지 처음 몇 번만
 // 남긴다. 세션마다 펌프가 따로 돌 수 있어 실행 지점을 가리는 근거다.
 constexpr int kPumpSeenCap = 8;
@@ -711,6 +788,46 @@ void pump_hook_remove() {
 
 bool pump_hook_installed() {
     return g_pump_installed.load(std::memory_order_acquire);
+}
+
+bool find_task_run_rva(const std::vector<std::uint8_t>& image,
+                       std::uint64_t* rva_out) {
+    return find_one(image, kTaskRunPattern, rva_out);
+}
+
+bool taskrun_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_taskrun_installed.load(std::memory_order_acquire)) return true;
+    std::uint64_t rva = 0;
+    if (!find_task_run_rva(rtti.image(), &rva)) {
+        log::warnf("작업 실행 래퍼를 찾지 못했다");
+        return false;
+    }
+    if (!mem::hook_init()) return false;
+    g_taskrun_target = reinterpret_cast<void*>(
+        reader.module_base() + static_cast<std::uintptr_t>(rva));
+    if (!mem::hook_install(g_taskrun_target, &det_task_run,
+                           reinterpret_cast<void**>(&g_orig_taskrun))) {
+        log::errorf("작업 실행 래퍼 후킹 실패 (RVA 0x{:X})", rva);
+        g_taskrun_target = nullptr;
+        return false;
+    }
+    g_taskrun_installed.store(true, std::memory_order_release);
+    log::infof("작업 실행 래퍼 후킹 설치 (RVA 0x{:X}) - 빈도만 잰다", rva);
+    return true;
+}
+
+void taskrun_hook_remove() {
+    if (!g_taskrun_installed.load(std::memory_order_acquire)) return;
+    g_taskrun_installed.store(false, std::memory_order_release);
+    mem::hook_remove(g_taskrun_target);
+    g_taskrun_target = nullptr;
+    g_orig_taskrun = nullptr;
+    log::infof("작업 실행 래퍼 후킹 원복 (총 {}회)",
+               g_taskrun_calls.load(std::memory_order_relaxed));
+}
+
+bool taskrun_hook_installed() {
+    return g_taskrun_installed.load(std::memory_order_acquire);
 }
 
 bool actor_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {

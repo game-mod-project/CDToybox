@@ -311,6 +311,51 @@ TEST(find_message_pump_fails_when_absent) {
     CHECK(!cdtb::game::find_message_pump_rva(img, &rva));
 }
 
+// 작업 실행 래퍼. 앞 24바이트(흔한 프롤로그 + gs:[0x58])는 이미지에
+// 15곳이라, 함수 고유 바이트(mov rbx,rcx; mov [rcx+0x70],1; mov
+// rsi,[rax])까지 34바이트로 유일하다.
+namespace {
+const std::uint8_t kTaskRunHead[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57,
+    0x48, 0x83, 0xEC, 0x20, 0x65, 0x48, 0x8B, 0x04, 0x25, 0x58, 0x00,
+    0x00, 0x00, 0x48, 0x89, 0xCB, 0xC6, 0x41, 0x70, 0x01, 0x48, 0x8B,
+    0x30};
+}  // namespace
+
+TEST(find_task_run_returns_its_offset) {
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    for (std::size_t i = 0; i < sizeof(kTaskRunHead); ++i) {
+        img[0x400 + i] = kTaskRunHead[i];
+    }
+    std::uint64_t rva = 0;
+    CHECK(cdtb::game::find_task_run_rva(img, &rva));
+    CHECK_EQ(rva, 0x400u);
+}
+
+// 앞 24바이트만 같은 함수가 여럿 있어도(실제 이미지에 15곳) 그것만으로
+// 잡지 않아야 한다.
+TEST(find_task_run_ignores_the_common_prologue) {
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    for (std::size_t i = 0; i < sizeof(kTaskRunHead); ++i) {
+        img[0x400 + i] = kTaskRunHead[i];
+    }
+    // 앞 24바이트만 같은 다른 함수.
+    for (std::size_t i = 0; i < 24; ++i) img[0x900 + i] = kTaskRunHead[i];
+    std::uint64_t rva = 0;
+    CHECK(cdtb::game::find_task_run_rva(img, &rva));
+    CHECK_EQ(rva, 0x400u);
+}
+
+TEST(find_task_run_rejects_a_second_full_match) {
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    for (std::size_t i = 0; i < sizeof(kTaskRunHead); ++i) {
+        img[0x400 + i] = kTaskRunHead[i];
+        img[0x900 + i] = kTaskRunHead[i];
+    }
+    std::uint64_t rva = 0;
+    CHECK(!cdtb::game::find_task_run_rva(img, &rva));
+}
+
 // 능력치·처치 치트는 대상 엔티티 ID 를 페이로드로 받는다. 그 ID 를
 // 엔티티로 바꾸는 함수는 앞머리가 세 곳에서 겹쳐 바이트 패턴으로
 // 찍을 수 없다. 대신 처리기 본문에서 호출 자리를 찾는다.

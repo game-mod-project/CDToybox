@@ -191,9 +191,11 @@ void auto_analysis_loop() {
     // 받아 적기만 한다 - 아무것도 쓰지 않는다.
     actor_hook_install(rtti, reader);
     tick_hook_install(rtti, reader);
-    // 메시지 펌프가 돌아온 자리가 프레임 경계다. 이게 걸리면 위 두
-    // 자리에서는 실행하지 않는다.
-    pump_hook_install(rtti, reader);
+    // 프레임 경계 조사용 훅(펌프·작업 래퍼)은 지급이 잘 되던 상태와
+    // 대조하기 위해 기본으로 끈다. 지급은 검증된 액터 조회 자리에서만
+    // 실행한다. 조사를 이어갈 때 아래 두 줄을 다시 켠다.
+    //   pump_hook_install(rtti, reader);
+    //   taskrun_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
