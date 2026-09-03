@@ -25,10 +25,19 @@ struct StashSocket {
     std::uint8_t raw[6]{};    // 원본 6바이트
 };
 
+// `e` 토큰이 없는 줄. 옛 파일이 그렇고, 그때는 꺼낼 때 최대치를
+// 준다 - 안 채우면 부서진 채로 나온다.
+inline constexpr std::uint32_t kStashNoEndurance = 0xFFFFFFFFu;
+
 struct StashEntry {
     std::uint32_t key = 0;
     std::int64_t count = 1;
     std::uint32_t temper = 0;              // 담금질
+
+    // 현재 내구도. kStashNoEndurance 면 파일에 안 적혀 있던 것이다.
+    // 내구도가 없는 아이템(레코드 +0x40 이 0xFFFF)은 적지 않는다 -
+    // 적어 봐야 뜻이 없다.
+    std::uint32_t endurance = kStashNoEndurance;
     std::vector<StashSocket> sockets;      // 박힌 것만
 };
 

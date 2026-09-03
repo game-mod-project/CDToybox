@@ -87,6 +87,9 @@ void parse_item_extras(const char* rest, StashEntry* e) {
         if (tok[0] == 't') {
             e->temper = static_cast<std::uint32_t>(
                 std::strtoul(tok.c_str() + 1, nullptr, 10));
+        } else if (tok[0] == 'e') {
+            e->endurance = static_cast<std::uint32_t>(
+                std::strtoul(tok.c_str() + 1, nullptr, 10));
         } else if (tok[0] == 's') {
             StashSocket s;
             if (parse_socket(tok, &s)) e->sockets.push_back(s);
@@ -142,6 +145,10 @@ std::string Stash::serialize() const {
             // 없는 것은 안 쓴다. 대부분의 아이템은 둘 다 없어서, 붙이면
             // 옛 파일과 달라 보이고 눈으로 읽기도 나빠진다.
             if (e.temper != 0) out += " t" + std::to_string(e.temper);
+            // 내구도는 0 도 뜻이 있다(부서진 것). "없음" 은 따로 둔다.
+            if (e.endurance != kStashNoEndurance) {
+                out += " e" + std::to_string(e.endurance);
+            }
             for (const auto& k : e.sockets) {
                 out += " s" + std::to_string(k.slot) + ":" +
                        std::to_string(k.key) + ":" +

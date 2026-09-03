@@ -22,6 +22,7 @@ constexpr std::size_t kRecStride = 0xC8;
 constexpr std::size_t kRecInstanceId = 0x00;    // u64
 constexpr std::size_t kRecIndex = 0x08;         // u16 아이템 표 순번
 constexpr std::size_t kRecTemper = 0x0A;        // u16 담금질
+constexpr std::size_t kRecEndurance = 0x40;     // u16 현재 내구도
 constexpr std::size_t kRecCount = 0x10;         // i64
 constexpr std::size_t kRecSockets = 0x60;       // ptr 소켓 배열
 constexpr std::size_t kRecSocketCount = 0x68;   // u32 (실측 5)
@@ -98,12 +99,13 @@ bool read_inventory_records(const mem::Reader& reader,
             raw.data() + static_cast<std::size_t>(i) * kRecStride;
 
         std::uint64_t instance = 0, sockets = 0;
-        std::uint16_t index = 0, temper = 0;
+        std::uint16_t index = 0, temper = 0, endurance = 0;
         std::uint32_t socket_count = 0;
         std::int64_t count = 0;
         std::memcpy(&instance, p + kRecInstanceId, sizeof(instance));
         std::memcpy(&index, p + kRecIndex, sizeof(index));
         std::memcpy(&temper, p + kRecTemper, sizeof(temper));
+        std::memcpy(&endurance, p + kRecEndurance, sizeof(endurance));
         std::memcpy(&count, p + kRecCount, sizeof(count));
         std::memcpy(&sockets, p + kRecSockets, sizeof(sockets));
         std::memcpy(&socket_count, p + kRecSocketCount, sizeof(socket_count));
@@ -118,6 +120,7 @@ bool read_inventory_records(const mem::Reader& reader,
         r.instance_id = instance;
         r.index = index;
         r.temper = temper;
+        r.endurance = endurance;
         r.count = count;
         r.sockets = static_cast<std::uintptr_t>(sockets);
         r.socket_count = socket_count;

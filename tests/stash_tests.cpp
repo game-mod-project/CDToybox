@@ -234,3 +234,70 @@ TEST(round_trip_keeps_temper_and_sockets) {
     CHECK_EQ(items[0].sockets[0].raw[5], std::uint8_t{0xFF});
     CHECK_EQ(items[0].sockets[0].raw[0], std::uint8_t{0x8F});
 }
+
+// --- 내구도 (`e` 토큰) -------------------------------------------------
+//
+// 레코드 +0x40 이 현재 내구도다. 안 실으면 지급분이 0/30 으로 부서진
+// 채 나오고, 이 게임은 아무 아이템도 수리 데이터가 없어 되돌릴 수
+// 없다. 0 도 뜻이 있는 값이라 "없음" 은 따로 둔다.
+
+TEST(stash_round_trip_keeps_the_endurance) {
+    cdtb::game::Stash a;
+    const int i = a.add_set("가방");
+    cdtb::game::StashEntry e{1002261, 1};
+    e.endurance = 17;
+    a.set_at(i)->items.push_back(e);
+
+    cdtb::game::Stash b;
+    CHECK(b.parse(a.serialize()));
+    CHECK_EQ(b.set_count(), 1);
+    if (b.set_count() != 1) return;
+    const auto& items = b.set_at(0)->items;
+    CHECK_EQ(items.size(), std::size_t{1});
+    if (items.empty()) return;
+    CHECK_EQ(items[0].endurance, std::uint32_t{17});
+}
+
+// 0 은 "부서진" 이지 "없음" 이 아니다. 둘을 섞으면 부서진 아이템이
+// 최대치로 되살아난다.
+TEST(stash_keeps_a_zero_endurance_apart_from_absent) {
+    cdtb::game::Stash a;
+    const int i = a.add_set("가방");
+    cdtb::game::StashEntry e{1002261, 1};
+    e.endurance = 0;
+    a.set_at(i)->items.push_back(e);
+    const std::string text = a.serialize();
+    CHECK(text.find(" e0") != std::string::npos);
+
+    cdtb::game::Stash b;
+    CHECK(b.parse(text));
+    if (b.set_count() != 1 || b.set_at(0)->items.empty()) return;
+    CHECK_EQ(b.set_at(0)->items[0].endurance, std::uint32_t{0});
+}
+
+TEST(stash_writes_no_token_when_the_endurance_is_absent) {
+    cdtb::game::Stash a;
+    const int i = a.add_set("가방");
+    a.set_at(i)->items.push_back(cdtb::game::StashEntry{105, 1});
+    const std::string text = a.serialize();
+    CHECK(text.find(" e") == std::string::npos);
+}
+
+// 옛 파일에는 `e` 가 없다. 그대로 읽히고 "없음" 으로 남아야 한다.
+TEST(stash_reads_an_old_line_without_the_endurance) {
+    cdtb::game::Stash a;
+    CHECK(a.parse("set 가방\nitem 200914 1 t3\n"));
+    CHECK_EQ(a.set_count(), 1);
+    if (a.set_count() != 1 || a.set_at(0)->items.empty()) return;
+    CHECK_EQ(a.set_at(0)->items[0].temper, std::uint32_t{3});
+    CHECK_EQ(a.set_at(0)->items[0].endurance,
+             cdtb::game::kStashNoEndurance);
+}
+
+TEST(stash_reads_the_endurance_token_in_any_order) {
+    cdtb::game::Stash a;
+    CHECK(a.parse("set 가방\nitem 200914 1 e12 t3\n"));
+    if (a.set_count() != 1 || a.set_at(0)->items.empty()) return;
+    CHECK_EQ(a.set_at(0)->items[0].temper, std::uint32_t{3});
+    CHECK_EQ(a.set_at(0)->items[0].endurance, std::uint32_t{12});
+}
