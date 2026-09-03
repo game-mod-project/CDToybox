@@ -165,7 +165,7 @@ bool stash_is_favorite(unsigned int key) {
     return g_stash.is_favorite(key);
 }
 
-void draw_stash_panel() {
+void draw_stash_panel(bool* open) {
     if (!g_loaded) load();
 
     // 큐가 남아 있으면 한 개씩 흘려보낸다. request_give 가 쿨다운에
@@ -248,7 +248,7 @@ void draw_stash_panel() {
     }
 
     ImGui::SetNextWindowSize(ImVec2(420.0f, 400.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("보관함")) {
+    if (!ImGui::Begin("보관함", open)) {
         ImGui::End();
         return;
     }

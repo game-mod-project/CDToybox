@@ -297,9 +297,9 @@ int grant_socket_keys(unsigned int* out, int cap) {
     return n;
 }
 
-void draw_grant_panel() {
+void draw_grant_panel(bool* open) {
     ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("아이템 지급")) {
+    if (!ImGui::Begin("아이템 지급", open)) {
         ImGui::End();
         return;
     }
