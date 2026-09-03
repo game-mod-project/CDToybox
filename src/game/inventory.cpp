@@ -1,7 +1,10 @@
 #include "game/inventory.h"
 
+#include <atomic>
 #include <cstring>
 #include <utility>
+
+#include "core/log.h"
 
 namespace cdtb::game {
 namespace {
@@ -161,6 +164,67 @@ bool read_inventory_sockets(const mem::Reader& reader,
     }
     *out = std::move(ss);
     return true;
+}
+
+
+// --------------------------------------------------- 모드용 배경 탐색
+
+namespace {
+
+constexpr const char* kInventoryClass =
+    ".?AVServerInventoryActorComponent@pa@@";
+
+std::atomic<std::uintptr_t> g_component{0};
+
+}  // namespace
+
+bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_component.load(std::memory_order_acquire) != 0) return true;
+
+    for (const auto addr : rtti.instances_of_class(kInventoryClass, 64)) {
+        std::vector<InventoryContainer> cs;
+        if (!read_inventory_containers(reader, addr, &cs)) continue;
+        bool any = false;
+        for (const auto& c : cs) {
+            if (c.used > 0) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) continue;   // 빈 컴포넌트가 여럿 살아 있다
+        g_component.store(addr, std::memory_order_release);
+        log::infof("인벤토리 컴포넌트 0x{:X}", addr);
+        return true;
+    }
+    return false;
+}
+
+bool inventory_ready() {
+    return g_component.load(std::memory_order_acquire) != 0;
+}
+
+std::uintptr_t inventory_component() {
+    return g_component.load(std::memory_order_acquire);
+}
+
+void forget_inventory() {
+    g_component.store(0, std::memory_order_release);
+}
+
+// --------------------------------------------------------- 표시용 변환
+
+InventoryRowText format_inventory_row(std::uint32_t endurance,
+                                      std::uint32_t sharpness,
+                                      const std::vector<std::string>& gems) {
+    InventoryRowText t;
+    if (endurance != kNoEndurance) t.endurance = std::to_string(endurance);
+    if (sharpness != 0) t.sharpness = std::to_string(sharpness);
+    for (const auto& g : gems) {
+        if (g.empty()) continue;
+        if (!t.sockets.empty()) t.sockets += ", ";
+        t.sockets += g;
+    }
+    return t;
 }
 
 }  // namespace cdtb::game

@@ -3,6 +3,8 @@
 
 #include "fake_memory.h"
 #include "game/inventory.h"
+#include <string>
+
 #include "harness.h"
 
 namespace {
@@ -342,4 +344,40 @@ TEST(read_inventory_sockets_rejects_a_bogus_count) {
     rs[0].socket_count = 0x7FFFFFFFu;
     std::vector<cdtb::game::InventorySocket> ss;
     CHECK(!cdtb::game::read_inventory_sockets(f.mem, rs[0], &ss));
+}
+
+// --- 표시용 변환 --------------------------------------------------------
+//
+// 내구도가 없는 아이템은 레코드에 0xFFFF 가 들어 있다. 그대로 내면
+// 65535 로 보인다.
+
+TEST(inventory_row_hides_the_endurance_when_the_item_has_none) {
+    const auto t = cdtb::game::format_inventory_row(
+        cdtb::game::kNoEndurance, 0, {});
+    CHECK(t.endurance.empty());
+}
+
+TEST(inventory_row_shows_a_zero_endurance) {
+    // 0 은 "부서진" 이라 보여야 한다. "없음" 과 다르다.
+    const auto t = cdtb::game::format_inventory_row(0, 0, {});
+    CHECK(t.endurance == std::string("0"));
+}
+
+TEST(inventory_row_hides_a_zero_sharpness) {
+    const auto t = cdtb::game::format_inventory_row(30, 0, {});
+    CHECK(t.endurance == std::string("30"));
+    CHECK(t.sharpness.empty());
+}
+
+TEST(inventory_row_joins_socket_names) {
+    const auto t = cdtb::game::format_inventory_row(
+        cdtb::game::kNoEndurance, 100, {"바람 가르기", "파괴 I"});
+    CHECK(t.sharpness == std::string("100"));
+    CHECK(t.sockets == std::string("바람 가르기, 파괴 I"));
+}
+
+TEST(inventory_row_skips_empty_socket_names) {
+    const auto t = cdtb::game::format_inventory_row(
+        cdtb::game::kNoEndurance, 0, {"", "파괴 I", ""});
+    CHECK(t.sockets == std::string("파괴 I"));
 }
