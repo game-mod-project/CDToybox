@@ -255,11 +255,56 @@ void note_pump_context() {
     log::infof("메시지 펌프 경계: 스레드 {} 작업 컨텍스트 0x{:X}", tid, ctx);
 }
 
+// 디스패처를 지나는 작업들. 콜백마다 한 번씩 "어느 콜백이, 어떤
+// 컨텍스트로, 그때 TLS+0x250 이 서 있는지" 를 남긴다. 매 틱 돌면서
+// TLS 가 서 있는 작업이 있으면 그것이 프레임 경계 후보다.
+constexpr int kTaskSeenCap = 24;
+std::uintptr_t g_task_cb[kTaskSeenCap]{};
+std::uint32_t g_task_hits[kTaskSeenCap]{};
+std::atomic<int> g_task_seen{0};
+
+void note_task(void* self) {
+    if (g_reader == nullptr) return;
+    const auto t = reinterpret_cast<std::uintptr_t>(self);
+    std::uintptr_t desc = 0, cb = 0, ctx = 0, tls_ctx = 0;
+    if (!safe_deref(t + 0x78, &desc) || desc == 0) return;
+    safe_deref(desc + 8, &cb);
+    safe_deref(t + 0x80, &ctx);
+    const std::uintptr_t tls = static_cast<std::uintptr_t>(__readgsqword(0x58));
+    std::uintptr_t slot0 = 0;
+    if (tls != 0 && safe_deref(tls, &slot0) && slot0 != 0) {
+        safe_deref(slot0 + 0x250, &tls_ctx);
+    }
+    const int n = g_task_seen.load(std::memory_order_acquire);
+    for (int i = 0; i < n; ++i) {
+        if (g_task_cb[i] == cb) {
+            ++g_task_hits[i];
+            return;
+        }
+    }
+    if (n >= kTaskSeenCap) return;
+    g_task_cb[n] = cb;
+    g_task_hits[n] = 1;
+    g_task_seen.store(n + 1, std::memory_order_release);
+    const std::uintptr_t base = g_reader->module_base();
+    log::infof("작업 #{}: 콜백 모듈+0x{:X} 컨텍스트 0x{:X} TLS+0x250 0x{:X} "
+               "스레드 {}",
+               n, cb >= base ? cb - base : cb, ctx, tls_ctx,
+               GetCurrentThreadId());
+}
+
 void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
     ++g_detour_depth;
     g_orig_pump(a, b, c, d, e);
-    g_pump_calls.fetch_add(1, std::memory_order_relaxed);
+    const std::uint32_t calls =
+        g_pump_calls.fetch_add(1, std::memory_order_relaxed) + 1;
     if (g_detour_depth == 1) {
+        // 펌프가 실제로 도는지, 얼마나 자주 도는지. 처음 셋과 그 뒤
+        // 1000번마다 한 줄.
+        if (calls <= 3 || calls % 1000 == 0) {
+            log::infof("메시지 펌프 호출 {}회 (스레드 {})", calls,
+                       GetCurrentThreadId());
+        }
         if (g_has_pending.load(std::memory_order_acquire)) note_pump_context();
         if (run_pending_if_any()) {
             log::infof("메시지 펌프 경계에서 요청을 실행했다 (스레드 {})",
@@ -277,8 +322,8 @@ void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
 // 스택도 여전히 얕다(스레드 본체 -> 이 함수).
 void __fastcall det_task_dispatch(void* self) {
     g_orig_dispatch(self);
-    // 펌프 훅이 있으면 실행 지점은 그쪽 하나다.
-    if (g_detour_depth == 0 && !g_pump_installed.load(std::memory_order_acquire)) {
+    if (g_detour_depth == 0) note_task(self);
+    if (g_detour_depth == 0) {
         ++g_detour_depth;
         run_pending_if_any();
         --g_detour_depth;
@@ -363,12 +408,10 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     // 때만, 한 번에 하나만, 2초 간격으로 - 그 셋을 넣은 뒤로는
     // 교착이 재발하지 않았다.
     //
-    // 메시지 펌프 훅이 설치돼 있으면 여기서는 실행하지 않는다. 펌프가
-    // 돌아온 자리가 프레임 경계이고, 실행 지점은 하나여야 어느 자리가
-    // 동작했는지 가릴 수 있다.
-    if (g_detour_depth == 1 && !g_pump_installed.load(std::memory_order_acquire)) {
-        run_pending_if_any();
-    }
+    // 이 자리가 실측으로 확인된 유일한 실행 지점이다. 펌프·디스패처
+    // 자리는 메시지 처리 작업 전용이라 싱글플레이 유휴 상태에서는
+    // 돌지 않는다(2026-09-04 실측). 그래서 여기서 실행한다.
+    if (g_detour_depth == 1) run_pending_if_any();
 
     if (g_detour_depth == 1 && g_reader != nullptr &&
         !g_traced.load(std::memory_order_acquire) && thread_ready_for_spawn()) {
