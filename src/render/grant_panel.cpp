@@ -173,8 +173,12 @@ void draw_grant_panel() {
 
     ImGui::BeginDisabled(blocked != nullptr || !game::give_ready());
     if (ImGui::Button("인벤토리에 넣기", ImVec2(150.0f, 0.0f))) {
-        g_call_ok = game::request_give(
-            seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count);
+        const auto key = static_cast<std::uint32_t>(g_item_key);
+        game::GiveExtras extras;
+        // 내구도가 있는 아이템은 가득 채워 준다. 안 그러면 툴팁에
+        // 0/30 이 빨갛게 뜨고 공격력에 벌점이 붙는다.
+        extras.endurance = game::full_endurance_for(key);
+        g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;
         g_last_to_inventory = true;
         g_last_what = "";

@@ -165,6 +165,9 @@ void draw_stash_panel() {
             game::GiveExtras extras;
             extras.temper =
                 static_cast<std::uint16_t>(e.temper > cap ? cap : e.temper);
+            // 안 채우면 내구도 0 짜리가 나온다. 이 게임은 아무
+            // 아이템도 수리 데이터가 없어 되돌릴 수 없다.
+            extras.endurance = game::full_endurance_for(e.key);
 
             // 소켓도 같다. 아이템 표의 칸 수를 넘기면 게임이 조용히
             // 거절한다. 배열 자체도 다섯 칸이다.
