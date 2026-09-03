@@ -60,6 +60,13 @@ struct ItemEntry {
     // 수리 데이터를 가진 종류가 하나라도 있으면 종류가 가르는
     // 것이고, 하나도 없으면 다른 것이 결정한다.
     std::uint32_t repair_entries = 0;
+
+    // 예리도 상한. 레코드 +0x2E8 의 `_SharpnessData` 첫 i16 이고
+    // 실측에서 무기가 100 이다. 0 이면 예리도가 없는 아이템이다.
+    //
+    // 변환 함수가 `min(TrItemValue +0x1AE, 이 값)` 을 레코드 +0x58 에
+    // 넣는다. 담금질과 달리 상한 그대로다("-1" 이 아니다).
+    std::int16_t max_sharpness = 0;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -179,6 +186,7 @@ struct ItemCatalogEntry {
     std::uint32_t max_sockets = 0;  // ItemEntry 의 같은 칸
     std::uint16_t max_endurance = 0xFFFF;  // ItemEntry 의 같은 칸
     std::uint32_t repair_entries = 0;      // ItemEntry 의 같은 칸
+    std::int16_t max_sharpness = 0;        // ItemEntry 의 같은 칸
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름

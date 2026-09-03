@@ -972,9 +972,10 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
     packet[0] = static_cast<std::uint64_t>(session);
 
     log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {} 담금질 {} 소켓 {}"
-               " 내구도 {}",
+               " 내구도 {} 예리도 {}",
                session, item_key, count, extras.temper,
-               static_cast<int>(extras.socket_count), extras.endurance);
+               static_cast<int>(extras.socket_count), extras.endurance,
+               extras.sharpness);
     o.crashed = !call_give_guarded(
         reinterpret_cast<GiveFn>(g_give_msg.handler),
         reinterpret_cast<void*>(g_give_msg.descriptor), packet, value, &o.seh,
@@ -1041,8 +1042,9 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
 
 bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
                      std::int64_t count, const GiveExtras& extras) {
-    // 소켓 칸이 +0x5E 까지 가므로 그만큼은 있어야 한다.
-    if (buf == nullptr || n < 0x60) return false;
+    // 예리도 칸이 +0x1AE 까지 가므로 그만큼은 있어야 한다.
+    // (소켓만 보고 0x60 으로 잡았다가 그 뒤를 쓰게 됐다.)
+    if (buf == nullptr || n < 0x1B0) return false;
     if (extras.socket_count > kGiveMaxSockets) return false;
 
     auto* p = static_cast<std::uint8_t*>(buf);
@@ -1058,6 +1060,7 @@ bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
                     kGiveSocketBytes);
     }
     p[0x5E] = extras.socket_count;
+    std::memcpy(p + 0x1AE, &extras.sharpness, sizeof(extras.sharpness));
     return true;
 }
 
