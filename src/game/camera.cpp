@@ -191,11 +191,12 @@ void auto_analysis_loop() {
     // 받아 적기만 한다 - 아무것도 쓰지 않는다.
     actor_hook_install(rtti, reader);
     tick_hook_install(rtti, reader);
-    // 프레임 경계 조사용 훅(펌프·작업 래퍼)은 지급이 잘 되던 상태와
-    // 대조하기 위해 기본으로 끈다. 지급은 검증된 액터 조회 자리에서만
-    // 실행한다. 조사를 이어갈 때 아래 두 줄을 다시 켠다.
-    //   pump_hook_install(rtti, reader);
-    //   taskrun_hook_install(rtti, reader);
+    // 프레임 경계 조사용 계측 훅. 이제 g_detour_depth 를 건드리지 않아
+    // 지급을 막지 않는다(펌프는 g_pump_depth 로 분리, 작업 래퍼는
+    // 애초에 안 건드림). 호출 빈도·스레드 분포를 재고, 어느 스레드가
+    // 게임 로직인지 표시한다.
+    pump_hook_install(rtti, reader);
+    taskrun_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
