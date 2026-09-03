@@ -32,6 +32,8 @@ constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없�
 // 0..개수-1 이라 게임이 `담금질 <= [+0x250] - 1` 로 검사한다.
 constexpr std::size_t kRecTemperCap = 0x250;  // u32 담금질 상한+1
 constexpr std::size_t kRecMaxEndurance = 0x400;  // u16 _maxEndurance
+// _repairDataList 는 {ptr +0x408, u32 개수 +0x410} 다.
+constexpr std::size_t kRecRepairCount = 0x410;   // u32
 
 constexpr const char* kManagerClass = ".?AVItemInfoManager@pa@@";
 
@@ -145,6 +147,7 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         // 0xFFFF 면 내구도가 없는 아이템이다 - 담금질의 _equipTypeInfo
         // (+0x42) 와 같은 표기법이다.
         reader.read_value(e.record + kRecMaxEndurance, &e.max_endurance);
+        reader.read_value(e.record + kRecRepairCount, &e.repair_entries);
 
         items.push_back(e);
     }
@@ -173,6 +176,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.max_temper = e.max_temper;
         entry.max_sockets = e.max_sockets;
         entry.max_endurance = e.max_endurance;
+        entry.repair_entries = e.repair_entries;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
