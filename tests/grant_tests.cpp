@@ -269,6 +269,48 @@ TEST(find_task_dispatcher_fails_when_absent) {
     CHECK(!cdtb::game::find_task_dispatcher_rva(img, &rva));
 }
 
+// 메시지 펌프. 디스패처 자리는 TLS 가 서 있지 않아 요청이 실행되지
+// 않았고, 액터 조회 자리는 게임 코드 한복판이라 교착 위험이 있다.
+// 펌프가 돌아온 자리는 그 틱의 메시지를 전부 처리한 뒤이고 작업
+// 컨텍스트(TLS+0x250)는 아직 서 있다. 앞머리 40바이트로 찾는다.
+namespace {
+const std::uint8_t kPumpHead[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x68,
+    0x18, 0x48, 0x89, 0x70, 0x20, 0x48, 0x89, 0x48, 0x08, 0x57,
+    0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83,
+    0xEC, 0x50, 0x4D, 0x8B, 0xF9, 0x4D, 0x8B, 0xE0, 0x4C, 0x8B};
+}  // namespace
+
+TEST(find_message_pump_returns_its_offset) {
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    for (std::size_t i = 0; i < sizeof(kPumpHead); ++i) {
+        img[0x300 + i] = kPumpHead[i];
+    }
+    std::uint64_t rva = 0;
+    CHECK(cdtb::game::find_message_pump_rva(img, &rva));
+    CHECK_EQ(rva, 0x300u);
+}
+
+// 24바이트 프롤로그는 이미지에 10곳 있다. 그 길이만 같은 것은 잡지
+// 않아야 한다 - 두 곳이 맞으면 실패로 다룬다.
+TEST(find_message_pump_rejects_a_second_match) {
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    for (std::size_t i = 0; i < sizeof(kPumpHead); ++i) {
+        img[0x300 + i] = kPumpHead[i];
+        img[0x800 + i] = kPumpHead[i];
+    }
+    std::uint64_t rva = 0;
+    CHECK(!cdtb::game::find_message_pump_rva(img, &rva));
+}
+
+TEST(find_message_pump_fails_when_absent) {
+    std::vector<std::uint8_t> img(4096, 0xCC);
+    // 앞 24바이트만 같은 다른 함수.
+    for (std::size_t i = 0; i < 24; ++i) img[0x300 + i] = kPumpHead[i];
+    std::uint64_t rva = 0;
+    CHECK(!cdtb::game::find_message_pump_rva(img, &rva));
+}
+
 // 능력치·처치 치트는 대상 엔티티 ID 를 페이로드로 받는다. 그 ID 를
 // 엔티티로 바꾸는 함수는 앞머리가 세 곳에서 겹쳐 바이트 패턴으로
 // 찍을 수 없다. 대신 처리기 본문에서 호출 자리를 찾는다.

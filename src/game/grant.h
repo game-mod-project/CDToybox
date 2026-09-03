@@ -37,6 +37,22 @@ bool tick_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 void tick_hook_remove();
 bool tick_hook_installed();
 
+// 메시지 펌프. 게임 로직 작업의 콜백이 부르는 함수로, 세션 큐에서
+// 메시지를 하나씩 꺼내 역직렬화·처리기까지 돌린다(호출 스택
+// [10]~[6]). 이 함수가 **돌아온 자리**가 프레임 경계다 - 그 틱의
+// 메시지를 전부 처리했고, 처리기가 쥐던 락은 놓였으며, 작업
+// 실행기가 세운 TLS+0x250(현재 작업 컨텍스트)은 아직 서 있다.
+// 디스패처 자리와 달리 TLS 가 서 있고, 액터 조회 자리와 달리 게임
+// 코드 한복판이 아니다.
+//
+// 앞머리 40바이트로 찾는다. 24바이트는 10곳, 32바이트는 2곳이
+// 겹치고 40바이트부터 유일하다.
+bool find_message_pump_rva(const std::vector<std::uint8_t>& image,
+                           std::uint64_t* rva_out);
+bool pump_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
+void pump_hook_remove();
+bool pump_hook_installed();
+
 // 액터 조회 함수를 후킹한다. 그 함수는 게임 안에서 647곳이 부르므로
 // 가만 두어도 곧 값이 들어온다 - 우리가 세션에서 액터를 꺼내는
 // 복잡한 경로를 흉내 낼 필요가 없다. 훅은 값을 적어 두기만 하고
