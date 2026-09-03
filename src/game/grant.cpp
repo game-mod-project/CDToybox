@@ -161,8 +161,17 @@ std::atomic<bool> g_has_pending{false};
 //   2. 한 번에 하나만, 끝날 때까지 다음 요청을 받지 않는다
 //   3. 연속 호출 사이에 간격을 둔다
 thread_local int g_detour_depth = 0;
+// 계측 훅(펌프) 전용 재귀 가드. g_detour_depth 와 **반드시 분리한다** -
+// 펌프가 g_detour_depth 를 밀어 올려 지급의 실행 조건(액터 조회
+// depth==1)을 깬 적이 있다(2026-09-04). 계측은 실행 게이트를 건드리면
+// 안 된다.
+thread_local int g_pump_depth = 0;
 std::atomic<bool> g_running{false};
 std::atomic<unsigned long long> g_last_done{0};
+// 지급이 실제로 실행되는 스레드 = 게임 로직 스레드. 액터 조회가
+// depth==1·TLS 준비 상태로 도는 그 스레드다. 작업 실행 래퍼가 이
+// 스레드에서도 도는지 가리는 데 쓴다.
+std::atomic<std::uint32_t> g_game_thread{0};
 constexpr unsigned long long kCooldownMs = 2000;
 
 // 안전한 실행 지점을 찾으려고 호출 스택을 한 번만 뜬다. 지금은
@@ -261,10 +270,14 @@ void __fastcall det_task_run(void* task) {
             log::infof("작업 실행 래퍼: 총 {}회, 스레드 {}개 (첫 덤프)", total,
                        g_tr_nthreads.load(std::memory_order_acquire));
         }
+        const std::uint32_t game_tid =
+            g_game_thread.load(std::memory_order_relaxed);
         const int nn = g_tr_nthreads.load(std::memory_order_acquire);
         for (int i = 0; i < nn; ++i) {
-            log::infof("  스레드 {} : {}회", g_tr_tid[i],
-                       g_tr_hits[i].load(std::memory_order_relaxed));
+            const bool is_game = (game_tid != 0 && g_tr_tid[i] == game_tid);
+            log::infof("  스레드 {} : {}회{}", g_tr_tid[i],
+                       g_tr_hits[i].load(std::memory_order_relaxed),
+                       is_game ? "  <- 게임 로직" : "");
         }
     }
     g_orig_taskrun(task);
@@ -370,25 +383,22 @@ void note_task(void* self) {
                GetCurrentThreadId());
 }
 
+// 계측 전용이다. **g_detour_depth 를 건드리지 않는다** - 대신 펌프
+// 전용 가드(g_pump_depth)로 중첩 진입 때 로그만 걸러 낸다. 실행은
+// 하지 않는다(펌프는 메시지 구동이라 프레임 경계가 아니었다).
 void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
-    ++g_detour_depth;
+    ++g_pump_depth;
     g_orig_pump(a, b, c, d, e);
     const std::uint32_t calls =
         g_pump_calls.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (g_detour_depth == 1) {
-        // 펌프가 실제로 도는지, 얼마나 자주 도는지. 처음 셋과 그 뒤
-        // 1000번마다 한 줄.
+    if (g_pump_depth == 1) {
         if (calls <= 3 || calls % 1000 == 0) {
             log::infof("메시지 펌프 호출 {}회 (스레드 {})", calls,
                        GetCurrentThreadId());
         }
         if (g_has_pending.load(std::memory_order_acquire)) note_pump_context();
-        if (run_pending_if_any()) {
-            log::infof("메시지 펌프 경계에서 요청을 실행했다 (스레드 {})",
-                       GetCurrentThreadId());
-        }
     }
-    --g_detour_depth;
+    --g_pump_depth;
 }
 
 // 작업 콜백이 **끝난 뒤에** 우리 일을 한다.
@@ -488,6 +498,11 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     // 이 자리가 실측으로 확인된 유일한 실행 지점이다. 펌프·디스패처
     // 자리는 메시지 처리 작업 전용이라 싱글플레이 유휴 상태에서는
     // 돌지 않는다(2026-09-04 실측). 그래서 여기서 실행한다.
+    // 이 스레드가 곧 게임 로직 스레드다 - 작업 실행 래퍼 계측이
+    // 어느 스레드가 게임 로직인지 가리는 데 쓴다.
+    if (g_detour_depth == 1 && thread_ready_for_spawn()) {
+        g_game_thread.store(GetCurrentThreadId(), std::memory_order_relaxed);
+    }
     if (g_detour_depth == 1) run_pending_if_any();
 
     if (g_detour_depth == 1 && g_reader != nullptr &&
