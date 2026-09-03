@@ -1375,8 +1375,12 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                                 it.max_sockets);
         }
         if (it.max_temper != 0) {
-            std::snprintf(extra + at, sizeof(extra) - at, "  담금질 %u",
-                          it.max_temper);
+            at += std::snprintf(extra + at, sizeof(extra) - at, "  담금질 %u",
+                                it.max_temper);
+        }
+        if (it.repair_entries != 0) {
+            std::snprintf(extra + at, sizeof(extra) - at, "  수리 %u",
+                          it.repair_entries);
         }
         std::printf("%-10u %-20llu %s%s\n", it.key,
                     static_cast<unsigned long long>(it.name_key),

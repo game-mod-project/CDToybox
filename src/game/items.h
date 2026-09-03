@@ -52,6 +52,14 @@ struct ItemEntry {
     //   _maxEndurance != 0xFFFF && 인스턴스 내구도 <= 0 &&
     //   _isDestoryWhenBroken(+0x1FC) != 0   -> 오류 0x36
     std::uint16_t max_endurance = 0xFFFF;
+
+    // `_repairDataList` (레코드 +0x408) 의 항목 수. 다른 목록 칸과
+    // 같은 꼴이다 - `{ptr +0x408, u32 개수 +0x410}`.
+    //
+    // 툴팁의 "수리 불가" 가 이것으로 갈리는지 보려고 읽는다.
+    // 수리 데이터를 가진 종류가 하나라도 있으면 종류가 가르는
+    // 것이고, 하나도 없으면 다른 것이 결정한다.
+    std::uint32_t repair_entries = 0;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -170,6 +178,7 @@ struct ItemCatalogEntry {
     std::uint32_t max_temper = 0;   // ItemEntry 의 같은 칸
     std::uint32_t max_sockets = 0;  // ItemEntry 의 같은 칸
     std::uint16_t max_endurance = 0xFFFF;  // ItemEntry 의 같은 칸
+    std::uint32_t repair_entries = 0;      // ItemEntry 의 같은 칸
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름
