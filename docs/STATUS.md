@@ -264,7 +264,9 @@ python tools/rtti/fields.py <exe> ItemInfo
 `_isDestoryWhenBroken`(`+0x1FC`) 과 `_repairDataList`(`+0x408`) 도
 같이 나왔다. 전체 표는 `specs/2026-09-03-field-names.md`.
 
-디버그 문자열은 현지화 표(UTF-8)와 달리 **CP949** 다.
+문자열은 UTF-8 이다. 콘솔이 CP949 라 그냥 찍으면 깨져 보이는데,
+그것을 파일 인코딩 문제로 잘못 읽은 적이 있다 - 터미널 코드페이지와
+파일 인코딩은 다른 이야기다.
 
 ### 2.4 카메라 (미해결)
 
