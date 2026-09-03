@@ -1324,9 +1324,24 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         }
         if (max != 0 && shown >= max) continue;
         ++shown;
-        std::printf("%-10u %-20llu %s\n", it.key,
+        // 새로 읽는 칸들. 없는 아이템에는 안 붙인다.
+        char extra[80] = {0};
+        int at = 0;
+        if (it.max_endurance != 0xFFFF) {
+            at += std::snprintf(extra + at, sizeof(extra) - at, "  내구도 %u",
+                                it.max_endurance);
+        }
+        if (it.max_sockets != 0) {
+            at += std::snprintf(extra + at, sizeof(extra) - at, "  소켓 %u",
+                                it.max_sockets);
+        }
+        if (it.max_temper != 0) {
+            std::snprintf(extra + at, sizeof(extra) - at, "  담금질 %u",
+                          it.max_temper);
+        }
+        std::printf("%-10u %-20llu %s%s\n", it.key,
                     static_cast<unsigned long long>(it.name_key),
-                    ok ? it.name.c_str() : "(이름 없음)");
+                    ok ? it.name.c_str() : "(이름 없음)", extra);
     }
     std::printf("\n이름이 풀린 것 %zu / %zu\n", named, items.size());
     if (max != 0 && items.size() > shown) {

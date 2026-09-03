@@ -241,7 +241,32 @@ VirtSize > RawSize 인 섹션(`.00cfg`)에서 RVA→파일오프셋 변환에
 **아직 안 판 광맥이다.** 렌더 디버그 옵션 UI 가 통째로 남아 있고,
 그 옵션들은 `.00cfg` 의 런타임 전역에 매달려 있다.
 
-### 2.3 카메라 (미해결)
+### 2.3 게임이 필드 이름을 알려 준다 (2026-09-03)
+
+데이터 역직렬화 함수가 필드마다 실패 메시지를 들고 있다 -
+`"ItemInfo의 _maxEndurance를 읽어들이는데 실패했다."` 직전의
+`lea rdx,[rsi+0x400]` 과 짝지으면 **이름 -> 오프셋 표**가 나온다.
+
+```
+python tools/rtti/fields.py <exe> ItemInfo
+  _maxStackCount        +0x18     _itemType             +0xA3
+  _itemTier             +0x210    _isDestoryWhenBroken  +0x1FC
+  _SharpnessData        +0x2E8    _maxEndurance         +0x400
+```
+
+`ItemInfo` 109개를 뽑았고 오프셋이 겹치는 자리는 0이다. 이미
+실측으로 알던 칸(`+0x18` 최대 스택, `+0xA3` 분류, `+0x210` 등급)과
+전부 맞는다. 실패 메시지가 있는 클래스면 무엇이든 된다
+(`EquipTypeInfo` 19개 등).
+
+**내구도의 이름이 여기서 나왔다** - `_maxEndurance` 는 아이템 표
+`+0x400` 의 u16 이고 **0xFFFF 면 내구도가 없는 아이템**이다.
+`_isDestoryWhenBroken`(`+0x1FC`) 과 `_repairDataList`(`+0x408`) 도
+같이 나왔다. 전체 표는 `specs/2026-09-03-field-names.md`.
+
+디버그 문자열은 현지화 표(UTF-8)와 달리 **CP949** 다.
+
+### 2.4 카메라 (미해결)
 
 카메라 객체의 지역 변환은 **항등**이다 — 스케일 (1,1,1), 회전 항등,
 위치 (0,0,0). 이미지 전수 조사에서도 그 칸에 쓰는 코드가 0곳이었다.
@@ -259,7 +284,7 @@ VirtSize > RawSize 인 섹션(`.00cfg`)에서 RVA→파일오프셋 변환에
 
 **그런데 이 값들 어느 것도 렌더를 구동하지 않는다.** 전부 우리 값으로
 고정해도 화면이 변하지 않았다. double 좌표는 메모리 전체에 0곳이다.
-자세한 것은 2.4 를 볼 것.
+자세한 것은 3 을 볼 것.
 
 ---
 
@@ -330,7 +355,8 @@ src/game/     카메라 · 분석 · 현지화 · 아이템 표 · 치트 지급
 src/input/    WndProc 서브클래싱 · 커서 가드
 src/proxy/    xinput1_4 프록시
 tools/probe/  외부 분석 도구 (invlist · itemvalue · heapptr · loc · items)
-tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm)
+tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
+              fields = 게임이 알려 주는 필드 이름)
 tests/        240개 (전부 통과)
 scripts/      build.ps1 · deploy.ps1
 ```
@@ -569,9 +595,9 @@ probe invfind 202529:1    # {순번 5921, 담금질 3} 을 든 레코드
    에 있는 핸들이다(원소 0xD0 간격 = 레코드 0xC8 + 핸들). 순번
    6438 을 넣어 아무 일도 없었던 이유가 이것이다. 그 배열을 훑어
    핸들을 얻은 뒤 다시 눌러 본다.
-4. **아이템 표 `+0x400`.** 0xFFFF 면 소진 검사를 건너뛴다. 군주의
-   검과 재료를 읽어 무엇을 가르는지 본다. 곁들여 `+0x1FC` u8,
-   `+0x2E8` i16, `+0x3F0` u8 도 새로 나왔다.
+4. **아이템 표 `_maxEndurance`(`+0x400`).** 이름은 게임에서 나왔고
+   (2.3) 값은 아직 안 읽어 봤다. `probe items find 군주의 검` 이
+   이제 내구도 · 소켓 · 담금질을 함께 낸다. 재료와 견줘 본다.
 5. 모드(인게임 UI)에도 대응표와 인벤토리 읽기를 물린다. 지금은
    probe 에만 있다. 소켓을 아이템 키로 되돌리려면 필요하다 -
    지금은 원본 순번을 그대로 쓰므로 게임이 패치되면 어긋난다.
