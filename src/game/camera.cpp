@@ -203,6 +203,9 @@ void auto_analysis_loop() {
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
         discover_items(rtti, reader);
+        // 소켓 지급이 키 -> 순번 대응표를 쓴다. 아이템 표가 선 뒤에
+        // 한 번만 읽고 스스로 빠진다.
+        discover_item_ids(rtti, reader);
         log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
@@ -224,6 +227,7 @@ void auto_analysis_loop() {
     // 정상이다. 예전에는 카메라를 찾는 순간 이 루프를 빠져나가 이름이
     // 영영 비었다 - 로그에 "이름 풀린 것 0개" 로 남았다.
     for (int i = 0; i < 120 && !g_stop.load(); ++i) {
+        discover_item_ids(rtti, reader);
         if (discover_items(rtti, reader)) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응

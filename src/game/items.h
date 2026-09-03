@@ -151,6 +151,13 @@ bool find_item_key_map(const mem::Reader& reader,
 bool read_item_key_map(const mem::Reader& reader, const ItemKeyMap& map,
                        std::vector<ItemKeyPair>* out);
 
+// 대응표에 없는 키의 답.
+inline constexpr std::uint32_t kNoItemId = 0xFFFFFFFFu;
+
+// 키로 정렬된 대응표에서 순번을 찾는다. 없으면 kNoItemId.
+std::uint32_t find_item_id(const std::vector<ItemKeyPair>& sorted,
+                           std::uint32_t key);
+
 // --------------------------------------------------------------- 목록
 
 struct ItemCatalogEntry {
@@ -192,6 +199,18 @@ bool should_rebuild_catalog(bool have_catalog, bool names_resolved,
 
 // 이름까지 풀린 목록을 만들었으면 true. 아직이면 다시 부르면 된다.
 bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 키 -> 순번 대응표를 배경에서 한 번 읽어 캐시한다. 아이템 표가
+// 먼저 올라와 있어야 한다 - 후보를 개수로 가리기 때문이다.
+//
+// 소켓을 지급할 때 필요하다. 보관함 파일은 보석의 **아이템 키**를
+// 들고 있는데 게임에 보내는 6바이트는 **순번**으로 시작한다. 순번은
+// 표에서의 위치라 게임이 갱신되면 달라진다.
+bool discover_item_ids(const mem::Rtti& rtti, const mem::Reader& reader);
+bool item_ids_ready();
+
+// 캐시에서 키의 순번을 찾는다. 아직 안 읽었거나 없으면 kNoItemId.
+std::uint32_t item_id_for_key(std::uint32_t key);
 
 // 이름이 실제로 풀렸는가.
 bool items_named();

@@ -172,8 +172,19 @@ void draw_stash_panel() {
             if (room > game::kGiveMaxSockets) room = game::kGiveMaxSockets;
             for (const auto& sk : e.sockets) {
                 if (extras.socket_count >= room) break;
-                std::memcpy(extras.sockets[extras.socket_count].raw, sk.raw,
-                            game::kGiveSocketBytes);
+                auto& dst = extras.sockets[extras.socket_count];
+                std::memcpy(dst.raw, sk.raw, game::kGiveSocketBytes);
+
+                // 6바이트의 첫 u16 은 아이템 표에서의 **순번**이다.
+                // 표에서의 위치라 게임이 갱신되면 달라진다. 보관함
+                // 파일은 보석의 아이템 키도 들고 있으므로 지금 표에서
+                // 다시 찾아 덮어쓴다. 못 찾으면 원본 바이트를 그대로
+                // 둔다 - 같은 빌드라면 그것이 맞는 값이다.
+                const std::uint32_t id = game::item_id_for_key(sk.key);
+                if (id != game::kNoItemId && id <= 0xFFFF) {
+                    const auto v = static_cast<std::uint16_t>(id);
+                    std::memcpy(dst.raw, &v, sizeof(v));
+                }
                 ++extras.socket_count;
             }
 

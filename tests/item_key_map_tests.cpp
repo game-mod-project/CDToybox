@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -297,4 +298,42 @@ TEST(read_item_key_map_fails_without_records) {
     m.records = 0;
     std::vector<ItemKeyPair> pairs;
     CHECK(!cdtb::game::read_item_key_map(f.mem, m, &pairs));
+}
+
+// --- 키 -> 순번 되찾기 -------------------------------------------------
+//
+// 소켓 지급이 이것을 쓴다. 보관함 파일은 보석의 아이템 키를 들고
+// 있는데 게임에 보내는 6바이트는 순번으로 시작한다. 순번은 표에서의
+// 위치라 게임이 갱신되면 달라지므로 지급할 때 다시 찾는다.
+
+TEST(find_item_id_returns_the_id_for_a_known_key) {
+    const std::vector<cdtb::game::ItemKeyPair> sorted = {
+        {105, 3}, {1002569, 3364}, {1002785, 3214}, {200914, 6438}};
+    // 정렬돼 있어야 한다 - 부르는 쪽이 지킨다.
+    std::vector<cdtb::game::ItemKeyPair> v = sorted;
+    std::sort(v.begin(), v.end(),
+              [](const cdtb::game::ItemKeyPair& a,
+                 const cdtb::game::ItemKeyPair& b) { return a.key < b.key; });
+
+    CHECK_EQ(cdtb::game::find_item_id(v, 1002569), std::uint32_t{3364});
+    CHECK_EQ(cdtb::game::find_item_id(v, 200914), std::uint32_t{6438});
+    CHECK_EQ(cdtb::game::find_item_id(v, 105), std::uint32_t{3});
+}
+
+TEST(find_item_id_says_no_for_an_unknown_key) {
+    std::vector<cdtb::game::ItemKeyPair> v = {{100, 1}, {200, 2}, {300, 3}};
+    CHECK_EQ(cdtb::game::find_item_id(v, 150), cdtb::game::kNoItemId);
+    CHECK_EQ(cdtb::game::find_item_id(v, 0), cdtb::game::kNoItemId);
+    CHECK_EQ(cdtb::game::find_item_id(v, 400), cdtb::game::kNoItemId);
+}
+
+TEST(find_item_id_says_no_on_an_empty_table) {
+    const std::vector<cdtb::game::ItemKeyPair> v;
+    CHECK_EQ(cdtb::game::find_item_id(v, 1002569), cdtb::game::kNoItemId);
+}
+
+// 순번 0 은 유효한 값이다. "못 찾음" 과 섞이면 첫 아이템이 사라진다.
+TEST(find_item_id_treats_zero_as_a_real_id) {
+    const std::vector<cdtb::game::ItemKeyPair> v = {{100, 0}, {200, 5}};
+    CHECK_EQ(cdtb::game::find_item_id(v, 100), std::uint32_t{0});
 }
