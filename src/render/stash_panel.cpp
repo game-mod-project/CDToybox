@@ -247,6 +247,7 @@ void draw_stash_panel(bool* open) {
         }
     }
 
+    ImGui::SetNextWindowPos(ImVec2(1180, 340), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 400.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("보관함", open)) {
         ImGui::End();

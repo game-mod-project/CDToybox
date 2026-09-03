@@ -18,6 +18,7 @@ namespace cdtb::render {
 // 의미가 없다. 분석은 game::start_auto_analysis() 가 백그라운드에서
 // 스스로 하고, 여기서는 그 결과만 보여준다.
 void draw_camera_panel(bool* open) {
+    ImGui::SetNextWindowPos(ImVec2(60, 340), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 320), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("카메라 분석", open)) {
         ImGui::End();

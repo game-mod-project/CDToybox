@@ -202,6 +202,7 @@ void apply_sort_specs() {
 }  // namespace
 
 void draw_item_panel(bool* open) {
+    ImGui::SetNextWindowPos(ImVec2(400, 60), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
     // 너무 좁히면 표가 읽히지 않는다. 아래로는 못 내려가게 막는다.
     ImGui::SetNextWindowSizeConstraints(ImVec2(430.0f, 240.0f),

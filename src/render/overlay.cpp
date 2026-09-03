@@ -365,6 +365,7 @@ void draw_windows() {
 }
 
 void draw_ui() {
+    ImGui::SetNextWindowPos(ImVec2(60, 60), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(360, 260), ImGuiCond_FirstUseEver);
     ImGui::Begin("CDToybox");
 
