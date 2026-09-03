@@ -231,7 +231,8 @@ void auto_analysis_loop() {
     // 영영 비었다 - 로그에 "이름 풀린 것 0개" 로 남았다.
     for (int i = 0; i < 120 && !g_stop.load(); ++i) {
         discover_item_ids(rtti, reader);
-        if (discover_items(rtti, reader)) break;
+        discover_inventory(rtti, reader);
+        if (discover_items(rtti, reader) && inventory_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
         }
@@ -247,8 +248,22 @@ void auto_analysis_loop() {
     // 엔티티 ID 는 처음 30초만 봐도 충분히 갈린다. 플레이어 것은
     // 게임이 계속 조회하므로 횟수가 압도적이다.
     int ent_reports = 0;
+    int spin = 0;
     while (!g_stop.load()) {
         log_new_actors(rtti, reader);
+
+        // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
+        // 표보다 늦어서, 앞의 루프들이 먼저 끝나면 못 잡은 채로
+        // 남았다 - 실측에서 창이 "컴포넌트를 아직 못 찾았습니다"
+        // 에서 멈췄다. 여기서 계속 찾는다. 화면의 "다시 찾기" 가
+        // 캐시를 비우면 여기서 다시 잡는다.
+        //
+        // 못 찾은 동안에만 훑는다. RTTI 인스턴스 탐색은 힙 전수라
+        // 값싸지 않아 10초에 한 번으로 줄인다.
+        if (!inventory_ready() && (spin % 5) == 0) {
+            discover_inventory(rtti, reader);
+        }
+        ++spin;
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

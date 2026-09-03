@@ -65,7 +65,7 @@ void refresh(const mem::Reader& reader) {
     g_rows.clear();
 
     if (!game::inventory_ready()) {
-        g_status = "인벤토리 컴포넌트를 아직 못 찾았습니다";
+        g_status = "컴포넌트를 찾는 중입니다 - 월드에 들어간 뒤 잠시";
         return;
     }
     if (!game::item_ids_ready()) {
@@ -281,7 +281,7 @@ void draw_inventory_panel() {
     if (ImGui::SmallButton("컴포넌트 다시 찾기")) {
         game::forget_inventory();
         g_rows.clear();
-        g_status = "다시 찾는 중입니다 - 잠시 뒤 '다시 읽기'";
+        g_status = "다시 찾는 중입니다 - 10초쯤 뒤 '다시 읽기'";
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
