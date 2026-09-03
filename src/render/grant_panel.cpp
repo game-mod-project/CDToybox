@@ -237,6 +237,20 @@ unsigned int grant_item_key() {
 
 long long grant_item_count() { return g_count; }
 
+unsigned int grant_temper() {
+    return static_cast<unsigned int>(g_temper < 0 ? 0 : g_temper);
+}
+
+int grant_socket_keys(unsigned int* out, int cap) {
+    if (out == nullptr || cap <= 0) return 0;
+    int n = 0;
+    for (int i = 0; i < game::kGiveMaxSockets && n < cap; ++i) {
+        if (g_socket_keys[i] == 0) break;   // 앞에서부터만 찬다
+        out[n++] = g_socket_keys[i];
+    }
+    return n;
+}
+
 void draw_grant_panel() {
     ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("아이템 지급")) {

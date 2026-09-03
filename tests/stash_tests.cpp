@@ -228,4 +228,9 @@ TEST(round_trip_keeps_temper_and_sockets) {
     CHECK_EQ(items[0].sockets[0].slot, std::uint32_t{1});
     CHECK_EQ(items[0].sockets[0].key, std::uint32_t{1002791});
     CHECK_EQ(items[0].sockets[0].raw[4], std::uint8_t{0x01});
+    // 여섯 번째까지 봐야 한다. 실측에서 원본은 0xFF 이고
+    // 지급분이 0x00 으로 갈린 적이 있다 - 왕복에서 잃으면
+    // 그것을 못 잡는다.
+    CHECK_EQ(items[0].sockets[0].raw[5], std::uint8_t{0xFF});
+    CHECK_EQ(items[0].sockets[0].raw[0], std::uint8_t{0x8F});
 }

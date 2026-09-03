@@ -176,17 +176,17 @@ void draw_stash_panel() {
             for (const auto& sk : e.sockets) {
                 if (extras.socket_count >= room) break;
                 auto& dst = extras.sockets[extras.socket_count];
-                std::memcpy(dst.raw, sk.raw, game::kGiveSocketBytes);
 
-                // 6바이트의 첫 u16 은 아이템 표에서의 **순번**이다.
-                // 표에서의 위치라 게임이 갱신되면 달라진다. 보관함
-                // 파일은 보석의 아이템 키도 들고 있으므로 지금 표에서
-                // 다시 찾아 덮어쓴다. 못 찾으면 원본 바이트를 그대로
-                // 둔다 - 같은 빌드라면 그것이 맞는 값이다.
-                const std::uint32_t id = game::item_id_for_key(sk.key);
-                if (id != game::kNoItemId && id <= 0xFFFF) {
-                    const auto v = static_cast<std::uint16_t>(id);
-                    std::memcpy(dst.raw, &v, sizeof(v));
+                // 6바이트를 **보석 키에서 다시 조립한다.** 파일의
+                // 원본 바이트를 그대로 쓰면 첫 u16(순번)이 그 파일을
+                // 만든 빌드에 묶이고, 실측에서 여섯 번째 바이트가
+                // 원본(FF)과 갈리는 일도 있었다. 지급 패널과 같은
+                // 조립기를 쓰면 두 경로가 같은 바이트를 낸다.
+                //
+                // 대응표를 아직 못 읽었으면 파일의 바이트로 물러선다 -
+                // 같은 빌드라면 그것이 맞는 값이다.
+                if (!game::socket_bytes_for_key(sk.key, dst.raw)) {
+                    std::memcpy(dst.raw, sk.raw, game::kGiveSocketBytes);
                 }
                 ++extras.socket_count;
             }
@@ -278,8 +278,24 @@ void draw_stash_panel() {
             if (ImGui::SmallButton("지금 고른 아이템 담기")) {
                 const unsigned int k = grant_item_key();
                 if (k != 0) {
-                    set->items.push_back(
-                        game::StashEntry{k, grant_item_count()});
+                    // 키만 담으면 꺼낼 때 맨 아이템이 나온다. 지급
+                    // 칸에서 고른 담금질과 소켓도 함께 담는다.
+                    game::StashEntry e{k, grant_item_count()};
+                    e.temper = grant_temper();
+                    unsigned int gems[game::kGiveMaxSockets]{};
+                    const int gn =
+                        grant_socket_keys(gems, game::kGiveMaxSockets);
+                    for (int gi = 0; gi < gn; ++gi) {
+                        game::StashSocket ss;
+                        ss.slot = static_cast<std::uint32_t>(gi);
+                        ss.key = gems[gi];
+                        // 파일에 남길 원본 바이트도 같은 조립기로
+                        // 만든다. 대응표가 없으면 키만 남는다 -
+                        // 꺼낼 때 다시 조립하므로 그래도 된다.
+                        game::socket_bytes_for_key(ss.key, ss.raw);
+                        e.sockets.push_back(ss);
+                    }
+                    set->items.push_back(std::move(e));
                     g_dirty = true;
                 }
             }
