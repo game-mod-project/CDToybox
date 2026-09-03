@@ -28,6 +28,7 @@ constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
 constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
 constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없음)
+constexpr std::size_t kRecSharpness = 0x2E8;  // i16 _SharpnessData 의 상한
 // _enchantDataList 는 {ptr +0x248, u32 개수 +0x250} 다. 담금질은
 // 0..개수-1 이라 게임이 `담금질 <= [+0x250] - 1` 로 검사한다.
 constexpr std::size_t kRecTemperCap = 0x250;  // u32 담금질 상한+1
@@ -148,6 +149,7 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         // (+0x42) 와 같은 표기법이다.
         reader.read_value(e.record + kRecMaxEndurance, &e.max_endurance);
         reader.read_value(e.record + kRecRepairCount, &e.repair_entries);
+        reader.read_value(e.record + kRecSharpness, &e.max_sharpness);
 
         items.push_back(e);
     }
@@ -177,6 +179,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.max_sockets = e.max_sockets;
         entry.max_endurance = e.max_endurance;
         entry.repair_entries = e.repair_entries;
+        entry.max_sharpness = e.max_sharpness;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);

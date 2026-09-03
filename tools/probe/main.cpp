@@ -1383,7 +1383,7 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         if (max != 0 && shown >= max) continue;
         ++shown;
         // 새로 읽는 칸들. 없는 아이템에는 안 붙인다.
-        char extra[80] = {0};
+        char extra[112] = {0};
         int at = 0;
         if (it.max_endurance != 0xFFFF) {
             at += std::snprintf(extra + at, sizeof(extra) - at, "  내구도 %u",
@@ -1398,8 +1398,12 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                                 it.max_temper);
         }
         if (it.repair_entries != 0) {
-            std::snprintf(extra + at, sizeof(extra) - at, "  수리 %u",
-                          it.repair_entries);
+            at += std::snprintf(extra + at, sizeof(extra) - at, "  수리 %u",
+                                it.repair_entries);
+        }
+        if (it.max_sharpness != 0) {
+            std::snprintf(extra + at, sizeof(extra) - at, "  예리도 %d",
+                          it.max_sharpness);
         }
         std::printf("%-10u %-20llu %s%s\n", it.key,
                     static_cast<unsigned long long>(it.name_key),

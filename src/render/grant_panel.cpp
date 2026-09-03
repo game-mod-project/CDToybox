@@ -39,6 +39,7 @@ int g_endur_b = 0;
 // 돌기 때문에 2번 칸만 채우는 것은 불가능하다. 그래서 고르거나
 // 비울 때마다 앞으로 당겨 붙인다.
 int g_temper = 0;
+int g_sharpness = 0;
 std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};   // 0 = 비어 있음
 int g_socket_picking = -1;       // 팝업이 채울 칸
 bool g_open_gem_popup = false;
@@ -99,15 +100,17 @@ void compact_sockets() {
 void draw_extras(const game::ItemCatalogEntry* item) {
     if (item == nullptr) return;
     const int cap_t = static_cast<int>(item->max_temper);
+    const int cap_s = static_cast<int>(item->max_sharpness);
     int rows = static_cast<int>(item->max_sockets);
     if (rows > game::kGiveMaxSockets) rows = game::kGiveMaxSockets;
-    if (cap_t == 0 && rows == 0) return;
+    if (cap_t == 0 && cap_s == 0 && rows == 0) return;
 
     // 아이템이 바뀌면 상한 밖의 값이 남아 있을 수 있다.
     if (g_temper > cap_t) g_temper = cap_t;
+    if (g_sharpness > cap_s) g_sharpness = cap_s;
     for (int i = rows; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
 
-    if (!ImGui::CollapsingHeader("담금질 · 소켓")) return;
+    if (!ImGui::CollapsingHeader("담금질 · 소켓 · 예리도")) return;
     ImGui::Indent();
 
     if (cap_t > 0) {
@@ -119,6 +122,19 @@ void draw_extras(const game::ItemCatalogEntry* item) {
         if (g_temper > cap_t) g_temper = cap_t;
         ImGui::SameLine();
         ImGui::TextDisabled("(0 ~ %d)", cap_t);
+    }
+
+    if (cap_s > 0) {
+        // 인벤토리 507개가 전부 0 이다. 화면에 무엇이 달라지는지는
+        // 아직 못 봤다 - 넣어 보고 툴팁을 확인하려고 낸 칸이다.
+        ImGui::TextUnformatted("예리도");
+        ImGui::SameLine(80.0f);
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::InputInt("##sharp", &g_sharpness, 1, 10);
+        if (g_sharpness < 0) g_sharpness = 0;
+        if (g_sharpness > cap_s) g_sharpness = cap_s;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(0 ~ %d)", cap_s);
     }
 
     if (rows > 0) {
@@ -335,6 +351,10 @@ void draw_grant_panel() {
             const int cap_t = static_cast<int>(item->max_temper);
             const int t = (g_temper > cap_t) ? cap_t : g_temper;
             extras.temper = static_cast<std::uint16_t>(t < 0 ? 0 : t);
+
+            const int cap_s = static_cast<int>(item->max_sharpness);
+            const int sh = (g_sharpness > cap_s) ? cap_s : g_sharpness;
+            extras.sharpness = static_cast<std::uint16_t>(sh < 0 ? 0 : sh);
 
             int room = static_cast<int>(item->max_sockets);
             if (room > game::kGiveMaxSockets) room = game::kGiveMaxSockets;

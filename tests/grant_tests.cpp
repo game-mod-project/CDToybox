@@ -221,7 +221,7 @@ TEST(spawn_args_accept_a_real_item) {
 //   mov eax, [r8+8];  test eax,eax; je 실패      아이템 키
 //   cmp qword [r8+0x10], 0; jle 실패             개수
 TEST(item_value_puts_key_at_8_and_count_at_10) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 7);
     std::uint32_t key = 0;
     std::int64_t count = 0;
@@ -339,7 +339,7 @@ TEST(no_actor_before_the_hook_sees_one) {
 // 버퍼가 0 으로 초기화된다.
 
 TEST(fill_item_value_writes_the_temper_at_0x0C) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.temper = 3;
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
@@ -350,7 +350,7 @@ TEST(fill_item_value_writes_the_temper_at_0x0C) {
 
 TEST(fill_item_value_leaves_the_temper_zero_by_default) {
     // 옛 호출자가 그대로 동작해야 한다.
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     std::memset(buf, 0xAB, sizeof(buf));
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 7));
     std::uint16_t temper = 0xFFFF;
@@ -359,7 +359,7 @@ TEST(fill_item_value_leaves_the_temper_zero_by_default) {
 }
 
 TEST(fill_item_value_keeps_the_key_and_count) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.temper = 2;
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 5, ex));
@@ -372,7 +372,8 @@ TEST(fill_item_value_keeps_the_key_and_count) {
 }
 
 TEST(fill_item_value_refuses_a_buffer_too_small_for_the_sockets) {
-    // 소켓 개수 칸이 +0x5E 라 그만큼은 있어야 한다.
+    // 소켓 개수 칸이 +0x5E 다. 지금은 예리도(+0x1AE)까지 쓰므로
+    // 하한이 더 높지만, 이 크기들은 그 아래라 여전히 거절한다.
     std::uint8_t buf[0x10]{};
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
     std::uint8_t half[0x40]{};
@@ -394,7 +395,7 @@ TEST(fill_item_value_refuses_a_buffer_too_small_for_the_sockets) {
 // 한 칸도 안 돌았기 때문이다.
 
 TEST(fill_item_value_writes_the_socket_count_at_0x5E) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.socket_count = 2;
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
@@ -402,7 +403,7 @@ TEST(fill_item_value_writes_the_socket_count_at_0x5E) {
 }
 
 TEST(fill_item_value_copies_socket_bytes_verbatim_from_0x40) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.socket_count = 2;
     const std::uint8_t a[6] = {0x24, 0x0D, 0xFF, 0xFF, 0x00, 0xFF};
@@ -417,7 +418,7 @@ TEST(fill_item_value_copies_socket_bytes_verbatim_from_0x40) {
 TEST(fill_item_value_leaves_unused_socket_slots_alone) {
     // 남은 칸은 게임 생성자가 채운 빈 값(FF FF 00 00 FF)이라야 한다.
     // 우리가 0 으로 밀면 안 된다.
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     for (int i = 0; i < 5; ++i) {
         std::uint8_t* e = buf + 0x40 + i * 6;
         e[0] = 0xFF; e[1] = 0xFF; e[2] = 0; e[3] = 0; e[4] = 0xFF; e[5] = 0;
@@ -435,14 +436,14 @@ TEST(fill_item_value_leaves_unused_socket_slots_alone) {
 
 TEST(fill_item_value_refuses_more_sockets_than_the_array_holds) {
     // 배열은 다섯 칸이다. 넘겨 보내면 게임이 배열 밖을 읽는다.
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.socket_count = 6;
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
 }
 
 TEST(fill_item_value_writes_no_sockets_by_default) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     std::memset(buf, 0xAB, sizeof(buf));
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
     CHECK_EQ(buf[0x5E], std::uint8_t{0});
@@ -462,7 +463,7 @@ TEST(fill_item_value_writes_no_sockets_by_default) {
 // 게임은 아무 아이템도 수리 데이터가 없어(0 / 6,810) 되돌릴 수 없다.
 
 TEST(fill_item_value_writes_the_endurance_at_0x2A) {
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.endurance = 30;
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 1002261, 1, ex));
@@ -474,7 +475,7 @@ TEST(fill_item_value_writes_the_endurance_at_0x2A) {
 TEST(fill_item_value_leaves_the_endurance_zero_by_default) {
     // 내구도가 없는 아이템은 0 이어야 한다 - 게임이 나중에 0xFFFF 로
     // 채운다. 옛 호출자도 그대로 동작해야 한다.
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     std::memset(buf, 0xAB, sizeof(buf));
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1));
     std::uint16_t endu = 0xFFFF;
@@ -485,7 +486,7 @@ TEST(fill_item_value_leaves_the_endurance_zero_by_default) {
 TEST(fill_item_value_keeps_endurance_and_sockets_apart) {
     // +0x2A 와 소켓(+0x40) 은 붙어 있지 않다. 한쪽이 다른 쪽을
     // 덮으면 소켓 첫 칸이 망가진다.
-    std::uint8_t buf[0x80]{};
+    std::uint8_t buf[0x200]{};
     cdtb::game::GiveExtras ex;
     ex.endurance = 0x1234;
     ex.socket_count = 1;
@@ -496,4 +497,42 @@ TEST(fill_item_value_keeps_endurance_and_sockets_apart) {
     CHECK_EQ(buf[0x2B], std::uint8_t{0x12});
     CHECK_EQ(buf[0x40], std::uint8_t{0x24});
     CHECK_EQ(buf[0x41], std::uint8_t{0x0D});
+}
+
+// --- 예리도 (변환 함수 0x2094050) --------------------------------------
+//
+//   movsx ebx, word [r14+0x1AE]      TrItemValue 의 값
+//   call  0x317900                   아이템 표
+//   movsx ecx, word [rax+0x2E8]      _SharpnessData 의 상한 (실측 100)
+//   cmp   ebx, ecx / cmovl / cmovs   min(값, 상한), 음수면 0
+//   mov   word [rdi+0x58], cx        레코드 +0x58
+//
+// 게임이 상한으로 자르므로 넘겨 보내도 거절하지는 않는다. 그래도
+// 화면에서 자른 값과 보내는 값이 갈리지 않게 부르는 쪽에서 자른다.
+
+TEST(fill_item_value_writes_the_sharpness_at_0x1AE) {
+    std::uint8_t buf[0x200]{};
+    cdtb::game::GiveExtras ex;
+    ex.sharpness = 100;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    std::uint16_t sharp = 0;
+    std::memcpy(&sharp, buf + 0x1AE, sizeof(sharp));
+    CHECK_EQ(sharp, std::uint16_t{100});
+}
+
+TEST(fill_item_value_leaves_the_sharpness_zero_by_default) {
+    // 인벤토리 507개가 전부 0 이다. 기본값을 최대치로 줄 근거가 없다.
+    std::uint8_t buf[0x200]{};
+    std::memset(buf, 0xAB, sizeof(buf));
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1));
+    std::uint16_t sharp = 0xFFFF;
+    std::memcpy(&sharp, buf + 0x1AE, sizeof(sharp));
+    CHECK_EQ(sharp, std::uint16_t{0});
+}
+
+TEST(fill_item_value_refuses_a_buffer_that_stops_before_the_sharpness) {
+    // 예리도 칸이 +0x1AE 라 그만큼은 있어야 한다. 소켓만 보고 잡은
+    // 옛 하한(0x60)으로는 버퍼 밖에 쓴다.
+    std::uint8_t buf[0x100]{};
+    CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1));
 }
