@@ -270,9 +270,10 @@ void draw_filter_bar() {
 
 }  // namespace
 
-void draw_inventory_panel() {
+void draw_inventory_panel(bool* open) {
+    ImGui::SetNextWindowPos(ImVec2(400, 600), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(680.0f, 420.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("인벤토리")) {
+    if (!ImGui::Begin("인벤토리", open)) {
         ImGui::End();
         return;
     }

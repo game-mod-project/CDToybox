@@ -338,16 +338,59 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     return true;
 }
 
-void draw_ui() {
-    ImGui::SetNextWindowSize(ImVec2(640, 420), ImGuiCond_FirstUseEver);
-    ImGui::Begin("CDToybox — 0단계");
+// 어떤 창을 띄울지. 본창에서 켜고 끈다.
+//
+// 창마다 ✕ 를 달아 치울 수 있게 했으면, **다시 여는 자리**가 반드시
+// 있어야 한다. 없으면 한 번 닫은 창은 영영 못 본다. 그 자리가 본창
+// 이고, 그래서 본창은 닫히지 않는다.
+struct WindowFlags {
+    bool items = true;
+    bool grant = true;
+    bool stash = true;
+    bool inventory = true;
+    bool camera = false;   // 개발 진단이다. 필요할 때만 연다
+};
+WindowFlags g_show;
 
+// 켜 둔 창만 그린다. ✕ 를 누르면 ImGui 가 플래그를 내려 주므로
+// 다음 프레임부터 안 그린다.
+void draw_windows() {
+    if (g_show.items) cdtb::render::draw_item_panel(&g_show.items);
+    if (g_show.grant) cdtb::render::draw_grant_panel(&g_show.grant);
+    if (g_show.stash) cdtb::render::draw_stash_panel(&g_show.stash);
+    if (g_show.inventory) {
+        cdtb::render::draw_inventory_panel(&g_show.inventory);
+    }
+    if (g_show.camera) cdtb::render::draw_camera_panel(&g_show.camera);
+}
+
+void draw_ui() {
+    ImGui::SetNextWindowPos(ImVec2(60, 60), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 260), ImGuiCond_FirstUseEver);
+    ImGui::Begin("CDToybox");
+
+    // 창 목록이 먼저다. 예전에는 FPS 와 개발 진단이 본창의 전부라,
+    // 무슨 창이 있는지 알 방법이 아예 없었다.
+    ImGui::TextUnformatted("창");
+    ImGui::Checkbox("아이템 목록", &g_show.items);
+    ImGui::SameLine();
+    ImGui::Checkbox("아이템 지급", &g_show.grant);
+    ImGui::Checkbox("보관함", &g_show.stash);
+    ImGui::SameLine();
+    ImGui::Checkbox("인벤토리", &g_show.inventory);
+    ImGui::Checkbox("카메라 분석", &g_show.camera);
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Insert 토글 · End 비활성화 · F9 프리카메라");
     ImGui::Text("Crimson Desert 2.00.01 / %.1f FPS", ImGui::GetIO().Framerate);
-    ImGui::Text("쓰기 기능: %s",
-                cdtb::guard::is_safe_to_modify() ? "허용" : "차단 (0단계)");
+    if (!cdtb::guard::is_safe_to_modify()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.35f, 1.0f),
+                           "쓰기 기능이 잠겨 있습니다");
+    }
 
     if (!g_cfg.show_diagnostics) {
         ImGui::End();
+        draw_windows();
         return;
     }
 
@@ -390,16 +433,8 @@ void draw_ui() {
                     d.prologue_ms);
     }
 
-    ImGui::Separator();
-    ImGui::Text("Insert 토글 · End 비활성화");
     ImGui::End();
-
-    // 분석 결과 표시. 버튼은 없다 - 분석은 백그라운드가 한다.
-    cdtb::render::draw_camera_panel();
-    cdtb::render::draw_item_panel();
-    cdtb::render::draw_grant_panel();
-    cdtb::render::draw_stash_panel();
-    cdtb::render::draw_inventory_panel();
+    draw_windows();
 }
 
 }  // namespace cdtb::overlay::detail

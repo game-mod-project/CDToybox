@@ -30,8 +30,6 @@ const char* g_last_what = "";
 
 // 내구도 치트의 인자 둘. 뜻을 아직 모른다 - 값을 바꿔 가며 화면으로
 // 확인해야 한다. 페이로드는 u16 둘뿐이다.
-int g_endur_a = 0;
-int g_endur_b = 0;
 
 // 담금질과 소켓. 아이템을 바꾸면 상한에 맞춰 잘린다.
 //
@@ -297,9 +295,10 @@ int grant_socket_keys(unsigned int* out, int cap) {
     return n;
 }
 
-void draw_grant_panel() {
+void draw_grant_panel(bool* open) {
+    ImGui::SetNextWindowPos(ImVec2(1180, 60), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("아이템 지급")) {
+    if (!ImGui::Begin("아이템 지급", open)) {
         ImGui::End();
         return;
     }
@@ -460,36 +459,6 @@ void draw_grant_panel() {
     // 인자 둘의 뜻을 모른다. 값을 바꿔 가며 장비 내구도가 변하는지
     // 보는 용도다. 페이로드가 u16 둘뿐이라 시도 범위가 좁다.
     ImGui::Separator();
-    if (ImGui::CollapsingHeader("내구도 (뜻 확인 중)")) {
-        // 뜻은 정적 분석으로 밝혔다. 그런데 대상에 내구도가 없어
-        // 이 캐릭터에서는 아무 일도 일어나지 않는다.
-        ImGui::TextDisabled("a = 장비 슬롯 번호(0~20), b = 개수입니다.");
-        ImGui::TextDisabled("장착 중인 것에만 듣는데, 지금 장착품에는"
-                            " 내구도가 없어 변화가 없습니다.");
-        ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputInt("a", &g_endur_a, 1, 10);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputInt("b", &g_endur_b, 1, 10);
-        if (g_endur_a < 0) g_endur_a = 0;
-        if (g_endur_b < 0) g_endur_b = 0;
-        if (g_endur_a > 0xFFFF) g_endur_a = 0xFFFF;
-        if (g_endur_b > 0xFFFF) g_endur_b = 0xFFFF;
-
-        ImGui::BeginDisabled(blocked != nullptr || !game::endurance_ready());
-        if (ImGui::Button("내구도 적용", ImVec2(150.0f, 0.0f))) {
-            g_call_ok = game::request_endurance(
-                seen[g_pick], static_cast<std::uint16_t>(g_endur_a),
-                static_cast<std::uint16_t>(g_endur_b));
-            g_called = true;
-            g_last_what = "내구도를 보냈습니다";
-        }
-        ImGui::EndDisabled();
-        if (!game::endurance_ready()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(메시지 해석 실패)");
-        }
-    }
 
     // --- 고급: 세션 고르기 ------------------------------------------
     // 자동 선택이 맞는 것을 실측으로 확인했으므로 접어 둔다. 틀릴

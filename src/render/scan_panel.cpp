@@ -17,9 +17,13 @@ namespace cdtb::render {
 // UI였다. 그건 조작자가 사람이라는 전제이고, 그러면 모드를 만든
 // 의미가 없다. 분석은 game::start_auto_analysis() 가 백그라운드에서
 // 스스로 하고, 여기서는 그 결과만 보여준다.
-void draw_camera_panel() {
+void draw_camera_panel(bool* open) {
+    ImGui::SetNextWindowPos(ImVec2(60, 340), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 320), ImGuiCond_FirstUseEver);
-    ImGui::Begin("카메라 분석");
+    if (!ImGui::Begin("카메라 분석", open)) {
+        ImGui::End();
+        return;
+    }
 
     if (!game::discovered()) {
         ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "분석 중...");
