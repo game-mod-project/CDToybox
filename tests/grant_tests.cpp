@@ -339,8 +339,10 @@ TEST(no_actor_before_the_hook_sees_one) {
 // 버퍼가 0 으로 초기화된다.
 
 TEST(fill_item_value_writes_the_temper_at_0x0C) {
-    std::uint8_t buf[0x40]{};
-    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, 3));
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.temper = 3;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
     std::uint16_t temper = 0;
     std::memcpy(&temper, buf + 0x0C, sizeof(temper));
     CHECK_EQ(temper, std::uint16_t{3});
@@ -348,7 +350,7 @@ TEST(fill_item_value_writes_the_temper_at_0x0C) {
 
 TEST(fill_item_value_leaves_the_temper_zero_by_default) {
     // 옛 호출자가 그대로 동작해야 한다.
-    std::uint8_t buf[0x40]{};
+    std::uint8_t buf[0x80]{};
     std::memset(buf, 0xAB, sizeof(buf));
     CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 7));
     std::uint16_t temper = 0xFFFF;
@@ -357,8 +359,10 @@ TEST(fill_item_value_leaves_the_temper_zero_by_default) {
 }
 
 TEST(fill_item_value_keeps_the_key_and_count) {
-    std::uint8_t buf[0x40]{};
-    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 5, 2));
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.temper = 2;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 5, ex));
     std::uint32_t key = 0;
     std::int64_t count = 0;
     std::memcpy(&key, buf + 0x08, sizeof(key));
@@ -367,8 +371,83 @@ TEST(fill_item_value_keeps_the_key_and_count) {
     CHECK_EQ(count, std::int64_t{5});
 }
 
-TEST(fill_item_value_refuses_a_buffer_too_small_for_the_temper) {
-    // 키와 개수만 쓰던 시절의 하한(0x18)은 담금질 칸을 포함한다.
+TEST(fill_item_value_refuses_a_buffer_too_small_for_the_sockets) {
+    // 소켓 개수 칸이 +0x5E 라 그만큼은 있어야 한다.
     std::uint8_t buf[0x10]{};
-    CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1, 3));
+    CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
+    std::uint8_t half[0x40]{};
+    CHECK(!cdtb::game::fill_item_value(half, sizeof(half), 50001, 1));
+}
+
+// --- 소켓 (RVA 0x2094324) ----------------------------------------------
+//
+// 변환 함수의 복사 루프가 TrItemValue +0x40 부터 6바이트씩 다섯 칸을
+// 레코드 소켓 배열로 그대로 옮기고, 개수는 +0x5E (u8) 에서 읽는다.
+//
+//   movzx ebx, byte [r14+0x5E]        개수
+//   mov   byte [rdi+0x70], bl         레코드 +0x70 에 그대로
+//   ecx = dword [r14+0x40+r9]         6바이트를 그대로
+//   dx  = word  [r14+0x44+r9]
+//   byte [rax+r9+4] = r8b             다섯 번째 바이트만 슬롯 번호로 덮어쓴다
+//
+// 지금까지 지급분에 소켓이 하나도 없던 것은 +0x5E 가 0 이라 루프가
+// 한 칸도 안 돌았기 때문이다.
+
+TEST(fill_item_value_writes_the_socket_count_at_0x5E) {
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.socket_count = 2;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    CHECK_EQ(buf[0x5E], std::uint8_t{2});
+}
+
+TEST(fill_item_value_copies_socket_bytes_verbatim_from_0x40) {
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.socket_count = 2;
+    const std::uint8_t a[6] = {0x24, 0x0D, 0xFF, 0xFF, 0x00, 0xFF};
+    const std::uint8_t b[6] = {0x8E, 0x0C, 0xFF, 0xFF, 0x01, 0xFF};
+    std::memcpy(ex.sockets[0].raw, a, 6);
+    std::memcpy(ex.sockets[1].raw, b, 6);
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    CHECK(std::memcmp(buf + 0x40, a, 6) == 0);
+    CHECK(std::memcmp(buf + 0x46, b, 6) == 0);
+}
+
+TEST(fill_item_value_leaves_unused_socket_slots_alone) {
+    // 남은 칸은 게임 생성자가 채운 빈 값(FF FF 00 00 FF)이라야 한다.
+    // 우리가 0 으로 밀면 안 된다.
+    std::uint8_t buf[0x80]{};
+    for (int i = 0; i < 5; ++i) {
+        std::uint8_t* e = buf + 0x40 + i * 6;
+        e[0] = 0xFF; e[1] = 0xFF; e[2] = 0; e[3] = 0; e[4] = 0xFF; e[5] = 0;
+    }
+    cdtb::game::GiveExtras ex;
+    ex.socket_count = 1;
+    ex.sockets[0].raw[0] = 0x24;
+    ex.sockets[0].raw[1] = 0x0D;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    const std::uint8_t empty[6] = {0xFF, 0xFF, 0, 0, 0xFF, 0};
+    for (int i = 1; i < 5; ++i) {
+        CHECK(std::memcmp(buf + 0x40 + i * 6, empty, 6) == 0);
+    }
+}
+
+TEST(fill_item_value_refuses_more_sockets_than_the_array_holds) {
+    // 배열은 다섯 칸이다. 넘겨 보내면 게임이 배열 밖을 읽는다.
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.socket_count = 6;
+    CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+}
+
+TEST(fill_item_value_writes_no_sockets_by_default) {
+    std::uint8_t buf[0x80]{};
+    std::memset(buf, 0xAB, sizeof(buf));
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 50001, 1));
+    CHECK_EQ(buf[0x5E], std::uint8_t{0});
+    // 소켓 칸은 건드리지 않는다.
+    for (std::size_t i = 0x40; i < 0x5E; ++i) {
+        CHECK_EQ(buf[i], std::uint8_t{0xAB});
+    }
 }
