@@ -64,6 +64,7 @@ void usage() {
         "  itemmap key <아이템키> ...  아이템 키의 짧은 식별자\n"
         "  itemmap cand                변환 함수 패턴 후보 전부\n"
         "  invlist [주소]              인벤토리를 이름·담금질까지\n"
+        "  invlist raw [주소]          + 뜻을 모르는 칸까지\n"
         "  invexport [파일]            인벤토리를 보관함 파일로\n"
         "  dumpimage [파일] [--raw]    실행 중 프로세스의 모듈 이미지를\n"
         "                              디스어셈블러가 읽는 PE 로 뜬다\n"
@@ -367,8 +368,19 @@ bool build_inv_context(const mem::Rtti& rt, const mem::Reader& reader,
 
 void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                  const Remote& r, int argc, char** argv) {
+    // invlist raw : 아직 뜻을 모르는 칸까지 낸다.
+    bool raw_mode = false;
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "raw") == 0) raw_mode = true;
+    }
+
+    // "raw" 는 주소가 아니다. 그대로 넘기면 주소로 파싱된다.
+    const char* addr =
+        (argc >= 3 && !raw_mode) ? argv[2]
+                                 : ((argc >= 4) ? argv[3] : nullptr);
+
     InvContext ctx;
-    if (!build_inv_context(rt, reader, argc >= 3 ? argv[2] : nullptr, &ctx)) {
+    if (!build_inv_context(rt, reader, addr, &ctx)) {
         return;
     }
     const std::uintptr_t comp = ctx.component;
@@ -423,6 +435,33 @@ void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                         rec.slot, rec.index, rec.temper, item_key,
                         static_cast<long long>(rec.count),
                         static_cast<unsigned long long>(rec.instance_id), name);
+
+            // invlist raw : 변환 함수가 채우는 칸을 그대로 낸다.
+            //
+            // 어느 칸이 무엇인지 아직 다 모른다. 지급분과 원본을
+            // 견주려면 값이 보여야 하므로 이름 대신 오프셋으로 낸다.
+            // 배선은 specs/2026-09-03-static-analysis.md 의 표에 있다.
+            if (raw_mode) {
+                std::uint32_t f28 = 0, f2c = 0;
+                // +0x70 은 u8 이다. 변환 함수가 `mov byte [rdi+0x70], bl`
+                // 로 쓴다 - u32 로 읽으면 옆 칸이 섞여 값이 터무니없어진다.
+                std::uint8_t f70 = 0;
+                std::uint64_t f30 = 0, f38 = 0;
+                std::uint16_t f40 = 0, f58 = 0;
+                reader.read_value(rec.address + 0x28, &f28);
+                reader.read_value(rec.address + 0x2C, &f2c);
+                reader.read_value(rec.address + 0x30, &f30);
+                reader.read_value(rec.address + 0x38, &f38);
+                reader.read_value(rec.address + 0x40, &f40);
+                reader.read_value(rec.address + 0x58, &f58);
+                reader.read_value(rec.address + 0x70, &f70);
+                std::printf("         +28 %-6u +2C %-6u +30 %-6llu +38 %-8llu"
+                            " +40 %-6u +58 %-4u 소켓 %u\n",
+                            f28, f2c,
+                            static_cast<unsigned long long>(f30),
+                            static_cast<unsigned long long>(f38), f40, f58,
+                            static_cast<unsigned>(f70));
+            }
 
             // 박힌 소켓이 있을 때만 낸다. 실측에서 대부분 비어 있다.
             std::vector<game::InventorySocket> socks;
