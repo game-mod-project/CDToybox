@@ -42,6 +42,7 @@ add_library(cdtb_core STATIC
     src/mem/value_scanner.cpp
     src/mem/reader.cpp
     src/mem/rtti.cpp
+    src/mem/image_dump.cpp
     src/mem/watchpoint.cpp
     src/core/log.cpp
     src/core/config.cpp
@@ -104,6 +105,7 @@ add_executable(cdtb_tests
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
     tests/stash_tests.cpp
+    tests/image_dump_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp

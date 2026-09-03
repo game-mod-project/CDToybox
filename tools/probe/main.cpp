@@ -19,6 +19,7 @@
 
 #include "remote.h"
 #include "mem/rtti.h"
+#include "mem/image_dump.h"
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
@@ -64,6 +65,8 @@ void usage() {
         "  itemmap cand                변환 함수 패턴 후보 전부\n"
         "  invlist [주소]              인벤토리를 이름·담금질까지\n"
         "  invexport [파일]            인벤토리를 보관함 파일로\n"
+        "  dumpimage [파일] [--raw]    실행 중 프로세스의 모듈 이미지를\n"
+        "                              디스어셈블러가 읽는 PE 로 뜬다\n"
         "\n"
         "주소는 16진(0x 접두 선택)으로 준다.\n");
 }
@@ -1947,6 +1950,113 @@ void cmd_activity(const Remote& r, unsigned wait_ms, std::size_t max_mb) {
                           : "동작 중");
 }
 
+// 실행 중인 프로세스의 모듈 이미지를 파일로 뜬다.
+//
+// 디스크의 실행 파일은 Denuvo 로 싸여 있어 코드가 보이지 않는다.
+// 풀린 코드는 프로세스 메모리에만 있으므로 정적 분석은 여기서 뜬
+// 파일로 한다. 이미지를 읽는 것 자체는 RTTI 탐색이 늘 하던 일이고,
+// 여기서는 저장과 헤더 고치기만 더한다.
+//
+// 기본은 섹션 헤더를 "파일 오프셋 = RVA" 로 고친 PE 다 - Ghidra 나
+// IDA 가 아무 설정 없이 연다. --raw 는 메모리 배치 그대로 낸다
+// (평면 바이너리로 열고 베이스를 직접 준다).
+void cmd_dumpimage(mem::Rtti& rt, const Remote& r,
+                   const mem::Rtti::ImageLoad& stats, int argc, char** argv) {
+    bool raw = false;
+    const char* path = nullptr;
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--raw") == 0) {
+            raw = true;
+            continue;
+        }
+        if (path == nullptr) path = argv[i];
+    }
+
+    // 이름을 직접 준 경우에만 덮어쓰기를 거절한다. 기본 파일은
+    // 언제든 다시 뜰 수 있으므로 막지 않는다.
+    if (path != nullptr) {
+        if (std::FILE* exists = std::fopen(path, "rb")) {
+            std::fclose(exists);
+            std::printf("이미 있는 파일입니다: %s\n"
+                        "덮어쓰지 않습니다. 다른 이름을 주거나 지우고"
+                        " 다시 부르세요.\n",
+                        path);
+            return;
+        }
+    } else {
+        path = raw ? "cdtb_image.bin" : "cdtb_image.exe";
+    }
+
+    std::vector<std::uint8_t> image = rt.take_image();
+    if (image.empty()) {
+        std::printf("이미지가 비었습니다\n");
+        return;
+    }
+
+    std::printf("모듈 0x%llX + %zu 바이트 (%.1f MB)\n",
+                static_cast<unsigned long long>(r.module_base()), image.size(),
+                static_cast<double>(image.size()) / 1048576.0);
+    if (stats.failed_chunks > 0) {
+        std::printf("  못 읽은 곳 %zu / %zu 청크 (%.2f MB, %.2f%%) - 0 으로"
+                    " 남았습니다\n",
+                    stats.failed_chunks, stats.chunks,
+                    static_cast<double>(stats.failed_bytes) / 1048576.0,
+                    stats.chunks ? 100.0 * stats.failed_chunks / stats.chunks
+                                 : 0.0);
+    } else {
+        std::printf("  구멍 없음 - %zu 청크 전부 읽었습니다\n", stats.chunks);
+    }
+
+    if (!raw) {
+        mem::DumpFixup fx;
+        std::string err;
+        if (!mem::make_dump_loadable(image.data(), image.size(),
+                                     r.module_base(), &fx, &err)) {
+            std::printf("PE 헤더를 고치지 못했습니다: %s\n"
+                        "--raw 로 메모리 배치 그대로 뜰 수 있습니다.\n",
+                        err.c_str());
+            return;
+        }
+        std::printf("ImageBase 0x%llX, 진입점 RVA 0x%X, 섹션 %zu개\n",
+                    static_cast<unsigned long long>(fx.image_base),
+                    fx.entry_rva, fx.sections.size());
+        for (const auto& sc : fx.sections) {
+            char attr[4] = {'-', '-', '-', 0};
+            if (sc.characteristics & 0x20000000u) attr[0] = 'X';
+            if (sc.characteristics & 0x40000000u) attr[1] = 'R';
+            if (sc.characteristics & 0x80000000u) attr[2] = 'W';
+            std::printf("  %-8s RVA 0x%08X  가상 0x%08X  파일 0x%08X  %s%s\n",
+                        sc.name.c_str(), sc.rva, sc.virtual_size, sc.raw_size,
+                        attr, sc.truncated ? "  (잘림)" : "");
+        }
+    }
+
+    std::FILE* f = std::fopen(path, "wb");
+    if (f == nullptr) {
+        std::printf("파일을 열지 못했습니다: %s\n", path);
+        return;
+    }
+    const std::size_t wrote = std::fwrite(image.data(), 1, image.size(), f);
+    const bool closed = std::fclose(f) == 0;
+    if (wrote != image.size() || !closed) {
+        std::printf("쓰다 말았습니다 (%zu / %zu 바이트): %s\n", wrote,
+                    image.size(), path);
+        return;
+    }
+
+    std::printf("%s 에 썼습니다 (%.1f MB)\n", path,
+                static_cast<double>(image.size()) / 1048576.0);
+    if (raw) {
+        std::printf("평면 바이너리입니다. x86-64 로 열고 베이스를"
+                    " 0x%llX 로 주세요.\n",
+                    static_cast<unsigned long long>(r.module_base()));
+    } else {
+        std::printf("PE 로 열립니다. 섹션과 진입점이 그대로 잡히고"
+                    " 주소는 0x%llX 기준입니다.\n",
+                    static_cast<unsigned long long>(r.module_base()));
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2120,9 +2230,15 @@ int main(int argc, char** argv) {
     mem::Rtti rt(reader);
     std::printf("모듈 이미지 로드 중 (%.1f MB)...\n",
                 static_cast<double>(r.module_size()) / 1048576.0);
-    if (!rt.load_image()) {
+    mem::Rtti::ImageLoad img_stats;
+    if (!rt.load_image(&img_stats)) {
         std::printf("이미지 로드 실패\n");
         return 3;
+    }
+
+    if (cmd == "dumpimage") {
+        cmd_dumpimage(rt, r, img_stats, argc, argv);
+        return 0;
     }
 
     if (cmd == "camera") {
