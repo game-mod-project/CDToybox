@@ -473,4 +473,13 @@ std::uint32_t item_id_for_key(std::uint32_t key) {
     return find_item_id(*g_ids.load(std::memory_order_acquire), key);
 }
 
+std::uint16_t full_endurance_for(std::uint32_t item_key) {
+    if (!items_ready()) return 0;
+    for (const auto& e : item_catalog()) {
+        if (e.key != item_key) continue;
+        return (e.max_endurance == 0xFFFF) ? 0 : e.max_endurance;
+    }
+    return 0;
+}
+
 }  // namespace cdtb::game

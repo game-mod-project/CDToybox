@@ -221,6 +221,13 @@ bool item_ids_ready();
 // 캐시에서 키의 순번을 찾는다. 아직 안 읽었거나 없으면 kNoItemId.
 std::uint32_t item_id_for_key(std::uint32_t key);
 
+// 이 아이템을 새로 줄 때 채워야 할 현재 내구도.
+//
+// 표의 `_maxEndurance` 가 0xFFFF 면 내구도가 없는 아이템이므로 0 이다.
+// 그 밖에는 최대치를 준다 - 게임이 새로 만드는 것과 같은 상태다.
+// 표가 아직 없으면 0 이다.
+std::uint16_t full_endurance_for(std::uint32_t item_key);
+
 // 이름이 실제로 풀렸는가.
 bool items_named();
 

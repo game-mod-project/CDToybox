@@ -971,9 +971,10 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
     std::uint64_t packet[8]{};
     packet[0] = static_cast<std::uint64_t>(session);
 
-    log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {} 담금질 {} 소켓 {}",
+    log::infof("인벤토리 지급: 세션 0x{:X} 키 {} 개수 {} 담금질 {} 소켓 {}"
+               " 내구도 {}",
                session, item_key, count, extras.temper,
-               static_cast<int>(extras.socket_count));
+               static_cast<int>(extras.socket_count), extras.endurance);
     o.crashed = !call_give_guarded(
         reinterpret_cast<GiveFn>(g_give_msg.handler),
         reinterpret_cast<void*>(g_give_msg.descriptor), packet, value, &o.seh,
@@ -1048,6 +1049,7 @@ bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
     std::memcpy(p + 0x08, &item_key, sizeof(item_key));
     std::memcpy(p + 0x0C, &extras.temper, sizeof(extras.temper));
     std::memcpy(p + 0x10, &count, sizeof(count));
+    std::memcpy(p + 0x2A, &extras.endurance, sizeof(extras.endurance));
 
     // 개수만큼만 옮긴다. 나머지 칸은 게임 생성자가 채운 빈 값
     // (FF FF 00 00 FF) 그대로 두어야 한다.

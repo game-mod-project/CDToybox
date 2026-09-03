@@ -451,3 +451,49 @@ TEST(fill_item_value_writes_no_sockets_by_default) {
         CHECK_EQ(buf[i], std::uint8_t{0xAB});
     }
 }
+
+// --- 현재 내구도 (변환 함수 0x2094050) ---------------------------------
+//
+//   movzx eax, word [r14+0x2A]
+//   mov   word [rdi+0x40], ax        레코드 +0x40 = 현재 내구도
+//
+// 안 채우면 0 으로 간다. 실측에서 미로숲의 한손검(최대 30)을 그렇게
+// 줬더니 툴팁이 `0/30` 을 빨갛게 내고 공격력에 -11 이 붙었다. 이
+// 게임은 아무 아이템도 수리 데이터가 없어(0 / 6,810) 되돌릴 수 없다.
+
+TEST(fill_item_value_writes_the_endurance_at_0x2A) {
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.endurance = 30;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 1002261, 1, ex));
+    std::uint16_t endu = 0;
+    std::memcpy(&endu, buf + 0x2A, sizeof(endu));
+    CHECK_EQ(endu, std::uint16_t{30});
+}
+
+TEST(fill_item_value_leaves_the_endurance_zero_by_default) {
+    // 내구도가 없는 아이템은 0 이어야 한다 - 게임이 나중에 0xFFFF 로
+    // 채운다. 옛 호출자도 그대로 동작해야 한다.
+    std::uint8_t buf[0x80]{};
+    std::memset(buf, 0xAB, sizeof(buf));
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1));
+    std::uint16_t endu = 0xFFFF;
+    std::memcpy(&endu, buf + 0x2A, sizeof(endu));
+    CHECK_EQ(endu, std::uint16_t{0});
+}
+
+TEST(fill_item_value_keeps_endurance_and_sockets_apart) {
+    // +0x2A 와 소켓(+0x40) 은 붙어 있지 않다. 한쪽이 다른 쪽을
+    // 덮으면 소켓 첫 칸이 망가진다.
+    std::uint8_t buf[0x80]{};
+    cdtb::game::GiveExtras ex;
+    ex.endurance = 0x1234;
+    ex.socket_count = 1;
+    ex.sockets[0].raw[0] = 0x24;
+    ex.sockets[0].raw[1] = 0x0D;
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    CHECK_EQ(buf[0x2A], std::uint8_t{0x34});
+    CHECK_EQ(buf[0x2B], std::uint8_t{0x12});
+    CHECK_EQ(buf[0x40], std::uint8_t{0x24});
+    CHECK_EQ(buf[0x41], std::uint8_t{0x0D});
+}
