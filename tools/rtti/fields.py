@@ -1,6 +1,7 @@
 """데이터 클래스의 필드 이름과 오프셋을 뽑는다.
 
     python tools/rtti/fields.py <exe> <클래스이름>
+    python tools/rtti/fields.py <exe>              뽑을 수 있는 클래스
 
 게임을 켜지 않고 파일만 보고 한다.
 
@@ -25,8 +26,9 @@
 있어 28개 명령만 보고 멈췄다. 참조 자리마다 **그 앞 몇십 바이트만**
 정렬을 맞춰 읽으면 된다 - 짝짓기는 국소적이다.
 
-이 게임의 디버그 문자열은 UTF-8 이 아니라 **CP949** 다. 현지화 표와
-다르다 - 그쪽은 UTF-8 이다.
+문자열은 **UTF-8** 이다. 콘솔이 CP949 라 그냥 찍으면 깨져 보이는데,
+그것을 인코딩이 다른 것으로 잘못 읽은 적이 있다 - 터미널 코드페이지와
+파일 인코딩은 다른 이야기다. `PYTHONIOENCODING=utf-8` 로 찍는다.
 """
 import os
 import re
@@ -45,7 +47,7 @@ WINDOW = 0x60
 
 def find_message_refs(img, cls):
     """`<클래스>의 _필드를 ...` 문자열의 (RVA, 필드이름)."""
-    prefix = cls.encode('cp949')
+    prefix = cls.encode('utf-8')
     out = []
     start = 0
     while True:
@@ -58,7 +60,7 @@ def find_message_refs(img, cls):
         end = img.data.find(b'\0', i, i + 300)
         if end < 0:
             continue
-        text = img.data[i:end].decode('cp949', 'replace')
+        text = img.data[i:end].decode('utf-8', 'replace')
         m = re.search(r'(_[A-Za-z0-9_]+)', text)
         if m is None:
             continue
@@ -126,11 +128,40 @@ def field_at(img, md, at):
     return last
 
 
+# "<클래스>의 _<필드>를 읽어들이는데 실패했다." 의 CP949 바이트.
+MSG_TAIL = '를 읽어들이는데 실패했다'.encode('utf-8')
+
+
+def list_classes(img):
+    """실패 메시지를 가진 클래스와 그 개수."""
+    counts = {}
+    start = 0
+    while True:
+        i = img.data.find(MSG_TAIL, start)
+        if i < 0:
+            break
+        start = i + 1
+        head = img.data.rfind(bytes([0]), max(0, i - 300), i) + 1
+        text = img.data[head:i].decode('utf-8', 'replace')
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)의 (_[A-Za-z0-9_]+)$', text)
+        if m is None:
+            continue
+        counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    return counts
+
+
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print(__doc__)
         return 1
     img = Image(sys.argv[1])
+    if len(sys.argv) < 3:
+        # 클래스를 안 주면 뽑을 수 있는 클래스를 나열한다.
+        counts = list_classes(img)
+        print('실패 메시지를 가진 클래스 %d개' % len(counts))
+        for name, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print('  %-44s %d개' % (name, n))
+        return 0
     cls = sys.argv[2]
 
     refs = find_message_refs(img, cls)

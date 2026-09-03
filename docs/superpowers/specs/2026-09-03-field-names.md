@@ -21,8 +21,11 @@ lea  rax, "ItemInfo의 _maxEndurance를 읽어들이는데 실패했다."
 python tools/rtti/fields.py "...\bin64\CrimsonDesert.exe" ItemInfo
 ```
 
-게임을 켜지 않고 **디스크 파일만** 보고 한다. 디버그 문자열은
-현지화 표(UTF-8)와 달리 **CP949** 다.
+게임을 켜지 않고 **디스크 파일만** 보고 한다.
+
+문자열은 **UTF-8** 이다. 처음에 CP949 로 잘못 읽었다 - 콘솔이
+CP949 라 그냥 찍으면 깨져 보이는데, 그것을 파일 인코딩 문제로
+읽었다. 터미널 코드페이지와 파일 인코딩은 다른 이야기다.
 
 ### 검증
 
@@ -91,8 +94,25 @@ _customizationAppearanceIndexKey  _armorDyeAppearanceIndexKey
 | `_onGuardDamageReductionPercent` | `+0x30` |
 | `_isCriticalCollidable` | `+0x38` |
 
-같은 도구로 어떤 데이터 클래스든 뽑을 수 있다. `EnchantData` ·
-`GimmickInfo` · `StatusInfo` 등 실패 메시지가 있는 클래스면 된다.
+## 뽑을 수 있는 클래스 528개
+
+클래스를 안 주면 나열한다.
+
+```
+python tools/rtti/fields.py <exe>
+  GimmickInfo      207개    CharacterInfo   191개    ItemInfo    115개
+  StageInfo         91개    QuestInfo        37개    SkillInfo    35개
+  StatusInfo        34개    EquipInfoData    20개    EquipTypeInfo 19개
+  ...
+```
+
+실패 메시지가 전부 4,661개다. 게임의 데이터 구조가 통째로 이름과
+함께 들어 있는 셈이다 - 아이템 말고도 캐릭터 · 스킬 · 퀘스트 ·
+기믹까지 같은 방법으로 뽑힌다.
+
+`EquipInfoData` 20개는 전부 짝지어졌다 (`_decreaseEndurancePercent`
+`+0x18`, `_isWeaponSlot` `+0x69` 등). `RepairData` 4개는 코드 모양이
+달라 하나도 못 짝지었다 - 그런 클래스도 있다.
 
 ## `ItemInfo` 전체 (109개)
 
