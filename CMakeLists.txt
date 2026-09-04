@@ -65,11 +65,13 @@ add_library(cdtoybox SHARED
     src/render/item_style.cpp
     src/render/stash_panel.cpp
     src/render/inventory_panel.cpp
+    src/render/roster_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
     src/game/localization.cpp
     src/game/items.cpp
+    src/game/roster.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -139,6 +141,7 @@ add_executable(cdtb_probe
     src/game/analysis.cpp
     src/game/localization.cpp
     src/game/items.cpp
+    src/game/roster.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
