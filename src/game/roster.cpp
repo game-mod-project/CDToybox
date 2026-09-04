@@ -10,13 +10,18 @@ namespace cdtb::game {
 namespace {
 
 // StaticInfoManager2 컨테이너 배치. 아이템 매니저와 같다.
-constexpr std::size_t kIndexPtr = 0x28;    // (u32 키, u32 …) 쌍의 표
 constexpr std::size_t kCountField = 0x30;  // u32 개수
+constexpr std::size_t kIndexPtr = 0x28;    // 색인 표 포인터
 constexpr std::size_t kRecordsPtr = 0x58;  // 레코드 포인터 배열
 
-// 레코드 (탈것·용병·캐릭터 공통, fields.py 로 확인)
-constexpr std::size_t kRecKey = 0x00;      // u32 키
-constexpr std::size_t kRecStringKey = 0x08;  // u64 _stringKey (이름)
+// 레코드 (탈것·용병·캐릭터 공통, 실측 2026-09-04)
+constexpr std::size_t kRecKey = 0x00;        // u16 키 (첫 u32 의 하위 16비트)
+constexpr std::size_t kRecStringKey = 0x08;  // 엔진 문자열 객체 포인터
+
+// 엔진 문자열 객체
+constexpr std::size_t kStrData = 0x00;    // char* UTF-8
+constexpr std::size_t kStrLength = 0x08;  // u32 길이
+constexpr std::uint32_t kMaxNameLen = 200;
 
 bool read_header(const mem::Reader& r, std::uintptr_t manager,
                  std::uint32_t* count, std::uintptr_t* records) {
@@ -30,7 +35,32 @@ bool read_header(const mem::Reader& r, std::uintptr_t manager,
     return true;
 }
 
+// 색인 항목과 레코드 첫 칸의 **u16 키**를 읽는다. 키 타입이 G(u16)
+// 라, 첫 u32 의 하위 16비트가 키이고 상위 16비트는 다른 필드다 -
+// u32 전체로 비교하면 어긋난다(실측).
+bool read_u16_key(const mem::Reader& r, std::uintptr_t at, std::uint16_t* out) {
+    std::uint32_t v = 0;
+    if (!r.read_value(at, &v)) return false;
+    *out = static_cast<std::uint16_t>(v & 0xFFFF);
+    return true;
+}
+
 }  // namespace
+
+std::string read_engine_string(const mem::Reader& reader,
+                               std::uintptr_t string_obj) {
+    if (string_obj == 0) return {};
+    std::uint64_t data = 0;
+    std::uint32_t len = 0;
+    if (!reader.read_value(string_obj + kStrData, &data) || data == 0) return {};
+    if (!reader.read_value(string_obj + kStrLength, &len)) return {};
+    if (len == 0 || len > kMaxNameLen) return {};
+    std::string s(len, '\0');
+    if (!reader.read(static_cast<std::uintptr_t>(data), s.data(), len)) {
+        return {};
+    }
+    return s;
+}
 
 bool looks_like_static_manager(const mem::Reader& reader,
                                std::uintptr_t manager) {
@@ -42,22 +72,22 @@ bool looks_like_static_manager(const mem::Reader& reader,
     if (!reader.read_value(manager + kIndexPtr, &index) || index == 0) {
         return false;
     }
-    std::uint32_t index_key = 0;
-    if (!reader.read_value(static_cast<std::uintptr_t>(index), &index_key)) {
+    std::uint16_t index_key = 0;
+    if (!read_u16_key(reader, static_cast<std::uintptr_t>(index), &index_key)) {
         return false;
     }
     std::uint64_t first = 0;
     if (!reader.read_value(records, &first) || first == 0) return false;
-    std::uint32_t record_key = 0;
-    if (!reader.read_value(static_cast<std::uintptr_t>(first) + kRecKey,
-                           &record_key)) {
+    std::uint16_t record_key = 0;
+    if (!read_u16_key(reader, static_cast<std::uintptr_t>(first) + kRecKey,
+                      &record_key)) {
         return false;
     }
     return index_key == record_key;
 }
 
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
-                          const char* manager_class, const LocSystem& sys,
+                          const char* manager_class,
                           std::vector<RosterEntry>* out) {
     if (out == nullptr || manager_class == nullptr) return false;
 
@@ -74,7 +104,6 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
     std::uintptr_t records = 0;
     if (!read_header(reader, manager, &count, &records)) return false;
 
-    const bool has_loc = sys.valid();
     std::vector<RosterEntry> catalog;
     catalog.reserve(count);
     for (std::uint32_t i = 0; i < count; ++i) {
@@ -86,11 +115,13 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
         }
         const auto record = static_cast<std::uintptr_t>(rec);
         RosterEntry entry;
-        if (!reader.read_value(record + kRecKey, &entry.key)) continue;
-        reader.read_value(record + kRecStringKey, &entry.name_key);
-        if (has_loc && entry.name_key != 0) {
-            // 못 풀려도 항목은 남긴다 - 키는 있는 것이다.
-            resolve(reader, sys, entry.name_key, &entry.name, nullptr);
+        std::uint16_t key = 0;
+        if (!read_u16_key(reader, record + kRecKey, &key)) continue;
+        entry.key = key;
+        std::uint64_t str_obj = 0;
+        if (reader.read_value(record + kRecStringKey, &str_obj)) {
+            entry.name =
+                read_engine_string(reader, static_cast<std::uintptr_t>(str_obj));
         }
         catalog.push_back(std::move(entry));
     }
@@ -125,47 +156,31 @@ Cache g_vehicle;
 Cache g_mercenary;
 Cache g_character;
 std::atomic<bool> g_ready{false};
-std::atomic<bool> g_named{false};
 
 }  // namespace
 
 bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
-    LocSystem sys;
-    const bool loc_ok = find_loc_system(rtti, reader, &sys) && sys.valid();
+    if (g_ready.load(std::memory_order_acquire)) return true;
 
-    // 이미 이름까지 풀렸으면 다시 만들지 않는다.
-    if (g_ready.load(std::memory_order_acquire) &&
-        g_named.load(std::memory_order_acquire)) {
-        return true;
-    }
+    std::vector<RosterEntry> v, c;
+    // 탈것·캐릭터는 레코드 +0x00 이 키라 그대로 읽힌다. 용병은 키가
+    // +0x00 이 아니고(포인터) 색인도 정렬/해시라 단순 오프셋으로 안
+    // 나온다 - 키 구조 조사가 끝나야 붙인다(Tier 1b). 준비 판정은 이
+    // 둘로만 한다.
+    const bool ok_v = build_static_catalog(reader, rtti, kVehicleClass, &v);
+    const bool ok_c = build_static_catalog(reader, rtti, kCharacterClass, &c);
+    if (!ok_v || !ok_c) return false;
 
-    std::vector<RosterEntry> v, m, c;
-    const bool ok_v = build_static_catalog(reader, rtti, kVehicleClass, sys, &v);
-    const bool ok_m =
-        build_static_catalog(reader, rtti, kMercenaryClass, sys, &m);
-    const bool ok_c =
-        build_static_catalog(reader, rtti, kCharacterClass, sys, &c);
-    // 셋 다 올라와야 준비로 본다. 하나라도 아직이면 재시도.
-    if (!ok_v || !ok_m || !ok_c) return false;
-
-    const std::size_t vn = v.size(), mn = m.size(), cn = c.size();
+    const std::size_t vn = v.size(), cn = c.size();
     g_vehicle.swap(std::move(v));
-    g_mercenary.swap(std::move(m));
     g_character.swap(std::move(c));
     g_ready.store(true, std::memory_order_release);
-    if (loc_ok && !g_named.load(std::memory_order_acquire)) {
-        g_named.store(true, std::memory_order_release);
-        log::infof("로스터: 탈것 {}개, 용병 {}개, 캐릭터 {}개 (이름 풀림)", vn,
-                   mn, cn);
-    } else if (!loc_ok) {
-        log::infof("로스터: 탈것 {}개, 용병 {}개, 캐릭터 {}개 (이름 대기)", vn,
-                   mn, cn);
-    }
+    log::infof("로스터: 탈것 {}개, 캐릭터 {}개 (내부 이름). 용병은 후속", vn,
+               cn);
     return true;
 }
 
 bool roster_ready() { return g_ready.load(std::memory_order_acquire); }
-bool roster_named() { return g_named.load(std::memory_order_acquire); }
 
 const std::vector<RosterEntry>& vehicle_catalog() {
     return *g_vehicle.live.load(std::memory_order_acquire);

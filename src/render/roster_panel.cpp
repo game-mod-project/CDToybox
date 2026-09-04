@@ -57,9 +57,7 @@ void draw_roster_panel(bool* open) {
         ImGui::End();
         return;
     }
-    if (!game::roster_named()) {
-        ImGui::TextDisabled("이름을 푸는 중입니다 (현지화 대기).");
-    }
+    ImGui::TextDisabled("내부 이름입니다. 한글 표시명은 후속 조사 대상입니다.");
 
     if (ImGui::BeginTabBar("roster_tabs")) {
         if (ImGui::BeginTabItem("탈것")) { g_tab = 0; ImGui::EndTabItem(); }
@@ -73,6 +71,13 @@ void draw_roster_panel(bool* open) {
                              sizeof(g_query));
 
     const auto& all = active_catalog();
+
+    if (g_tab == 1 && all.empty()) {
+        ImGui::TextDisabled(
+            "용병은 키 구조가 달라 아직 못 읽습니다 (후속 조사 대상).");
+        ImGui::End();
+        return;
+    }
 
     // 거른 목록을 프레임마다 다시 만든다. 최대 캐릭터 표가 수천 개라
     // 값싸다(문자열 부분일치뿐). 걸러 낸 포인터만 그린다.
