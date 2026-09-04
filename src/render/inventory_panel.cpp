@@ -360,7 +360,7 @@ void draw_inventory_panel(bool* open) {
     const float inv_footer_h =
         ImGui::GetTextLineHeightWithSpacing() * 2.0f +
         ImGui::GetStyle().ItemSpacing.y;
-    if (ImGui::BeginTable("inv", 8,
+    if (ImGui::BeginTable("inv", 9,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Sortable |
@@ -377,6 +377,12 @@ void draw_inventory_panel(bool* open) {
         ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed,
                                 45.0f);
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
+        // 슬롯 = 컨테이너 안 아이템 위치(레코드 배열 인덱스). 소켓 실험의
+        // 대상/보석 슬롯에 그대로 넣는다. 컨테이너(칸)가 다르면 슬롯이
+        // 겹칠 수 있으니, 대상과 보석은 같은 칸(kind)에서 고른다.
+        ImGui::TableSetupColumn("슬롯", ImGuiTableColumnFlags_WidthFixed |
+                                          ImGuiTableColumnFlags_NoSort,
+                                44.0f);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
                                         ImGuiTableColumnFlags_NoSort,
                                 190.0f);
@@ -420,6 +426,10 @@ void draw_inventory_panel(bool* open) {
             if (!r.text.sockets.empty()) {
                 ImGui::TextUnformatted(r.text.sockets.c_str());
             }
+            ImGui::TableNextColumn();
+            // 소켓 실험 대상/보석 슬롯에 넣을 값. 칸(kind)도 함께 보여
+            // 같은 칸끼리 고르게 한다.
+            ImGui::Text("%u:%u", r.kind, r.slot);
             ImGui::TableNextColumn();
             // 제자리 수정은 게임이 되쓴다. 대신 값을 지급 칸에 채워
             // 주고, 고쳐서 새로 지급하게 한다.
