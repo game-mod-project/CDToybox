@@ -1729,21 +1729,20 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;
-    // 2026-09-04 업데이트: 소켓(+0x5E>0 은 새 처리기가 오류 분기로
-    // 빠져 상태를 오염시켜 게임이 죽었다)·내구도(+0x2A)·연마(+0x1AE)의
-    // 전달 자리가 새 exe 에서 재검증되지 않았다. 키·개수·담금질만
-    // 확인됐으므로 나머지는 떨구어 보낸다. 재도출하면 여기서 되살린다.
+    // 2026-09-04 업데이트: 소켓만 막는다. 새 처리기(생성 함수 0x2A70000)
+    // 는 소켓수(+0x5E)>0 이면 오류 분기로 빠져 상태를 오염시켜 게임이
+    // 죽는다. 내구도(+0x2A)·연마(+0x1AE)는 정적으로 재확인했다 - 소켓수
+    // 0 인 정상 경로의 필드 복사 함수 0x234F930 이 그 오프셋을 그대로
+    // 읽는다(연마는 아이템 표 +0x2E8 상한으로 자름). 담금질도 그대로.
     // 자세한 것은 specs/2026-09-04-game-update-break.md.
     GiveExtras safe = extras;
     safe.socket_count = 0;
-    safe.endurance = 0;
-    safe.sharpness = 0;
     g_pending.extras = safe;
     g_outcome = SpawnOutcome{};
     g_has_pending.store(true, std::memory_order_release);
-    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 소켓 {}) -"
+    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}) -"
                " 게임 스레드를 기다린다",
-               safe.temper, static_cast<int>(safe.socket_count));
+               safe.temper, safe.endurance, safe.sharpness);
     return true;
 }
 
