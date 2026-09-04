@@ -441,6 +441,43 @@ bool find_item_key_map(const mem::Reader& reader,
     return true;
 }
 
+// 대응표 테이블은 ItemInfoManager 자신의 +0x68 이다(실측: 맵 객체의
+// RTTI 가 .?AVItemInfoManager 이고 매니저 +0x30 아이템 개수와 +0x6C
+// 맵 개수가 둘 다 6813). 매니저는 RTTI 로 이미 찾으므로, 스캔·패턴
+// 없이 즉시 읽는다. 업데이트에도 견딘다(클래스 이름은 안 바뀐다).
+bool find_item_key_map_from_manager(const mem::Reader& reader,
+                                    std::uintptr_t manager,
+                                    std::uint32_t expected_count,
+                                    ItemKeyMap* out) {
+    if (out == nullptr || manager == 0 || expected_count == 0) return false;
+
+    ItemKeyMap m;
+    m.global = 0;
+    m.object = manager;
+    m.table = manager + kMapAtObject;
+
+    std::uint64_t slots = 0, records = 0;
+    if (!reader.read_value(m.table + kMapCountField, &m.count)) return false;
+    if (!reader.read_value(m.table + kMapCapacityField, &m.capacity)) {
+        return false;
+    }
+    if (!reader.read_value(m.table + kMapRecCountField, &m.record_count)) {
+        return false;
+    }
+    if (!reader.read_value(m.table + kMapSlotsPtr, &slots)) return false;
+    if (!reader.read_value(m.table + kMapRecordsPtr, &records)) return false;
+
+    if (m.count != expected_count) return false;
+    if (m.capacity < m.count || m.capacity > kMaxItemCount) return false;
+    if (m.record_count == 0 || m.record_count > kMaxItemCount) return false;
+    if (slots == 0 || records == 0) return false;
+
+    m.slots = static_cast<std::uintptr_t>(slots);
+    m.records = static_cast<std::uintptr_t>(records);
+    *out = m;
+    return true;
+}
+
 namespace {
 
 // 후보 table 자리의 레코드 몇 개를 따라가 키가 실제 아이템인지 본다.
@@ -601,16 +638,22 @@ bool discover_item_ids(const mem::Rtti& rtti, const mem::Reader& reader) {
     const auto count = static_cast<std::uint32_t>(cat.size());
     if (count == 0) return false;
 
-    // 패턴을 먼저 시도하고(빠르다), 깨졌으면 힙 스캔으로 떨어진다.
-    // 스캔은 레코드 키를 아이템 표와 대조하므로 정렬 키가 필요하다.
+    // 가장 빠르고 튼튼한 길: 대응표는 ItemInfoManager 의 +0x68 이다.
+    // 매니저를 RTTI 로 찾아 바로 읽는다(스캔 없이 즉시).
     ItemKeyMap map;
-    if (!find_item_key_map(reader, rtti.image(), count, &map)) {
+    bool found = false;
+    std::uintptr_t manager = 0;
+    if (find_item_manager(rtti, reader, &manager)) {
+        found = find_item_key_map_from_manager(reader, manager, count, &map);
+    }
+    // 만약을 위한 폴백: 매니저 레이아웃이 바뀌면 패턴·힙 스캔으로.
+    if (!found && !find_item_key_map(reader, rtti.image(), count, &map)) {
         std::vector<std::uint32_t> keys;
         keys.reserve(cat.size());
         for (const auto& e : cat) keys.push_back(e.key);
         std::sort(keys.begin(), keys.end());
         if (!find_item_key_map_by_scan(reader, count, keys, &map)) return false;
-        log::infof("아이템 대응표: 패턴이 깨져 힙 스캔으로 찾았다 "
+        log::infof("아이템 대응표: 매니저+0x68 실패, 힙 스캔으로 찾았다 "
                    "(객체 0x{:X})", map.object);
     }
 

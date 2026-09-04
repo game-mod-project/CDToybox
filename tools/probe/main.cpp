@@ -1589,10 +1589,14 @@ void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     }
     std::printf("아이템 표 %zu개\n", items.size());
 
+    const auto icount = static_cast<std::uint32_t>(items.size());
     game::ItemKeyMap m;
-    if (!game::find_item_key_map(reader, rt.image(),
-                                 static_cast<std::uint32_t>(items.size()),
-                                 &m)) {
+    bool got = game::find_item_key_map_from_manager(reader, mgr, icount, &m);
+    if (got) {
+        std::printf("매니저+0x68 에서 즉시 찾음 (객체 0x%llX)\n",
+                    static_cast<unsigned long long>(m.object));
+    }
+    if (!got && !game::find_item_key_map(reader, rt.image(), icount, &m)) {
         std::printf("패턴으로 못 찾음 - 힙 스캔으로 재시도합니다.\n");
         std::vector<std::uint32_t> keys;
         keys.reserve(items.size());

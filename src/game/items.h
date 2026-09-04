@@ -173,6 +173,14 @@ bool find_item_key_map_by_scan(const mem::Reader& reader,
                                const std::vector<std::uint32_t>& sorted_keys,
                                ItemKeyMap* out);
 
+// 가장 튼튼하고 빠른 길: 대응표는 ItemInfoManager 자신의 +0x68 이다.
+// 매니저를 RTTI 로 찾아(find_item_manager) 그 주소를 넘기면 스캔 없이
+// 즉시 읽는다. 개수가 expected_count 여야 한다.
+bool find_item_key_map_from_manager(const mem::Reader& reader,
+                                    std::uintptr_t manager,
+                                    std::uint32_t expected_count,
+                                    ItemKeyMap* out);
+
 // 레코드 배열을 걸어 {아이템 키, 순번} 을 모은다. 순번은 배열에서의
 // 위치 그대로다 - 널 슬롯을 건너뛰어도 앞으로 당기지 않는다.
 //
