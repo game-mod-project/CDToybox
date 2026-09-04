@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "game/camera.h"
+#include "game/grant.h"
 #include "game/roster.h"
 
 namespace cdtb::render {
@@ -14,6 +16,29 @@ namespace {
 
 char g_query[128] = "";
 int g_tab = 0;  // 0=탈것, 1=용병, 2=캐릭터
+std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
+char g_selected_name[128] = "";
+bool g_spawn_ok = false;            // 마지막 소환 요청이 걸렸는가
+
+// 카메라 초점의 월드 좌표. 소환 위치로 쓴다. 그란트 패널과 같은 경로.
+bool camera_position(float out[3]) {
+    const auto& set = game::cameras();
+    if (set.player_component == 0) return false;
+    return game::read_world_position(set.player_component, out);
+}
+
+// 가장 유력한 서버 세션을 고른다. 그란트 패널과 같은 방식.
+std::uintptr_t best_server_session() {
+    std::uintptr_t seen[16]{};
+    std::uint32_t hits[16]{};
+    const int n = game::seen_sessions(seen, hits, 16);
+    if (n == 0) return 0;
+    bool server[16]{};
+    for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
+    const int pick = game::best_actor_index(hits, server, n);
+    if (pick < 0 || pick >= n || !server[pick]) return 0;
+    return seen[pick];
+}
 
 // 대소문자 없는 부분일치. 질의는 ImGui 가 UTF-8 로 주고 이름도 UTF-8
 // 이라 한글은 바이트 그대로 비교하면 맞는다(아이템 검색과 같다).
@@ -97,7 +122,47 @@ void draw_roster_panel(bool* open) {
 
     ImGui::Text("%zu / %zu", view.size(), all.size());
     ImGui::SameLine();
-    ImGui::TextDisabled("줄을 누르면 키가 복사됩니다");
+    ImGui::TextDisabled("줄을 누르면 선택됩니다");
+
+    // --- 소환 ---------------------------------------------------------
+    // 탈것·NPC 는 캐릭터이므로 SpawnCharacterCheatReq 로 소환한다.
+    // 미시도 치트라 처음엔 죽을 수 있다 - SEH 로 감싸 있으나 화면 확인이
+    // 필수다. 위치는 카메라 초점, 세션은 서버 세션을 자동으로 고른다.
+    if (g_selected_key != 0) {
+        ImGui::Text("선택: %u  %s", g_selected_key, g_selected_name);
+    } else {
+        ImGui::TextDisabled("소환할 줄을 먼저 고르세요.");
+    }
+    const bool ready = game::char_spawn_ready();
+    const bool busy = game::spawn_pending();
+    ImGui::BeginDisabled(!ready || busy || g_selected_key == 0);
+    if (ImGui::Button("월드에 소환")) {
+        float pos[3]{};
+        const bool have_pos = camera_position(pos);
+        const std::uintptr_t session = best_server_session();
+        if (session != 0) {
+            g_spawn_ok = game::request_char_spawn(
+                session, g_selected_key, have_pos ? pos : pos);
+        } else {
+            g_spawn_ok = false;
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (busy) {
+        ImGui::TextDisabled("소환 중…");
+    } else if (!ready) {
+        ImGui::TextDisabled("월드 진입 후 준비됩니다");
+    } else {
+        const auto& o = game::last_outcome();
+        if (o.crashed) {
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "소환이 실패했습니다");
+        } else if (o.no_actor) {
+            ImGui::TextDisabled("서버 세션을 못 찾았습니다");
+        } else if (o.called) {
+            ImGui::TextColored(ImVec4(0.4f, 1, 0.4f, 1), "소환 요청됨");
+        }
+    }
     ImGui::Separator();
 
     if (ImGui::BeginChild("roster_list")) {
@@ -110,7 +175,11 @@ void draw_roster_panel(bool* open) {
                 std::snprintf(line, sizeof(line), "%-10u  %s##r%d", e->key,
                               e->name.empty() ? "(이름 없음)" : e->name.c_str(),
                               i);
-                if (ImGui::Selectable(line)) {
+                const bool sel = (e->key == g_selected_key);
+                if (ImGui::Selectable(line, sel)) {
+                    g_selected_key = e->key;
+                    std::snprintf(g_selected_name, sizeof(g_selected_name), "%s",
+                                  e->name.c_str());
                     char just_key[16];
                     std::snprintf(just_key, sizeof(just_key), "%u", e->key);
                     ImGui::SetClipboardText(just_key);
