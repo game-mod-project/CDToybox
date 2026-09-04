@@ -1103,6 +1103,51 @@ void cmd_roster(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         {"용병", ".?AVMercenaryInfoManager@pa@@"},
         {"캐릭터", ".?AVCharacterInfoManager@pa@@"},
     };
+    // roster loc [표번호 0=탈것/1=용병/2=캐릭터] - 레코드 후보 오프셋을
+    // resolve 에 넣어 한글 표시명의 현지화 키가 어디 있는지 찾는다.
+    if (argc > 2 && std::strcmp(argv[2], "loc") == 0) {
+        game::LocSystem sys;
+        if (!game::find_loc_system(rt, reader, &sys) || !sys.valid()) {
+            std::printf("현지화 시스템을 못 찾았습니다.\n");
+            return;
+        }
+        int ti = (argc > 3) ? std::atoi(argv[3]) : 0;
+        if (ti < 0 || ti > 2) ti = 0;
+        std::uintptr_t mgr = 0;
+        if (!game::find_static_manager(reader, rt, tables[ti].cls, &mgr)) {
+            std::printf("매니저를 못 찾았습니다.\n");
+            return;
+        }
+        std::uint32_t count = 0;
+        std::uintptr_t records = 0;
+        if (!game::roster_header(reader, mgr, &count, &records)) return;
+        const std::size_t offs[] = {0x08, 0x10, 0x14, 0x18, 0x20, 0x28,
+                                    0x30, 0x38, 0x40, 0x48, 0x50, 0x58,
+                                    0x60, 0x68, 0x70, 0x78};
+        for (std::uint32_t i = 0; i < count && i < 4; ++i) {
+            std::uint64_t rec = 0;
+            if (!reader.read_value(records + i * 8, &rec) || rec == 0) continue;
+            const auto record = static_cast<std::uintptr_t>(rec);
+            std::uint64_t so = 0;
+            reader.read_value(record + 0x08, &so);
+            std::string nm =
+                game::read_engine_string(reader, static_cast<std::uintptr_t>(so));
+            std::printf("record[%u] 내부이름=%s\n", i, nm.c_str());
+            for (std::size_t off : offs) {
+                std::uint64_t key = 0;
+                if (!reader.read_value(record + off, &key) || key == 0) continue;
+                std::string txt;
+                if (game::resolve(reader, sys, key, &txt, nullptr) &&
+                    !txt.empty()) {
+                    std::printf("   +0x%02zX key=%llu -> '%s'\n", off,
+                                static_cast<unsigned long long>(key),
+                                txt.c_str());
+                }
+            }
+        }
+        return;
+    }
+
     const char* want = (argc > 2) ? argv[2] : nullptr;
     const std::size_t show = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
                                         : 15;

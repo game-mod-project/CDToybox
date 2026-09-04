@@ -86,19 +86,32 @@ bool looks_like_static_manager(const mem::Reader& reader,
     return index_key == record_key;
 }
 
+bool find_static_manager(const mem::Reader& reader, const mem::Rtti& rtti,
+                         const char* manager_class, std::uintptr_t* out) {
+    if (out == nullptr || manager_class == nullptr) return false;
+    for (const auto addr : rtti.instances_of_class(manager_class, 32)) {
+        if (looks_like_static_manager(reader, addr)) {
+            *out = addr;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool roster_header(const mem::Reader& reader, std::uintptr_t manager,
+                   std::uint32_t* count, std::uintptr_t* records) {
+    return read_header(reader, manager, count, records);
+}
+
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
                           const char* manager_class,
                           std::vector<RosterEntry>* out) {
     if (out == nullptr || manager_class == nullptr) return false;
 
     std::uintptr_t manager = 0;
-    for (const auto addr : rtti.instances_of_class(manager_class, 32)) {
-        if (looks_like_static_manager(reader, addr)) {
-            manager = addr;
-            break;
-        }
+    if (!find_static_manager(reader, rtti, manager_class, &manager)) {
+        return false;
     }
-    if (manager == 0) return false;
 
     std::uint32_t count = 0;
     std::uintptr_t records = 0;
