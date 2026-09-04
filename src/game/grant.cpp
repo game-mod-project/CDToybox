@@ -93,10 +93,20 @@ bool g_trace = false;
 using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
                                     const std::int64_t*, const std::uint16_t*,
                                     const float*);
+
+// SpawnCharacter 처리기(0x278B860). 인자 순서·타입이 아이템 스폰과
+// 다르다 - 역직렬화(0x2563430)의 처리기 호출을 실측했다:
+//   rcx 서술자  rdx 패킷  r8 &캐릭터키u32  r9 &Bu32  [+0x20] &위치float3
+//   [+0x28] &플래그u8
+// 처리기는 캐릭터키가 0이면 거부한다(아이템 스폰의 키 검사와 같다).
+using CharSpawnFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
+                                      const std::uint32_t*, const float*,
+                                      const std::uint8_t*);
 CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
+CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2510)
 
 // 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
 using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
@@ -129,7 +139,7 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance };
+enum class Kind { Ground, Inventory, Endurance, CharSpawn };
 
 struct Pending {
     Kind kind = Kind::Inventory;
@@ -149,6 +159,8 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
               std::int64_t count, const GiveExtras& extras, SpawnOutcome* out);
 void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
                    SpawnOutcome* out);
+void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
+                    const float pos[3], SpawnOutcome* out);
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
@@ -353,6 +365,9 @@ bool run_pending_if_any() {
                 break;
             case Kind::Ground:
                 run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+                break;
+            case Kind::CharSpawn:
+                run_char_spawn(req.session, req.key, req.pos, &g_outcome);
                 break;
         }
     }
@@ -649,6 +664,18 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
                           std::uint32_t* seh_out, std::uintptr_t* addr_out) {
     __try {
         fn(self, packet, key, count, f3, pos);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
+}
+
+bool call_charspawn_guarded(CharSpawnFn fn, void* self, void* packet,
+                            const std::uint32_t* key, const std::uint32_t* b,
+                            const float* pos, const std::uint8_t* flag,
+                            std::uint32_t* seh_out, std::uintptr_t* addr_out) {
+    __try {
+        fn(self, packet, key, b, pos, flag);
         return true;
     } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
         return false;
@@ -1169,6 +1196,11 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
         }
     }
 
+    if (g_char_msg.handler == 0) {
+        resolve_cheat_message(rtti, reader, "SpawnCharacterCheatReq",
+                              &g_char_msg);
+    }
+
     if (g_endur_msg.handler == 0) {
         resolve_cheat_message(rtti, reader, "VaryEnduranceItemByCheatReq",
                               &g_endur_msg);
@@ -1226,6 +1258,10 @@ bool thread_ready_for_spawn() {
     std::uintptr_t block = 0;
     if (!safe_deref(slot0 + 0x250, &block) || block == 0) return false;
     return true;
+}
+
+bool char_spawn_ready() {
+    return g_char_msg.handler != 0 && g_orig_actor_getter != nullptr;
 }
 
 bool spawn_ready() {
@@ -1288,6 +1324,56 @@ void run_spawn(std::uintptr_t session, std::uint32_t item_key,
                     o.fault - g_reader->module_base());
     } else {
         log::infof("바닥 스폰 끝 (처리기 경로)");
+    }
+    if (out != nullptr) *out = o;
+}
+
+// 캐릭터(탈것·NPC 포함)를 월드에 소환한다. TLS 가 준비된 스레드에서만.
+// 아이템 바닥 스폰과 같은 꼴이다 - 처리기가 세션에서 스포너를 얻어
+// 처리하므로 우리는 세션과 키·위치만 넘긴다. 미시도 치트라 처음엔
+// 죽을 수 있으므로 SEH 로 감싼다.
+void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
+                    const float pos[3], SpawnOutcome* out) {
+    SpawnOutcome o;
+    if (out != nullptr) *out = o;
+    if (g_char_msg.handler == 0 || g_reader == nullptr) {
+        log::warnf("캐릭터 소환: 메시지 미해석");
+        return;
+    }
+
+    std::uint32_t key = char_key;
+    std::uint32_t b = 0;           // 뜻 미상. 0 으로 시작한다
+    std::uint8_t flag = 0;         // 뜻 미상. 0 으로 시작한다
+    float where[3] = {pos[0], pos[1], pos[2]};
+
+    log::infof("캐릭터 소환: 세션 0x{:X} 키 {} 위치 {:.1f},{:.1f},{:.1f}",
+               session, char_key, where[0], where[1], where[2]);
+
+    // 서버 세션이어야 한다 - 처리기가 세션 vtable +0x160 으로 스포너를
+    // 얻는다. 클라이언트 세션은 사슬이 끊겨 조용히 되돌아간다.
+    std::uintptr_t gate = 0;
+    if (!gate_object(*g_reader, session, &gate)) {
+        o.no_actor = true;
+        log::warnf("캐릭터 소환: 세션 0x{:X} 사슬이 끊겼다 (클라이언트 세션)",
+                   session);
+        if (out != nullptr) *out = o;
+        return;
+    }
+
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+
+    o.called = true;
+    o.crashed = !call_charspawn_guarded(
+        reinterpret_cast<CharSpawnFn>(g_char_msg.handler),
+        reinterpret_cast<void*>(g_char_msg.descriptor), packet, &key, &b, where,
+        &flag, &o.seh, &o.fault);
+    if (o.crashed) {
+        log::errorf("캐릭터 소환이 게임 안에서 죽었다: 0x{:X} at 0x{:X} "
+                    "(RVA 0x{:X})",
+                    o.seh, o.fault, o.fault - g_reader->module_base());
+    } else {
+        log::infof("캐릭터 소환 끝 (처리기 경로)");
     }
     if (out != nullptr) *out = o;
 }
@@ -1481,6 +1567,33 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     g_outcome = SpawnOutcome{};
     g_has_pending.store(true, std::memory_order_release);
     log::infof("바닥 스폰 요청을 걸었다 - 게임 스레드를 기다린다");
+    return true;
+}
+
+bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
+                        const float pos[3]) {
+    if (!char_spawn_ready() || pos == nullptr || g_reader == nullptr) {
+        return false;
+    }
+    if (char_key == 0 || session == 0) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+
+    g_pending = Pending{};
+    g_pending.kind = Kind::CharSpawn;
+    g_pending.session = session;
+    g_pending.key = char_key;
+    g_pending.pos[0] = pos[0];
+    g_pending.pos[1] = pos[1];
+    g_pending.pos[2] = pos[2];
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("캐릭터 소환 요청을 걸었다 (키 {}) - 게임 스레드를 기다린다",
+               char_key);
     return true;
 }
 
