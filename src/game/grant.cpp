@@ -835,22 +835,19 @@ bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
 
 // ------------------------------------------------ 소켓 페이로드 캡처 (진단)
 //
-// 소켓(어비스기어 삽입)은 업데이트로 전용 메시지로 옮겨졌다. 인벤토리
-// 아이템에 박으면 TrocTrAddSocketItemToInventoryReq(0x293C560),
-// 착용 장비에 박으면 TrocTrAddSocketItemToEquipSlotReq(0x293CBE0) 이
-// 처리한다. 처리기가 역직렬화 안에 인라인이라 치트처럼 못 부르니,
-// 먼저 게임이 실제로 소켓을 박을 때 들어오는 와이어 페이로드를 잡아
-// 형식을 배운다. 두 경로를 다 후킹한다.
+// 소켓은 막힘/뚫림 상태가 있다(SocketInfo._isBlocked). 흐름은
+// 막힌 소켓 -> 뚫기(개방) -> 보석 장착. 옛 방식(아이템에 소켓 바이트를
+// 미리 채워 지급)은 뚫기를 건너뛰어 새 게임이 거부했다. 올바른 흐름을
+// 배우려고 소켓 메시지 전부(Add/Push/Pop x 인벤/장비)를 후킹해 게임이
+// 실제로 뚫고 장착할 때 들어오는 와이어 페이로드를 로그한다.
 //   패킷 +0x10  u16 길이 · +0x18  페이로드 포인터
 using SocketDeserFn = void*(__fastcall*)(void*, void*, void*, void*);
-SocketDeserFn g_orig_socket_inv = nullptr;
-SocketDeserFn g_orig_socket_equip = nullptr;
 bool g_socket_installed = false;
 std::atomic<int> g_socket_dumps{0};
 
 void dump_socket_payload(void* packet, const char* tag) {
     if (packet == nullptr) return;
-    if (g_socket_dumps.load(std::memory_order_relaxed) >= 24) return;
+    if (g_socket_dumps.load(std::memory_order_relaxed) >= 40) return;
     auto* p = reinterpret_cast<std::uint8_t*>(packet);
     std::uint16_t len = 0;
     std::uint64_t payload = 0;
@@ -871,14 +868,20 @@ void dump_socket_payload(void* packet, const char* tag) {
     log::infof("소켓 페이로드 [{}] ({}바이트): {}", tag, len, hex);
 }
 
-void* __fastcall det_socket_inv(void* a, void* result, void* packet, void* d) {
-    dump_socket_payload(packet, "인벤");
-    return g_orig_socket_inv(a, result, packet, d);
-}
-void* __fastcall det_socket_equip(void* a, void* result, void* packet, void* d) {
-    dump_socket_payload(packet, "장비");
-    return g_orig_socket_equip(a, result, packet, d);
-}
+// 메시지마다 detour·원본이 따로 있어야 해서 매크로로 찍어 낸다.
+#define CDTB_SOCK_DETOUR(id, tag)                                            \
+    SocketDeserFn g_orig_sock_##id = nullptr;                               \
+    void* __fastcall det_sock_##id(void* a, void* b, void* p, void* d) {    \
+        dump_socket_payload(p, tag);                                         \
+        return g_orig_sock_##id(a, b, p, d);                                 \
+    }
+CDTB_SOCK_DETOUR(add_inv, "Add/인벤")
+CDTB_SOCK_DETOUR(add_eq, "Add/장비")
+CDTB_SOCK_DETOUR(push_inv, "Push/인벤")
+CDTB_SOCK_DETOUR(push_eq, "Push/장비")
+CDTB_SOCK_DETOUR(pop_inv, "Pop/인벤")
+CDTB_SOCK_DETOUR(pop_eq, "Pop/장비")
+#undef CDTB_SOCK_DETOUR
 
 bool resolve_socket_deser(const mem::Rtti& rtti, const mem::Reader& reader,
                           const char* class_name, std::uintptr_t* deser_out) {
@@ -894,36 +897,53 @@ bool resolve_socket_deser(const mem::Rtti& rtti, const mem::Reader& reader,
     return true;
 }
 
+bool hook_one_socket(const mem::Rtti& rtti, const mem::Reader& reader,
+                     const char* cls, void* detour, void** orig,
+                     const char* tag) {
+    std::uintptr_t deser = 0;
+    if (!resolve_socket_deser(rtti, reader, cls, &deser)) return false;
+    if (!mem::hook_install(reinterpret_cast<void*>(deser), detour, orig)) {
+        return false;
+    }
+    log::infof("소켓 캡처: {} 후킹 (RVA 0x{:X})", tag,
+               deser - reader.module_base());
+    return true;
+}
+
 bool socket_capture_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_socket_installed) return true;
     g_reader = &reader;
     if (!mem::hook_init()) return false;
 
-    std::uintptr_t inv = 0, equip = 0;
-    const bool have_inv = resolve_socket_deser(
-        rtti, reader, "TrocTrAddSocketItemToInventoryReq", &inv);
-    const bool have_equip = resolve_socket_deser(
-        rtti, reader, "TrocTrAddSocketItemToEquipSlotReq", &equip);
-    if (!have_inv && !have_equip) return false;
-
-    int installed = 0;
-    if (have_inv &&
-        mem::hook_install(reinterpret_cast<void*>(inv), &det_socket_inv,
-                          reinterpret_cast<void**>(&g_orig_socket_inv))) {
-        log::infof("소켓 캡처: 인벤 경로 후킹 (RVA 0x{:X})",
-                   inv - reader.module_base());
-        ++installed;
-    }
-    if (have_equip &&
-        mem::hook_install(reinterpret_cast<void*>(equip), &det_socket_equip,
-                          reinterpret_cast<void**>(&g_orig_socket_equip))) {
-        log::infof("소켓 캡처: 장비 경로 후킹 (RVA 0x{:X})",
-                   equip - reader.module_base());
-        ++installed;
-    }
-    if (installed == 0) return false;
+    int n = 0;
+    n += hook_one_socket(rtti, reader, "TrocTrAddSocketItemToInventoryReq",
+                         &det_sock_add_inv,
+                         reinterpret_cast<void**>(&g_orig_sock_add_inv),
+                         "Add/인벤");
+    n += hook_one_socket(rtti, reader, "TrocTrAddSocketItemToEquipSlotReq",
+                         &det_sock_add_eq,
+                         reinterpret_cast<void**>(&g_orig_sock_add_eq),
+                         "Add/장비");
+    n += hook_one_socket(rtti, reader, "TrocTrPushSocketItemToInventoryReq",
+                         &det_sock_push_inv,
+                         reinterpret_cast<void**>(&g_orig_sock_push_inv),
+                         "Push/인벤");
+    n += hook_one_socket(rtti, reader, "TrocTrPushSocketItemToEquipSlotReq",
+                         &det_sock_push_eq,
+                         reinterpret_cast<void**>(&g_orig_sock_push_eq),
+                         "Push/장비");
+    n += hook_one_socket(rtti, reader, "TrocTrPopSocketItemToInventoryReq",
+                         &det_sock_pop_inv,
+                         reinterpret_cast<void**>(&g_orig_sock_pop_inv),
+                         "Pop/인벤");
+    n += hook_one_socket(rtti, reader, "TrocTrPopSocketItemToEquipSlotReq",
+                         &det_sock_pop_eq,
+                         reinterpret_cast<void**>(&g_orig_sock_pop_eq),
+                         "Pop/장비");
+    if (n == 0) return false;
     g_socket_installed = true;
-    log::infof("소켓 페이로드 캡처 준비됨 - 인벤/장비에 보석을 박으면 뜬다");
+    log::infof("소켓 페이로드 캡처 준비됨 ({}경로) - 소켓을 뚫거나 박으면 뜬다",
+               n);
     return true;
 }
 
