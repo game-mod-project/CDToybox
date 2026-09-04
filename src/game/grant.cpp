@@ -832,6 +832,86 @@ bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
     return true;
 }
 
+
+// ------------------------------------------------ 소켓 페이로드 캡처 (진단)
+//
+// 소켓(어비스기어 삽입)은 업데이트로 전용 메시지
+// TrocTrAddSocketItemToInventoryReq(ID 2739)로 옮겨졌다. 처리기가
+// 역직렬화 안에 인라인이라 치트처럼 부를 수 없어, 먼저 게임이 실제로
+// 소켓을 박을 때 들어오는 와이어 페이로드를 잡아 형식을 배운다.
+// 역직렬화 deser(rcx, rdx=결과, r8=패킷)에서 패킷의 페이로드를 낸다.
+//   패킷 +0x10  u16 길이 · +0x18  페이로드 포인터
+using SocketDeserFn = void*(__fastcall*)(void*, void*, void*, void*);
+SocketDeserFn g_orig_socket_deser = nullptr;
+void* g_socket_target = nullptr;
+bool g_socket_installed = false;
+std::atomic<int> g_socket_dumps{0};
+
+void* __fastcall det_socket_deser(void* a, void* result, void* packet,
+                                  void* d) {
+    if (packet != nullptr &&
+        g_socket_dumps.load(std::memory_order_relaxed) < 16) {
+        auto* p = reinterpret_cast<std::uint8_t*>(packet);
+        std::uint16_t len = 0;
+        std::uint64_t payload = 0;
+        std::memcpy(&len, p + 0x10, sizeof(len));
+        std::memcpy(&payload, p + 0x18, sizeof(payload));
+        if (payload != 0 && len > 0 && len <= 256) {
+            g_socket_dumps.fetch_add(1, std::memory_order_relaxed);
+            char hex[256 * 3 + 1];
+            std::size_t w = 0;
+            auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
+            for (std::uint16_t i = 0; i < len && w + 3 < sizeof(hex); ++i) {
+                static const char* kHexDigits = "0123456789ABCDEF";
+                hex[w++] = kHexDigits[(pl[i] >> 4) & 0xF];
+                hex[w++] = kHexDigits[pl[i] & 0xF];
+                hex[w++] = ' ';
+            }
+            hex[w] = '\0';
+            log::infof("소켓 페이로드 ({}바이트): {}", len, hex);
+        }
+    }
+    return g_orig_socket_deser(a, result, packet, d);
+}
+
+bool resolve_socket_deser(const mem::Rtti& rtti, const mem::Reader& reader,
+                          const char* class_name, std::uintptr_t* deser_out) {
+    const auto types = rtti.find_types(class_name, 2);
+    if (types.size() != 1) return false;
+    const auto vts = rtti.vtables_for(types[0].descriptor);
+    if (vts.empty()) return false;
+    std::uintptr_t deser = 0;
+    if (!reader.read(vts[0] + 0x10, &deser, sizeof(deser)) || deser == 0) {
+        return false;
+    }
+    *deser_out = deser;
+    return true;
+}
+
+bool socket_capture_install(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_socket_installed) return true;
+    g_reader = &reader;
+    std::uintptr_t deser = 0;
+    if (!resolve_socket_deser(rtti, reader,
+                              "TrocTrAddSocketItemToInventoryReq", &deser)) {
+        return false;
+    }
+    if (!mem::hook_init()) return false;
+    g_socket_target = reinterpret_cast<void*>(deser);
+    if (!mem::hook_install(g_socket_target, &det_socket_deser,
+                           reinterpret_cast<void**>(&g_orig_socket_deser))) {
+        log::errorf("소켓 캡처 후킹 실패 (RVA 0x{:X})",
+                    deser - reader.module_base());
+        g_socket_target = nullptr;
+        return false;
+    }
+    g_socket_installed = true;
+    log::infof("소켓 페이로드 캡처 훅 설치 (역직렬화 RVA 0x{:X}) - "
+               "게임에서 보석을 박으면 로그에 뜬다",
+               deser - reader.module_base());
+    return true;
+}
+
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
                               std::uint64_t* rva_out) {
     return find_one(image, kTaskDispatcherPattern, rva_out);
