@@ -321,6 +321,29 @@ void draw_inventory_panel(bool* open) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
 
+    // 컴포넌트·대응표·이름이 다 준비될 때까지 로딩을 보여 준다. 이름은
+    // 현지화 후에야 채워지므로 그 전에는 '(순번 N)' 만 나온다. 진행
+    // 단계를 명시해 느린 로드인지 멈춘 것인지 가릴 수 있게 한다.
+    const bool fully_ready = game::inventory_ready() &&
+                             game::item_ids_ready() && game::items_named();
+    if (!fully_ready) {
+        char dots[5] = {0};
+        const int nd = 1 + (static_cast<int>(ImGui::GetTime() * 3.0) % 3);
+        for (int i = 0; i < nd; ++i) dots[i] = '.';
+        const char* what = !game::inventory_ready()
+                               ? "인벤토리 컴포넌트를 찾는 중"
+                               : !game::item_ids_ready()
+                                     ? "아이템 대응표를 읽는 중"
+                                     : "아이템 이름 불러오는 중";
+        ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "%s%s", what, dots);
+        ImGui::TextWrapped(
+            "월드 진입 후 자동으로 채워집니다 (보통 5~10초, 상황에 따라 더 "
+            "걸릴 수 있습니다). 이 표시가 사라지지 않고 계속 남아 있으면 "
+            "로드 실패입니다.");
+        ImGui::End();
+        return;
+    }
+
     draw_filter_bar();
 
     const int want_grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
