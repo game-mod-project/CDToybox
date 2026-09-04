@@ -195,6 +195,48 @@ void log_call_stack() {
         }
     }
 }
+
+// 평소 플레이 중(치트 처리가 아닌) 액터 조회 스택. 20:58 스택은 치트
+// 처리 중이라 그 순간의 사슬이었다. 지급이 안 걸린 상태의 스택이라야
+// 매 프레임 세션 업데이트 루프가 드러난다. 서로 다른 바깥 프레임을
+// 몇 개만 잡아 로그한다 - RtlCaptureStackBackTrace 는 비싸므로 상한을
+// 둔다.
+constexpr int kNormalTraces = 4;
+std::atomic<int> g_normal_traces{0};
+std::uintptr_t g_normal_outer[kNormalTraces]{};
+
+void log_normal_stack() {
+    void* frames[48]{};
+    const USHORT n = RtlCaptureStackBackTrace(0, 48, frames, nullptr);
+    const std::uintptr_t base = g_reader->module_base();
+    const std::size_t size = g_reader->module_size();
+    // 바깥쪽(스레드 뿌리에 가까운) 모듈 내 프레임으로 중복을 가른다.
+    std::uintptr_t outer = 0;
+    for (int i = n - 1; i >= 0; --i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) {
+            outer = a - base;
+            break;
+        }
+    }
+    const int seen = g_normal_traces.load(std::memory_order_acquire);
+    for (int i = 0; i < seen; ++i) {
+        if (g_normal_outer[i] == outer) return;  // 같은 경로는 한 번만
+    }
+    if (seen >= kNormalTraces) return;
+    g_normal_outer[seen] = outer;
+    g_normal_traces.store(seen + 1, std::memory_order_release);
+    log::infof("=== 평소 플레이 액터 조회 스택 #{} (스레드 {}), {}단 ===",
+               seen, GetCurrentThreadId(), n);
+    for (USHORT i = 0; i < n; ++i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) {
+            log::infof("  [{}] 모듈+0x{:X}", i, a - base);
+        } else {
+            log::infof("  [{}] 0x{:X} (모듈 밖)", i, a);
+        }
+    }
+}
 SpawnOutcome g_outcome;
 
 // 작업 디스패처. 여기 진입점이 안전한 실행 지점이다 - 스택이 얕고
@@ -502,6 +544,13 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     // 어느 스레드가 게임 로직인지 가리는 데 쓴다.
     if (g_detour_depth == 1 && thread_ready_for_spawn()) {
         g_game_thread.store(GetCurrentThreadId(), std::memory_order_relaxed);
+        // 지급이 안 걸린 평소 상태의 스택을 몇 개 잡는다 - 매 프레임
+        // 세션 업데이트 루프를 찾기 위한 것. 상한이 차면 아무것도 안 한다.
+        if (g_reader != nullptr &&
+            !g_has_pending.load(std::memory_order_acquire) &&
+            g_normal_traces.load(std::memory_order_acquire) < kNormalTraces) {
+            log_normal_stack();
+        }
     }
     if (g_detour_depth == 1) run_pending_if_any();
 
