@@ -425,49 +425,60 @@ bool find_item_key_map_by_scan(const mem::Reader& reader,
                                ItemKeyMap* out) {
     if (out == nullptr || expected_count == 0) return false;
 
+    // 큰 영역도 통째로 복사하지 않고 64MB 청크로 훑는다. 512MB 를
+    // 건너뛰던 옛 코드는 맵 객체가 큰 힙 영역에 있으면 못 찾아
+    // 대응표가 안 올라왔다(인벤토리·지급 패널이 막혔다). 맵 구조가
+    // 청크 경계에 걸리지 않게 kOverlap 만큼 겹쳐 읽는다.
+    constexpr std::size_t kChunk = 64u << 20;
+    constexpr std::size_t kOverlap = 0x40;
     std::vector<std::uint8_t> buf;
     for (const auto& reg : reader.heap_regions()) {
         const auto base = reinterpret_cast<std::uintptr_t>(reg.begin);
-        if (reg.size == 0 || reg.size > (512u << 20)) continue;
-        buf.resize(reg.size);
-        if (!reader.read(base, buf.data(), buf.size())) continue;
+        if (reg.size == 0) continue;
+        for (std::size_t off = 0; off < reg.size; off += kChunk - kOverlap) {
+            const std::size_t len =
+                (reg.size - off < kChunk) ? (reg.size - off) : kChunk;
+            if (len < 0x20) break;
+            buf.resize(len);
+            if (!reader.read(base + off, buf.data(), len)) continue;
 
-        // 개수는 table+0x04 에 있다. table 은 8정렬(객체 16정렬 +0x68)
-        // 이라 개수 u32 의 주소는 8로 나눠 4가 남는다. 그 자리만 본다.
-        for (std::size_t i = 4; i + 0x20 <= buf.size(); i += 8) {
-            std::uint32_t count = 0;
-            std::memcpy(&count, buf.data() + i, 4);
-            if (count != expected_count) continue;
+            // 개수는 table+0x04 에 있다. table 은 8정렬(객체 16정렬
+            // +0x68)이라 개수 u32 의 주소는 8로 나눠 4가 남는다.
+            for (std::size_t i = 4; i + 0x20 <= len; i += 8) {
+                std::uint32_t count = 0;
+                std::memcpy(&count, buf.data() + i, 4);
+                if (count != expected_count) continue;
 
-            const std::size_t t = i - 4;   // table 시작
-            std::uint32_t capacity = 0, record_count = 0;
-            std::uint64_t slots = 0, records = 0;
-            std::memcpy(&capacity, buf.data() + t + kMapCapacityField, 4);
-            std::memcpy(&record_count, buf.data() + t + kMapRecCountField, 4);
-            std::memcpy(&slots, buf.data() + t + kMapSlotsPtr, 8);
-            std::memcpy(&records, buf.data() + t + kMapRecordsPtr, 8);
+                const std::size_t t = i - 4;   // table 시작
+                std::uint32_t capacity = 0, record_count = 0;
+                std::uint64_t slots = 0, records = 0;
+                std::memcpy(&capacity, buf.data() + t + kMapCapacityField, 4);
+                std::memcpy(&record_count, buf.data() + t + kMapRecCountField, 4);
+                std::memcpy(&slots, buf.data() + t + kMapSlotsPtr, 8);
+                std::memcpy(&records, buf.data() + t + kMapRecordsPtr, 8);
 
-            if (capacity < count || capacity > kMaxItemCount) continue;
-            if (record_count == 0 || record_count > kMaxItemCount) continue;
-            if (slots == 0 || records == 0) continue;
+                if (capacity < count || capacity > kMaxItemCount) continue;
+                if (record_count == 0 || record_count > kMaxItemCount) continue;
+                if (slots == 0 || records == 0) continue;
 
-            if (!records_look_like_items(reader,
-                                         static_cast<std::uintptr_t>(records),
-                                         record_count, sorted_keys)) {
-                continue;
+                if (!records_look_like_items(
+                        reader, static_cast<std::uintptr_t>(records),
+                        record_count, sorted_keys)) {
+                    continue;
+                }
+
+                ItemKeyMap m;
+                m.table = base + off + t;
+                m.object = m.table - kMapAtObject;
+                m.global = 0;   // 전역이 아니라 객체를 직접 찾았다
+                m.slots = static_cast<std::uintptr_t>(slots);
+                m.records = static_cast<std::uintptr_t>(records);
+                m.count = count;
+                m.capacity = capacity;
+                m.record_count = record_count;
+                *out = m;
+                return true;
             }
-
-            ItemKeyMap m;
-            m.table = base + t;
-            m.object = m.table - kMapAtObject;
-            m.global = 0;   // 전역이 아니라 객체를 직접 찾았다
-            m.slots = static_cast<std::uintptr_t>(slots);
-            m.records = static_cast<std::uintptr_t>(records);
-            m.count = count;
-            m.capacity = capacity;
-            m.record_count = record_count;
-            *out = m;
-            return true;
         }
     }
     return false;
