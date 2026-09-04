@@ -160,7 +160,8 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
 void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
                    SpawnOutcome* out);
 void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                    const float pos[3], SpawnOutcome* out);
+                    std::uint32_t b, std::uint8_t flag, const float pos[3],
+                    SpawnOutcome* out);
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
@@ -367,7 +368,9 @@ bool run_pending_if_any() {
                 run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
                 break;
             case Kind::CharSpawn:
-                run_char_spawn(req.session, req.key, req.pos, &g_outcome);
+                run_char_spawn(req.session, req.key,
+                               static_cast<std::uint32_t>(req.count), req.a,
+                               req.pos, &g_outcome);
                 break;
         }
     }
@@ -1333,7 +1336,8 @@ void run_spawn(std::uintptr_t session, std::uint32_t item_key,
 // 처리하므로 우리는 세션과 키·위치만 넘긴다. 미시도 치트라 처음엔
 // 죽을 수 있으므로 SEH 로 감싼다.
 void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                    const float pos[3], SpawnOutcome* out) {
+                    std::uint32_t b_in, std::uint8_t flag_in, const float pos[3],
+                    SpawnOutcome* out) {
     SpawnOutcome o;
     if (out != nullptr) *out = o;
     if (g_char_msg.handler == 0 || g_reader == nullptr) {
@@ -1342,12 +1346,14 @@ void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
     }
 
     std::uint32_t key = char_key;
-    std::uint32_t b = 0;           // 뜻 미상. 0 으로 시작한다
-    std::uint8_t flag = 0;         // 뜻 미상. 0 으로 시작한다
+    std::uint32_t b = b_in;        // 뜻 미상 - UI 에서 바꿔 실험한다
+    std::uint8_t flag = flag_in;   // 뜻 미상 - UI 에서 바꿔 실험한다
     float where[3] = {pos[0], pos[1], pos[2]};
 
-    log::infof("캐릭터 소환: 세션 0x{:X} 키 {} 위치 {:.1f},{:.1f},{:.1f}",
-               session, char_key, where[0], where[1], where[2]);
+    log::infof("캐릭터 소환: 세션 0x{:X} 키 {} B {} 플래그 {} "
+               "위치 {:.1f},{:.1f},{:.1f}",
+               session, char_key, b, static_cast<int>(flag), where[0], where[1],
+               where[2]);
 
     // 서버 세션이어야 한다 - 처리기가 세션 vtable +0x160 으로 스포너를
     // 얻는다. 클라이언트 세션은 사슬이 끊겨 조용히 되돌아간다.
@@ -1571,7 +1577,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
 }
 
 bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                        const float pos[3]) {
+                        std::uint32_t b, std::uint8_t flag, const float pos[3]) {
     if (!char_spawn_ready() || pos == nullptr || g_reader == nullptr) {
         return false;
     }
@@ -1587,13 +1593,16 @@ bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
     g_pending.kind = Kind::CharSpawn;
     g_pending.session = session;
     g_pending.key = char_key;
+    g_pending.count = b;      // CharSpawn 은 count 칸에 B 를 싣는다
+    g_pending.a = flag;       // a 칸에 플래그를 싣는다
     g_pending.pos[0] = pos[0];
     g_pending.pos[1] = pos[1];
     g_pending.pos[2] = pos[2];
     g_outcome = SpawnOutcome{};
     g_has_pending.store(true, std::memory_order_release);
-    log::infof("캐릭터 소환 요청을 걸었다 (키 {}) - 게임 스레드를 기다린다",
-               char_key);
+    log::infof("캐릭터 소환 요청을 걸었다 (키 {} B {} 플래그 {}) -"
+               " 게임 스레드를 기다린다",
+               char_key, b, static_cast<int>(flag));
     return true;
 }
 

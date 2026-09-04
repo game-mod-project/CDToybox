@@ -132,6 +132,17 @@ void draw_roster_panel(bool* open) {
     } else {
         ImGui::TextDisabled("소환할 줄을 먼저 고르세요.");
     }
+    // B·플래그의 뜻이 미상이라 개체가 안 생긴다 - 여기서 바꿔 실험한다.
+    static int g_b = 0;
+    static int g_flag = 0;
+    ImGui::SetNextItemWidth(90);
+    ImGui::InputInt("B", &g_b);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    ImGui::InputInt("플래그", &g_flag);
+    if (g_b < 0) g_b = 0;
+    if (g_flag < 0) g_flag = 0;
+
     const bool ready = game::char_spawn_ready();
     const bool busy = game::spawn_pending();
     ImGui::BeginDisabled(!ready || busy || g_selected_key == 0);
@@ -140,7 +151,9 @@ void draw_roster_panel(bool* open) {
         camera_position(pos);
         const std::uintptr_t session = best_server_session();
         if (session != 0) {
-            game::request_char_spawn(session, g_selected_key, pos);
+            game::request_char_spawn(
+                session, g_selected_key, static_cast<std::uint32_t>(g_b),
+                static_cast<std::uint8_t>(g_flag & 0xFF), pos);
         }
     }
     ImGui::EndDisabled();

@@ -327,7 +327,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
 // 캐릭터(탈것·NPC 포함)를 월드에 소환한다. SpawnCharacterCheatReq
 // (ID 2510) 를 게임 스레드에서 부른다. 미시도 치트라 화면 확인 전이다.
 bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                        const float pos[3]);
+                        std::uint32_t b, std::uint8_t flag, const float pos[3]);
 bool char_spawn_ready();
 
 // 걸어 둔 요청이 처리됐는가. 아직이면 false.
