@@ -14,6 +14,7 @@
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
+#include "game/roster.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
 #include "mem/safe_read.h"
@@ -191,12 +192,12 @@ void auto_analysis_loop() {
     // 받아 적기만 한다 - 아무것도 쓰지 않는다.
     actor_hook_install(rtti, reader);
     tick_hook_install(rtti, reader);
-    // 프레임 경계 조사용 계측 훅. 이제 g_detour_depth 를 건드리지 않아
-    // 지급을 막지 않는다(펌프는 g_pump_depth 로 분리, 작업 래퍼는
-    // 애초에 안 건드림). 호출 빈도·스레드 분포를 재고, 어느 스레드가
-    // 게임 로직인지 표시한다.
-    pump_hook_install(rtti, reader);
-    taskrun_hook_install(rtti, reader);
+    // 프레임 경계 조사용 계측 훅(펌프·작업 래퍼)은 조사가 끝나 끈다.
+    // 이 훅들은 전용 워커 스레드의 장기 실행 루프에 걸려 메시지
+    // 파이프라인 타이밍을 흔들 위험이 있다(2026-09-04). 코드는 남겨
+    // 두되 설치하지 않는다.
+    //   pump_hook_install(rtti, reader);
+    //   taskrun_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
@@ -215,6 +216,9 @@ void auto_analysis_loop() {
         discover_item_ids(rtti, reader);
         // 인벤토리 창이 쓴다. 찾으면 스스로 빠진다.
         discover_inventory(rtti, reader);
+        // 탈것·용병·캐릭터 카탈로그. 아이템 표와 같은 인프라라 여기
+        // 얹는다. 이름까지 풀리면 스스로 빠진다.
+        discover_roster(rtti, reader);
         log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
@@ -238,6 +242,7 @@ void auto_analysis_loop() {
     for (int i = 0; i < 120 && !g_stop.load(); ++i) {
         discover_item_ids(rtti, reader);
         discover_inventory(rtti, reader);
+        discover_roster(rtti, reader);
         if (discover_items(rtti, reader) && inventory_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응

@@ -21,6 +21,7 @@
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
 #include "render/item_panel.h"
+#include "render/roster_panel.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
@@ -348,6 +349,7 @@ struct WindowFlags {
     bool grant = true;
     bool stash = true;
     bool inventory = true;
+    bool roster = false;   // 탈것·용병·캐릭터 뷰어. 필요할 때 연다
     bool camera = false;   // 개발 진단이다. 필요할 때만 연다
 };
 WindowFlags g_show;
@@ -361,6 +363,7 @@ void draw_windows() {
     if (g_show.inventory) {
         cdtb::render::draw_inventory_panel(&g_show.inventory);
     }
+    if (g_show.roster) cdtb::render::draw_roster_panel(&g_show.roster);
     if (g_show.camera) cdtb::render::draw_camera_panel(&g_show.camera);
 }
 
@@ -378,6 +381,7 @@ void draw_ui() {
     ImGui::Checkbox("보관함", &g_show.stash);
     ImGui::SameLine();
     ImGui::Checkbox("인벤토리", &g_show.inventory);
+    ImGui::Checkbox("탈것·용병·캐릭터", &g_show.roster);
     ImGui::Checkbox("카메라 분석", &g_show.camera);
 
     ImGui::Separator();
