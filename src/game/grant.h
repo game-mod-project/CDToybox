@@ -162,6 +162,12 @@ bool entity_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 // 때 들어오는 와이어 페이로드를 로그로 낸다 - 형식을 배운 뒤 뗀다.
 bool socket_capture_install(const mem::Rtti& rtti,
                             const mem::Reader& reader);
+
+// 캡처 훅이 세션에서 학습한 소켓 컨테이너 핸들(0xB010, 세션마다 바뀜).
+// 0 이면 아직 못 배운 것 - 게임에서 소켓을 한 번 뚫거나 박으면 채워진다.
+// 인벤토리 소켓 재구현의 대상 참조를 만드는 데 쓴다.
+std::uint32_t socket_inv_handle();
+std::uint32_t socket_eq_handle();
 int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap);
 
 // 표 조회 함수를 후킹해 "이 키를 어느 표에서 찾는지" 를 잡는다.

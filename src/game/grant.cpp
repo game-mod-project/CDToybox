@@ -845,19 +845,55 @@ using SocketDeserFn = void*(__fastcall*)(void*, void*, void*, void*);
 bool g_socket_installed = false;
 std::atomic<int> g_socket_dumps{0};
 
+// 세션마다 바뀌는 인벤토리·장비 컨테이너 핸들(0xB010 네임스페이스).
+// 객체에 저장돼 있지 않고(2026-09-04 heapfind 로 확인 - 인벤토리 컴포넌트
+// 영역엔 한 건도 없다) 전역 핸들 테이블에만 있어 객체->핸들 역조회가
+// 어렵다. 그래서 게임이 실제로 소켓을 뚫거나 박을 때 캡처 훅이 와이어
+// 페이로드에서 그대로 학습한다(이관 문서 3.3-1 의 v1). 세션 내에선
+// 고정이므로 한 번 배우면 재사용한다. 0 이면 아직 못 배운 것이다.
+std::atomic<std::uint32_t> g_socket_inv_handle{0};
+std::atomic<std::uint32_t> g_socket_eq_handle{0};
+
+// 와이어 대상 참조 `[04][컨테이너핸들 u32][(슬롯<<16)|2 u32]` 에서
+// 컨테이너 핸들을 뽑는다. 본문(헤더 5바이트 뒤)의 첫 바이트가 0x04 인
+// 참조 종류일 때만 유효하다. 실패면 0.
+std::uint32_t parse_socket_container_handle(const std::uint8_t* pl,
+                                            std::uint16_t len) {
+    // 헤더 5 + 참조 9 = 14 바이트는 있어야 하고, 참조 종류가 04 여야 한다.
+    if (pl == nullptr || len < 14 || pl[5] != 0x04) return 0;
+    std::uint32_t handle = 0;
+    std::memcpy(&handle, pl + 6, sizeof(handle));
+    return handle;
+}
+
 void dump_socket_payload(void* packet, const char* tag) {
     if (packet == nullptr) return;
-    if (g_socket_dumps.load(std::memory_order_relaxed) >= 40) return;
     auto* p = reinterpret_cast<std::uint8_t*>(packet);
     std::uint16_t len = 0;
     std::uint64_t payload = 0;
     std::memcpy(&len, p + 0x10, sizeof(len));
     std::memcpy(&payload, p + 0x18, sizeof(payload));
     if (payload == 0 || len == 0 || len > 512) return;
+    auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
+
+    // 핸들 학습은 로그 상한과 무관하게 항상 한다. 인벤 경로면 인벤
+    // 핸들을, 장비 경로면 장비 핸들을 새로 배운다(값이 바뀌면 갱신).
+    const std::uint32_t handle = parse_socket_container_handle(pl, len);
+    if (handle != 0) {
+        const bool inv = std::strstr(tag, "인벤") != nullptr;
+        auto& slot = inv ? g_socket_inv_handle : g_socket_eq_handle;
+        const std::uint32_t prev =
+            slot.exchange(handle, std::memory_order_release);
+        if (prev != handle) {
+            log::infof("소켓 컨테이너 핸들 학습 [{}]: 0x{:08X}{}", tag, handle,
+                       prev != 0 ? " (갱신됨)" : "");
+        }
+    }
+
+    if (g_socket_dumps.load(std::memory_order_relaxed) >= 40) return;
     g_socket_dumps.fetch_add(1, std::memory_order_relaxed);
     char hex[512 * 3 + 1];
     std::size_t w = 0;
-    auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
     static const char* kHexDigits = "0123456789ABCDEF";
     for (std::uint16_t i = 0; i < len && w + 3 < sizeof(hex); ++i) {
         hex[w++] = kHexDigits[(pl[i] >> 4) & 0xF];
@@ -945,6 +981,15 @@ bool socket_capture_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     log::infof("소켓 페이로드 캡처 준비됨 ({}경로) - 소켓을 뚫거나 박으면 뜬다",
                n);
     return true;
+}
+
+// 캡처 훅이 학습한 컨테이너 핸들. 아직 못 배웠으면 0. 세션 내 고정이라
+// 소켓 재구현(뚫기·장착 와이어 조립)이 대상 참조를 만들 때 쓴다.
+std::uint32_t socket_inv_handle() {
+    return g_socket_inv_handle.load(std::memory_order_acquire);
+}
+std::uint32_t socket_eq_handle() {
+    return g_socket_eq_handle.load(std::memory_order_acquire);
 }
 
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,

@@ -1,0 +1,142 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1788509933047,
+  "projectRoot": "E:\\CDToybox",
+  "techStack": {
+    "languages": [
+      {
+        "name": "C/C++",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "CMakeLists.txt"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "scripts",
+      "src",
+      "tests"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "build": {
+      "path": "build",
+      "purpose": "Build output",
+      "fileCount": 23,
+      "lastAccessed": 1788509932927,
+      "keyFiles": [
+        "build.ninja",
+        "cdtb_bench.exe",
+        "cdtb_bench.ilk",
+        "cdtb_bench.pdb",
+        "cdtb_core.lib"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1788509932928,
+      "keyFiles": [
+        "STATUS.md"
+      ]
+    },
+    "external": {
+      "path": "external",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1788509932929,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 2,
+      "lastAccessed": 1788509932930,
+      "keyFiles": [
+        "build.ps1",
+        "deploy.ps1"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1788509932931,
+      "keyFiles": [
+        "dllmain.cpp"
+      ]
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 23,
+      "lastAccessed": 1788509932932,
+      "keyFiles": [
+        "bench_scanner.cpp",
+        "core_tests.cpp",
+        "cursor_tests.cpp",
+        "fake_memory.h",
+        "grant_tests.cpp"
+      ]
+    },
+    "tools": {
+      "path": "tools",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1788509932933,
+      "keyFiles": []
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "C:\\Users\\deepe\\AppData\\Roaming\\Claude\\stealth-relaunch",
+      "accessCount": 1,
+      "lastAccessed": 1788510151755,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\deepe\\.claude\\projects\\E--CDToybox\\b361a1cf-566e-4773-98cd-c3cb96367690\\tool-results\\bthxsv3za.txt",
+      "accessCount": 1,
+      "lastAccessed": 1788510525560,
+      "type": "directory"
+    },
+    {
+      "path": "C:\\Users\\deepe\\AppData\\Roaming\\Claude\\claude-code-sessions\\fedab922-57cf-49b1-afbe-f65b34c5ef63\\26886c02-c1aa-493a-96da-2e52105eae2e\\local_00cc794f-247b-402f-8d6a-fabc8b421093.json",
+      "accessCount": 1,
+      "lastAccessed": 1788510618423,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\deepe\\.claude\\projects\\E--CDToybox\\memory\\claude-desktop-restart-fix.md",
+      "accessCount": 1,
+      "lastAccessed": 1788510636376,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
