@@ -1729,12 +1729,21 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;
-    g_pending.extras = extras;
+    // 2026-09-04 업데이트: 소켓(+0x5E>0 은 새 처리기가 오류 분기로
+    // 빠져 상태를 오염시켜 게임이 죽었다)·내구도(+0x2A)·연마(+0x1AE)의
+    // 전달 자리가 새 exe 에서 재검증되지 않았다. 키·개수·담금질만
+    // 확인됐으므로 나머지는 떨구어 보낸다. 재도출하면 여기서 되살린다.
+    // 자세한 것은 specs/2026-09-04-game-update-break.md.
+    GiveExtras safe = extras;
+    safe.socket_count = 0;
+    safe.endurance = 0;
+    safe.sharpness = 0;
+    g_pending.extras = safe;
     g_outcome = SpawnOutcome{};
     g_has_pending.store(true, std::memory_order_release);
     log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 소켓 {}) -"
                " 게임 스레드를 기다린다",
-               extras.temper, static_cast<int>(extras.socket_count));
+               safe.temper, static_cast<int>(safe.socket_count));
     return true;
 }
 
