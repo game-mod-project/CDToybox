@@ -346,6 +346,8 @@ void draw_inventory_panel(bool* open) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
                                         ImGuiTableColumnFlags_NoSort,
                                 190.0f);
+        // 헤더 행을 고정한다 - 스크롤해도 열 이름이 위에 남는다.
+        ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         apply_sort();
 
