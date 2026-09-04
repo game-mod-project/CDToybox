@@ -173,6 +173,21 @@ $ cdtb_probe items find 비약
 검색은 비교 전에 UTF-8 로 옮긴다. 오버레이는 ImGui 입력도 UTF-8 이라
 변환이 필요 없다.
 
+### 1.9 탈것·캐릭터 카탈로그 뷰어 (완료, 화면 확인 2026-09-04)
+
+`VehicleInfoManager`·`CharacterInfoManager` 를 아이템과 같은
+`StaticInfoManager2` 컨테이너로 읽어 오버레이 "탈것·용병·캐릭터" 창에
+낸다. 화면 확인했다 - 탈것 34개(Dragon·Wolf·Wyvern…), 캐릭터
+7251개(Kliff=1·Damian=4…)가 키·**내부 이름**과 함께 뜬다. FPS 62.5,
+예외 0.
+
+레코드 구조가 아이템과 다르다: 키가 u16(record +0x00), 이름은
+`_stringKey`(+0x08)가 가리키는 엔진 문자열 객체(+0x00 char*, +0x08
+길이)의 **내부 이름**이다(한글 표시명 아님 - 현지화 경로가 달라
+Tier 1b). **용병은 키가 +0x00 이 아니고 색인이 정렬/해시라 아직 못
+읽는다**(Tier 1b). 자세한 것은
+`specs/2026-09-04-vehicle-pet-review.md`. probe 검증: `probe roster`.
+
 ### 1.8 인게임 아이템 목록 (완료, 화면 확인)
 
 오버레이에 "아이템 목록" 패널. 검색창 + 목록, 줄을 누르면 키가
