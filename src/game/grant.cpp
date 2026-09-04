@@ -673,6 +673,20 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
     }
 }
 
+// 캐릭터 소환 크래시 시점의 호출 스택. 널 해시가 어디서 불렸는지
+// 찾으려 예외 필터에서 뜬다(그 시점엔 스택이 살아 있다).
+void* g_char_crash_frames[24]{};
+USHORT g_char_crash_n = 0;
+
+int charspawn_seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
+                         std::uintptr_t* addr) {
+    *code = static_cast<std::uint32_t>(ep->ExceptionRecord->ExceptionCode);
+    *addr = reinterpret_cast<std::uintptr_t>(
+        ep->ExceptionRecord->ExceptionAddress);
+    g_char_crash_n = RtlCaptureStackBackTrace(0, 24, g_char_crash_frames, nullptr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 bool call_charspawn_guarded(CharSpawnFn fn, void* self, void* packet,
                             const std::uint32_t* key, const std::uint32_t* b,
                             const float* pos, const std::uint8_t* flag,
@@ -680,7 +694,8 @@ bool call_charspawn_guarded(CharSpawnFn fn, void* self, void* packet,
     __try {
         fn(self, packet, key, b, pos, flag);
         return true;
-    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+    } __except (charspawn_seh_filter(GetExceptionInformation(), seh_out,
+                                     addr_out)) {
         return false;
     }
 }
@@ -1452,9 +1467,18 @@ void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
         reinterpret_cast<void*>(g_char_msg.descriptor), packet, &key, &b, where,
         &flag, &o.seh, &o.fault);
     if (o.crashed) {
+        const std::uintptr_t base = g_reader->module_base();
+        const std::size_t size = g_reader->module_size();
         log::errorf("캐릭터 소환이 게임 안에서 죽었다: 0x{:X} at 0x{:X} "
-                    "(RVA 0x{:X})",
-                    o.seh, o.fault, o.fault - g_reader->module_base());
+                    "(RVA 0x{:X}) - 호출 스택 {}단",
+                    o.seh, o.fault, o.fault - base, g_char_crash_n);
+        for (USHORT i = 0; i < g_char_crash_n; ++i) {
+            const auto a =
+                reinterpret_cast<std::uintptr_t>(g_char_crash_frames[i]);
+            if (a >= base && a < base + size) {
+                log::infof("  [{}] 모듈+0x{:X}", i, a - base);
+            }
+        }
     } else {
         log::infof("캐릭터 소환 끝 (처리기 경로)");
     }
