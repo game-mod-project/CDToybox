@@ -107,6 +107,8 @@ CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
 CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2510)
+SocketMessage g_sock_add_inv_msg;   // TrocTrAddSocketItemToInventoryReq 2739
+SocketMessage g_sock_push_inv_msg;  // TrocTrPushSocketItemToInventoryReq 2354
 
 // 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
 using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
@@ -139,7 +141,7 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance, CharSpawn };
+enum class Kind { Ground, Inventory, Endurance, CharSpawn, Socket };
 
 struct Pending {
     Kind kind = Kind::Inventory;
@@ -151,6 +153,10 @@ struct Pending {
     GiveExtras extras;           // 담금질·소켓 (TrItemValue 칸들)
     std::uint16_t a = 0;         // 내구도 인자
     std::uint16_t b = 0;
+    // 소켓(Socket) 인자. sock_push=false 면 뚫기(Add), true 면 장착(Push).
+    bool sock_push = false;
+    std::uint32_t sock_handle = 0;   // 컨테이너 핸들(0 이면 학습값 사용)
+    std::uint16_t sock_gems[5]{};    // 장착 시 소켓 i 에 박을 보석 슬롯
 };
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
@@ -162,6 +168,9 @@ void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
 void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
                     std::uint32_t b, std::uint8_t flag, const float pos[3],
                     SpawnOutcome* out);
+void run_socket(std::uintptr_t session, bool push, std::uint32_t handle,
+                std::uint32_t slot, const std::uint16_t gems[5],
+                SpawnOutcome* out);
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
@@ -371,6 +380,10 @@ bool run_pending_if_any() {
                 run_char_spawn(req.session, req.key,
                                static_cast<std::uint32_t>(req.count), req.a,
                                req.pos, &g_outcome);
+                break;
+            case Kind::Socket:
+                run_socket(req.session, req.sock_push, req.sock_handle,
+                           req.key, req.sock_gems, &g_outcome);
                 break;
         }
     }
@@ -1443,6 +1456,133 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
     return true;
 }
 
+namespace {
+// 소켓 뚫기 데이터는 모든 아이템 공통·고정이다(5슬롯 개방).
+constexpr std::uint8_t kSocketAddData[18] = {
+    0x02, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0x00, 0x00};
+
+// 대상 참조 9바이트를 쓴다. [04][핸들 u32][(슬롯<<16)|2 u32].
+std::size_t write_socket_target(std::uint8_t* p, std::uint32_t handle,
+                                std::uint32_t slot) {
+    p[0] = 0x04;
+    std::memcpy(p + 1, &handle, sizeof(handle));
+    const std::uint32_t enc = (slot << 16) | 0x0002u;
+    std::memcpy(p + 5, &enc, sizeof(enc));
+    return 9;
+}
+}  // namespace
+
+bool build_socket_add_wire(std::uint32_t container_handle, std::uint32_t slot,
+                           std::uint8_t* out, std::size_t out_cap) {
+    if (out == nullptr || out_cap < kSocketAddWireLen) return false;
+    // 헤더 5B: [ID u16][00][본문길이 u8][00]. 본문길이 = 전체 - 5.
+    const std::uint16_t id = kSocketAddInvId;
+    std::memcpy(out, &id, sizeof(id));
+    out[2] = 0;
+    out[3] = static_cast<std::uint8_t>(kSocketAddWireLen - 5);  // 0x1B
+    out[4] = 0;
+    std::size_t w = 5;
+    w += write_socket_target(out + w, container_handle, slot);
+    std::memcpy(out + w, kSocketAddData, sizeof(kSocketAddData));
+    w += sizeof(kSocketAddData);
+    return w == kSocketAddWireLen;
+}
+
+bool build_socket_push_wire(std::uint32_t container_handle, std::uint32_t slot,
+                            const std::uint16_t gem_slots[kSocketSlots],
+                            std::uint8_t* out, std::size_t out_cap) {
+    if (out == nullptr || gem_slots == nullptr ||
+        out_cap < kSocketPushWireLen) {
+        return false;
+    }
+    const std::uint16_t id = kSocketPushInvId;
+    std::memcpy(out, &id, sizeof(id));
+    out[2] = 0;
+    out[3] = static_cast<std::uint8_t>(kSocketPushWireLen - 5);  // 0x18
+    out[4] = 0;
+    std::size_t w = 5;
+    w += write_socket_target(out + w, container_handle, slot);
+    // 장착 데이터: {소켓슬롯 u8, 보석슬롯 u16} x5.
+    for (int i = 0; i < kSocketSlots; ++i) {
+        out[w++] = static_cast<std::uint8_t>(i);
+        std::memcpy(out + w, &gem_slots[i], sizeof(std::uint16_t));
+        w += sizeof(std::uint16_t);
+    }
+    return w == kSocketPushWireLen;
+}
+
+bool resolve_socket_message(const mem::Rtti& rtti, const mem::Reader& reader,
+                            const char* class_name, SocketMessage* out) {
+    if (out == nullptr || class_name == nullptr) return false;
+    const auto types = rtti.find_types(class_name, 2);
+    if (types.size() != 1) {
+        log::warnf("소켓 메시지 {}: 클래스가 {}개 - 고를 수 없다", class_name,
+                   types.size());
+        return false;
+    }
+    const auto vts = rtti.vtables_for(types[0].descriptor);
+    if (vts.empty()) return false;
+    const std::uintptr_t vtable = vts[0];
+    const std::uint64_t vtable_rva = vtable - reader.module_base();
+
+    // 정적 초기화가 vtable 을 넣는 전역이 곧 메시지 서술자다.
+    //   48 8D 05 <-vtable>   lea rax,[rip+..]
+    //   48 89 05 <-서술자>   mov [rip+..],rax
+    const auto& img = rtti.image();
+    std::uint64_t desc_rva = 0;
+    int hits = 0;
+    for (std::size_t i = 0; i + 14 <= img.size(); ++i) {
+        if (img[i] != 0x48 || img[i + 1] != 0x8D || img[i + 2] != 0x05) continue;
+        if (img[i + 7] != 0x48 || img[i + 8] != 0x89 || img[i + 9] != 0x05) {
+            continue;
+        }
+        std::int32_t d1 = 0, d2 = 0;
+        std::memcpy(&d1, img.data() + i + 3, 4);
+        std::memcpy(&d2, img.data() + i + 10, 4);
+        if (static_cast<std::uint64_t>(i + 7 + d1) != vtable_rva) continue;
+        desc_rva = static_cast<std::uint64_t>(i + 14 + d2);
+        if (++hits > 1) break;
+    }
+    if (hits != 1) {
+        log::warnf("소켓 메시지 {}: 서술자를 {}곳에서 찾았다", class_name, hits);
+        return false;
+    }
+
+    SocketMessage m;
+    m.descriptor = reader.module_base() + static_cast<std::uintptr_t>(desc_rva);
+    std::uintptr_t vptr = 0;
+    if (!reader.read(m.descriptor, &vptr, sizeof(vptr)) || vptr != vtable) {
+        log::warnf("소켓 메시지 {}: 서술자 vptr 이 다르다", class_name);
+        return false;
+    }
+    reader.read(m.descriptor + 0x0C, &m.id, sizeof(m.id));
+    // vtable[2] 가 역직렬화 함수다.
+    if (!reader.read(vtable + 0x10, &m.deser, sizeof(m.deser)) || m.deser == 0) {
+        return false;
+    }
+    log::infof("소켓 메시지 {}: ID {} 서술자 0x{:X} 역직렬화 0x{:X} (RVA 0x{:X})",
+               class_name, m.id, m.descriptor, m.deser,
+               m.deser - reader.module_base());
+    *out = m;
+    return true;
+}
+
+bool socket_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader) {
+    bool ok = true;
+    if (g_sock_add_inv_msg.deser == 0) {
+        ok &= resolve_socket_message(rtti, reader,
+                                     "TrocTrAddSocketItemToInventoryReq",
+                                     &g_sock_add_inv_msg);
+    }
+    if (g_sock_push_inv_msg.deser == 0) {
+        ok &= resolve_socket_message(rtti, reader,
+                                     "TrocTrPushSocketItemToInventoryReq",
+                                     &g_sock_push_inv_msg);
+    }
+    return ok;
+}
+
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
     g_reader = &reader;
 
@@ -1806,6 +1946,89 @@ void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
     if (out != nullptr) *out = o;
 }
 
+// 소켓 역직렬화(vtable[2])를 서버 세션 패킷으로 구동한다. SEH 로 감싼다 -
+// 실제 게임플레이 거래라 인자가 틀리면 죽거나 인벤토리를 오염시킬 수 있다.
+bool call_socket_guarded(SocketDeserFn fn, void* self, void* result,
+                         void* packet, std::uint32_t* seh_out,
+                         std::uintptr_t* addr_out) {
+    __try {
+        fn(self, result, packet, nullptr);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
+}
+
+// **실험적.** 소켓 뚫기(Add)·장착(Push) 와이어를 만들어 역직렬화를
+// 구동한다. TLS 가 준비된 게임 스레드에서만 부른다.
+void run_socket(std::uintptr_t session, bool push, std::uint32_t handle,
+                std::uint32_t slot, const std::uint16_t gems[5],
+                SpawnOutcome* out) {
+    SpawnOutcome o;
+    if (out != nullptr) *out = o;
+
+    const SocketMessage& msg = push ? g_sock_push_inv_msg : g_sock_add_inv_msg;
+    if (msg.deser == 0 || g_reader == nullptr) {
+        log::warnf("소켓 구동: 메시지 미해석");
+        if (out != nullptr) *out = o;
+        return;
+    }
+    // 핸들이 안 넘어오면 학습값을 쓴다. 그것도 0 이면 못 배운 것.
+    if (handle == 0) handle = socket_inv_handle();
+    if (handle == 0) {
+        o.no_actor = true;
+        log::warnf("소켓 구동: 컨테이너 핸들을 아직 못 배웠다 - 게임에서"
+                   " 소켓을 한 번 뚫거나 박아야 학습된다");
+        if (out != nullptr) *out = o;
+        return;
+    }
+
+    alignas(16) std::uint8_t wire[64]{};
+    std::size_t wlen = 0;
+    if (push) {
+        std::uint16_t g[kSocketSlots]{};
+        for (int i = 0; i < kSocketSlots; ++i) g[i] = gems != nullptr ? gems[i] : 0;
+        if (!build_socket_push_wire(handle, slot, g, wire, sizeof(wire))) {
+            log::warnf("소켓 구동: Push 와이어 조립 실패");
+            if (out != nullptr) *out = o;
+            return;
+        }
+        wlen = kSocketPushWireLen;
+    } else {
+        if (!build_socket_add_wire(handle, slot, wire, sizeof(wire))) {
+            log::warnf("소켓 구동: Add 와이어 조립 실패");
+            if (out != nullptr) *out = o;
+            return;
+        }
+        wlen = kSocketAddWireLen;
+    }
+
+    // 패킷: [+0x10] u16 전체길이 · [+0x18] 페이로드 포인터 · [+0x38] 플래그 0.
+    // [+0x00] 은 성공 경로에서 안 쓰지만 실패 경로 대비로 세션을 둔다.
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+    packet[2] = static_cast<std::uint64_t>(wlen);            // +0x10
+    packet[3] = reinterpret_cast<std::uint64_t>(&wire[0]);   // +0x18
+    packet[7] = 0;                                           // +0x38
+
+    std::uint32_t result = 0;
+    log::infof("소켓 구동 [{}]: 세션 0x{:X} 핸들 0x{:08X} 슬롯 {} 길이 {}",
+               push ? "Push" : "Add", session, handle, slot, wlen);
+    o.called = true;
+    o.crashed = !call_socket_guarded(
+        reinterpret_cast<SocketDeserFn>(msg.deser),
+        reinterpret_cast<void*>(msg.descriptor), &result, packet, &o.seh,
+        &o.fault);
+    o.result = result;
+    if (o.crashed) {
+        log::errorf("소켓 구동이 게임 안에서 죽었다: 0x{:X} (RVA 0x{:X})", o.seh,
+                    o.fault - g_reader->module_base());
+    } else {
+        log::infof("소켓 구동 끝 (결과 {})", result);
+    }
+    if (out != nullptr) *out = o;
+}
+
 }  // namespace
 
 bool endurance_ready() {
@@ -1960,6 +2183,59 @@ bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
     log::infof("캐릭터 소환 요청을 걸었다 (키 {} B {} 플래그 {}) -"
                " 게임 스레드를 기다린다",
                char_key, b, static_cast<int>(flag));
+    return true;
+}
+
+bool socket_drive_ready() {
+    return g_sock_add_inv_msg.deser != 0 && g_sock_push_inv_msg.deser != 0 &&
+           g_orig_actor_getter != nullptr && g_reader != nullptr;
+}
+
+bool request_socket_add(std::uintptr_t session, std::uint32_t container_handle,
+                        std::uint32_t slot) {
+    if (!socket_drive_ready() || session == 0) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+    g_pending = Pending{};
+    g_pending.kind = Kind::Socket;
+    g_pending.session = session;
+    g_pending.sock_push = false;
+    g_pending.sock_handle = container_handle;
+    g_pending.key = slot;
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("소켓 뚫기 요청을 걸었다 (핸들 0x{:08X} 슬롯 {}) - 게임 스레드"
+               "를 기다린다", container_handle, slot);
+    return true;
+}
+
+bool request_socket_push(std::uintptr_t session, std::uint32_t container_handle,
+                         std::uint32_t slot,
+                         const std::uint16_t gem_slots[kSocketSlots]) {
+    if (!socket_drive_ready() || session == 0) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+    g_pending = Pending{};
+    g_pending.kind = Kind::Socket;
+    g_pending.session = session;
+    g_pending.sock_push = true;
+    g_pending.sock_handle = container_handle;
+    g_pending.key = slot;
+    for (int i = 0; i < kSocketSlots; ++i) {
+        g_pending.sock_gems[i] = gem_slots != nullptr ? gem_slots[i] : 0;
+    }
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("소켓 장착 요청을 걸었다 (핸들 0x{:08X} 슬롯 {}) - 게임 스레드"
+               "를 기다린다", container_handle, slot);
     return true;
 }
 

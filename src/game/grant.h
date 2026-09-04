@@ -168,6 +168,68 @@ bool socket_capture_install(const mem::Rtti& rtti,
 // 인벤토리 소켓 재구현의 대상 참조를 만드는 데 쓴다.
 std::uint32_t socket_inv_handle();
 std::uint32_t socket_eq_handle();
+
+// ------------------------------------------------ 어비스 소켓 재구현 (Phase 2)
+//
+// 소켓은 아이템 생성 치트에서 빠지고 전용 게임플레이 메시지로 옮겨졌다.
+// 막힌 소켓을 뚫고(Add) 보석을 박는(Push) 두 요청을 세션 서버 패킷으로
+// 역직렬화(vtable[2]) 구동한다. 와이어 형식은 실측 캡처로 완전 해독했다
+// (docs/superpowers/specs/2026-09-04-socket-wire-format.md).
+//
+//   헤더 5B : [ID u16 LE][00][본문길이 u8][00]   본문길이 = 전체 - 5
+//   대상 9B : [04][컨테이너핸들 u32][(슬롯<<16)|2 u32]
+//   뚫기 데이터(고정 18B) : 02 00 05 00 00 00 01 00 00 02 00 00 03 00 00 04 00 00
+//   장착 데이터(15B) : {소켓슬롯 u8, 보석슬롯 u16} x5
+
+inline constexpr std::uint16_t kSocketAddInvId = 2739;   // 0x0AB3
+inline constexpr std::uint16_t kSocketPushInvId = 2354;  // 0x0932
+inline constexpr int kSocketSlots = 5;
+inline constexpr std::size_t kSocketAddWireLen = 32;
+inline constexpr std::size_t kSocketPushWireLen = 29;
+
+// 뚫기(Add) 와이어를 만든다. 모든 아이템 공통으로 5슬롯을 개방한다.
+// `slot` 은 컨테이너 안 아이템의 인벤토리 위치(레코드 배열 인덱스).
+// out 은 kSocketAddWireLen 바이트를 담을 수 있어야 한다. 성공하면 참.
+bool build_socket_add_wire(std::uint32_t container_handle, std::uint32_t slot,
+                           std::uint8_t* out, std::size_t out_cap);
+
+// 장착(Push) 와이어를 만든다. `gem_slots[i]` 는 소켓 i 에 박을 보석의
+// 인벤토리 위치다(보석도 인벤토리에 있어야 한다). out 은
+// kSocketPushWireLen 바이트를 담을 수 있어야 한다.
+bool build_socket_push_wire(std::uint32_t container_handle, std::uint32_t slot,
+                            const std::uint16_t gem_slots[kSocketSlots],
+                            std::uint8_t* out, std::size_t out_cap);
+
+// 소켓 메시지 서술자와 역직렬화 함수. 처리기가 인라인이라
+// resolve_cheat_message 의 처리기 탐색이 실패하므로, 서술자(정적 초기화
+// 관용구)와 vtable[2](역직렬화)만 잡는 전용 해석기를 둔다.
+struct SocketMessage {
+    std::uintptr_t descriptor = 0;
+    std::uintptr_t deser = 0;   // vtable[2]
+    std::uint32_t id = 0;
+};
+bool resolve_socket_message(const mem::Rtti& rtti, const mem::Reader& reader,
+                            const char* class_name, SocketMessage* out);
+
+// 두 인벤토리 소켓 메시지(뚫기·장착)를 해석해 둔다. 지급 메시지
+// 해석과 같은 자리에서 부른다.
+bool socket_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// **실험적.** 인벤토리 아이템 하나의 5소켓을 뚫는다(Add). 실제
+// 게임플레이 거래라 틀리면 인벤토리를 오염시킬 수 있다 - 버릴
+// 세이브에서만 시험한다. `container_handle` 이 0 이면 학습된 인벤
+// 핸들(socket_inv_handle)을 쓴다. 요청을 걸어 두고 게임 스레드가
+// 집어 간다.
+bool request_socket_add(std::uintptr_t session, std::uint32_t container_handle,
+                        std::uint32_t slot);
+
+// **실험적.** 인벤토리 아이템 하나의 소켓에 보석을 박는다(Push).
+bool request_socket_push(std::uintptr_t session, std::uint32_t container_handle,
+                         std::uint32_t slot,
+                         const std::uint16_t gem_slots[kSocketSlots]);
+
+// 소켓 구동 준비가 됐는가(두 메시지가 해석됐고 실행 인프라가 섰는가).
+bool socket_drive_ready();
 int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap);
 
 // 표 조회 함수를 후킹해 "이 키를 어느 표에서 찾는지" 를 잡는다.

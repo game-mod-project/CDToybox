@@ -1566,6 +1566,32 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     for (const char* n : kKnown) cmd_cheat_one(rt, reader, n);
 }
 
+// 소켓 메시지 서술자.역직렬화를 해석하고, deser 성공 경로가 요구하는
+// 서술자+0x21==0 을 확인한다. 읽기만 한다.
+void cmd_socketmsg(const mem::Rtti& rt, const mem::Reader& reader) {
+    static const char* kCls[] = {
+        "TrocTrAddSocketItemToInventoryReq",
+        "TrocTrPushSocketItemToInventoryReq",
+    };
+    const auto base = reader.module_base();
+    for (const char* c : kCls) {
+        game::SocketMessage m;
+        if (!game::resolve_socket_message(rt, reader, c, &m)) {
+            std::printf("  %-40s  해석 실패\n", c);
+            continue;
+        }
+        std::uint8_t gate = 0xFF;
+        reader.read(m.descriptor + 0x21, &gate, sizeof(gate));
+        std::printf("  %-40s  ID %-5u  desc RVA 0x%llX  deser RVA 0x%llX  +0x21=%u %s\n",
+                    c, m.id,
+                    static_cast<unsigned long long>(m.descriptor - base),
+                    static_cast<unsigned long long>(m.deser - base), gate,
+                    gate == 0 ? "(구동 가능)" : "(구동경로 막힘)");
+    }
+    std::printf("학습된 인벤 핸들 0x%08X, 장비 핸들 0x%08X\n",
+                game::socket_inv_handle(), game::socket_eq_handle());
+}
+
 void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                  char** argv) {
     if (argc > 2 && std::strcmp(argv[2], "cand") == 0) {
@@ -2632,6 +2658,7 @@ int main(int argc, char** argv) {
         cmd_cheat(rt, reader, argc, argv);
         return 0;
     }
+    if (cmd == "socketmsg") { cmd_socketmsg(rt, reader); return 0; }
 
     usage();
     return 1;

@@ -703,3 +703,49 @@ TEST(clamp_count_never_goes_below_one) {
     CHECK_EQ(cdtb::game::clamp_count_to_stack(0, 10), 1);
     CHECK_EQ(cdtb::game::clamp_count_to_stack(-494665728, 3800301568u), 1);
 }
+
+// --- 어비스 소켓 와이어 (실측 캡처와 정확히 일치해야 한다) ---
+// 세션B 캡처(핸들 0xB0100102, 슬롯 0x56):
+//   Add : B3 0A 00 1B 00 04 02 01 10 B0 02 00 56 00 + 뚫기 고정 18B
+//   Push: 32 09 00 18 00 04 02 01 10 B0 02 00 56 00 + {슬롯,보석u16}x5
+
+TEST(socket_add_wire_matches_capture) {
+    const std::uint8_t want[] = {
+        0xB3, 0x0A, 0x00, 0x1B, 0x00, 0x04, 0x02, 0x01, 0x10, 0xB0, 0x02,
+        0x00, 0x56, 0x00, 0x02, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0x00, 0x00};
+    std::uint8_t out[64] = {0};
+    CHECK(cdtb::game::build_socket_add_wire(0xB0100102u, 0x56u, out,
+                                            sizeof(out)));
+    CHECK_EQ(std::memcmp(out, want, sizeof(want)), 0);
+}
+
+TEST(socket_add_wire_refuses_small_buffer) {
+    std::uint8_t out[8] = {0};
+    CHECK(!cdtb::game::build_socket_add_wire(0xB0100102u, 0x56u, out,
+                                             sizeof(out)));
+}
+
+TEST(socket_push_wire_matches_capture) {
+    const std::uint8_t want[] = {
+        0x32, 0x09, 0x00, 0x18, 0x00, 0x04, 0x02, 0x01, 0x10, 0xB0, 0x02,
+        0x00, 0x56, 0x00, 0x00, 0x60, 0x00, 0x01, 0x5E, 0x00, 0x02, 0x5D,
+        0x00, 0x03, 0x5F, 0x00, 0x04, 0x52, 0x00};
+    const std::uint16_t gems[5] = {0x60, 0x5E, 0x5D, 0x5F, 0x52};
+    std::uint8_t out[64] = {0};
+    CHECK(cdtb::game::build_socket_push_wire(0xB0100102u, 0x56u, gems, out,
+                                             sizeof(out)));
+    CHECK_EQ(std::memcmp(out, want, sizeof(want)), 0);
+}
+
+TEST(socket_wire_encodes_slot_into_high_word) {
+    // (슬롯<<16)|2 - 슬롯이 대상 참조의 상위 워드로 들어간다.
+    std::uint8_t out[64] = {0};
+    CHECK(cdtb::game::build_socket_add_wire(0xB0100102u, 0x0Au, out,
+                                            sizeof(out)));
+    // 대상 참조는 오프셋 5부터: 04 [핸들 4B] [enc 4B]
+    std::uint32_t enc = 0;
+    std::memcpy(&enc, out + 10, sizeof(enc));
+    CHECK_EQ(enc, (0x0Au << 16) | 0x0002u);
+}
+

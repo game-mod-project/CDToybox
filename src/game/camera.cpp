@@ -202,6 +202,9 @@ void auto_analysis_loop() {
     spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
     socket_capture_install(rtti, reader);
+    // 소켓 재구현(Phase 2): 뚫기·장착 메시지의 서술자·역직렬화를 해석해
+    // 둔다. 실제 구동은 실험 UI 로만 - 자동 흐름엔 걸지 않는다.
+    socket_resolve_messages(rtti, reader);
     // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
     // 늑대의 한손검. 인벤토리 첫 칸이고 현지화에 이름이 있다.
     table_probe_install(rtti, reader, 1163042);

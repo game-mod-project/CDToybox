@@ -40,6 +40,11 @@ int g_temper = 0;
 int g_sharpness = 0;
 std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};   // 0 = 비어 있음
 int g_socket_picking = -1;       // 팝업이 채울 칸
+
+// 어비스 소켓 실험 UI 상태. 슬롯 = 컨테이너 안 아이템의 인벤토리 위치
+// (레코드 배열 인덱스), 보석 슬롯 = 박을 보석의 인벤토리 위치.
+int g_sock_slot = 0;
+int g_sock_gems[5]{};
 bool g_open_gem_popup = false;
 char g_gem_search[64]{};
 game::SpawnOutcome g_outcome;
@@ -459,6 +464,63 @@ void draw_grant_panel(bool* open) {
     // 인자 둘의 뜻을 모른다. 값을 바꿔 가며 장비 내구도가 변하는지
     // 보는 용도다. 페이로드가 u16 둘뿐이라 시도 범위가 좁다.
     ImGui::Separator();
+
+    // --- 어비스 소켓 재구현 (실험) ----------------------------------
+    // 소켓이 전용 메시지로 옮겨져 뚫기(Add)->장착(Push) 두 요청을 세션
+    // 서버 패킷으로 구동한다. 실제 게임플레이 거래라 틀리면 인벤토리를
+    // 오염시킬 수 있으니 **버릴 세이브에서만** 시험한다.
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("어비스 소켓 (실험 - 버릴 세이브에서만)")) {
+        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.3f, 1.0f),
+                           "실제 거래입니다. 틀리면 인벤토리가 오염될 수 있으니");
+        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.3f, 1.0f),
+                           "버릴 세이브에서만 시험하세요.");
+        const std::uint32_t h = game::socket_inv_handle();
+        if (h == 0) {
+            ImGui::TextDisabled("컨테이너 핸들 미학습 - 게임에서 소켓을 한 번"
+                                " 직접 뚫거나 박으면 자동 학습됩니다.");
+        } else {
+            ImGui::Text("학습된 인벤 핸들 0x%08X", h);
+        }
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::InputInt("슬롯(아이템 위치)##sock", &g_sock_slot, 1, 10);
+        if (g_sock_slot < 0) g_sock_slot = 0;
+
+        const bool sock_blocked =
+            blocked != nullptr || !game::socket_drive_ready() || h == 0;
+        ImGui::BeginDisabled(sock_blocked);
+        if (ImGui::Button("5소켓 뚫기 (Add)", ImVec2(150.0f, 0.0f))) {
+            g_call_ok = game::request_socket_add(
+                seen[g_pick], 0u, static_cast<std::uint32_t>(g_sock_slot));
+            g_called = true;
+            g_last_to_inventory = true;
+            g_last_what = "소켓 뚫기를 보냈습니다 (인벤토리로 확인)";
+        }
+        ImGui::TextDisabled("보석 슬롯 5칸 (아이템 위치, 0 = 안 박음)");
+        for (int i = 0; i < 5; ++i) {
+            ImGui::SetNextItemWidth(70.0f);
+            char lbl[16];
+            std::snprintf(lbl, sizeof(lbl), "##gem%d", i);
+            ImGui::InputInt(lbl, &g_sock_gems[i], 0, 0);
+            if (g_sock_gems[i] < 0) g_sock_gems[i] = 0;
+            if (i != 4) ImGui::SameLine();
+        }
+        if (ImGui::Button("보석 박기 (Push)", ImVec2(150.0f, 0.0f))) {
+            std::uint16_t gems[5]{};
+            for (int i = 0; i < 5; ++i) {
+                gems[i] = static_cast<std::uint16_t>(g_sock_gems[i]);
+            }
+            g_call_ok = game::request_socket_push(
+                seen[g_pick], 0u, static_cast<std::uint32_t>(g_sock_slot), gems);
+            g_called = true;
+            g_last_to_inventory = true;
+            g_last_what = "보석 박기를 보냈습니다 (인벤토리로 확인)";
+        }
+        ImGui::EndDisabled();
+        if (!game::socket_drive_ready()) {
+            ImGui::TextDisabled("소켓 메시지 미해석 - 월드 로드 후 준비됩니다.");
+        }
+    }
 
     // --- 고급: 세션 고르기 ------------------------------------------
     // 자동 선택이 맞는 것을 실측으로 확인했으므로 접어 둔다. 틀릴
