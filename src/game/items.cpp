@@ -325,6 +325,51 @@ std::vector<std::uint64_t> find_item_key_map_rvas(
 
 namespace {
 
+// 맵 테이블에 접근하는 코드 관용구로 전역을 뽑는다:
+//   48 8B /r [rip+disp32]   mov  reg, [전역]
+//   48 83 /0 68             add  reg, 0x68     (테이블은 객체의 +0x68)
+// 변환 함수 본문 패턴(kConvertBodyPattern)은 스택 오프셋에 의존해
+// 업데이트로 깨졌다. 이 11바이트 관용구는 스택과 무관해 더 튼튼하고,
+// 맵을 쓰는 여러 곳 중 하나만 맞아도 전역이 나온다. 이미지가 RVA
+// 인덱스라 오프셋이 곧 명령의 RVA 다.
+std::vector<std::uint64_t> load_add68_globals(
+    const std::vector<std::uint8_t>& image) {
+    std::vector<std::uint64_t> out;
+    if (image.size() < 12) return out;
+    // mov [rip] 의 modrm: mod=00, reg, rm=101. reg<<3 | 5.
+    auto mov_reg = [](std::uint8_t m) -> int {
+        if ((m & 0xC7) != 0x05) return -1;   // mod=00, rm=101
+        return (m >> 3) & 7;
+    };
+    // add reg,imm8 의 modrm: mod=11, /0, rm=reg. 0xC0 | reg.
+    auto add_reg = [](std::uint8_t m) -> int {
+        if ((m & 0xF8) != 0xC0) return -1;
+        return m & 7;
+    };
+    for (std::size_t i = 0; i + 11 <= image.size(); ++i) {
+        if (image[i] != 0x48 || image[i + 1] != 0x8B) continue;
+        const int r1 = mov_reg(image[i + 2]);
+        if (r1 < 0) continue;
+        if (image[i + 7] != 0x48 || image[i + 8] != 0x83 ||
+            image[i + 10] != 0x68) {
+            continue;
+        }
+        const int r2 = add_reg(image[i + 9]);
+        if (r2 != r1) continue;   // 같은 레지스터라야 로드-후-더하기다
+        std::int32_t disp = 0;
+        std::memcpy(&disp, image.data() + i + 3, sizeof(disp));
+        const std::int64_t rva = static_cast<std::int64_t>(i + 7) + disp;
+        if (rva < 0 || static_cast<std::uint64_t>(rva) + 8 > image.size()) {
+            continue;
+        }
+        out.push_back(static_cast<std::uint64_t>(rva));
+    }
+    // 같은 전역이 여러 곳에서 쓰인다. 한 번만 본다.
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 // 후보 하나를 따라가 표의 앞뒤가 맞는지 본다.
 bool read_candidate(const mem::Reader& reader, std::uint64_t rva,
                     ItemKeyMap* out) {
@@ -372,9 +417,18 @@ bool find_item_key_map(const mem::Reader& reader,
                        std::uint32_t expected_count, ItemKeyMap* out) {
     if (out == nullptr || expected_count == 0) return false;
 
+    // 후보를 두 갈래로 모은다: 변환 함수 본문 패턴(옛 방식)과, 더
+    // 튼튼한 load+add0x68 관용구. 업데이트로 앞엎것이 깨져도
+    // 뒷엎것이 맵 전역을 잡는다. 합쳐서 개수가 맞는 유일한 것을 고른다.
+    std::vector<std::uint64_t> rvas =
+        find_item_key_map_rvas(image, kMaxCandidates);
+    for (const auto rva : load_add68_globals(image)) rvas.push_back(rva);
+    std::sort(rvas.begin(), rvas.end());
+    rvas.erase(std::unique(rvas.begin(), rvas.end()), rvas.end());
+
     ItemKeyMap found;
     std::size_t hits = 0;
-    for (const auto rva : find_item_key_map_rvas(image, kMaxCandidates)) {
+    for (const auto rva : rvas) {
         ItemKeyMap m;
         if (!read_candidate(reader, rva, &m)) continue;
         if (m.count != expected_count) continue;
