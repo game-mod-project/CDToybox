@@ -26,6 +26,7 @@
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/localization.h"
+#include "game/roster.h"
 #include "game/stash.h"
 
 using namespace cdtb;
@@ -1085,6 +1086,39 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             std::printf("    0x%llX  %-9u %s\n",
                         static_cast<unsigned long long>(h.at), h.key,
                         (e && !e->name.empty()) ? e->name.c_str() : "(이름 없음)");
+        }
+    }
+}
+
+// 탈것·용병·캐릭터 카탈로그를 낸다. 모드와 같은 함수를 돌려 배포 전
+// 검증한다. roster [탈것|용병|캐릭터] [최대개수]
+void cmd_roster(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                char** argv) {
+    struct Tbl {
+        const char* arg;
+        const char* cls;
+    };
+    const Tbl tables[] = {
+        {"탈것", ".?AVVehicleInfoManager@pa@@"},
+        {"용병", ".?AVMercenaryInfoManager@pa@@"},
+        {"캐릭터", ".?AVCharacterInfoManager@pa@@"},
+    };
+    const char* want = (argc > 2) ? argv[2] : nullptr;
+    const std::size_t show = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
+                                        : 15;
+    for (const auto& t : tables) {
+        if (want != nullptr && std::strcmp(want, t.arg) != 0) continue;
+        std::vector<game::RosterEntry> cat;
+        if (!game::build_static_catalog(reader, rt, t.cls, &cat)) {
+            std::printf("%s: 매니저를 찾지 못했습니다.\n", t.arg);
+            continue;
+        }
+        std::printf("=== %s: %zu개 ===\n", t.arg, cat.size());
+        std::size_t n = 0;
+        for (const auto& e : cat) {
+            if (n++ >= show) break;
+            std::printf("  %-6u  %s\n", e.key,
+                        e.name.empty() ? "(이름 없음)" : e.name.c_str());
         }
     }
 }
@@ -2480,6 +2514,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "items") {
         cmd_items(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "roster") {
+        cmd_roster(rt, reader, argc, argv);
         return 0;
     }
     if (cmd == "itemmap") {
