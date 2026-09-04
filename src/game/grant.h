@@ -94,6 +94,10 @@ std::uintptr_t last_actor();
 // 컴포넌트를 고를 일이 없어진다.
 int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap);
 
+// 서버 쪽 세션 중 호출이 가장 많은 것(=플레이어). 없으면 0. 지급·소켓
+// 구동이 대상 세션을 고를 때 쓴다 - 그림 패널이 직접 고를 필요가 없다.
+std::uintptr_t best_server_session();
+
 // 치트의 문. 35개 처리기가 전부 세션에서 이 사슬로 같은 객체를
 // 꺼내 가상 함수를 불러 보고, 거짓이면 조용히 반환한다.
 //

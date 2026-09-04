@@ -1202,6 +1202,16 @@ int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
     return take;
 }
 
+std::uintptr_t best_server_session() {
+    std::uintptr_t seen[kSeenCap]{};
+    std::uint32_t hits[kSeenCap]{};
+    const int n = seen_sessions(seen, hits, kSeenCap);
+    bool server[kSeenCap]{};
+    for (int i = 0; i < n; ++i) server[i] = session_is_server(i);
+    const int idx = best_actor_index(hits, server, n);
+    return (idx >= 0 && idx < n) ? seen[idx] : 0;
+}
+
 int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
     const int n = g_seen_count.load(std::memory_order_acquire);
     const int take = (n < cap) ? n : cap;

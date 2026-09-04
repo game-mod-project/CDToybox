@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "game/grant.h"
 #include "game/inventory.h"
 #include "mem/reader.h"
 #include "game/items.h"
@@ -33,6 +34,7 @@ struct Row {
     std::uint32_t temper = 0;
     std::uint32_t sharpness = 0;
     std::uint32_t socket_count = 0;
+    std::uint32_t max_sockets = 0;   // 표의 소켓 상한 (0 이면 소켓 불가)
     std::uint32_t endurance = 0;     // 정렬용 원값. 0xFFFF 면 없는 것
     std::uint32_t max_endurance = 0xFFFF;   // 표의 값. 담기에 쓴다
     std::vector<std::uint32_t> gem_keys;
@@ -44,6 +46,10 @@ std::vector<Row> g_rows;
 // 채워지며 새 판으로 갈리는데, 개수는 그대로라 크기로는 못 가른다.
 // 판이 바뀌면 자동으로 다시 읽어 '(순번 N)' 이 이름으로 채워진다.
 const void* g_rows_cat_ptr = nullptr;
+// 학습된 소켓 컨테이너의 칸(kind). 이 칸의 아이템만 행별 '소켓뚫기' 를
+// 켠다 - 칸마다 컨테이너가 하나뿐이라 kind 가 곧 컨테이너(=핸들)를
+// 가리켜 안전하다. -1 이면 아직 모른다.
+int g_socket_kind = -1;
 std::string g_status = "아직 안 읽었습니다";
 
 // 컴포넌트가 생기기를 기다리는 중인가. 생기는 순간 스스로 읽는다.
@@ -136,6 +142,7 @@ void refresh(const mem::Reader& reader) {
                 r.grade = e->grade;
                 r.category = e->category;
                 r.max_endurance = e->max_endurance;
+                r.max_sockets = e->max_sockets;
             }
             if (r.name.empty()) {
                 char buf[48];
@@ -167,6 +174,18 @@ void refresh(const mem::Reader& reader) {
     }
 
     g_containers = containers;
+    // 학습된 슬롯에 소켓이 박힌 행의 칸을 찾아 둔다. 그 칸의 아이템만
+    // 행별 소켓 버튼을 켠다(핸들이 그 컨테이너 것이므로 안전).
+    g_socket_kind = -1;
+    const std::uint32_t lslot = game::socket_inv_slot();
+    if (lslot != 0xFFFFFFFFu) {
+        for (const auto& rr : g_rows) {
+            if (rr.slot == lslot && rr.socket_count > 0) {
+                g_socket_kind = static_cast<int>(rr.kind);
+                break;
+            }
+        }
+    }
     g_rows_cat_ptr = game::item_catalog().data();
     build_category_labels(&g_categories, &g_category_labels);
 
@@ -467,6 +486,23 @@ void draw_inventory_panel(bool* open) {
                 stash_add_entry(set, e);
             }
             ImGui::EndDisabled();
+
+            // 소켓 가능 장비면 '소켓뚫기' 한 번으로 5소켓을 연다. 학습된
+            // 칸(=핸들 아는 컨테이너)의 아이템만 켠다 - 슬롯을 손으로
+            // 넣을 필요가 없다. 핸들 미학습이면 비활성(게임에서 소켓을
+            // 한 번 뚫으면 켜진다).
+            if (r.max_sockets > 0) {
+                ImGui::SameLine();
+                const bool ok = game::socket_inv_handle() != 0 &&
+                                g_socket_kind >= 0 &&
+                                static_cast<int>(r.kind) == g_socket_kind;
+                ImGui::BeginDisabled(!ok);
+                if (ImGui::SmallButton("소켓뚫기")) {
+                    game::request_socket_add(game::best_server_session(),
+                                             game::socket_inv_handle(), r.slot);
+                }
+                ImGui::EndDisabled();
+            }
             ImGui::PopID();
         }
         ImGui::EndTable();
