@@ -40,6 +40,10 @@ struct Row {
 };
 
 std::vector<Row> g_rows;
+// g_rows 를 만들 때 쓴 카탈로그 판(포인터). 이름은 현지화 후 뒤늦게
+// 채워지며 새 판으로 갈리는데, 개수는 그대로라 크기로는 못 가른다.
+// 판이 바뀌면 자동으로 다시 읽어 '(순번 N)' 이 이름으로 채워진다.
+const void* g_rows_cat_ptr = nullptr;
 std::string g_status = "아직 안 읽었습니다";
 
 // 컴포넌트가 생기기를 기다리는 중인가. 생기는 순간 스스로 읽는다.
@@ -163,6 +167,7 @@ void refresh(const mem::Reader& reader) {
     }
 
     g_containers = containers;
+    g_rows_cat_ptr = game::item_catalog().data();
     build_category_labels(&g_categories, &g_category_labels);
 
     char buf[128];
@@ -304,6 +309,12 @@ void draw_inventory_panel(bool* open) {
     // 알 방법이 없었다.
     if (g_waiting && game::inventory_ready()) {
         g_waiting = false;
+        const mem::LocalReader reader;
+        refresh(reader);
+    } else if (!g_waiting && game::inventory_ready() &&
+               g_rows_cat_ptr != game::item_catalog().data()) {
+        // 이름이 뒤늦게 풀려 카탈로그 판이 갈렸다 - 손 안 대도 다시 읽어
+        // '(순번 N)' 을 이름으로 바꾼다.
         const mem::LocalReader reader;
         refresh(reader);
     }

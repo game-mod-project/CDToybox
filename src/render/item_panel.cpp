@@ -38,6 +38,10 @@ std::vector<std::uint8_t> g_categories;      // 표에 실제로 있는 분류 �
 std::string g_category_labels;               // Combo 용 널 구분 문자열
 bool g_dirty = true;
 std::size_t g_built_from = 0;
+// 카탈로그는 이름이 뒤늦게(현지화 후) 채워지며 새 판으로 갈린다.
+// 이때 개수(6813)는 그대로라 크기만으로는 갱신을 놓친다 - 목록이
+// '이름 없는 것 감추기' 로 0개에 갇힌다. 판의 실체(포인터)로 가른다.
+const void* g_built_ptr = nullptr;
 
 constexpr float kIconSize = 22.0f;
 constexpr std::size_t kPerPage[] = {20, 40, 60, 100};
@@ -65,6 +69,7 @@ void rebuild() {
     g_view = game::filter_items(all, f);
     game::sort_items(g_view, g_sort, g_ascending);
     g_built_from = all.size();
+    g_built_ptr = all.data();
     g_dirty = false;
 }
 
@@ -222,7 +227,8 @@ void draw_item_panel(bool* open) {
     }
 
     const auto& all = game::item_catalog();
-    if (g_built_from != all.size()) {
+    if (g_built_from != all.size() ||
+        g_built_ptr != static_cast<const void*>(all.data())) {
         rebuild_categories();
         g_dirty = true;
     }
