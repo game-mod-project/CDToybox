@@ -482,9 +482,34 @@ void draw_grant_panel(bool* open) {
         } else {
             ImGui::Text("학습된 인벤 핸들 0x%08X", h);
         }
+        // 슬롯은 학습된 컨테이너의 '소켓 가능 장비' 위치여야 한다. 임의
+        // 슬롯에 뚫으면 엉뚱한 아이템이 오염돼 게임이 팅긴다(2026-09-05
+        // 슬롯5 실측 크래시). 그래서 마지막으로 게임이 소켓한 아이템의
+        // 슬롯을 학습해 기본값으로 채운다.
+        const std::uint32_t learned = game::socket_inv_slot();
+        static bool g_sock_prefilled = false;
+        if (!g_sock_prefilled && learned != 0xFFFFFFFFu) {
+            g_sock_slot = static_cast<int>(learned);
+            g_sock_prefilled = true;
+        }
+        if (learned != 0xFFFFFFFFu) {
+            ImGui::Text("학습된 슬롯 %u (마지막으로 게임이 소켓한 아이템)",
+                        learned);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("이 슬롯 넣기")) {
+                g_sock_slot = static_cast<int>(learned);
+            }
+        } else {
+            ImGui::TextDisabled("슬롯 미학습 - 게임에서 소켓을 한 번 뚫으면"
+                                " 그 아이템 슬롯을 배웁니다.");
+        }
         ImGui::SetNextItemWidth(110.0f);
         ImGui::InputInt("슬롯(아이템 위치)##sock", &g_sock_slot, 1, 10);
         if (g_sock_slot < 0) g_sock_slot = 0;
+        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.3f, 1.0f),
+                           "슬롯은 학습된 컨테이너의 소켓 가능 장비 위치여야");
+        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.3f, 1.0f),
+                           "합니다. 엉뚱한 슬롯에 뚫으면 오염돼 팅깁니다.");
 
         const bool sock_blocked =
             blocked != nullptr || !game::socket_drive_ready() || h == 0;

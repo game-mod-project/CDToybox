@@ -169,6 +169,11 @@ bool socket_capture_install(const mem::Rtti& rtti,
 std::uint32_t socket_inv_handle();
 std::uint32_t socket_eq_handle();
 
+// 학습된 대상 슬롯. 0xFFFFFFFF 면 아직 못 배운 것. 실험 UI 가 임의 슬롯
+// 사고를 막으려고 이 값을 기본 타깃으로 쓴다.
+std::uint32_t socket_inv_slot();
+std::uint32_t socket_eq_slot();
+
 // ------------------------------------------------ 어비스 소켓 재구현 (Phase 2)
 //
 // 소켓은 아이템 생성 치트에서 빠지고 전용 게임플레이 메시지로 옮겨졌다.

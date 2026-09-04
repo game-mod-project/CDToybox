@@ -866,6 +866,11 @@ std::atomic<int> g_socket_dumps{0};
 // 고정이므로 한 번 배우면 재사용한다. 0 이면 아직 못 배운 것이다.
 std::atomic<std::uint32_t> g_socket_inv_handle{0};
 std::atomic<std::uint32_t> g_socket_eq_handle{0};
+// 학습된 슬롯(마지막으로 게임이 소켓을 뚫거나 박은 아이템의 인벤토리
+// 위치). 실험 구동이 이 슬롯을 기본으로 쓰면 임의 슬롯에 뚫어 엉뚱한
+// 아이템을 오염시키는 사고를 막는다(2026-09-05 슬롯5 크래시).
+std::atomic<std::uint32_t> g_socket_inv_slot{0xFFFFFFFF};
+std::atomic<std::uint32_t> g_socket_eq_slot{0xFFFFFFFF};
 
 // 와이어 대상 참조 `[04][컨테이너핸들 u32][(슬롯<<16)|2 u32]` 에서
 // 컨테이너 핸들을 뽑는다. 본문(헤더 5바이트 뒤)의 첫 바이트가 0x04 인
@@ -900,6 +905,14 @@ void dump_socket_payload(void* packet, const char* tag) {
         if (prev != handle) {
             log::infof("소켓 컨테이너 핸들 학습 [{}]: 0x{:08X}{}", tag, handle,
                        prev != 0 ? " (갱신됨)" : "");
+        }
+        // 대상 슬롯도 배운다. 참조 뒤 u32(오프셋 10) = (슬롯<<16)|2.
+        if (len >= 14) {
+            std::uint32_t enc = 0;
+            std::memcpy(&enc, pl + 10, sizeof(enc));
+            const std::uint32_t sv = enc >> 16;
+            auto& sslot = inv ? g_socket_inv_slot : g_socket_eq_slot;
+            sslot.store(sv, std::memory_order_release);
         }
     }
 
@@ -1003,6 +1016,14 @@ std::uint32_t socket_inv_handle() {
 }
 std::uint32_t socket_eq_handle() {
     return g_socket_eq_handle.load(std::memory_order_acquire);
+}
+
+// 학습된 슬롯. 0xFFFFFFFF 면 아직 못 배운 것.
+std::uint32_t socket_inv_slot() {
+    return g_socket_inv_slot.load(std::memory_order_acquire);
+}
+std::uint32_t socket_eq_slot() {
+    return g_socket_eq_slot.load(std::memory_order_acquire);
 }
 
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
