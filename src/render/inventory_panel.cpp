@@ -320,11 +320,18 @@ void draw_inventory_panel(bool* open) {
             : static_cast<int>(g_categories[static_cast<std::size_t>(
                   g_category_idx - 1)]);
 
+    // 표에 바깥 창 스크롤이 생기지 않도록 아래 안내문 두 줄만큼 높이를
+    // 남기고, 표가 그 안에서 스스로 스크롤하게 한다. 필터·헤더는 위에,
+    // 안내문은 아래에 늘 보이고 목록만 표 안에서 움직인다.
+    const float inv_footer_h =
+        ImGui::GetTextLineHeightWithSpacing() * 2.0f +
+        ImGui::GetStyle().ItemSpacing.y;
     if (ImGui::BeginTable("inv", 8,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Sortable |
-                              ImGuiTableFlags_SortMulti)) {
+                              ImGuiTableFlags_SortMulti,
+                          ImVec2(0.0f, -inv_footer_h))) {
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,
                                 120.0f);
@@ -339,6 +346,8 @@ void draw_inventory_panel(bool* open) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
                                         ImGuiTableColumnFlags_NoSort,
                                 190.0f);
+        // 헤더 행을 고정한다 - 스크롤해도 열 이름이 위에 남는다.
+        ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         apply_sort();
 

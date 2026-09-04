@@ -123,55 +123,20 @@ void draw_roster_panel(bool* open) {
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 선택됩니다");
 
-    // --- 소환 (탈것·캐릭터) -------------------------------------------
-    // 탈것·NPC 는 캐릭터이므로 SpawnCharacterCheatReq 로 소환한다.
-    // 미시도 치트라 죽을 수 있어 run_char_spawn 이 SEH 로 감싼다.
-    // 위치는 카메라 초점, 세션은 서버 세션을 자동으로 고른다.
+    // --- 소환 (보류) --------------------------------------------------
+    // 2026-09-04 업데이트로 SpawnCharacterCheatReq 의 처리기 탐지가
+    // 깨졌다(잘못된 함수가 잡힌다). 실측: 소환을 누르니 필드의 NPC 가
+    // 모두 사라지고 빠른 이동이 무한 로딩에 걸렸다. 새 exe 로 처리기
+    // 규약을 재도출하기 전까지 버튼을 막는다.
+    // 자세한 것은 specs/2026-09-04-game-update-break.md.
     if (g_selected_key != 0) {
         ImGui::Text("선택: %u  %s", g_selected_key, g_selected_name);
-    } else {
-        ImGui::TextDisabled("소환할 줄을 먼저 고르세요.");
     }
-    // B·플래그의 뜻이 미상이라 개체가 안 생긴다 - 여기서 바꿔 실험한다.
-    static int g_b = 0;
-    static int g_flag = 0;
-    ImGui::SetNextItemWidth(90);
-    ImGui::InputInt("B", &g_b);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    ImGui::InputInt("플래그", &g_flag);
-    if (g_b < 0) g_b = 0;
-    if (g_flag < 0) g_flag = 0;
-
-    const bool ready = game::char_spawn_ready();
-    const bool busy = game::spawn_pending();
-    ImGui::BeginDisabled(!ready || busy || g_selected_key == 0);
-    if (ImGui::Button("월드에 소환")) {
-        float pos[3]{};
-        camera_position(pos);
-        const std::uintptr_t session = best_server_session();
-        if (session != 0) {
-            game::request_char_spawn(
-                session, g_selected_key, static_cast<std::uint32_t>(g_b),
-                static_cast<std::uint8_t>(g_flag & 0xFF), pos);
-        }
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (busy) {
-        ImGui::TextDisabled("소환 중…");
-    } else if (!ready) {
-        ImGui::TextDisabled("월드 진입 후 준비됩니다");
-    } else {
-        const auto& o = game::last_outcome();
-        if (o.crashed) {
-            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "소환이 실패했습니다");
-        } else if (o.no_actor) {
-            ImGui::TextDisabled("서버 세션을 못 찾았습니다");
-        } else if (o.called) {
-            ImGui::TextColored(ImVec4(0.4f, 1, 0.4f, 1), "소환 요청됨");
-        }
-    }
+    ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1),
+                       "소환은 게임 업데이트로 비활성화되었습니다.");
+    ImGui::TextDisabled(
+        "이 빌드에서 소환을 누르면 NPC 가 사라지고 무한 로딩에 걸립니다.");
+    ImGui::TextDisabled("처리기 규약 재도출 후 다시 켭니다.");
     ImGui::Separator();
 
     if (ImGui::BeginChild("roster_list")) {

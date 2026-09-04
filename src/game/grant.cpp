@@ -832,6 +832,121 @@ bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
     return true;
 }
 
+
+// ------------------------------------------------ 소켓 페이로드 캡처 (진단)
+//
+// 소켓은 막힘/뚫림 상태가 있다(SocketInfo._isBlocked). 흐름은
+// 막힌 소켓 -> 뚫기(개방) -> 보석 장착. 옛 방식(아이템에 소켓 바이트를
+// 미리 채워 지급)은 뚫기를 건너뛰어 새 게임이 거부했다. 올바른 흐름을
+// 배우려고 소켓 메시지 전부(Add/Push/Pop x 인벤/장비)를 후킹해 게임이
+// 실제로 뚫고 장착할 때 들어오는 와이어 페이로드를 로그한다.
+//   패킷 +0x10  u16 길이 · +0x18  페이로드 포인터
+using SocketDeserFn = void*(__fastcall*)(void*, void*, void*, void*);
+bool g_socket_installed = false;
+std::atomic<int> g_socket_dumps{0};
+
+void dump_socket_payload(void* packet, const char* tag) {
+    if (packet == nullptr) return;
+    if (g_socket_dumps.load(std::memory_order_relaxed) >= 40) return;
+    auto* p = reinterpret_cast<std::uint8_t*>(packet);
+    std::uint16_t len = 0;
+    std::uint64_t payload = 0;
+    std::memcpy(&len, p + 0x10, sizeof(len));
+    std::memcpy(&payload, p + 0x18, sizeof(payload));
+    if (payload == 0 || len == 0 || len > 512) return;
+    g_socket_dumps.fetch_add(1, std::memory_order_relaxed);
+    char hex[512 * 3 + 1];
+    std::size_t w = 0;
+    auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
+    static const char* kHexDigits = "0123456789ABCDEF";
+    for (std::uint16_t i = 0; i < len && w + 3 < sizeof(hex); ++i) {
+        hex[w++] = kHexDigits[(pl[i] >> 4) & 0xF];
+        hex[w++] = kHexDigits[pl[i] & 0xF];
+        hex[w++] = ' ';
+    }
+    hex[w] = '\0';
+    log::infof("소켓 페이로드 [{}] ({}바이트): {}", tag, len, hex);
+}
+
+// 메시지마다 detour·원본이 따로 있어야 해서 매크로로 찍어 낸다.
+#define CDTB_SOCK_DETOUR(id, tag)                                            \
+    SocketDeserFn g_orig_sock_##id = nullptr;                               \
+    void* __fastcall det_sock_##id(void* a, void* b, void* p, void* d) {    \
+        dump_socket_payload(p, tag);                                         \
+        return g_orig_sock_##id(a, b, p, d);                                 \
+    }
+CDTB_SOCK_DETOUR(add_inv, "Add/인벤")
+CDTB_SOCK_DETOUR(add_eq, "Add/장비")
+CDTB_SOCK_DETOUR(push_inv, "Push/인벤")
+CDTB_SOCK_DETOUR(push_eq, "Push/장비")
+CDTB_SOCK_DETOUR(pop_inv, "Pop/인벤")
+CDTB_SOCK_DETOUR(pop_eq, "Pop/장비")
+#undef CDTB_SOCK_DETOUR
+
+bool resolve_socket_deser(const mem::Rtti& rtti, const mem::Reader& reader,
+                          const char* class_name, std::uintptr_t* deser_out) {
+    const auto types = rtti.find_types(class_name, 2);
+    if (types.size() != 1) return false;
+    const auto vts = rtti.vtables_for(types[0].descriptor);
+    if (vts.empty()) return false;
+    std::uintptr_t deser = 0;
+    if (!reader.read(vts[0] + 0x10, &deser, sizeof(deser)) || deser == 0) {
+        return false;
+    }
+    *deser_out = deser;
+    return true;
+}
+
+bool hook_one_socket(const mem::Rtti& rtti, const mem::Reader& reader,
+                     const char* cls, void* detour, void** orig,
+                     const char* tag) {
+    std::uintptr_t deser = 0;
+    if (!resolve_socket_deser(rtti, reader, cls, &deser)) return false;
+    if (!mem::hook_install(reinterpret_cast<void*>(deser), detour, orig)) {
+        return false;
+    }
+    log::infof("소켓 캡처: {} 후킹 (RVA 0x{:X})", tag,
+               deser - reader.module_base());
+    return true;
+}
+
+bool socket_capture_install(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_socket_installed) return true;
+    g_reader = &reader;
+    if (!mem::hook_init()) return false;
+
+    int n = 0;
+    n += hook_one_socket(rtti, reader, "TrocTrAddSocketItemToInventoryReq",
+                         &det_sock_add_inv,
+                         reinterpret_cast<void**>(&g_orig_sock_add_inv),
+                         "Add/인벤");
+    n += hook_one_socket(rtti, reader, "TrocTrAddSocketItemToEquipSlotReq",
+                         &det_sock_add_eq,
+                         reinterpret_cast<void**>(&g_orig_sock_add_eq),
+                         "Add/장비");
+    n += hook_one_socket(rtti, reader, "TrocTrPushSocketItemToInventoryReq",
+                         &det_sock_push_inv,
+                         reinterpret_cast<void**>(&g_orig_sock_push_inv),
+                         "Push/인벤");
+    n += hook_one_socket(rtti, reader, "TrocTrPushSocketItemToEquipSlotReq",
+                         &det_sock_push_eq,
+                         reinterpret_cast<void**>(&g_orig_sock_push_eq),
+                         "Push/장비");
+    n += hook_one_socket(rtti, reader, "TrocTrPopSocketItemToInventoryReq",
+                         &det_sock_pop_inv,
+                         reinterpret_cast<void**>(&g_orig_sock_pop_inv),
+                         "Pop/인벤");
+    n += hook_one_socket(rtti, reader, "TrocTrPopSocketItemToEquipSlotReq",
+                         &det_sock_pop_eq,
+                         reinterpret_cast<void**>(&g_orig_sock_pop_eq),
+                         "Pop/장비");
+    if (n == 0) return false;
+    g_socket_installed = true;
+    log::infof("소켓 페이로드 캡처 준비됨 ({}경로) - 소켓을 뚫거나 박으면 뜬다",
+               n);
+    return true;
+}
+
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
                               std::uint64_t* rva_out) {
     return find_one(image, kTaskDispatcherPattern, rva_out);
@@ -1058,6 +1173,50 @@ bool session_is_server(int index) {
     return g_sess_server[index];
 }
 
+namespace {
+
+// modrm 이 [reg] (mod=00, rm ∈ {rax,rcx,rdx,rbx,rsi,rdi}) 인가.
+// rm=4 는 SIB, rm=5 는 RIP 상대라 뺀다.
+bool is_deref_reg(std::uint8_t modrm) {
+    if ((modrm & 0xC0) != 0) return false;
+    const std::uint8_t rm = modrm & 7;
+    return rm == 0 || rm == 1 || rm == 2 || rm == 3 || rm == 6 || rm == 7;
+}
+
+// 본문 앞쪽 어딘가에서 `xor src,src` 로 src 를 0 으로 만들었는가.
+// 성공코드 0 을 레지스터로 저장하는 새 컴파일러 관용구를 알아보려면
+// 그 레지스터가 정말 0 인지 봐야 한다.
+bool xored_zero_before(const std::uint8_t* body, std::size_t pos,
+                       std::uint8_t src) {
+    const std::uint8_t modrm = static_cast<std::uint8_t>(0xC0 | (src << 3) | src);
+    for (std::size_t j = 0; j + 1 < pos; ++j) {
+        if ((body[j] == 0x31 || body[j] == 0x33) && body[j + 1] == modrm) {
+            // 바로 앞이 REX.R/B 면 r8~r15 이라 다른 레지스터다.
+            if (j > 0 && body[j - 1] >= 0x44 && body[j - 1] <= 0x4F) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 호출 바로 앞(24바이트)에 다섯 번째 이상 인자를 스택으로 넘기는
+// 저장(`mov [rsp+disp], reg`, disp>=0x20)이 있는가. 그림자 영역
+// 0x00~0x18 은 앞 네 레지스터 인자 몫이고, 0x20 이상은 5번째부터다.
+// 우리 처리기는 (self, packet, &struct) 3인자라 이게 없다 - 스트림
+// 경로 처리기(5인자)를 가려낸다.
+bool has_stack_arg_before(const std::uint8_t* body, std::size_t call_pos) {
+    const std::size_t lo = call_pos > 24 ? call_pos - 24 : 0;
+    for (std::size_t j = lo; j + 5 <= call_pos; ++j) {
+        if ((body[j] == 0x48 || body[j] == 0x4C) && body[j + 1] == 0x89 &&
+            body[j + 2] == 0x44 && body[j + 3] == 0x24 && body[j + 4] >= 0x20) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 bool find_handler_call(const std::uint8_t* body, std::size_t n,
                        std::uint64_t body_rva, std::uint64_t* handler_rva) {
     if (body == nullptr || handler_rva == nullptr || n < 11) return false;
@@ -1073,21 +1232,65 @@ bool find_handler_call(const std::uint8_t* body, std::size_t n,
     }
     if (n < 11) return false;
 
-    // "call rel32" 5바이트 + "C7 03 00 00 00 00" 6바이트
-    static const std::uint8_t kMark[] = {0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
-    std::uint64_t found = 0;
-    int hits = 0;
-    for (std::size_t i = 5; i + sizeof(kMark) <= n; ++i) {
+    // 처리기 호출은 `call rel32` 뒤에 성공코드 0 을 결과 포인터에
+    // 저장하는 것으로 알아본다. 그 저장이 두 꼴로 나온다.
+    //   C7 /0 [reg] 00000000       mov dword [reg], 0     (즉시값)
+    //   89 /r  [reg]                mov dword [reg], src   (src 는 0)
+    // 2026-09-04 업데이트에서 컴파일러가 즉시값 대신 미리 xor 로 0 을
+    // 만든 레지스터를 쓰기 시작해, 즉시값만 보던 옛 코드가 give 의
+    // 엉뚱한(스트림 경로) 처리기를 집었다 - 성공은 뜨나 아이템은
+    // 안 생겼다. 두 꼴을 다 본다.
+    struct Cand {
+        std::size_t call_pos;
+        std::uint64_t target;
+    };
+    Cand cands[16];
+    std::size_t ncand = 0;
+
+    for (std::size_t i = 5; i + 2 <= n && ncand < 16; ++i) {
         if (body[i - 5] != 0xE8) continue;
-        if (std::memcmp(body + i, kMark, sizeof(kMark)) != 0) continue;
+        bool store = false;
+        if (body[i] == 0xC7 && i + 6 <= n && is_deref_reg(body[i + 1]) &&
+            body[i + 2] == 0 && body[i + 3] == 0 && body[i + 4] == 0 &&
+            body[i + 5] == 0) {
+            store = true;
+        } else if (body[i] == 0x89 && is_deref_reg(body[i + 1])) {
+            // 앞바이트가 REX 면 32비트 저장이 아니다. 순수 89 /r 만.
+            const bool rex = (i >= 1 && body[i - 1] >= 0x40 && body[i - 1] <= 0x4F);
+            const std::uint8_t src = static_cast<std::uint8_t>((body[i + 1] >> 3) & 7);
+            if (!rex && xored_zero_before(body, i, src)) store = true;
+        }
+        if (!store) continue;
+
         std::int32_t rel = 0;
         std::memcpy(&rel, body + i - 4, sizeof(rel));
-        found = body_rva + i + static_cast<std::uint64_t>(
-                                   static_cast<std::int64_t>(rel));
-        if (++hits > 1) return false;
+        const std::uint64_t target =
+            body_rva + i +
+            static_cast<std::uint64_t>(static_cast<std::int64_t>(rel));
+        // 같은 대상은 한 번만.
+        bool dup = false;
+        for (std::size_t k = 0; k < ncand; ++k) {
+            if (cands[k].target == target) { dup = true; break; }
+        }
+        if (!dup) cands[ncand++] = Cand{i - 5, target};
     }
-    if (hits != 1) return false;
-    *handler_rva = found;
+
+    if (ncand == 0) return false;
+    if (ncand == 1) {
+        *handler_rva = cands[0].target;
+        return true;
+    }
+
+    // 여럿이면 5인자 스트림 경로를 빼고 3인자만 남긴다.
+    std::uint64_t kept = 0;
+    std::size_t nkept = 0;
+    for (std::size_t k = 0; k < ncand; ++k) {
+        if (has_stack_arg_before(body, cands[k].call_pos)) continue;
+        kept = cands[k].target;
+        ++nkept;
+    }
+    if (nkept != 1) return false;
+    *handler_rva = kept;
     return true;
 }
 
@@ -1641,12 +1844,20 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;
-    g_pending.extras = extras;
+    // 2026-09-04 업데이트: 소켓만 막는다. 새 처리기(생성 함수 0x2A70000)
+    // 는 소켓수(+0x5E)>0 이면 오류 분기로 빠져 상태를 오염시켜 게임이
+    // 죽는다. 내구도(+0x2A)·연마(+0x1AE)는 정적으로 재확인했다 - 소켓수
+    // 0 인 정상 경로의 필드 복사 함수 0x234F930 이 그 오프셋을 그대로
+    // 읽는다(연마는 아이템 표 +0x2E8 상한으로 자름). 담금질도 그대로.
+    // 자세한 것은 specs/2026-09-04-game-update-break.md.
+    GiveExtras safe = extras;
+    safe.socket_count = 0;
+    g_pending.extras = safe;
     g_outcome = SpawnOutcome{};
     g_has_pending.store(true, std::memory_order_release);
-    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 소켓 {}) -"
+    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}) -"
                " 게임 스레드를 기다린다",
-               extras.temper, static_cast<int>(extras.socket_count));
+               safe.temper, safe.endurance, safe.sharpness);
     return true;
 }
 

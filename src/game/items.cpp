@@ -325,6 +325,51 @@ std::vector<std::uint64_t> find_item_key_map_rvas(
 
 namespace {
 
+// 맵 테이블에 접근하는 코드 관용구로 전역을 뽑는다:
+//   48 8B /r [rip+disp32]   mov  reg, [전역]
+//   48 83 /0 68             add  reg, 0x68     (테이블은 객체의 +0x68)
+// 변환 함수 본문 패턴(kConvertBodyPattern)은 스택 오프셋에 의존해
+// 업데이트로 깨졌다. 이 11바이트 관용구는 스택과 무관해 더 튼튼하고,
+// 맵을 쓰는 여러 곳 중 하나만 맞아도 전역이 나온다. 이미지가 RVA
+// 인덱스라 오프셋이 곧 명령의 RVA 다.
+std::vector<std::uint64_t> load_add68_globals(
+    const std::vector<std::uint8_t>& image) {
+    std::vector<std::uint64_t> out;
+    if (image.size() < 12) return out;
+    // mov [rip] 의 modrm: mod=00, reg, rm=101. reg<<3 | 5.
+    auto mov_reg = [](std::uint8_t m) -> int {
+        if ((m & 0xC7) != 0x05) return -1;   // mod=00, rm=101
+        return (m >> 3) & 7;
+    };
+    // add reg,imm8 의 modrm: mod=11, /0, rm=reg. 0xC0 | reg.
+    auto add_reg = [](std::uint8_t m) -> int {
+        if ((m & 0xF8) != 0xC0) return -1;
+        return m & 7;
+    };
+    for (std::size_t i = 0; i + 11 <= image.size(); ++i) {
+        if (image[i] != 0x48 || image[i + 1] != 0x8B) continue;
+        const int r1 = mov_reg(image[i + 2]);
+        if (r1 < 0) continue;
+        if (image[i + 7] != 0x48 || image[i + 8] != 0x83 ||
+            image[i + 10] != 0x68) {
+            continue;
+        }
+        const int r2 = add_reg(image[i + 9]);
+        if (r2 != r1) continue;   // 같은 레지스터라야 로드-후-더하기다
+        std::int32_t disp = 0;
+        std::memcpy(&disp, image.data() + i + 3, sizeof(disp));
+        const std::int64_t rva = static_cast<std::int64_t>(i + 7) + disp;
+        if (rva < 0 || static_cast<std::uint64_t>(rva) + 8 > image.size()) {
+            continue;
+        }
+        out.push_back(static_cast<std::uint64_t>(rva));
+    }
+    // 같은 전역이 여러 곳에서 쓰인다. 한 번만 본다.
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 // 후보 하나를 따라가 표의 앞뒤가 맞는지 본다.
 bool read_candidate(const mem::Reader& reader, std::uint64_t rva,
                     ItemKeyMap* out) {
@@ -372,9 +417,18 @@ bool find_item_key_map(const mem::Reader& reader,
                        std::uint32_t expected_count, ItemKeyMap* out) {
     if (out == nullptr || expected_count == 0) return false;
 
+    // 후보를 두 갈래로 모은다: 변환 함수 본문 패턴(옛 방식)과, 더
+    // 튼튼한 load+add0x68 관용구. 업데이트로 앞엎것이 깨져도
+    // 뒷엎것이 맵 전역을 잡는다. 합쳐서 개수가 맞는 유일한 것을 고른다.
+    std::vector<std::uint64_t> rvas =
+        find_item_key_map_rvas(image, kMaxCandidates);
+    for (const auto rva : load_add68_globals(image)) rvas.push_back(rva);
+    std::sort(rvas.begin(), rvas.end());
+    rvas.erase(std::unique(rvas.begin(), rvas.end()), rvas.end());
+
     ItemKeyMap found;
     std::size_t hits = 0;
-    for (const auto rva : find_item_key_map_rvas(image, kMaxCandidates)) {
+    for (const auto rva : rvas) {
         ItemKeyMap m;
         if (!read_candidate(reader, rva, &m)) continue;
         if (m.count != expected_count) continue;
@@ -385,6 +439,140 @@ bool find_item_key_map(const mem::Reader& reader,
     if (hits != 1) return false;
     *out = found;
     return true;
+}
+
+// 대응표 테이블은 ItemInfoManager 자신의 +0x68 이다(실측: 맵 객체의
+// RTTI 가 .?AVItemInfoManager 이고 매니저 +0x30 아이템 개수와 +0x6C
+// 맵 개수가 둘 다 6813). 매니저는 RTTI 로 이미 찾으므로, 스캔·패턴
+// 없이 즉시 읽는다. 업데이트에도 견딘다(클래스 이름은 안 바뀐다).
+bool find_item_key_map_from_manager(const mem::Reader& reader,
+                                    std::uintptr_t manager,
+                                    std::uint32_t expected_count,
+                                    ItemKeyMap* out) {
+    if (out == nullptr || manager == 0 || expected_count == 0) return false;
+
+    ItemKeyMap m;
+    m.global = 0;
+    m.object = manager;
+    m.table = manager + kMapAtObject;
+
+    std::uint64_t slots = 0, records = 0;
+    if (!reader.read_value(m.table + kMapCountField, &m.count)) return false;
+    if (!reader.read_value(m.table + kMapCapacityField, &m.capacity)) {
+        return false;
+    }
+    if (!reader.read_value(m.table + kMapRecCountField, &m.record_count)) {
+        return false;
+    }
+    if (!reader.read_value(m.table + kMapSlotsPtr, &slots)) return false;
+    if (!reader.read_value(m.table + kMapRecordsPtr, &records)) return false;
+
+    if (m.count != expected_count) return false;
+    if (m.capacity < m.count || m.capacity > kMaxItemCount) return false;
+    if (m.record_count == 0 || m.record_count > kMaxItemCount) return false;
+    if (slots == 0 || records == 0) return false;
+
+    m.slots = static_cast<std::uintptr_t>(slots);
+    m.records = static_cast<std::uintptr_t>(records);
+    *out = m;
+    return true;
+}
+
+namespace {
+
+// 후보 table 자리의 레코드 몇 개를 따라가 키가 실제 아이템인지 본다.
+// 이 의미 검증이 우연히 개수만 같은 다른 해시맵을 걸러 낸다.
+bool records_look_like_items(const mem::Reader& reader,
+                             std::uintptr_t records,
+                             std::uint32_t record_count,
+                             const std::vector<std::uint32_t>& sorted_keys) {
+    if (records == 0 || record_count == 0 || sorted_keys.empty()) return false;
+
+    const std::uint32_t probe = record_count < 64 ? record_count : 64;
+    std::size_t checked = 0, present = 0;
+    for (std::uint32_t i = 0; i < probe; ++i) {
+        std::uint64_t rec = 0;
+        if (!reader.read_value(records + i * 8, &rec) || rec == 0) continue;
+        std::uint32_t key = 0;
+        if (!reader.read_value(static_cast<std::uintptr_t>(rec) + kRecItemKey,
+                               &key)) {
+            continue;
+        }
+        ++checked;
+        if (std::binary_search(sorted_keys.begin(), sorted_keys.end(), key)) {
+            ++present;
+        }
+    }
+    // 적어도 8개를 봤고 전부 아이템 키여야 한다. 하나라도 어긋나면
+    // 다른 표다 - 아이템 대응표는 키가 전부 표에 있다(실측 누락 0).
+    return checked >= 8 && present == checked;
+}
+
+}  // namespace
+
+bool find_item_key_map_by_scan(const mem::Reader& reader,
+                               std::uint32_t expected_count,
+                               const std::vector<std::uint32_t>& sorted_keys,
+                               ItemKeyMap* out) {
+    if (out == nullptr || expected_count == 0) return false;
+
+    // 큰 영역도 통째로 복사하지 않고 64MB 청크로 훑는다. 512MB 를
+    // 건너뛰던 옛 코드는 맵 객체가 큰 힙 영역에 있으면 못 찾아
+    // 대응표가 안 올라왔다(인벤토리·지급 패널이 막혔다). 맵 구조가
+    // 청크 경계에 걸리지 않게 kOverlap 만큼 겹쳐 읽는다.
+    constexpr std::size_t kChunk = 64u << 20;
+    constexpr std::size_t kOverlap = 0x40;
+    std::vector<std::uint8_t> buf;
+    for (const auto& reg : reader.heap_regions()) {
+        const auto base = reinterpret_cast<std::uintptr_t>(reg.begin);
+        if (reg.size == 0) continue;
+        for (std::size_t off = 0; off < reg.size; off += kChunk - kOverlap) {
+            const std::size_t len =
+                (reg.size - off < kChunk) ? (reg.size - off) : kChunk;
+            if (len < 0x20) break;
+            buf.resize(len);
+            if (!reader.read(base + off, buf.data(), len)) continue;
+
+            // 개수는 table+0x04 에 있다. table 은 8정렬(객체 16정렬
+            // +0x68)이라 개수 u32 의 주소는 8로 나눠 4가 남는다.
+            for (std::size_t i = 4; i + 0x20 <= len; i += 8) {
+                std::uint32_t count = 0;
+                std::memcpy(&count, buf.data() + i, 4);
+                if (count != expected_count) continue;
+
+                const std::size_t t = i - 4;   // table 시작
+                std::uint32_t capacity = 0, record_count = 0;
+                std::uint64_t slots = 0, records = 0;
+                std::memcpy(&capacity, buf.data() + t + kMapCapacityField, 4);
+                std::memcpy(&record_count, buf.data() + t + kMapRecCountField, 4);
+                std::memcpy(&slots, buf.data() + t + kMapSlotsPtr, 8);
+                std::memcpy(&records, buf.data() + t + kMapRecordsPtr, 8);
+
+                if (capacity < count || capacity > kMaxItemCount) continue;
+                if (record_count == 0 || record_count > kMaxItemCount) continue;
+                if (slots == 0 || records == 0) continue;
+
+                if (!records_look_like_items(
+                        reader, static_cast<std::uintptr_t>(records),
+                        record_count, sorted_keys)) {
+                    continue;
+                }
+
+                ItemKeyMap m;
+                m.table = base + off + t;
+                m.object = m.table - kMapAtObject;
+                m.global = 0;   // 전역이 아니라 객체를 직접 찾았다
+                m.slots = static_cast<std::uintptr_t>(slots);
+                m.records = static_cast<std::uintptr_t>(records);
+                m.count = count;
+                m.capacity = capacity;
+                m.record_count = record_count;
+                *out = m;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool read_item_key_map(const mem::Reader& reader, const ItemKeyMap& map,
@@ -446,11 +634,28 @@ bool discover_item_ids(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_ids_ready.load(std::memory_order_acquire)) return true;
     // 후보를 개수로 가리므로 아이템 표가 먼저 있어야 한다.
     if (!items_ready()) return false;
-    const auto count = static_cast<std::uint32_t>(item_catalog().size());
+    const auto& cat = item_catalog();
+    const auto count = static_cast<std::uint32_t>(cat.size());
     if (count == 0) return false;
 
+    // 가장 빠르고 튼튼한 길: 대응표는 ItemInfoManager 의 +0x68 이다.
+    // 매니저를 RTTI 로 찾아 바로 읽는다(스캔 없이 즉시).
     ItemKeyMap map;
-    if (!find_item_key_map(reader, rtti.image(), count, &map)) return false;
+    bool found = false;
+    std::uintptr_t manager = 0;
+    if (find_item_manager(rtti, reader, &manager)) {
+        found = find_item_key_map_from_manager(reader, manager, count, &map);
+    }
+    // 만약을 위한 폴백: 매니저 레이아웃이 바뀌면 패턴·힙 스캔으로.
+    if (!found && !find_item_key_map(reader, rtti.image(), count, &map)) {
+        std::vector<std::uint32_t> keys;
+        keys.reserve(cat.size());
+        for (const auto& e : cat) keys.push_back(e.key);
+        std::sort(keys.begin(), keys.end());
+        if (!find_item_key_map_by_scan(reader, count, keys, &map)) return false;
+        log::infof("아이템 대응표: 매니저+0x68 실패, 힙 스캔으로 찾았다 "
+                   "(객체 0x{:X})", map.object);
+    }
 
     auto built = std::make_unique<std::vector<ItemKeyPair>>();
     if (!read_item_key_map(reader, map, built.get()) || built->empty()) {

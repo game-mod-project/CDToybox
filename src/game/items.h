@@ -157,6 +157,30 @@ bool find_item_key_map(const mem::Reader& reader,
                        const std::vector<std::uint8_t>& image,
                        std::uint32_t expected_count, ItemKeyMap* out);
 
+// 함수 본문 패턴에 기대지 않고, 힙에서 대응표 구조를 직접 찾는다.
+//
+// 변환 함수 패턴은 스택 오프셋·명령 인코딩에 의존해 게임이 갱신되면
+// 깨진다(2026-09-04 업데이트에서 후보 0곳이 됐다). 대응표 객체는 힙에
+// 있고 그 컨테이너 레이아웃(+0x04 개수, +0x08 용량, +0x10 슬롯,
+// +0x18 레코드)은 엔진 코드라 데이터·주소가 바뀌어도 그대로다.
+//
+// 개수가 expected_count 인 자리를 찾고, 레코드 몇 개의 키가 실제
+// 아이템 키(sorted_keys)에 있는지로 확인한다 - 이 의미 검증이 있어야
+// 우연히 개수만 같은 다른 해시맵을 배제한다. sorted_keys 는 오름차순.
+// global 은 0 으로 둔다(전역 슬롯이 아니라 객체를 직접 찾았다).
+bool find_item_key_map_by_scan(const mem::Reader& reader,
+                               std::uint32_t expected_count,
+                               const std::vector<std::uint32_t>& sorted_keys,
+                               ItemKeyMap* out);
+
+// 가장 튼튼하고 빠른 길: 대응표는 ItemInfoManager 자신의 +0x68 이다.
+// 매니저를 RTTI 로 찾아(find_item_manager) 그 주소를 넘기면 스캔 없이
+// 즉시 읽는다. 개수가 expected_count 여야 한다.
+bool find_item_key_map_from_manager(const mem::Reader& reader,
+                                    std::uintptr_t manager,
+                                    std::uint32_t expected_count,
+                                    ItemKeyMap* out);
+
 // 레코드 배열을 걸어 {아이템 키, 순번} 을 모은다. 순번은 배열에서의
 // 위치 그대로다 - 널 슬롯을 건너뛰어도 앞으로 당기지 않는다.
 //
