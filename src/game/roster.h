@@ -51,6 +51,14 @@ std::string read_engine_string(const mem::Reader& reader,
 bool looks_like_static_manager(const mem::Reader& reader,
                                std::uintptr_t manager);
 
+// 주어진 클래스의 살아 있는 매니저(looks_like 통과)를 찾는다.
+bool find_static_manager(const mem::Reader& reader, const mem::Rtti& rtti,
+                         const char* manager_class, std::uintptr_t* out);
+
+// 매니저의 개수와 레코드 배열을 낸다(진단용).
+bool roster_header(const mem::Reader& reader, std::uintptr_t manager,
+                   std::uint32_t* count, std::uintptr_t* records);
+
 // 주어진 매니저 클래스(`.?AVVehicleInfoManager@pa@@` 등)의 살아 있는
 // 인스턴스를 RTTI 로 찾아, 레코드를 걷고 내부 이름을 붙인다.
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
