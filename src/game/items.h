@@ -292,6 +292,12 @@ bool socket_bytes_for_key(std::uint32_t gem_key, std::uint8_t out[6]);
 // 이름이 실제로 풀렸는가.
 bool items_named();
 
+// 로딩 표시용. 마지막으로 만든 카탈로그의 (이름 풀린 수, 전체 수).
+// 이름은 현지화 후 뒤늦게 채워지므로, 창이 '불러오는 중 N/M' 으로
+// 진행을 보여 주면 느린 로드인지 멈춘 것인지 사람이 가릴 수 있다.
+std::size_t items_named_count();
+std::size_t items_total_count();
+
 // 캐시가 준비됐는가. 준비된 뒤에는 목록이 다시 바뀌지 않는다.
 bool items_ready();
 
