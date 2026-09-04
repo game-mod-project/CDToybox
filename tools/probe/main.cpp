@@ -1555,11 +1555,19 @@ void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     if (!game::find_item_key_map(reader, rt.image(),
                                  static_cast<std::uint32_t>(items.size()),
                                  &m)) {
-        std::printf("대응표를 찾지 못했습니다 - 개수가 %zu 인 후보가\n"
-                    "없거나 둘 이상입니다. 후보를 냅니다.\n\n",
-                    items.size());
-        dump_itemmap_candidates(rt, reader);
-        return;
+        std::printf("패턴으로 못 찾음 - 힙 스캔으로 재시도합니다.\n");
+        std::vector<std::uint32_t> keys;
+        keys.reserve(items.size());
+        for (const auto& it : items) keys.push_back(it.key);
+        std::sort(keys.begin(), keys.end());
+        if (!game::find_item_key_map_by_scan(
+                reader, static_cast<std::uint32_t>(items.size()), keys, &m)) {
+            std::printf("힙 스캔으로도 못 찾았습니다. 후보를 냅니다.\n\n");
+            dump_itemmap_candidates(rt, reader);
+            return;
+        }
+        std::printf("힙 스캔 성공: 객체 0x%llX\n",
+                    static_cast<unsigned long long>(m.object));
     }
     std::vector<game::ItemKeyPair> pairs;
     if (!game::read_item_key_map(reader, m, &pairs)) {
@@ -1568,9 +1576,14 @@ void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         return;
     }
 
-    std::printf("전역     0x%llX  (RVA 0x%llX)\n",
-                static_cast<unsigned long long>(m.global),
-                static_cast<unsigned long long>(m.global - reader.module_base()));
+    if (m.global != 0) {
+        std::printf("전역     0x%llX  (RVA 0x%llX)\n",
+                    static_cast<unsigned long long>(m.global),
+                    static_cast<unsigned long long>(m.global -
+                                                    reader.module_base()));
+    } else {
+        std::printf("전역     (없음 - 힙 스캔으로 객체를 직접 찾음)\n");
+    }
     std::printf("객체     0x%llX\n", static_cast<unsigned long long>(m.object));
     std::printf("표       0x%llX   개수 %u / 용량 %u\n",
                 static_cast<unsigned long long>(m.table), m.count, m.capacity);

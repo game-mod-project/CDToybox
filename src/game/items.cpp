@@ -387,6 +387,92 @@ bool find_item_key_map(const mem::Reader& reader,
     return true;
 }
 
+namespace {
+
+// 후보 table 자리의 레코드 몇 개를 따라가 키가 실제 아이템인지 본다.
+// 이 의미 검증이 우연히 개수만 같은 다른 해시맵을 걸러 낸다.
+bool records_look_like_items(const mem::Reader& reader,
+                             std::uintptr_t records,
+                             std::uint32_t record_count,
+                             const std::vector<std::uint32_t>& sorted_keys) {
+    if (records == 0 || record_count == 0 || sorted_keys.empty()) return false;
+
+    const std::uint32_t probe = record_count < 64 ? record_count : 64;
+    std::size_t checked = 0, present = 0;
+    for (std::uint32_t i = 0; i < probe; ++i) {
+        std::uint64_t rec = 0;
+        if (!reader.read_value(records + i * 8, &rec) || rec == 0) continue;
+        std::uint32_t key = 0;
+        if (!reader.read_value(static_cast<std::uintptr_t>(rec) + kRecItemKey,
+                               &key)) {
+            continue;
+        }
+        ++checked;
+        if (std::binary_search(sorted_keys.begin(), sorted_keys.end(), key)) {
+            ++present;
+        }
+    }
+    // 적어도 8개를 봤고 전부 아이템 키여야 한다. 하나라도 어긋나면
+    // 다른 표다 - 아이템 대응표는 키가 전부 표에 있다(실측 누락 0).
+    return checked >= 8 && present == checked;
+}
+
+}  // namespace
+
+bool find_item_key_map_by_scan(const mem::Reader& reader,
+                               std::uint32_t expected_count,
+                               const std::vector<std::uint32_t>& sorted_keys,
+                               ItemKeyMap* out) {
+    if (out == nullptr || expected_count == 0) return false;
+
+    std::vector<std::uint8_t> buf;
+    for (const auto& reg : reader.heap_regions()) {
+        const auto base = reinterpret_cast<std::uintptr_t>(reg.begin);
+        if (reg.size == 0 || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!reader.read(base, buf.data(), buf.size())) continue;
+
+        // 개수는 table+0x04 에 있다. table 은 8정렬(객체 16정렬 +0x68)
+        // 이라 개수 u32 의 주소는 8로 나눠 4가 남는다. 그 자리만 본다.
+        for (std::size_t i = 4; i + 0x20 <= buf.size(); i += 8) {
+            std::uint32_t count = 0;
+            std::memcpy(&count, buf.data() + i, 4);
+            if (count != expected_count) continue;
+
+            const std::size_t t = i - 4;   // table 시작
+            std::uint32_t capacity = 0, record_count = 0;
+            std::uint64_t slots = 0, records = 0;
+            std::memcpy(&capacity, buf.data() + t + kMapCapacityField, 4);
+            std::memcpy(&record_count, buf.data() + t + kMapRecCountField, 4);
+            std::memcpy(&slots, buf.data() + t + kMapSlotsPtr, 8);
+            std::memcpy(&records, buf.data() + t + kMapRecordsPtr, 8);
+
+            if (capacity < count || capacity > kMaxItemCount) continue;
+            if (record_count == 0 || record_count > kMaxItemCount) continue;
+            if (slots == 0 || records == 0) continue;
+
+            if (!records_look_like_items(reader,
+                                         static_cast<std::uintptr_t>(records),
+                                         record_count, sorted_keys)) {
+                continue;
+            }
+
+            ItemKeyMap m;
+            m.table = base + t;
+            m.object = m.table - kMapAtObject;
+            m.global = 0;   // 전역이 아니라 객체를 직접 찾았다
+            m.slots = static_cast<std::uintptr_t>(slots);
+            m.records = static_cast<std::uintptr_t>(records);
+            m.count = count;
+            m.capacity = capacity;
+            m.record_count = record_count;
+            *out = m;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool read_item_key_map(const mem::Reader& reader, const ItemKeyMap& map,
                        std::vector<ItemKeyPair>* out) {
     if (out == nullptr || map.records == 0) return false;
@@ -446,11 +532,22 @@ bool discover_item_ids(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_ids_ready.load(std::memory_order_acquire)) return true;
     // 후보를 개수로 가리므로 아이템 표가 먼저 있어야 한다.
     if (!items_ready()) return false;
-    const auto count = static_cast<std::uint32_t>(item_catalog().size());
+    const auto& cat = item_catalog();
+    const auto count = static_cast<std::uint32_t>(cat.size());
     if (count == 0) return false;
 
+    // 패턴을 먼저 시도하고(빠르다), 깨졌으면 힙 스캔으로 떨어진다.
+    // 스캔은 레코드 키를 아이템 표와 대조하므로 정렬 키가 필요하다.
     ItemKeyMap map;
-    if (!find_item_key_map(reader, rtti.image(), count, &map)) return false;
+    if (!find_item_key_map(reader, rtti.image(), count, &map)) {
+        std::vector<std::uint32_t> keys;
+        keys.reserve(cat.size());
+        for (const auto& e : cat) keys.push_back(e.key);
+        std::sort(keys.begin(), keys.end());
+        if (!find_item_key_map_by_scan(reader, count, keys, &map)) return false;
+        log::infof("아이템 대응표: 패턴이 깨져 힙 스캔으로 찾았다 "
+                   "(객체 0x{:X})", map.object);
+    }
 
     auto built = std::make_unique<std::vector<ItemKeyPair>>();
     if (!read_item_key_map(reader, map, built.get()) || built->empty()) {
