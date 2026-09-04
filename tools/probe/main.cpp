@@ -23,6 +23,7 @@
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
+#include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/localization.h"
@@ -1528,6 +1529,43 @@ void dump_itemmap_candidates(const mem::Rtti& rt, const mem::Reader& reader) {
     }
 }
 
+// 치트 메시지 하나를 모드와 같은 코드(resolve_cheat_message)로
+// 해석해 ID·서술자·처리기 RVA 를 낸다. 배포 전에 어느 치트가
+// 새 exe 에서 해석되고 어느 것이 깨졌는지 실측한다.
+//
+//   cheat <클래스명>
+//   cheat                 알려진 치트 여럿을 한 번에
+void cmd_cheat_one(const mem::Rtti& rt, const mem::Reader& reader,
+                   const char* name) {
+    game::CheatMessage m;
+    if (!game::resolve_cheat_message(rt, reader, name, &m)) {
+        std::printf("  %-40s  해석 실패\n", name);
+        return;
+    }
+    const auto base = reader.module_base();
+    std::printf("  %-40s  ID %-5u  서술자 RVA 0x%llX  처리기 RVA 0x%llX\n",
+                name, m.id,
+                static_cast<unsigned long long>(m.descriptor - base),
+                static_cast<unsigned long long>(m.handler - base));
+}
+
+void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+               char** argv) {
+    if (argc > 2) {
+        cmd_cheat_one(rt, reader, argv[2]);
+        return;
+    }
+    // 인자가 없으면 관심 치트를 한 번에 - 무엇이 깨졌는지 한눈에.
+    static const char* kKnown[] = {
+        "CreateItemFromTrItemValueCheatReq",
+        "SpawnItemToGroundByCheatReq",
+        "SpawnCharacterCheatReq",
+        "VaryEnduranceItemByCheatReq",
+        "VaryStatCheatReq",
+    };
+    for (const char* n : kKnown) cmd_cheat_one(rt, reader, n);
+}
+
 void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                  char** argv) {
     if (argc > 2 && std::strcmp(argv[2], "cand") == 0) {
@@ -2584,6 +2622,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "inv") {
         cmd_inv(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "cheat") {
+        cmd_cheat(rt, reader, argc, argv);
         return 0;
     }
 

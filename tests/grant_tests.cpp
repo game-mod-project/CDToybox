@@ -169,6 +169,52 @@ TEST(find_handler_call_fails_when_ambiguous) {
                                          &handler));
 }
 
+// 2026-09-04 업데이트: 컴파일러가 성공코드 0 을 즉시값 대신 미리 xor
+// 로 0 을 만든 레지스터로 저장하기 시작했다. `mov [rbx], esi` 꼴도
+// 처리기 저장으로 알아봐야 한다 - esi 가 앞서 xor 로 0 이 됐을 때만.
+TEST(find_handler_call_reads_register_zero_store) {
+    // 33 F6 = xor esi,esi ; E8 10.. = call ; 89 33 = mov [rbx],esi
+    std::vector<std::uint8_t> body = {0x33, 0xF6,
+                                      0xE8, 0x10, 0x00, 0x00, 0x00,
+                                      0x89, 0x33,
+                                      0x90, 0x90, 0x90};   // n>=11 패딩
+    std::uint64_t handler = 0;
+    CHECK(cdtb::game::find_handler_call(body.data(), body.size(), 0x1000,
+                                        &handler));
+    // 호출 0x1002, 다음 명령 0x1007, 대상 0x1017
+    CHECK_EQ(handler, std::uint64_t{0x1017});
+}
+
+// esi 가 0 이 된 적이 없으면 성공 저장이 아니다 - 임의의
+// `mov [reg], reg` 를 처리기로 오인하면 안 된다.
+TEST(find_handler_call_ignores_nonzero_register_store) {
+    std::vector<std::uint8_t> body = {0xE8, 0x10, 0x00, 0x00, 0x00,
+                                      0x89, 0x33,            // mov [rbx],esi
+                                      0x90, 0x90, 0x90, 0x90};
+    std::uint64_t handler = 0;
+    CHECK(!cdtb::game::find_handler_call(body.data(), body.size(), 0x1000,
+                                         &handler));
+}
+
+// give 처럼 처리기 호출이 둘일 때(빠른 경로 3인자 · 스트림 경로
+// 5인자), 5번째 인자를 스택으로 넘기는(`mov [rsp+0x20],reg`) 스트림
+// 경로를 빼고 3인자 경로를 고른다.
+TEST(find_handler_call_prefers_three_arg_over_stack_arg_path) {
+    std::vector<std::uint8_t> body = {
+        // 3인자 빠른 경로: 그냥 call + mov [rbx],0
+        0xE8, 0x10, 0x00, 0x00, 0x00,
+        0xC7, 0x03, 0x00, 0x00, 0x00, 0x00,
+        // 5인자 스트림 경로: mov [rsp+0x20],rax 뒤에 call + mov [rbx],0
+        0x48, 0x89, 0x44, 0x24, 0x20,
+        0xE8, 0x20, 0x00, 0x00, 0x00,
+        0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
+    std::uint64_t handler = 0;
+    CHECK(cdtb::game::find_handler_call(body.data(), body.size(), 0x1000,
+                                        &handler));
+    // 빠른 경로 호출 0x1000, 다음 0x1005, 대상 0x1015
+    CHECK_EQ(handler, std::uint64_t{0x1015});
+}
+
 // 35개 치트가 전부 같은 문 하나를 지난다. 처리기 앞머리가 세션에서
 // 이 사슬로 객체를 꺼내 가상 함수를 불러 보고, 거짓이면 조용히
 // 반환한다. 그 객체를 알아야 문을 열 수 있다.

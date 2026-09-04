@@ -1058,6 +1058,50 @@ bool session_is_server(int index) {
     return g_sess_server[index];
 }
 
+namespace {
+
+// modrm 이 [reg] (mod=00, rm ∈ {rax,rcx,rdx,rbx,rsi,rdi}) 인가.
+// rm=4 는 SIB, rm=5 는 RIP 상대라 뺀다.
+bool is_deref_reg(std::uint8_t modrm) {
+    if ((modrm & 0xC0) != 0) return false;
+    const std::uint8_t rm = modrm & 7;
+    return rm == 0 || rm == 1 || rm == 2 || rm == 3 || rm == 6 || rm == 7;
+}
+
+// 본문 앞쪽 어딘가에서 `xor src,src` 로 src 를 0 으로 만들었는가.
+// 성공코드 0 을 레지스터로 저장하는 새 컴파일러 관용구를 알아보려면
+// 그 레지스터가 정말 0 인지 봐야 한다.
+bool xored_zero_before(const std::uint8_t* body, std::size_t pos,
+                       std::uint8_t src) {
+    const std::uint8_t modrm = static_cast<std::uint8_t>(0xC0 | (src << 3) | src);
+    for (std::size_t j = 0; j + 1 < pos; ++j) {
+        if ((body[j] == 0x31 || body[j] == 0x33) && body[j + 1] == modrm) {
+            // 바로 앞이 REX.R/B 면 r8~r15 이라 다른 레지스터다.
+            if (j > 0 && body[j - 1] >= 0x44 && body[j - 1] <= 0x4F) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 호출 바로 앞(24바이트)에 다섯 번째 이상 인자를 스택으로 넘기는
+// 저장(`mov [rsp+disp], reg`, disp>=0x20)이 있는가. 그림자 영역
+// 0x00~0x18 은 앞 네 레지스터 인자 몫이고, 0x20 이상은 5번째부터다.
+// 우리 처리기는 (self, packet, &struct) 3인자라 이게 없다 - 스트림
+// 경로 처리기(5인자)를 가려낸다.
+bool has_stack_arg_before(const std::uint8_t* body, std::size_t call_pos) {
+    const std::size_t lo = call_pos > 24 ? call_pos - 24 : 0;
+    for (std::size_t j = lo; j + 5 <= call_pos; ++j) {
+        if ((body[j] == 0x48 || body[j] == 0x4C) && body[j + 1] == 0x89 &&
+            body[j + 2] == 0x44 && body[j + 3] == 0x24 && body[j + 4] >= 0x20) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 bool find_handler_call(const std::uint8_t* body, std::size_t n,
                        std::uint64_t body_rva, std::uint64_t* handler_rva) {
     if (body == nullptr || handler_rva == nullptr || n < 11) return false;
@@ -1073,21 +1117,65 @@ bool find_handler_call(const std::uint8_t* body, std::size_t n,
     }
     if (n < 11) return false;
 
-    // "call rel32" 5바이트 + "C7 03 00 00 00 00" 6바이트
-    static const std::uint8_t kMark[] = {0xC7, 0x03, 0x00, 0x00, 0x00, 0x00};
-    std::uint64_t found = 0;
-    int hits = 0;
-    for (std::size_t i = 5; i + sizeof(kMark) <= n; ++i) {
+    // 처리기 호출은 `call rel32` 뒤에 성공코드 0 을 결과 포인터에
+    // 저장하는 것으로 알아본다. 그 저장이 두 꼴로 나온다.
+    //   C7 /0 [reg] 00000000       mov dword [reg], 0     (즉시값)
+    //   89 /r  [reg]                mov dword [reg], src   (src 는 0)
+    // 2026-09-04 업데이트에서 컴파일러가 즉시값 대신 미리 xor 로 0 을
+    // 만든 레지스터를 쓰기 시작해, 즉시값만 보던 옛 코드가 give 의
+    // 엉뚱한(스트림 경로) 처리기를 집었다 - 성공은 뜨나 아이템은
+    // 안 생겼다. 두 꼴을 다 본다.
+    struct Cand {
+        std::size_t call_pos;
+        std::uint64_t target;
+    };
+    Cand cands[16];
+    std::size_t ncand = 0;
+
+    for (std::size_t i = 5; i + 2 <= n && ncand < 16; ++i) {
         if (body[i - 5] != 0xE8) continue;
-        if (std::memcmp(body + i, kMark, sizeof(kMark)) != 0) continue;
+        bool store = false;
+        if (body[i] == 0xC7 && i + 6 <= n && is_deref_reg(body[i + 1]) &&
+            body[i + 2] == 0 && body[i + 3] == 0 && body[i + 4] == 0 &&
+            body[i + 5] == 0) {
+            store = true;
+        } else if (body[i] == 0x89 && is_deref_reg(body[i + 1])) {
+            // 앞바이트가 REX 면 32비트 저장이 아니다. 순수 89 /r 만.
+            const bool rex = (i >= 1 && body[i - 1] >= 0x40 && body[i - 1] <= 0x4F);
+            const std::uint8_t src = static_cast<std::uint8_t>((body[i + 1] >> 3) & 7);
+            if (!rex && xored_zero_before(body, i, src)) store = true;
+        }
+        if (!store) continue;
+
         std::int32_t rel = 0;
         std::memcpy(&rel, body + i - 4, sizeof(rel));
-        found = body_rva + i + static_cast<std::uint64_t>(
-                                   static_cast<std::int64_t>(rel));
-        if (++hits > 1) return false;
+        const std::uint64_t target =
+            body_rva + i +
+            static_cast<std::uint64_t>(static_cast<std::int64_t>(rel));
+        // 같은 대상은 한 번만.
+        bool dup = false;
+        for (std::size_t k = 0; k < ncand; ++k) {
+            if (cands[k].target == target) { dup = true; break; }
+        }
+        if (!dup) cands[ncand++] = Cand{i - 5, target};
     }
-    if (hits != 1) return false;
-    *handler_rva = found;
+
+    if (ncand == 0) return false;
+    if (ncand == 1) {
+        *handler_rva = cands[0].target;
+        return true;
+    }
+
+    // 여럿이면 5인자 스트림 경로를 빼고 3인자만 남긴다.
+    std::uint64_t kept = 0;
+    std::size_t nkept = 0;
+    for (std::size_t k = 0; k < ncand; ++k) {
+        if (has_stack_arg_before(body, cands[k].call_pos)) continue;
+        kept = cands[k].target;
+        ++nkept;
+    }
+    if (nkept != 1) return false;
+    *handler_rva = kept;
     return true;
 }
 
