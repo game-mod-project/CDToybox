@@ -1331,6 +1331,69 @@ void run_spawn(std::uintptr_t session, std::uint32_t item_key,
     if (out != nullptr) *out = o;
 }
 
+// 처리기(0x278B860)가 실제로 하는 판정을 그대로 재현해 어디서 빠지는지
+// 잡는다. 처리기는 조용히 실패하므로(개체가 안 생김) 이 재현이 유일한
+// 실측이다. 값을 POD 에 담고 로그는 __except 밖에서 한다.
+struct CharTrace {
+    int step = 0;                 // 마지막으로 통과한 단계
+    std::uintptr_t spawner = 0;   // 세션 vtable[0x160] 결과
+    int ctx_byte = -1;            // 0x1D48380 이 채우는 +0x10 바이트
+    std::uintptr_t gate = 0;      // [스포너+0x68]+0x130
+    int gate_ok = -1;             // 게이트 vtable[0x140](gate,0)
+    std::uintptr_t record = 0;    // 키 조회 결과
+    int ordinal = -1;             // record 의 u16 순번 (0xFFFF 면 없음)
+};
+
+bool trace_char_path(std::uintptr_t session, std::uint32_t key,
+                     std::uintptr_t base, CharTrace* t) {
+    using GetSpawnerFn = std::uintptr_t(__fastcall*)(void*);
+    using CtxFn = void(__fastcall*)(void*, void*);
+    using GateFn = bool(__fastcall*)(void*, void*);
+    using LookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
+    __try {
+        t->step = 1;
+        void* sess = reinterpret_cast<void*>(session);
+        const std::uintptr_t svt = *reinterpret_cast<std::uintptr_t*>(sess);
+        auto get_spawner =
+            *reinterpret_cast<GetSpawnerFn*>(svt + 0x160);
+        t->spawner = get_spawner(sess);
+        if (t->spawner == 0) return true;
+
+        t->step = 2;
+        alignas(16) std::uint8_t buf[0x80]{};
+        auto ctx = reinterpret_cast<CtxFn>(base + 0x1D48380);
+        ctx(reinterpret_cast<void*>(t->spawner), buf);
+        t->ctx_byte = buf[0x10];
+
+        t->step = 3;
+        const std::uintptr_t g68 =
+            *reinterpret_cast<std::uintptr_t*>(t->spawner + 0x68);
+        t->gate = (g68 != 0)
+                      ? *reinterpret_cast<std::uintptr_t*>(g68 + 0x130)
+                      : 0;
+        if (t->gate != 0) {
+            const std::uintptr_t gvt =
+                *reinterpret_cast<std::uintptr_t*>(t->gate);
+            auto gatefn = *reinterpret_cast<GateFn*>(gvt + 0x140);
+            t->gate_ok = gatefn(reinterpret_cast<void*>(t->gate), nullptr) ? 1
+                                                                           : 0;
+        }
+
+        t->step = 4;
+        const std::uintptr_t gobj =
+            *reinterpret_cast<std::uintptr_t*>(base + 0x6331360);
+        auto lookup = reinterpret_cast<LookupFn>(base + 0x31BBF0);
+        void* rec = lookup(reinterpret_cast<void*>(gobj + 0x68), &key);
+        t->record = reinterpret_cast<std::uintptr_t>(rec);
+        t->ordinal = (rec != nullptr) ? *reinterpret_cast<std::uint16_t*>(rec)
+                                      : -1;
+        t->step = 5;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // 캐릭터(탈것·NPC 포함)를 월드에 소환한다. TLS 가 준비된 스레드에서만.
 // 아이템 바닥 스폰과 같은 꼴이다 - 처리기가 세션에서 스포너를 얻어
 // 처리하므로 우리는 세션과 키·위치만 넘긴다. 미시도 치트라 처음엔
@@ -1364,6 +1427,20 @@ void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
                    session);
         if (out != nullptr) *out = o;
         return;
+    }
+
+    // 처리기가 조용히 실패하므로, 그 판정 경로를 그대로 재현해 어디서
+    // 빠지는지 먼저 로그로 남긴다.
+    CharTrace t;
+    const bool trace_ok =
+        trace_char_path(session, key, g_reader->module_base(), &t);
+    if (!trace_ok) {
+        log::warnf("[추적] {}단계에서 예외 (스포너 0x{:X})", t.step, t.spawner);
+    } else {
+        log::infof("[추적] 스포너 0x{:X} 컨텍스트+0x10={} 게이트객체 0x{:X} "
+                   "게이트결과={} 키조회레코드 0x{:X} 순번={}",
+                   t.spawner, t.ctx_byte, t.gate, t.gate_ok, t.record,
+                   t.ordinal);
     }
 
     std::uint64_t packet[8]{};
