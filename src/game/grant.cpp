@@ -428,7 +428,18 @@ void note_task(void* self) {
 // 계측 전용이다. **g_detour_depth 를 건드리지 않는다** - 대신 펌프
 // 전용 가드(g_pump_depth)로 중첩 진입 때 로그만 걸러 낸다. 실행은
 // 하지 않는다(펌프는 메시지 구동이라 프레임 경계가 아니었다).
+std::atomic<std::uint32_t> g_pump_raw{0};   // depth 게이트 없는 순수 진입 수
 void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
+    // [진단] detour 가 실제로 도는가 + 이 스레드에서 thread_local 이
+    // 0 으로 초기화되는가. 게이트 없이 진입할 때마다 세고, 첫 다섯 번은
+    // g_pump_depth 의 현재 값(++ 전)을 그대로 찍는다. 값이 0 이 아니면
+    // thread_local 미초기화 가설이 맞다.
+    const int depth_before = g_pump_depth;
+    const std::uint32_t raw = g_pump_raw.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (raw <= 5) {
+        log::infof("[펌프진단] 진입 {}회 스레드 {} g_pump_depth(++전)={}", raw,
+                   GetCurrentThreadId(), depth_before);
+    }
     ++g_pump_depth;
     g_orig_pump(a, b, c, d, e);
     const std::uint32_t calls =
@@ -449,7 +460,17 @@ void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
 // 아직 서 있지 않다. 작업이 돌면서 늦게 잡히는 구조다. 콜백이
 // 돌아온 자리는 그 작업이 쥐었던 락을 이미 놓았고 TLS 는 서 있다.
 // 스택도 여전히 얕다(스레드 본체 -> 이 함수).
+std::atomic<std::uint32_t> g_disp_raw{0};   // 디스패처 순수 진입 수
 void __fastcall det_task_dispatch(void* self) {
+    // [진단] 디스패처 detour 도 라이브 스택엔 있는데 note_task 로그가
+    // 0 이다. 게이트 없이 진입을 세고, 첫 다섯 번은 g_detour_depth 값을
+    // (건드리기 전에) 그대로 찍는다.
+    const int depth_before = g_detour_depth;
+    const std::uint32_t raw = g_disp_raw.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (raw <= 5) {
+        log::infof("[디스패처진단] 진입 {}회 스레드 {} g_detour_depth={}", raw,
+                   GetCurrentThreadId(), depth_before);
+    }
     g_orig_dispatch(self);
     if (g_detour_depth == 0) note_task(self);
     if (g_detour_depth == 0) {
