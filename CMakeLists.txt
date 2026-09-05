@@ -73,6 +73,7 @@ add_library(cdtoybox SHARED
     src/game/localization.cpp
     src/game/items.cpp
     src/game/roster.cpp
+    src/game/companion.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -112,6 +113,7 @@ add_executable(cdtb_tests
     tests/grant_tests.cpp
     tests/stash_tests.cpp
     tests/roster_tests.cpp
+    tests/companion_tests.cpp
     tests/image_dump_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
@@ -122,6 +124,7 @@ add_executable(cdtb_tests
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/roster.cpp
+    src/game/companion.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -147,6 +150,7 @@ add_executable(cdtb_probe
     src/game/localization.cpp
     src/game/items.cpp
     src/game/roster.cpp
+    src/game/companion.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
