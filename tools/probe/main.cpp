@@ -904,6 +904,30 @@ void cmd_heapptr(const Remote& r, int argc, char** argv) {
 //   scan next <값>  적어 둔 후보 중 지금 그 값인 것만 남긴다
 //
 // 몇 번 반복하면 한 곳으로 수렴한다.
+// 모듈 이미지에서 AOB 패턴 히트 수와 RVA 를 보고한다(인라인 훅 사이트 검증용).
+void cmd_aob(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+             char** argv) {
+    if (argc <= 2) {
+        std::printf("사용법: aob \"48 89 5F ?? ...\"\n");
+        return;
+    }
+    const auto parsed = mem::parse_pattern(argv[2]);
+    if (!parsed) {
+        std::printf("패턴 파싱 실패\n");
+        return;
+    }
+    const auto& img = rt.image();
+    const mem::Range range{img.data(), img.size()};
+    const auto hits = mem::find_all(range, *parsed, 16);
+    std::printf("히트 %zu개%s\n", hits.size(),
+                hits.size() == 1 ? " (유일 - 훅 안전)" : "");
+    for (const auto* h : hits) {
+        const std::uint64_t rva = static_cast<std::uint64_t>(h - img.data());
+        std::printf("  RVA 0x%llX  addr 0x%llX\n", (unsigned long long)rva,
+                    (unsigned long long)(reader.module_base() + rva));
+    }
+}
+
 void cmd_scan(const Remote& r, int argc, char** argv) {
     const char* kFile = "cdtb_scan.bin";
     const bool next = (argc > 2) && std::strcmp(argv[2], "next") == 0;
@@ -3167,6 +3191,7 @@ int main(int argc, char** argv) {
         cmd_roster(rt, reader, argc, argv);
         return 0;
     }
+    if (cmd == "aob") { cmd_aob(rt, reader, argc, argv); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {

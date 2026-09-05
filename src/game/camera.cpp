@@ -17,6 +17,7 @@
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
+#include "game/nofall.h"
 #include "game/player.h"
 #include "game/roster.h"
 #include "mem/reader.h"
@@ -298,6 +299,11 @@ void auto_analysis_loop() {
         // 플레이어 치트(B-1). **힙 스캔 없음** - equip 이 고른 플레이어 comp 에서
         // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
         player_discover(reader);
+
+        // 낙사 방지(No Fall Damage). 훅은 한 번 설치(자기검증), 매 주기 플레이어
+        // faller 학습을 시도한다(플레이어가 한 번 떨어져야 학습됨).
+        nofall_install(rtti, reader);
+        nofall_identify(reader);
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};
