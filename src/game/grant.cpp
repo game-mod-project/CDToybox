@@ -955,6 +955,10 @@ CDTB_SOCK_DETOUR(pop_eq, "Pop/장비")
 CDTB_SOCK_DETOUR(equip, "장착")
 CDTB_SOCK_DETOUR(moveinv, "이동")
 CDTB_SOCK_DETOUR(useitem, "사용")
+// 탈것 보관함으로/에서 이동 - 컨테이너를 넘나드니 풀 참조(타입04)로
+// 소스 컨테이너 핸들을 싣는다. 말에 짐 넣기는 흔한 동작이라 학습원으로.
+CDTB_SOCK_DETOUR(tovehicle, "탈것에")
+CDTB_SOCK_DETOUR(fromvehicle, "탈것에서")
 #undef CDTB_SOCK_DETOUR
 
 bool resolve_socket_deser(const mem::Rtti& rtti, const mem::Reader& reader,
@@ -1022,6 +1026,13 @@ bool socket_capture_install(const mem::Rtti& rtti, const mem::Reader& reader) {
                     reinterpret_cast<void**>(&g_orig_sock_moveinv), "이동");
     hook_one_socket(rtti, reader, "TrocTrUseItemReq", &det_sock_useitem,
                     reinterpret_cast<void**>(&g_orig_sock_useitem), "사용");
+    hook_one_socket(rtti, reader, "TrocTrMoveItemInventoryToVehicleReq",
+                    &det_sock_tovehicle,
+                    reinterpret_cast<void**>(&g_orig_sock_tovehicle), "탈것에");
+    hook_one_socket(rtti, reader, "TrocTrMoveItemVehicleToInventoryReq",
+                    &det_sock_fromvehicle,
+                    reinterpret_cast<void**>(&g_orig_sock_fromvehicle),
+                    "탈것에서");
     if (n == 0) return false;
     g_socket_installed = true;
     log::infof("소켓 페이로드 캡처 준비됨 ({}경로) - 소켓을 뚫거나 박으면 뜬다",
