@@ -343,6 +343,44 @@ void draw_inventory_panel(bool* open) {
         return;
     }
 
+    // --- 가방/보관함 확장 ------------------------------------------
+    // 컨테이너의 확장 슬롯을 직접 쓴다(저장에 남는 +0x1A + 캐시). 종류별
+    // 기본 슬롯을 유도하므로 가방·보관함이 각자 맞는 값을 받는다.
+    if (ImGui::CollapsingHeader("가방 · 보관함 확장")) {
+        static int s_target = 999;
+        static std::string s_bag_status;
+        ImGui::SetNextItemWidth(90.0f);
+        ImGui::InputInt("목표 총 슬롯", &s_target, 10, 100);
+        if (s_target < 1) s_target = 1;
+        if (s_target > 60000) s_target = 60000;
+        ImGui::SameLine();
+        if (ImGui::Button("확장")) {
+            const mem::LocalReader reader;
+            const auto r = game::bag_expand_all(reader, s_target, false);
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                          "%d개 확장, %d개 실패, %d개 건너뜀. 게임에서 가방을"
+                          " 다시 열면 보입니다.",
+                          r.ok, r.fail, r.skip);
+            s_bag_status = buf;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("기본값으로")) {
+            const mem::LocalReader reader;
+            const auto r = game::bag_expand_all(reader, 0, true);
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                          "%d개 기본값, %d개 실패, %d개 건너뜀.", r.ok, r.fail,
+                          r.skip);
+            s_bag_status = buf;
+        }
+        ImGui::TextDisabled("기본 슬롯 밑으로는 못 줄입니다. 저장에 남습니다.");
+        if (!s_bag_status.empty()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "%s",
+                               s_bag_status.c_str());
+        }
+    }
+
     draw_filter_bar();
 
     const int want_grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;

@@ -163,6 +163,29 @@ void draw_equip_panel(bool* open) {
         ImGui::End();
         return;
     }
+
+    // 착용 장비 전부 최대 연마(10). 착용 목록은 전부 장비라 연마 불가
+    // 판정이 필요 없다(참고 모드는 인벤 전체라 gear 만 골랐다). both-realms.
+    if (ImGui::Button("전부 연마 10")) {
+        int done = 0, part = 0;
+        for (const auto& w : pieces) {
+            const int wc = game::eq_write_refine(reader, w.instance, 10);
+            if (wc >= 2) {
+                ++done;
+            } else if (wc == 1) {
+                ++part;
+            }
+        }
+        g_refine_edit.clear();
+        game::equip_refresh_pieces(reader);
+        std::snprintf(g_msg, sizeof(g_msg),
+                      "%d개 both-realms, %d개 한쪽만 연마 10. RE-EQUIP 하면"
+                      " 보입니다.",
+                      done, part);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(착용 장비 전체를 +10 으로)");
+
     if (g_msg[0]) {
         ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "%s", g_msg);
     }
