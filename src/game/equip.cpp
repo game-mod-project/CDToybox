@@ -449,15 +449,32 @@ std::atomic<bool> g_eq_refresh{false};
 
 void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
-    collect_equip_tables(rtti, reader, &tabs);
-    std::uintptr_t prefer = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_eq_mutex);
-        prefer = g_eq_player_table.arr;  // 이전에 고른 것 우선(안정화)
-    }
+    collect_equip_tables(rtti, reader, &tabs);   // both-realms 쓰기 대상 전체
+
     EquipTable pt;
     std::vector<WornPiece> pieces;
-    const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces);
+    bool ok = false;
+    // player.cpp 가 스티키로 고정한 로컬 플레이어 comp 를 최우선 앵커로 쓴다.
+    // 휴리스틱 재선택(pick_player_table)의 레이스로 목록이 깜빡이던 것 방지.
+    const std::uintptr_t pcomp = player_comp();
+    if (pcomp != 0) {
+        EquipTable t;
+        if (find_equip_table(reader, pcomp, &t)) {
+            t.comp = pcomp;
+            if (read_worn_gear(reader, t, &pieces) && pieces.size() >= 3) {
+                pt = t;
+                ok = true;
+            }
+        }
+    }
+    if (!ok) {   // 폴백: 플레이어 미고정 시 점수 기반 선택
+        std::uintptr_t prefer = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_eq_mutex);
+            prefer = g_eq_player_table.arr;
+        }
+        ok = pick_player_table(reader, tabs, prefer, &pt, &pieces);
+    }
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_tables = std::move(tabs);
     if (ok) {

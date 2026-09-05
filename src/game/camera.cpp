@@ -287,19 +287,17 @@ void auto_analysis_loop() {
         }
         ++spin;
 
-        // 장비 에디터. 전체 발견(equip_discover)은 힙 전수 스캔이라 비싸므로
-        // **아직 못 잡았거나 패널이 새로고침을 요청했을 때만** 돈다. 평소엔
-        // 캐시된 착용 테이블에서 값싸게 다시 읽기만 한다(장착 상태 반영).
-        // 예전엔 5주기마다 힙을 훑어 인벤토리 발견까지 함께 느려졌다.
+        // 플레이어 치트(B-1). 로컬 플레이어를 스티키로 고정한다(먼저 실행해서
+        // equip 이 같은 대상을 앵커로 쓰게 한다). 실제 freeze 는 렌더 프레임
+        // (~16ms)에서 돈다 - 2초로 고정하면 피해가 빨라 죽는다.
+        player_discover(rtti, reader);
+
+        // 장비 에디터. player 가 고정한 플레이어 comp 를 앵커로 쓴다.
         if (equip_take_refresh() || !equip_ready()) {
             equip_discover(rtti, reader);
         } else {
             equip_refresh_pieces(reader);
         }
-
-        // 플레이어 치트(B-1). 게이지 배열 재발견만 여기서(2초 주기). 실제
-        // freeze 는 렌더 프레임(~16ms)에서 돈다 - 2초로 고정하면 피해가 빨라 죽음.
-        player_discover(reader);
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

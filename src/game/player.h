@@ -31,10 +31,16 @@ std::uintptr_t player_gauge_array(const mem::Reader& reader, std::uintptr_t ch);
 bool char_is_player(const mem::Reader& reader, std::uintptr_t ch);
 
 // --------------------------------------------------------------- 발견/캐시
-// 분석 스레드에서 부른다. equip 캐시의 플레이어 comp 로 게이지 배열을 찾아
-// 캐시한다(게이트 재검증). 값싸다(힙 스캔 없음).
-void player_discover(const mem::Reader& reader);
+// 분석 스레드에서 부른다. **로컬 플레이어를 자립적으로 찾는다**: 정신력 풀을
+// 가진 char 중 착용 조각이 가장 많은 것(동행 11 < 플레이어 18). 한 번 잡으면
+// 고정(스티키)하고, 이후엔 Health 게이트만으로 유지한다 - 게이지 체인이 순간
+// 실패해도 NPC/동행으로 새지 않는다. 재탐색(스티키 무효 시)만 힙 스캔.
+void player_discover(const mem::Rtti& rtti, const mem::Reader& reader);
 bool player_ready();
+
+// 고정된 플레이어 char / 그 장비 컴포넌트(equip 이 같은 대상을 쓰도록). 없으면 0.
+std::uintptr_t player_char();
+std::uintptr_t player_comp();
 
 struct PlayerVitals {
     std::int32_t hp_cur = 0, hp_max = 0;

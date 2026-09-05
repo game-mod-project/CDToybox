@@ -1805,6 +1805,17 @@ void dump_status_ints(const mem::Reader& reader, std::uintptr_t base) {
 
 void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                 int argc, char** argv) {
+    // player find : 실제 discovery(스티키·조각최다) 를 돌려 결과를 본다.
+    if (argc > 2 && std::strcmp(argv[2], "find") == 0) {
+        game::player_discover(rt, reader);
+        const auto v = game::player_vitals(reader);
+        std::printf("player_char=0x%llX comp=0x%llX  HP %d/%d STA %d/%d SPI "
+                    "%d/%d ok=%d\n",
+                    (unsigned long long)game::player_char(),
+                    (unsigned long long)game::player_comp(), v.hp_cur, v.hp_max,
+                    v.sta_cur, v.sta_max, v.spi_cur, v.spi_max, v.ok);
+        return;
+    }
     // player scan <값>  : 시트 수치로 오프셋 탐색
     if (argc > 3 && std::strcmp(argv[2], "scan") == 0) {
         scan_status_for_value(rt, reader, std::atoi(argv[3]));

@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <vector>
 
 #include "game/equip.h"
 
@@ -20,6 +21,8 @@ constexpr std::size_t kStaCur = 0x6C8, kStaMax = 0x6D8;
 constexpr std::size_t kSpiCur = 0x758, kSpiMax = 0x768;
 
 std::atomic<std::uintptr_t> g_arr{0};
+std::atomic<std::uintptr_t> g_char{0};   // 고정된 플레이어 char(스티키)
+std::atomic<std::uintptr_t> g_comp{0};   // 그 char 의 장비 컴포넌트
 std::atomic<bool> g_god{false};
 std::atomic<bool> g_sta{false};
 std::atomic<bool> g_spi{false};
@@ -75,16 +78,50 @@ bool char_is_player(const mem::Reader& reader, std::uintptr_t ch) {
     return false;
 }
 
-void player_discover(const mem::Reader& reader) {
-    const std::uintptr_t comp = equip_player_comp();
-    if (comp == 0) {
-        g_arr.store(0, std::memory_order_release);
-        return;
+void player_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
+    // 스티키: 고정된 char 의 게이지 배열이 아직 유효(Health 게이트)하면 유지.
+    // Health 게이트만 보므로 정신력 스캔이 순간 실패해도 안 흔들린다.
+    const std::uintptr_t cached = g_char.load(std::memory_order_acquire);
+    if (cached != 0) {
+        const std::uintptr_t arr = player_gauge_array(reader, cached);
+        if (arr != 0) {
+            g_arr.store(arr, std::memory_order_release);
+            return;
+        }
+        // 게이트 실패(지역이동·캐릭전환) - 아래에서 재탐색.
     }
-    const std::uintptr_t ch = q(reader, comp, 0x08);   // comp+0x08 = char
-    const std::uintptr_t arr = player_gauge_array(reader, ch);
-    g_arr.store(arr, std::memory_order_release);
+
+    // 재탐색(스티키 무효 시에만, 힙 스캔): 정신력 풀을 가진 char 중 **착용 조각이
+    // 가장 많은 것** = 로컬 플레이어(동행 11 < 플레이어 18). 조각 수가 유일한
+    // 로컬-플레이어 신호다(동행도 정신력 풀은 있다).
+    const auto objs = rtti.find_objects("EquipSlotActorComponent", 512);
+    std::uintptr_t best_char = 0, best_comp = 0;
+    int best_pieces = 0;
+    std::vector<WornPiece> tmp;
+    for (const auto& o : objs) {
+        const std::uintptr_t ch = q(reader, o.address, 0x08);
+        if (!char_is_player(reader, ch)) continue;
+        EquipTable t;
+        if (!find_equip_table(reader, o.address, &t)) continue;
+        if (!read_worn_gear(reader, t, &tmp)) continue;
+        const int pieces = static_cast<int>(tmp.size());
+        if (pieces > best_pieces) {
+            best_pieces = pieces;
+            best_char = ch;
+            best_comp = o.address;
+        }
+    }
+    if (best_char != 0) {
+        g_char.store(best_char, std::memory_order_release);
+        g_comp.store(best_comp, std::memory_order_release);
+        g_arr.store(player_gauge_array(reader, best_char),
+                    std::memory_order_release);
+    }
+    // 못 찾으면 이전 고정 유지(g_char 그대로).
 }
+
+std::uintptr_t player_char() { return g_char.load(std::memory_order_acquire); }
+std::uintptr_t player_comp() { return g_comp.load(std::memory_order_acquire); }
 
 bool player_ready() {
     return g_arr.load(std::memory_order_acquire) != 0;
