@@ -61,6 +61,16 @@ struct WornSocket {
     bool filled() const { return marker == 0xFFFF && gem != 0xFFFF; }
 };
 
+// 염색 레코드 하나. entry+0x78 벡터, 16바이트/레코드. zone 이 정체성이다
+// (행 번호가 아님) - 한 조각은 12 zone 중 일부만 레코드로 가진다.
+struct WornDye {
+    int rec = 0;                 // 벡터 안 인덱스(both-realms 쓰기 인자)
+    std::uint8_t zone = 0xFF;    // +6, 정체성
+    std::uint8_t r = 0;          // +7
+    std::uint8_t g = 0;          // +8
+    std::uint8_t b = 0;          // +9
+};
+
 struct WornPiece {
     std::uintptr_t entry = 0;
     std::uint64_t instance = 0;   // +0x00, both-realms 매칭 키
@@ -69,6 +79,7 @@ struct WornPiece {
     std::uint16_t slot_tag = 0;   // +(stride-8)
     int unlocked = 0;             // 열린 소켓 수
     WornSocket sockets[5]{};      // entry+0x60 벡터
+    std::vector<WornDye> dyes;    // entry+0x78 벡터 (있으면)
 };
 
 // 착용 장비 목록을 읽는다(빈 슬롯 제외). 실패면 false.

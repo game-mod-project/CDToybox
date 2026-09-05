@@ -340,6 +340,23 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
                 if (s.index != 0xFF && s.index == k) ++w.unlocked;
             }
         }
+        // 염색 레코드: entry+0x78 벡터, +0x80 개수(<=12), 16바이트/레코드.
+        // zone 은 +6, RGB 는 +7/8/9. rec 는 both-realms 쓰기 인자로 쓴다.
+        const std::uintptr_t dp = rd64(reader, e + 0x78);
+        const std::uint32_t dc = rd32(reader, e + 0x80);
+        if (ptr_reads(reader, dp) && dc > 0 && dc <= 12) {
+            for (std::uint32_t d = 0; d < dc; ++d) {
+                const std::uintptr_t a =
+                    dp + static_cast<std::uintptr_t>(d) * 16;
+                WornDye dy;
+                dy.rec = static_cast<int>(d);
+                dy.zone = rd8(reader, a + 6);
+                dy.r = rd8(reader, a + 7);
+                dy.g = rd8(reader, a + 8);
+                dy.b = rd8(reader, a + 9);
+                w.dyes.push_back(dy);
+            }
+        }
         out->push_back(w);
     }
     return true;

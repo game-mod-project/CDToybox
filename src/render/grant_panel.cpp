@@ -28,20 +28,15 @@ bool g_call_ok = false;
 bool g_last_to_inventory = true;
 const char* g_last_what = "";
 
-// 내구도 치트의 인자 둘. 뜻을 아직 모른다 - 값을 바꿔 가며 화면으로
-// 확인해야 한다. 페이로드는 u16 둘뿐이다.
-
-// 담금질과 소켓. 아이템을 바꾸면 상한에 맞춰 잘린다.
+// 담금질과 장비 연마. 아이템을 바꾸면 상한에 맞춰 잘린다.
 //
-// 소켓은 **앞 칸부터** 채워야 한다. 게임의 복사 루프가 0..개수-1 만
-// 돌기 때문에 2번 칸만 채우는 것은 불가능하다. 그래서 고르거나
-// 비울 때마다 앞으로 당겨 붙인다.
+// 소켓은 여기서 다루지 않는다. 2026-09-04 게임 업데이트로 생성/지급
+// 경로에 소켓을 실으면(+0x5E>0) 새 처리기가 오류 분기로 빠져 게임이
+// 죽는다(grant.cpp request_give 가 강제로 0 으로 민다). 그래서 지급
+// 으로는 소켓을 못 넣는다 - 이미 박힌 소켓 표시는 인벤토리에서, 착용
+// 장비의 열린 소켓 편집은 "장비 소켓" 패널(both-realms)에서 한다.
 int g_temper = 0;
 int g_sharpness = 0;
-std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};   // 0 = 비어 있음
-int g_socket_picking = -1;       // 팝업이 채울 칸
-bool g_open_gem_popup = false;
-char g_gem_search[64]{};
 game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
@@ -73,42 +68,21 @@ const game::ItemCatalogEntry* selected_item() {
     return nullptr;
 }
 
-// 키로 표에서 찾는다. 없으면 nullptr.
-const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
-    if (key == 0 || !game::items_ready()) return nullptr;
-    for (const auto& e : game::item_catalog()) {
-        if (e.key == key) return &e;
-    }
-    return nullptr;
-}
-
-// 빈 칸을 없애 앞으로 당겨 붙인다. 게임이 앞에서부터만 읽는다.
-void compact_sockets() {
-    int w = 0;
-    for (int r = 0; r < game::kGiveMaxSockets; ++r) {
-        if (g_socket_keys[r] != 0) g_socket_keys[w++] = g_socket_keys[r];
-    }
-    for (; w < game::kGiveMaxSockets; ++w) g_socket_keys[w] = 0;
-}
-
-// 담금질과 소켓을 정해 준다. 아이템이 그 값을 가질 때만 낸다.
+// 담금질과 장비 연마를 정해 준다. 아이템이 그 값을 가질 때만 낸다.
 //
-// 상한은 아이템 표에서 온다 - 담금질은 `max_temper`, 소켓 칸 수는
-// `max_sockets` 다. 넘겨 보내면 게임이 조용히 거절한다.
+// 상한은 아이템 표에서 온다 - 담금질은 `max_temper`, 연마는
+// `max_sharpness` 다. 넘겨 보내면 게임이 조용히 거절한다.
 void draw_extras(const game::ItemCatalogEntry* item) {
     if (item == nullptr) return;
     const int cap_t = static_cast<int>(item->max_temper);
     const int cap_s = static_cast<int>(item->max_sharpness);
-    int rows = static_cast<int>(item->max_sockets);
-    if (rows > game::kGiveMaxSockets) rows = game::kGiveMaxSockets;
-    if (cap_t == 0 && cap_s == 0 && rows == 0) return;
+    if (cap_t == 0 && cap_s == 0) return;
 
     // 아이템이 바뀌면 상한 밖의 값이 남아 있을 수 있다.
     if (g_temper > cap_t) g_temper = cap_t;
     if (g_sharpness > cap_s) g_sharpness = cap_s;
-    for (int i = rows; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
 
-    if (!ImGui::CollapsingHeader("담금질 · 소켓 · 장비 연마")) return;
+    if (!ImGui::CollapsingHeader("담금질 · 장비 연마")) return;
     ImGui::Indent();
 
     if (cap_t > 0) {
@@ -143,80 +117,7 @@ void draw_extras(const game::ItemCatalogEntry* item) {
         ImGui::TextDisabled("(0 ~ %d)", cap_s);
     }
 
-    if (rows > 0) {
-        if (!game::item_ids_ready()) {
-            ImGui::TextDisabled("대응표를 아직 못 읽었습니다 - 잠시 뒤에 됩니다");
-        } else {
-            for (int i = 0; i < rows; ++i) {
-                ImGui::PushID(i);
-                ImGui::Text("소켓 %d", i);
-                ImGui::SameLine(80.0f);
-                const auto* gem = entry_of(g_socket_keys[i]);
-                if (g_socket_keys[i] == 0) {
-                    ImGui::TextDisabled("비어 있음");
-                } else if (gem != nullptr && !gem->name.empty()) {
-                    ImGui::TextColored(grade_color(gem->grade), "%s",
-                                       gem->name.c_str());
-                } else {
-                    ImGui::Text("%u", g_socket_keys[i]);
-                }
-                ImGui::SameLine(260.0f);
-                if (ImGui::SmallButton("고르기")) {
-                    g_socket_picking = i;
-                    g_gem_search[0] = 0;
-                    g_open_gem_popup = true;
-                }
-                if (g_socket_keys[i] != 0) {
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("비우기")) {
-                        g_socket_keys[i] = 0;
-                        compact_sockets();
-                    }
-                }
-                ImGui::PopID();
-            }
-            ImGui::TextDisabled("게임이 앞 칸부터 읽습니다 - 빈 칸은 당겨집니다");
-        }
-    }
-
     ImGui::Unindent();
-}
-
-// 보석 고르기. 분류 74(심연 장비)만 낸다 - 실측으로 확인한 값이고
-// 표에 190개 있다.
-void draw_gem_popup() {
-    if (g_open_gem_popup) {
-        ImGui::OpenPopup("보석 고르기");
-        g_open_gem_popup = false;
-    }
-    if (!ImGui::BeginPopup("보석 고르기")) return;
-
-    ImGui::SetNextItemWidth(280.0f);
-    ImGui::InputTextWithHint("##gemsearch", "이름으로 찾기", g_gem_search,
-                             sizeof(g_gem_search));
-    ImGui::BeginChild("gemlist", ImVec2(320.0f, 280.0f));
-    int shown = 0;
-    for (const auto& e : game::item_catalog()) {
-        if (e.category != game::kSocketGemCategory || e.name.empty()) continue;
-        if (g_gem_search[0] != 0 &&
-            e.name.find(g_gem_search) == std::string::npos) {
-            continue;
-        }
-        ++shown;
-        ImGui::PushID(static_cast<int>(e.key));
-        if (ImGui::Selectable(e.name.c_str())) {
-            if (g_socket_picking >= 0 &&
-                g_socket_picking < game::kGiveMaxSockets) {
-                g_socket_keys[g_socket_picking] = e.key;
-                compact_sockets();
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::PopID();
-    }
-    if (shown == 0) ImGui::TextDisabled("맞는 것이 없습니다");
-    ImGui::EndChild();
-    ImGui::EndPopup();
 }
 
 // 고른 아이템을 아이콘·이름·등급·분류로 보여 준다. 키 숫자만
@@ -264,35 +165,17 @@ unsigned int grant_temper() {
 }
 
 void set_grant_item(unsigned int key, long long count, unsigned int temper,
-                    unsigned int sharpness, const unsigned int* gems,
-                    int gem_count) {
+                    unsigned int sharpness) {
     g_item_key = static_cast<int>(key);
     g_count = (count < 1) ? 1 : (count > 0x7FFFFFFF)
                                     ? 0x7FFFFFFF
                                     : static_cast<int>(count);
     g_temper = static_cast<int>(temper);
     g_sharpness = static_cast<int>(sharpness);
-    for (int i = 0; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
-    if (gems != nullptr) {
-        for (int i = 0; i < gem_count && i < game::kGiveMaxSockets; ++i) {
-            g_socket_keys[i] = gems[i];
-        }
-    }
-    compact_sockets();
 }
 
 unsigned int grant_sharpness() {
     return static_cast<unsigned int>(g_sharpness < 0 ? 0 : g_sharpness);
-}
-
-int grant_socket_keys(unsigned int* out, int cap) {
-    if (out == nullptr || cap <= 0) return 0;
-    int n = 0;
-    for (int i = 0; i < game::kGiveMaxSockets && n < cap; ++i) {
-        if (g_socket_keys[i] == 0) break;   // 앞에서부터만 찬다
-        out[n++] = g_socket_keys[i];
-    }
-    return n;
 }
 
 void draw_grant_panel(bool* open) {
@@ -343,7 +226,6 @@ void draw_grant_panel(bool* open) {
     ImGui::TextDisabled("아이템 목록에서 줄을 누르면 여기로 들어옵니다");
 
     draw_extras(item);
-    draw_gem_popup();
 
     // --- 막힌 이유는 항상 적는다 ------------------------------------
     const char* blocked = nullptr;
@@ -382,17 +264,6 @@ void draw_grant_panel(bool* open) {
             const int cap_s = static_cast<int>(item->max_sharpness);
             const int sh = (g_sharpness > cap_s) ? cap_s : g_sharpness;
             extras.sharpness = static_cast<std::uint16_t>(sh < 0 ? 0 : sh);
-
-            int room = static_cast<int>(item->max_sockets);
-            if (room > game::kGiveMaxSockets) room = game::kGiveMaxSockets;
-            for (int i = 0; i < room; ++i) {
-                if (g_socket_keys[i] == 0) break;   // 앞에서부터만 찬다
-                std::uint8_t raw[game::kGiveSocketBytes]{};
-                if (!game::socket_bytes_for_key(g_socket_keys[i], raw)) break;
-                std::memcpy(extras.sockets[extras.socket_count].raw, raw,
-                            game::kGiveSocketBytes);
-                ++extras.socket_count;
-            }
         }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;
@@ -455,15 +326,11 @@ void draw_grant_panel(bool* open) {
         }
     }
 
-    // --- 내구도 (시험) ----------------------------------------------
-    // 인자 둘의 뜻을 모른다. 값을 바꿔 가며 장비 내구도가 변하는지
-    // 보는 용도다. 페이로드가 u16 둘뿐이라 시도 범위가 좁다.
     ImGui::Separator();
 
     // --- 고급: 세션 고르기 ------------------------------------------
     // 자동 선택이 맞는 것을 실측으로 확인했으므로 접어 둔다. 틀릴
     // 때만 열면 된다.
-    ImGui::Separator();
     if (ImGui::CollapsingHeader("고급")) {
         const auto& msg = game::spawn_message();
         if (msg.handler != 0) {

@@ -424,9 +424,8 @@ void draw_inventory_panel(bool* open) {
             // 주고, 고쳐서 새로 지급하게 한다.
             ImGui::BeginDisabled(r.key == 0);
             if (ImGui::SmallButton("지급 칸으로")) {
-                set_grant_item(r.key, r.count, r.temper, r.sharpness,
-                               r.gem_keys.data(),
-                               static_cast<int>(r.gem_keys.size()));
+                // 소켓은 옮기지 않는다 - 지급 경로로는 못 넣는다.
+                set_grant_item(r.key, r.count, r.temper, r.sharpness);
             }
             ImGui::EndDisabled();
 
