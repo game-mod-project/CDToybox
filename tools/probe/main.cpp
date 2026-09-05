@@ -1792,6 +1792,49 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             dump_status_ints(reader, std::strtoull(argv[i], nullptr, 16));
         return;
     }
+    // player chain : 참고 모드 경로(actor→+0x20→+0x18→+0x58 게이지)를 라이브 검증.
+    if (argc > 2 && std::strcmp(argv[2], "chain") == 0) {
+        game::EquipTable pt;
+        std::vector<game::WornPiece> ps;
+        if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+            std::printf("플레이어 장비 테이블 못 찾음\n");
+            return;
+        }
+        std::uint64_t actor = 0;
+        reader.read_value(pt.comp + 0x08, &actor);
+        std::printf("player actor=0x%llX\n", (unsigned long long)actor);
+        auto deref = [&](std::uint64_t a, std::size_t o) {
+            std::uint64_t v = 0;
+            reader.read_value(a + o, &v);
+            return v;
+        };
+        // 여러 해석을 시도한다.
+        std::uint64_t chains[3] = {0, 0, 0};
+        chains[0] = deref(deref(deref(actor, 0x20), 0x18), 0x58);
+        chains[1] = deref(deref(actor, 0x20), 0x18);  // 게이지 컨테이너 자체?
+        chains[2] = deref(deref(deref(actor, 0x68), 0x20), 0x18);
+        const char* names[3] = {"actor+20+18+58", "actor+20+18", "actor+68+20+18"};
+        for (int c = 0; c < 3; ++c) {
+            const std::uint64_t g = chains[c];
+            std::printf("--- %s = 0x%llX ---\n", names[c],
+                        (unsigned long long)g);
+            if (g < 0x100000000ULL) continue;
+            for (std::size_t off = 0; off <= 0x400; off += 4) {
+                std::int32_t iv = 0;
+                float fv = 0.0f;
+                reader.read_value(g + off, &iv);
+                reader.read_value(g + off, &fv);
+                const bool inti = iv >= 1 && iv <= 3000000;
+                const bool flt = fv >= 1.0f && fv <= 3000000.0f &&
+                                 (fv - static_cast<int>(fv) == 0.0f ||
+                                  fv > 10.0f);
+                if (inti || flt)
+                    std::printf("    +0x%03zX  int=%d  float=%.1f\n", off, iv,
+                                fv);
+            }
+        }
+        return;
+    }
     if (argc > 2 && std::strcmp(argv[2], "scan") != 0) {
         const std::uintptr_t actor = std::strtoull(argv[2], nullptr, 16);
         std::printf("actor=0x%llX 스캔\n", (unsigned long long)actor);
