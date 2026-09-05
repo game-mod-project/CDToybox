@@ -875,13 +875,25 @@ std::atomic<std::uint32_t> g_socket_eq_slot{0xFFFFFFFF};
 // 와이어 대상 참조 `[04][컨테이너핸들 u32][(슬롯<<16)|2 u32]` 에서
 // 컨테이너 핸들을 뽑는다. 본문(헤더 5바이트 뒤)의 첫 바이트가 0x04 인
 // 참조 종류일 때만 유효하다. 실패면 0.
-std::uint32_t parse_socket_container_handle(const std::uint8_t* pl,
-                                            std::uint16_t len) {
-    // 헤더 5 + 참조 9 = 14 바이트는 있어야 하고, 참조 종류가 04 여야 한다.
-    if (pl == nullptr || len < 14 || pl[5] != 0x04) return 0;
-    std::uint32_t handle = 0;
-    std::memcpy(&handle, pl + 6, sizeof(handle));
-    return handle;
+bool scan_inv_item_ref(const std::uint8_t* pl, std::uint16_t len,
+                       std::uint32_t* handle_out, std::uint32_t* slot_out) {
+    // 인벤토리 아이템 참조 [04][핸들 u32(상위16=0xB010)][enc u32(하위16=2)]
+    // 를 페이로드에서 훑는다. 소켓뿐 아니라 장착·이동·사용 등 어떤
+    // 인벤토리 메시지든 이 참조를 싣는다. 메시지마다 위치가 달라 오프셋을
+    // 못박지 않고 스캔한다. 슬롯 = enc>>16.
+    if (pl == nullptr || len < 9) return false;
+    for (std::uint16_t i = 0; i + 9 <= len; ++i) {
+        if (pl[i] != 0x04) continue;
+        std::uint32_t h = 0, enc = 0;
+        std::memcpy(&h, pl + i + 1, sizeof(h));
+        std::memcpy(&enc, pl + i + 5, sizeof(enc));
+        if ((h >> 16) != 0xB010u) continue;
+        if ((enc & 0xFFFFu) != 0x0002u) continue;
+        if (handle_out != nullptr) *handle_out = h;
+        if (slot_out != nullptr) *slot_out = enc >> 16;
+        return true;
+    }
+    return false;
 }
 
 void dump_socket_payload(void* packet, const char* tag) {
@@ -894,25 +906,19 @@ void dump_socket_payload(void* packet, const char* tag) {
     if (payload == 0 || len == 0 || len > 512) return;
     auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
 
-    // 핸들 학습은 로그 상한과 무관하게 항상 한다. 인벤 경로면 인벤
-    // 핸들을, 장비 경로면 장비 핸들을 새로 배운다(값이 바뀌면 갱신).
-    const std::uint32_t handle = parse_socket_container_handle(pl, len);
-    if (handle != 0) {
-        const bool inv = std::strstr(tag, "인벤") != nullptr;
-        auto& slot = inv ? g_socket_inv_handle : g_socket_eq_handle;
-        const std::uint32_t prev =
-            slot.exchange(handle, std::memory_order_release);
-        if (prev != handle) {
-            log::infof("소켓 컨테이너 핸들 학습 [{}]: 0x{:08X}{}", tag, handle,
-                       prev != 0 ? " (갱신됨)" : "");
-        }
-        // 대상 슬롯도 배운다. 참조 뒤 u32(오프셋 10) = (슬롯<<16)|2.
-        if (len >= 14) {
-            std::uint32_t enc = 0;
-            std::memcpy(&enc, pl + 10, sizeof(enc));
-            const std::uint32_t sv = enc >> 16;
-            auto& sslot = inv ? g_socket_inv_slot : g_socket_eq_slot;
-            sslot.store(sv, std::memory_order_release);
+    // 인벤 아이템 참조를 스캔해 컨테이너 핸들·슬롯을 배운다. 장비 소켓
+    // 경로(이미 착용한 장비의 소켓)는 다른 컨테이너라 학습에서 뺀다 -
+    // 인벤토리 소켓/장착/이동/사용 등만 인벤 컨테이너를 가리킨다.
+    if (std::strstr(tag, "장비") == nullptr) {
+        std::uint32_t handle = 0, sv = 0;
+        if (scan_inv_item_ref(pl, len, &handle, &sv)) {
+            const std::uint32_t prev =
+                g_socket_inv_handle.exchange(handle, std::memory_order_release);
+            g_socket_inv_slot.store(sv, std::memory_order_release);
+            if (prev != handle) {
+                log::infof("인벤 컨테이너 핸들 학습 [{}]: 0x{:08X} (슬롯 {}){}",
+                           tag, handle, sv, prev != 0 ? " (갱신됨)" : "");
+            }
         }
     }
 
@@ -943,6 +949,12 @@ CDTB_SOCK_DETOUR(push_inv, "Push/인벤")
 CDTB_SOCK_DETOUR(push_eq, "Push/장비")
 CDTB_SOCK_DETOUR(pop_inv, "Pop/인벤")
 CDTB_SOCK_DETOUR(pop_eq, "Pop/장비")
+// 일반 플레이에서 흔히 쏘는 인벤토리 메시지 - 같은 아이템 참조를 실어,
+// 사용자가 장착·이동·사용만 해도 컨테이너 핸들이 학습된다(NPC 소켓 불요).
+// 태그에 "장비" 를 넣지 않아 학습 게이트를 통과한다(읽기전용).
+CDTB_SOCK_DETOUR(equip, "장착")
+CDTB_SOCK_DETOUR(moveinv, "이동")
+CDTB_SOCK_DETOUR(useitem, "사용")
 #undef CDTB_SOCK_DETOUR
 
 bool resolve_socket_deser(const mem::Rtti& rtti, const mem::Reader& reader,
@@ -1002,6 +1014,14 @@ bool socket_capture_install(const mem::Rtti& rtti, const mem::Reader& reader) {
                          &det_sock_pop_eq,
                          reinterpret_cast<void**>(&g_orig_sock_pop_eq),
                          "Pop/장비");
+    // 일반 플레이 학습용(핸들). 실패해도 소켓 캡처는 유지한다.
+    hook_one_socket(rtti, reader, "TrocTrEquipItemReq", &det_sock_equip,
+                    reinterpret_cast<void**>(&g_orig_sock_equip), "장착");
+    hook_one_socket(rtti, reader, "TrocTrMoveItemInventoryToOtherInventoryReq",
+                    &det_sock_moveinv,
+                    reinterpret_cast<void**>(&g_orig_sock_moveinv), "이동");
+    hook_one_socket(rtti, reader, "TrocTrUseItemReq", &det_sock_useitem,
+                    reinterpret_cast<void**>(&g_orig_sock_useitem), "사용");
     if (n == 0) return false;
     g_socket_installed = true;
     log::infof("소켓 페이로드 캡처 준비됨 ({}경로) - 소켓을 뚫거나 박으면 뜬다",
