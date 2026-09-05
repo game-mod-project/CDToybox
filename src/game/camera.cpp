@@ -297,10 +297,9 @@ void auto_analysis_loop() {
             equip_refresh_pieces(reader);
         }
 
-        // 플레이어 치트(B-1). equip 캐시의 플레이어 comp 로 게이지 배열을
-        // 값싸게 재발견하고, 켜진 freeze 를 매 주기 적용한다.
+        // 플레이어 치트(B-1). 게이지 배열 재발견만 여기서(2초 주기). 실제
+        // freeze 는 렌더 프레임(~16ms)에서 돈다 - 2초로 고정하면 피해가 빨라 죽음.
         player_discover(reader);
-        player_apply(reader);
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

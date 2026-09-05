@@ -27,6 +27,8 @@
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
+#include "game/player.h"
+#include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
 // 접근해야 하므로 익명 네임스페이스를 쓸 수 없다.
@@ -559,6 +561,14 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    // 플레이어 치트 freeze 는 매 프레임(~16ms) 적용한다. 분석 루프는 2초
+    // 주기라 그걸로 고정하면 피해가 훨씬 빨라 죽는다(참고 모드도 50ms 타이머).
+    // 발견/게이지 캐시는 분석 루프가 담당하고, 여기선 캐시로 값싸게 쓴다.
+    {
+        const mem::LocalReader reader;
+        cdtb::game::player_apply(reader);
+    }
 
     g_frame_stage = kStageDrawUi;
     draw_ui();
