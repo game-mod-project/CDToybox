@@ -79,4 +79,35 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
 // 아니면 -1.
 int socket_unlocked(const mem::Reader& reader, std::uintptr_t entry);
 
+// ------------------------------------------------------------------ 자동 선택
+// RTTI 로 서버·클라 장비 컴포넌트 인스턴스를 모두 열거해, 유효한 착용장비
+// 테이블만 수집한다(잡음 필터: 실제아이템 >=3). both-realms 쓰기의 대상.
+int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
+                         std::vector<EquipTable>* out);
+
+// 플레이어의 착용장비를 한 번에 읽는다(가장 큰 테이블 = 플레이어). out 은
+// 그 테이블, pieces 는 그 착용 장비. 실패면 false.
+bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
+                      EquipTable* table_out, std::vector<WornPiece>* pieces_out);
+
+// ------------------------------------------------------------------ 쓰기 (인프로세스)
+// **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 직접 쓴다.
+// 전부 SEH 로 감싸고 read-back 으로 검증한다. 잠긴 소켓은 거부한다.
+//
+// both-realms: collect_equip_tables 로 모은 모든 테이블에서 인스턴스 ID 로
+// entry 를 찾아 각각에 쓴다. 쓴 realm 수를 돌려준다(0 이면 실패).
+
+// 이미 열린 소켓 k(0..4)에 보석 순번을 박는다. gem==0xFFFF 면 비운다.
+int eq_write_socket(const mem::Rtti& rtti, const mem::Reader& reader,
+                    std::uint64_t instance, int k, std::uint16_t gem);
+
+// 연마(refinement)를 설정한다.
+int eq_write_refine(const mem::Rtti& rtti, const mem::Reader& reader,
+                    std::uint64_t instance, std::uint16_t level);
+
+// 염색 레코드 rec 의 RGB 를 설정한다.
+int eq_write_dye(const mem::Rtti& rtti, const mem::Reader& reader,
+                 std::uint64_t instance, int rec, std::uint8_t r,
+                 std::uint8_t g, std::uint8_t b);
+
 }  // namespace cdtb::game

@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include <windows.h>
+
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -82,6 +84,69 @@ int equip_tag_score(const mem::Reader& r, std::uintptr_t arr,
         }
     }
     return n;
+}
+
+// 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
+bool wr16(std::uintptr_t a, std::uint16_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint16_t*>(a) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool wr8(std::uintptr_t a, std::uint8_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint8_t*>(a) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// 한 entry 의 소켓 k 채우기/비우기. 잠김 거부, read-back 검증.
+bool socket_fill_entry(const mem::Reader& r, std::uintptr_t entry, int k,
+                       std::uint16_t gem) {
+    if (k < 0 || k > 4) return false;
+    const std::uintptr_t sp = rd64(r, entry + 0x60);
+    if (!ptr_reads(r, sp)) return false;
+    const std::uintptr_t rec = sp + static_cast<std::uintptr_t>(k) * 6;
+    if (rd8(r, rec + 4) == 0xFF) return false;  // 잠긴 소켓
+    const std::uint16_t mk = (gem == 0xFFFF) ? 0 : 0xFFFF;
+    if (!wr16(rec, gem)) return false;
+    if (!wr16(rec + 2, mk)) return false;
+    return rd16(r, rec) == gem;
+}
+
+bool refine_set_entry(const mem::Reader& r, std::uintptr_t entry,
+                      std::uint16_t lvl) {
+    if (!wr16(entry + 0x0A, lvl)) return false;
+    return rd16(r, entry + 0x0A) == lvl;
+}
+
+bool dye_set_entry(const mem::Reader& r, std::uintptr_t entry, int rec,
+                   std::uint8_t rr, std::uint8_t gg, std::uint8_t bb) {
+    const std::uintptr_t dp = rd64(r, entry + 0x78);
+    const std::uint32_t dc = rd32(r, entry + 0x80);
+    if (!ptr_reads(r, dp) || rec < 0 || rec >= static_cast<int>(dc) || dc > 12)
+        return false;
+    const std::uintptr_t a = dp + static_cast<std::uintptr_t>(rec) * 16;
+    if (!wr8(a + 7, rr) || !wr8(a + 8, gg) || !wr8(a + 9, bb)) return false;
+    return rd8(r, a + 7) == rr;
+}
+
+// 테이블에서 인스턴스 ID 로 entry 를 찾는다(빈 슬롯 제외).
+std::uintptr_t entry_by_instance(const mem::Reader& r, const EquipTable& t,
+                                 std::uint64_t inst) {
+    if (inst == 0) return 0;
+    const int lim = t.cnt < 64 ? static_cast<int>(t.cnt) : 64;
+    for (int i = 0; i < lim; ++i) {
+        const std::uintptr_t e =
+            t.arr + static_cast<std::uintptr_t>(i) * t.stride;
+        const std::uint32_t key = rd32(r, e + 0x08) & 0xFFFF;
+        if (key != 0xFFFF && rd64(r, e + 0x00) == inst) return e;
+    }
+    return 0;
 }
 
 }  // namespace
@@ -261,6 +326,83 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
         out->push_back(w);
     }
     return true;
+}
+
+
+int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
+                         std::vector<EquipTable>* out) {
+    if (out == nullptr) return 0;
+    out->clear();
+    // 서버·클라 장비 컴포넌트를 한 번의 힙 스캔으로 모두 찾는다(부분일치).
+    const auto objs = rtti.find_objects("EquipSlotActorComponent", 64);
+    std::vector<WornPiece> tmp;
+    for (const auto& o : objs) {
+        EquipTable t;
+        if (!find_equip_table(reader, o.address, &t)) continue;
+        if (!read_worn_gear(reader, t, &tmp) || tmp.size() < 3) continue;
+        bool dup = false;
+        for (const auto& e : *out) {
+            if (e.arr == t.arr) { dup = true; break; }
+        }
+        if (!dup) out->push_back(t);
+    }
+    return static_cast<int>(out->size());
+}
+
+bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
+                      EquipTable* table_out, std::vector<WornPiece>* pieces_out) {
+    std::vector<EquipTable> tabs;
+    collect_equip_tables(rtti, reader, &tabs);
+    EquipTable best;
+    std::size_t bestN = 0;
+    std::vector<WornPiece> bestPieces, tmp;
+    for (const auto& t : tabs) {
+        if (read_worn_gear(reader, t, &tmp) && tmp.size() > bestN) {
+            bestN = tmp.size();
+            best = t;
+            bestPieces = tmp;
+        }
+    }
+    if (bestN == 0) return false;
+    if (table_out) *table_out = best;
+    if (pieces_out) *pieces_out = std::move(bestPieces);
+    return true;
+}
+
+// op: 0=socket 1=refine 2=dye
+static int eq_write_all(const mem::Rtti& rtti, const mem::Reader& reader,
+                        std::uint64_t instance, int op, int a, std::uint16_t b,
+                        std::uint8_t g, std::uint8_t bl) {
+    std::vector<EquipTable> tabs;
+    collect_equip_tables(rtti, reader, &tabs);
+    int wrote = 0;
+    for (const auto& t : tabs) {
+        const std::uintptr_t e = entry_by_instance(reader, t, instance);
+        if (e == 0) continue;
+        bool ok = false;
+        if (op == 0) ok = socket_fill_entry(reader, e, a, b);
+        else if (op == 1) ok = refine_set_entry(reader, e, b);
+        else if (op == 2) ok = dye_set_entry(reader, e, a,
+                                              static_cast<std::uint8_t>(b), g, bl);
+        if (ok) ++wrote;
+    }
+    return wrote;
+}
+
+int eq_write_socket(const mem::Rtti& rtti, const mem::Reader& reader,
+                    std::uint64_t instance, int k, std::uint16_t gem) {
+    return eq_write_all(rtti, reader, instance, 0, k, gem, 0, 0);
+}
+
+int eq_write_refine(const mem::Rtti& rtti, const mem::Reader& reader,
+                    std::uint64_t instance, std::uint16_t level) {
+    return eq_write_all(rtti, reader, instance, 1, 0, level, 0, 0);
+}
+
+int eq_write_dye(const mem::Rtti& rtti, const mem::Reader& reader,
+                 std::uint64_t instance, int rec, std::uint8_t r,
+                 std::uint8_t g, std::uint8_t b) {
+    return eq_write_all(rtti, reader, instance, 2, rec, r, g, b);
 }
 
 }  // namespace cdtb::game
