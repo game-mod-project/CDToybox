@@ -1779,8 +1779,8 @@ void dump_status_ints(const mem::Reader& reader, std::uintptr_t base) {
     }
 }
 
-void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, int argc,
-                char** argv) {
+void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+                int argc, char** argv) {
     // player scan <값>  : 시트 수치로 오프셋 탐색
     if (argc > 3 && std::strcmp(argv[2], "scan") == 0) {
         scan_status_for_value(rt, reader, std::atoi(argv[3]));
@@ -1826,6 +1826,47 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 }
             }
         }
+        return;
+    }
+    // player maxes <a> <b> <c> : 세 최대값(안 변함)이 가까이 모인 구조체를 찾는다.
+    // 재생성으로 현재값 스캔이 막혀도, 최대값들은 고정이라 스탯 블록을 짚는다.
+    if (argc > 4 && std::strcmp(argv[2], "maxes") == 0) {
+        const std::int32_t A = std::atoi(argv[3]);
+        const std::int32_t B = std::atoi(argv[4]);
+        const std::int32_t C = (argc > 5) ? std::atoi(argv[5]) : 0;
+        const auto regs = r.regions();
+        std::printf("=== %d & %d & %d 가 0x200 내 모인 곳 ===\n", A, B, C);
+        std::vector<std::uint8_t> buf;
+        int hits = 0;
+        for (const auto& reg : regs) {
+            if (!reg.writable || reg.is_image) continue;
+            if (reg.size == 0 || reg.size > (512u << 20)) continue;
+            buf.resize(reg.size);
+            if (!r.read(reg.base, buf.data(), buf.size())) continue;
+            const std::size_t win = 0x200;
+            for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+                std::int32_t v = 0;
+                std::memcpy(&v, buf.data() + i, 4);
+                if (v != A) continue;
+                // 근처에서 B, C 를 찾는다.
+                bool hasB = false, hasC = (C == 0);
+                const std::size_t lo = (i > win) ? i - win : 0;
+                const std::size_t hi =
+                    (i + win < buf.size()) ? i + win : buf.size() - 4;
+                for (std::size_t j = lo; j <= hi; j += 4) {
+                    std::int32_t w = 0;
+                    std::memcpy(&w, buf.data() + j, 4);
+                    if (w == B) hasB = true;
+                    if (C != 0 && w == C) hasC = true;
+                }
+                if (hasB && hasC) {
+                    std::printf("  0x%llX (%d 위치)\n",
+                                (unsigned long long)(reg.base + i), A);
+                    if (++hits >= 40) { std::printf("(멈춤)\n"); return; }
+                }
+            }
+        }
+        std::printf("%d곳\n", hits);
         return;
     }
     // player hpwatch : 체인 영역(actor+0x68+0x20+0x18) 안에서 HP 변화 diff.
@@ -3057,7 +3098,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
-    if (cmd == "player") { cmd_player(rt, reader, argc, argv); return 0; }
+    if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
         return 0;
