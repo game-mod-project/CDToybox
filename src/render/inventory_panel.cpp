@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -66,14 +67,6 @@ int g_containers = 0;
 int g_sort_col = -1;
 bool g_sort_asc = true;
 
-const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
-    if (key == 0 || !game::items_ready()) return nullptr;
-    for (const auto& e : game::item_catalog()) {
-        if (e.key == key) return &e;
-    }
-    return nullptr;
-}
-
 void refresh(const mem::Reader& reader) {
     g_rows.clear();
 
@@ -96,22 +89,28 @@ void refresh(const mem::Reader& reader) {
         return;
     }
 
-    // 순번 -> 키를 한 번만 만든다. 칸마다 표를 훑으면 6,810 x 500 이다.
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> id_to_key;
+    // 순번->키, 키->엔트리를 해시맵으로 한 번만 만든다. 예전엔 칸마다
+    // 선형탐색(6,810 x 500 x 2)이라 "다시 읽기" 가 느렸다. O(1) 조회로 바꾼다.
+    std::unordered_map<std::uint32_t, std::uint32_t> id2key;
+    std::unordered_map<std::uint32_t, const game::ItemCatalogEntry*> key2ent;
     if (game::items_ready()) {
-        id_to_key.reserve(game::item_catalog().size());
-        for (const auto& e : game::item_catalog()) {
+        const auto& cat = game::item_catalog();
+        id2key.reserve(cat.size());
+        key2ent.reserve(cat.size());
+        for (const auto& e : cat) {
             const std::uint32_t id = game::item_id_for_key(e.key);
-            if (id != game::kNoItemId) {
-                id_to_key.emplace_back(id, e.key);
-            }
+            if (id != game::kNoItemId) id2key.emplace(id, e.key);
+            key2ent.emplace(e.key, &e);
         }
     }
     const auto key_for = [&](std::uint32_t index) -> std::uint32_t {
-        for (const auto& p : id_to_key) {
-            if (p.first == index) return p.second;
-        }
-        return 0;
+        const auto it = id2key.find(index);
+        return it != id2key.end() ? it->second : 0;
+    };
+    const auto ent_for =
+        [&](std::uint32_t key) -> const game::ItemCatalogEntry* {
+        const auto it = key2ent.find(key);
+        return it != key2ent.end() ? it->second : nullptr;
     };
 
     int containers = 0;
@@ -131,7 +130,7 @@ void refresh(const mem::Reader& reader) {
             r.sharpness = rec.sharpness;
             r.socket_count = rec.socket_count;
 
-            if (const auto* e = entry_of(r.key)) {
+            if (const auto* e = ent_for(r.key)) {
                 r.name = e->name;
                 r.grade = e->grade;
                 r.category = e->category;
@@ -152,7 +151,7 @@ void refresh(const mem::Reader& reader) {
                     ++filled;
                     const std::uint32_t gk = key_for(s.index);
                     r.gem_keys.push_back(gk);
-                    const auto* ge = entry_of(gk);
+                    const auto* ge = ent_for(gk);
                     gems.push_back((ge != nullptr && !ge->name.empty())
                                        ? ge->name
                                        : std::string("?"));

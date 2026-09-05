@@ -280,10 +280,14 @@ void auto_analysis_loop() {
         }
         ++spin;
 
-        // 장비 에디터: 착용장비/소켓/연마/염색 캐시. 힙 스캔이라 5주기에
-        // 한 번(약 50초)만, 또는 패널의 새로고침 요청이 있으면 즉시.
-        if (equip_take_refresh() || (spin % 5) == 0) {
+        // 장비 에디터. 전체 발견(equip_discover)은 힙 전수 스캔이라 비싸므로
+        // **아직 못 잡았거나 패널이 새로고침을 요청했을 때만** 돈다. 평소엔
+        // 캐시된 착용 테이블에서 값싸게 다시 읽기만 한다(장착 상태 반영).
+        // 예전엔 5주기마다 힙을 훑어 인벤토리 발견까지 함께 느려졌다.
+        if (equip_take_refresh() || !equip_ready()) {
             equip_discover(rtti, reader);
+        } else {
+            equip_refresh_pieces(reader);
         }
 
         if (ent_reports < 6) {
