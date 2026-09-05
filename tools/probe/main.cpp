@@ -22,6 +22,7 @@
 #include "mem/image_dump.h"
 #include "remote_reader.h"
 #include "findquat.h"
+#include "game/actors.h"
 #include "game/camera.h"
 #include "game/equip.h"
 #include "game/grant.h"
@@ -1168,6 +1169,42 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 
 // 탈것·용병·캐릭터 카탈로그를 낸다. 모드와 같은 함수를 돌려 배포 전
 // 검증한다. roster [탈것|용병|캐릭터] [최대개수]
+// 살아 있는 액터를 걷어 캐릭터 이름을 붙인다 (모드의 근처 탭과 같은 코드).
+void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                char** argv) {
+    const bool all = (argc > 2) && std::strcmp(argv[2], "all") == 0;
+    std::uintptr_t mgr = 0;
+    if (!game::find_actor_manager(reader, rt, &mgr)) {
+        std::printf("액터 매니저를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::printf("액터 매니저 0x%llX\n", static_cast<unsigned long long>(mgr));
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
+    }
+    std::vector<game::LiveActor> list;
+    if (!game::snapshot_live_actors(reader, mgr, &list)) {
+        std::printf("액터 걷기 실패.\n");
+        return;
+    }
+    std::size_t comp = 0, named = 0;
+    for (const auto& a : list) {
+        if (a.is_companion()) ++comp;
+        if (!a.name.empty()) ++named;
+    }
+    std::printf("액터 %zu개, 이름 풀림 %zu, 동반자 타입 %zu\n", list.size(), named,
+                comp);
+    for (const auto& a : list) {
+        if (!all && !a.is_companion()) continue;
+        std::printf("  0x%llX  행 %5u  키 %6u  타입행 %2d  %s%s%s\n",
+                    static_cast<unsigned long long>(a.actor), a.row, a.key,
+                    a.is_companion() ? static_cast<int>(a.merc_row) : -1,
+                    a.name.empty() ? "(이름 없음)" : a.name.c_str(),
+                    game::roster_is_wild(a.name) ? "  [야생]" : "",
+                    a.hirable ? "  [고용가능]" : "");
+    }
+}
+
 void cmd_roster(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 char** argv) {
     struct Tbl {
@@ -2870,6 +2907,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "items") {
         cmd_items(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "nearby") {
+        cmd_nearby(rt, reader, argc, argv);
         return 0;
     }
     if (cmd == "roster") {

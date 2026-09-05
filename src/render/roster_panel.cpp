@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "game/actors.h"
 #include "game/camera.h"
 #include "game/grant.h"
 #include "game/roster.h"
@@ -15,7 +16,10 @@ namespace cdtb::render {
 namespace {
 
 char g_query[128] = "";
-int g_tab = 0;  // 0=동반자, 1=탈것, 2=용병 타입, 3=캐릭터
+int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
+bool g_near_companion_only = true;
+double g_near_last_refresh = 0.0;
+mem::LocalReader g_near_reader;
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
 char g_selected_name[128] = "";
 
@@ -194,6 +198,90 @@ void draw_companion_tab() {
     }
 }
 
+
+// --- 근처 탭 -----------------------------------------------------------
+//
+// 살아 있는 액터를 걷어 캐릭터 이름을 붙인다(game/actors.h). 게임
+// 메모리를 읽는 것은 여기서 2초에 한 번 또는 버튼을 눌렀을 때뿐이다.
+void draw_nearby_tab() {
+    if (!game::actor_manager_ready()) {
+        ImGui::TextDisabled("액터 매니저를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
+        return;
+    }
+    const double now = ImGui::GetTime();
+    bool refresh = false;
+    if (ImGui::SmallButton("새로고침")) refresh = true;
+    ImGui::SameLine();
+    ImGui::Checkbox("동반자만", &g_near_companion_only);
+    if (now - g_near_last_refresh > 2.0) refresh = true;
+    if (refresh) {
+        game::refresh_live_actors(g_near_reader);
+        g_near_last_refresh = now;
+    }
+    const auto& all = game::live_actors();
+    static std::vector<const game::LiveActor*> view;
+    view.clear();
+    for (const auto& a : all) {
+        if (g_near_companion_only && !a.is_companion()) continue;
+        if (g_query[0] != '\0') {
+            char keybuf[16];
+            std::snprintf(keybuf, sizeof(keybuf), "%u", a.key);
+            if (!(contains_ci(a.name, g_query) || std::strstr(keybuf, g_query))) continue;
+        }
+        view.push_back(&a);
+    }
+    ImGui::Text("%zu / %zu 액터", view.size(), all.size());
+    ImGui::SameLine();
+    ImGui::TextDisabled("줄을 누르면 액터 주소가 복사됩니다");
+
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+    if (ImGui::BeginTable("nearby", 5, flags)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 110);
+        ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
+        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(view.size()));
+        while (clipper.Step()) {
+            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                const game::LiveActor* a = view[static_cast<std::size_t>(i)];
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                char label[48];
+                std::snprintf(label, sizeof(label), "%llX##n%d",
+                              static_cast<unsigned long long>(a->actor), i);
+                if (ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAllColumns)) {
+                    char addr[32];
+                    std::snprintf(addr, sizeof(addr), "0x%llX",
+                                  static_cast<unsigned long long>(a->actor));
+                    ImGui::SetClipboardText(addr);
+                }
+                ImGui::TableSetColumnIndex(1);
+                if (a->name.empty()) {
+                    ImGui::TextDisabled("(행 %u)", a->row);
+                } else {
+                    ImGui::TextUnformatted(a->name.c_str());
+                }
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(
+                    a->is_companion()
+                        ? type_label(a->merc_row, game::mercenary_type_name(a->merc_row))
+                        : "");
+                ImGui::TableSetColumnIndex(3);
+                ImGui::TextUnformatted(game::roster_is_wild(a->name) ? "야생" : "");
+                ImGui::TableSetColumnIndex(4);
+                ImGui::TextUnformatted(a->hirable ? "가능" : "");
+            }
+        }
+        clipper.End();
+        ImGui::EndTable();
+    }
+}
+
 // --- 단순 목록 탭 (탈것·용병 타입·캐릭터) ------------------------------
 void draw_list_tab(const std::vector<game::RosterEntry>& all,
                    bool show_merc_type) {
@@ -256,9 +344,10 @@ void draw_roster_panel(bool* open) {
 
     if (ImGui::BeginTabBar("roster_tabs")) {
         if (ImGui::BeginTabItem("동반자")) { g_tab = 0; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("탈것")) { g_tab = 1; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("용병 타입")) { g_tab = 2; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("캐릭터")) { g_tab = 3; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("근처")) { g_tab = 1; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("탈것")) { g_tab = 2; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("용병 타입")) { g_tab = 3; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("캐릭터")) { g_tab = 4; ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 
@@ -271,8 +360,9 @@ void draw_roster_panel(bool* open) {
     // 설계는 specs/2026-09-05-companion-summon-acquire-design.md.
     switch (g_tab) {
         case 0: draw_companion_tab(); break;
-        case 1: draw_list_tab(game::vehicle_catalog(), false); break;
-        case 2:
+        case 1: draw_nearby_tab(); break;
+        case 2: draw_list_tab(game::vehicle_catalog(), false); break;
+        case 3:
             if (game::mercenary_catalog().empty()) {
                 ImGui::TextDisabled("용병 타입 표를 못 찾았습니다.");
             } else {

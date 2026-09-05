@@ -12,6 +12,7 @@
 #include <string>
 
 #include "game/equip.h"
+#include "game/actors.h"
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/inventory.h"
@@ -223,6 +224,7 @@ void auto_analysis_loop() {
         // 탈것·용병·캐릭터 카탈로그. 아이템 표와 같은 인프라라 여기
         // 얹는다. 이름까지 풀리면 스스로 빠진다.
         discover_roster(rtti, reader);
+        discover_actor_manager(rtti, reader);
         log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
@@ -247,6 +249,7 @@ void auto_analysis_loop() {
         discover_item_ids(rtti, reader);
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
+        discover_actor_manager(rtti, reader);
         if (discover_items(rtti, reader) && inventory_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응

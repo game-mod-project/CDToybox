@@ -156,6 +156,7 @@ bool build_catalog_from_manager(const mem::Reader& reader,
         }
         const auto record = static_cast<std::uintptr_t>(rec);
         RosterEntry entry;
+        entry.row = i;
         if (kind == RosterKind::Mercenary) {
             // +0x00 이 포인터라 행 번호가 키다. 캐릭터 표 +0xBE 와 맞는다.
             entry.key = i;
@@ -268,6 +269,9 @@ struct Cache {
 Cache g_vehicle;
 Cache g_mercenary;
 Cache g_character;
+// 행 번호 -> 캐릭터 항목 위치. 널 슬롯이 있어 항목 순번과 행 번호가 어긋난다.
+std::atomic<const std::vector<const RosterEntry*>*> g_char_rows{nullptr};
+std::vector<std::unique_ptr<std::vector<const RosterEntry*>>> g_char_row_versions;
 std::atomic<bool> g_ready{false};
 
 }  // namespace
@@ -293,6 +297,16 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
     g_vehicle.swap(std::move(v));
     g_character.swap(std::move(c));
+    {
+        const auto& chars = character_catalog();
+        std::uint32_t max_row = 0;
+        for (const auto& e : chars) max_row = (e.row > max_row) ? e.row : max_row;
+        auto rows = std::make_unique<std::vector<const RosterEntry*>>(max_row + 1, nullptr);
+        for (const auto& e : chars) (*rows)[e.row] = &e;
+        const auto* p = rows.get();
+        g_char_row_versions.push_back(std::move(rows));
+        g_char_rows.store(p, std::memory_order_release);
+    }
     if (ok_m) g_mercenary.swap(std::move(m));
     g_ready.store(true, std::memory_order_release);
     log::infof("로스터: 탈것 {}개, 캐릭터 {}개(동반자 {}개), 용병 타입 {}개",
@@ -310,6 +324,12 @@ const std::vector<RosterEntry>& mercenary_catalog() {
 }
 const std::vector<RosterEntry>& character_catalog() {
     return *g_character.live.load(std::memory_order_acquire);
+}
+
+const RosterEntry* character_by_row(std::uint32_t row) {
+    const auto* rows = g_char_rows.load(std::memory_order_acquire);
+    if (rows == nullptr || row >= rows->size()) return nullptr;
+    return (*rows)[row];
 }
 
 const std::string& mercenary_type_name(std::uint16_t row) {

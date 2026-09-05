@@ -49,6 +49,7 @@ namespace cdtb::game {
 
 struct RosterEntry {
     std::uint32_t key = 0;   // u16 키를 담는다. 용병 표는 행 번호.
+    std::uint32_t row = 0;   // 레코드 포인터 배열의 행 번호. 액터가 이 값으로 참조한다.
     std::string name;        // 내부 이름 (빈 문자열이면 못 읽음)
 
     // 캐릭터 표 전용. 다른 표는 기본값이다.
@@ -135,6 +136,10 @@ bool roster_ready();
 const std::vector<RosterEntry>& vehicle_catalog();
 const std::vector<RosterEntry>& mercenary_catalog();
 const std::vector<RosterEntry>& character_catalog();
+
+// 캐릭터 표 행 번호(레코드 배열 인덱스) -> 항목. 없으면 널. 살아 있는
+// 액터가 캐릭터를 이 행 번호로 가리킨다(game/actors.h).
+const RosterEntry* character_by_row(std::uint32_t row);
 
 // 용병 표 행 번호 -> 내부 이름. 모르면 빈 문자열.
 const std::string& mercenary_type_name(std::uint16_t row);
