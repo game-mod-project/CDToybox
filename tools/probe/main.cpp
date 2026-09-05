@@ -1680,6 +1680,30 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 
 void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                char** argv) {
+    if (argc > 2 && std::strcmp(argv[2], "diag") == 0) {
+        // 모든 장비 컴포넌트를 클래스·조각수·플레이어신호와 함께 나열한다.
+        const auto objs = rt.find_objects("EquipSlotActorComponent", 128);
+        std::printf("EquipSlotActorComponent: %zu\n", objs.size());
+        for (const auto& o : objs) {
+            game::EquipTable t;
+            if (!game::find_equip_table(reader, o.address, &t)) continue;
+            t.comp = o.address;
+            std::vector<game::WornPiece> ps;
+            if (!game::read_worn_gear(reader, t, &ps) || ps.size() < 3) continue;
+            std::uint64_t ch = 0;
+            reader.read_value(o.address + 0x08, &ch);
+            const std::uintptr_t arr =
+                game::player_gauge_array(reader, ch);
+            std::int32_t hpmax = 0;
+            if (arr) reader.read_value(arr + 0x18, &hpmax);
+            const bool isp = game::char_is_player(reader, ch);
+            std::printf("  [%s] comp=0x%llX pieces=%zu char=0x%llX gauge=%s "
+                        "hpmax=%d player=%d\n",
+                        o.cls.c_str(), (unsigned long long)o.address, ps.size(),
+                        (unsigned long long)ch, arr ? "Y" : "N", hpmax, isp);
+        }
+        return;
+    }
     if (argc > 2) {
         const std::uintptr_t comp =
             std::strtoull(argv[2], nullptr, 16);
@@ -1969,6 +1993,15 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
         pr("HP  ", 0x08, 0x18);
         pr("STA ", 0x6C8, 0x6D8);
         pr("SPI ", 0x758, 0x768);
+        // 엔트리[0](체력) 전체 필드(i64) - 피해가 어느 필드를 줄이는지 본다.
+        //   +0x00 type +0x08 cur +0x18 base +0x20 norm +0x28 floor +0x30 cap
+        std::printf("entry[0] raw i64:");
+        for (std::size_t o = 0x08; o <= 0x38; o += 8) {
+            std::int64_t v = 0;
+            reader.read_value(arr + o, &v);
+            std::printf(" +%zX=%lld", o, (long long)v);
+        }
+        std::printf("\n");
         auto tyname = [](int t) {
             switch (t) {
                 case 0: return "Health";

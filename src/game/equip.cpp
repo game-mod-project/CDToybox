@@ -369,7 +369,9 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
     if (out == nullptr) return 0;
     out->clear();
     // 서버·클라 장비 컴포넌트를 한 번의 힙 스캔으로 모두 찾는다(부분일치).
-    const auto objs = rtti.find_objects("EquipSlotActorComponent", 64);
+    // 상한을 넉넉히. 월드에 장비 컴포넌트가 128개+ 있어(NPC·동행 다수) 64 로
+    // 자르면 힙 순서에 따라 플레이어 comp 가 빠져 목록이 NPC 로 샜다.
+    const auto objs = rtti.find_objects("EquipSlotActorComponent", 512);
     std::vector<WornPiece> tmp;
     for (const auto& o : objs) {
         EquipTable t;
@@ -403,15 +405,19 @@ bool pick_player_table(const mem::Reader& reader,
         const int dt = distinct_tags(tmp);
         const int n = static_cast<int>(tmp.size());
         if (n == 0 || dt * 2 < n) continue;  // 태그가 조각 수의 절반 미만이면 잡음
+        // 플레이어 식별: (1) 정신력 풀 보유(char_is_player) - 단 동행(companion)
+        // 도 풀 게이지가 있어 참이 된다. (2) 그중 플레이어는 **착용 조각이 가장
+        // 많다**(전 슬롯 착용, 실측 18 vs 동행 11). 그래서 정신력-풀 게이트를
+        // 강하게 주되, 그 안에서는 조각 수(dt)로 가른다. prefer 는 **동률일 때만**
+        // 깨는 +1 로 둔다(예전 +1000 은 먼저 잡힌 동행을 고정시켜 목록이 동행으로
+        // 새는 원인이었다).
         int score = dt;
-        // 결정적 신호: 이 comp 의 액터가 정신력 풀을 가진 플레이어인가.
-        // 주변 NPC 장비 테이블과 확실히 구분돼 목록 흔들림을 없앤다.
         if (t.comp != 0) {
             const std::uintptr_t ch = rd64(reader, t.comp + 0x08);
-            if (char_is_player(reader, ch)) score += 100000;
+            if (char_is_player(reader, ch)) score += 10000;
         }
-        if (t.arr == prefer_arr && dt >= 3) score += 1000;  // 안정화 가산
-        if (t.stride == 0xD0) score += 1;                   // 확정 stride 우대
+        if (t.arr == prefer_arr && dt >= 3) score += 1;   // 동률 안정화만
+        if (t.stride == 0xD0) score += 1;                 // 확정 stride 우대
         if (score > bestScore) {
             bestScore = score;
             best = t;
