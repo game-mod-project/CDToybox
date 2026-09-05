@@ -23,6 +23,7 @@
 #include "remote_reader.h"
 #include "findquat.h"
 #include "game/camera.h"
+#include "game/equip.h"
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
@@ -1566,6 +1567,55 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     for (const char* n : kKnown) cmd_cheat_one(rt, reader, n);
 }
 
+void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+               char** argv) {
+    if (argc > 2) {
+        const std::uintptr_t comp =
+            std::strtoull(argv[2], nullptr, 16);
+        std::printf("comp=0x%llX (direct)\n", (unsigned long long)comp);
+        game::EquipTable t;
+        if (!game::find_equip_table(reader, comp, &t)) {
+            std::printf("equip table NOT found\n");
+            return;
+        }
+        std::printf("equip table arr=0x%llX cnt=%u stride=0x%X\n",
+                    (unsigned long long)t.arr, t.cnt, t.stride);
+        std::vector<game::WornPiece> ps;
+        game::read_worn_gear(reader, t, &ps);
+        std::printf("worn pieces: %zu\n", ps.size());
+        for (const auto& w : ps) {
+            std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
+                        (unsigned long long)w.instance, w.key, w.refine,
+                        w.slot_tag, w.unlocked);
+            for (int k = 0; k < 5; ++k)
+                std::printf(" [%u m%X i%02X]", w.sockets[k].gem,
+                            w.sockets[k].marker, w.sockets[k].index);
+            std::printf("\n");
+        }
+        return;
+    }
+    std::vector<game::EquipTable> tabs;
+    const int nt = game::collect_equip_tables(rt, reader, &tabs);
+    std::printf("valid equip tables: %d\n", nt);
+    game::EquipTable t;
+    std::vector<game::WornPiece> ps;
+    if (!game::read_player_worn(rt, reader, &t, &ps)) {
+        std::printf("player worn gear NOT found\n");
+        return;
+    }
+    std::printf("player table arr=0x%llX cnt=%u stride=0x%X  pieces=%zu\n",
+                (unsigned long long)t.arr, t.cnt, t.stride, ps.size());
+    for (const auto& w : ps) {
+        std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
+                    (unsigned long long)w.instance, w.key, w.refine,
+                    w.slot_tag, w.unlocked);
+        for (int k = 0; k < 5; ++k)
+            std::printf(" [%u m%X i%02X]", w.sockets[k].gem,
+                        w.sockets[k].marker, w.sockets[k].index);
+        std::printf("\n");
+    }
+}
+
 void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                  char** argv) {
     if (argc > 2 && std::strcmp(argv[2], "cand") == 0) {
@@ -2620,6 +2670,7 @@ int main(int argc, char** argv) {
         cmd_roster(rt, reader, argc, argv);
         return 0;
     }
+    if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
         return 0;
