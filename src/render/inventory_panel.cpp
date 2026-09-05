@@ -501,6 +501,23 @@ void draw_inventory_panel(bool* open) {
                     game::request_socket_add(game::best_server_session(),
                                              game::socket_inv_handle(), r.slot);
                 }
+                ImGui::SameLine();
+                // 보석 박기: 같은 칸의 강화 보석(분류 74) 슬롯을 최대 5개
+                // 자동으로 모아 Push 한다. 소켓뚫기 뒤에 누른다(2초 간격).
+                if (ImGui::SmallButton("보석")) {
+                    std::uint16_t gems[game::kSocketSlots]{};
+                    int gi = 0;
+                    for (const auto& gr : g_rows) {
+                        if (gi >= game::kSocketSlots) break;
+                        if (gr.category == game::kSocketGemCategory &&
+                            gr.kind == r.kind) {
+                            gems[gi++] = static_cast<std::uint16_t>(gr.slot);
+                        }
+                    }
+                    game::request_socket_push(game::best_server_session(),
+                                              game::socket_inv_handle(), r.slot,
+                                              gems);
+                }
                 ImGui::EndDisabled();
             }
             ImGui::PopID();
