@@ -110,6 +110,7 @@ add_executable(cdtb_tests
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
     tests/stash_tests.cpp
+    tests/roster_tests.cpp
     tests/image_dump_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
@@ -119,6 +120,7 @@ add_executable(cdtb_tests
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
+    src/game/roster.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
