@@ -486,6 +486,12 @@ std::uintptr_t equip_player_comp() {
     return g_eq_ready ? g_eq_player_table.comp : 0;
 }
 
+void equip_tables_copy(std::vector<EquipTable>* out) {
+    if (out == nullptr) return;
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    *out = g_eq_tables;
+}
+
 bool equip_snapshot(std::vector<WornPiece>* out) {
     if (out == nullptr) return false;
     std::lock_guard<std::mutex> lk(g_eq_mutex);

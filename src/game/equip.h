@@ -114,6 +114,10 @@ bool equip_ready();
 // 캐시된 플레이어 장비 컴포넌트(액터 앵커용, comp+0x08=char). 없으면 0.
 std::uintptr_t equip_player_comp();
 
+// 캐시된 both-realms 장비 테이블 전체를 복사한다(NPC 포함). 플레이어 치트가
+// 클라·서버 양쪽 게이지를 찾을 때 쓴다(사망 판정은 서버 게이지가 권위).
+void equip_tables_copy(std::vector<EquipTable>* out);
+
 // 패널이 즉시 새로고침을 요청. 분석 스레드가 다음 주기에 처리한다.
 void equip_request_refresh();
 bool equip_take_refresh();
