@@ -407,6 +407,15 @@ void draw_stash_panel(bool* open) {
     } else {
         ImGui::TextDisabled("cdtoybox_stash.txt 에 저장됩니다");
     }
+    // 파일을 손으로 고친 뒤 게임을 다시 켜지 않고 반영한다. 저장하지
+    // 않은 변경은 버려진다 - 파일이 진실이다.
+    ImGui::SameLine();
+    if (ImGui::SmallButton("다시 읽기")) {
+        g_stash = game::Stash{};
+        g_open_set = -1;
+        g_dirty = false;
+        load();
+    }
     ImGui::End();
 }
 
