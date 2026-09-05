@@ -22,12 +22,14 @@
 #include "mem/image_dump.h"
 #include "remote_reader.h"
 #include "findquat.h"
+#include "game/actors.h"
 #include "game/camera.h"
 #include "game/equip.h"
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/localization.h"
+#include "game/player.h"
 #include "game/roster.h"
 #include "game/stash.h"
 
@@ -293,6 +295,79 @@ void cmd_findu32(const Remote& r, std::uint32_t value, std::size_t max) {
         }
     }
     std::printf("%zu곳, 훑은 양 %.1f GB\n", found, scanned / 1073741824.0);
+}
+
+// float 값 변화 스캔. 후보를 hp_candidates.txt 에 이어 붙여, 재실행하면
+// 교집합으로 좁힌다. HP 를 바꿔 가며 두세 번 돌리면 살아있는 주소만 남는다.
+//   hpscan <값> [eps]   (처음=전체 수집, 이후=교집합)
+//   hpscan reset        (후보 파일 삭제)
+void cmd_hpscan(const Remote& r, int argc, char** argv) {
+    const char* path = "hp_candidates.txt";
+    if (argc >= 3 && std::strcmp(argv[2], "reset") == 0) {
+        std::remove(path);
+        std::printf("후보 초기화\n");
+        return;
+    }
+    if (argc < 3) {
+        std::printf("사용: hpscan <값> [eps] | hpscan reset\n");
+        return;
+    }
+    const float target = static_cast<float>(std::atof(argv[2]));
+    const float eps = (argc > 3) ? static_cast<float>(std::atof(argv[3])) : 0.5f;
+
+    std::vector<std::uint64_t> prev;
+    if (std::FILE* f = std::fopen(path, "r")) {
+        unsigned long long a = 0;
+        while (std::fscanf(f, "%llx", &a) == 1) prev.push_back(a);
+        std::fclose(f);
+    }
+
+    // 표현 무관 매칭: int32==값, int32==값*1000, float≈값, float≈값*1000.
+    // 변화 스캔을 반복하면 틀린 표현은 교집합에서 저절로 사라진다.
+    const std::int32_t iv1 = static_cast<std::int32_t>(target + 0.5f);
+    const std::int32_t iv2 = static_cast<std::int32_t>(target * 1000.0f + 0.5f);
+    const float f2 = target * 1000.0f;
+    auto matches = [&](const void* p) {
+        std::int32_t iv = 0;
+        float fv = 0.0f;
+        std::memcpy(&iv, p, 4);
+        std::memcpy(&fv, p, 4);
+        if (iv == iv1 || iv == iv2) return true;
+        if (fv >= target - eps && fv <= target + eps) return true;
+        if (fv >= f2 - 1.0f && fv <= f2 + 1.0f) return true;
+        return false;
+    };
+
+    std::vector<std::uint64_t> now;
+    if (prev.empty()) {
+        const auto regs = r.regions();
+        std::vector<std::uint8_t> buf;
+        for (const auto& reg : regs) {
+            if (!reg.writable || reg.is_image) continue;
+            if (reg.size == 0 || reg.size > (512u << 20)) continue;
+            buf.resize(reg.size);
+            if (!r.read(reg.base, buf.data(), buf.size())) continue;
+            for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+                if (matches(buf.data() + i)) now.push_back(reg.base + i);
+            }
+        }
+    } else {
+        for (const auto a : prev) {
+            std::uint8_t b4[4]{};
+            if (r.read(a, b4, 4) && matches(b4)) now.push_back(a);
+        }
+    }
+
+    if (std::FILE* f = std::fopen(path, "w")) {
+        for (const auto a : now)
+            std::fprintf(f, "%llX\n", static_cast<unsigned long long>(a));
+        std::fclose(f);
+    }
+    std::printf("후보 %zu개 (%s, 값 %.1f)\n", now.size(),
+                prev.empty() ? "초기 수집" : "교집합", target);
+    for (std::size_t i = 0; i < now.size() && i < 40; ++i)
+        std::printf("  0x%llX\n", static_cast<unsigned long long>(now[i]));
+    if (now.size() > 40) std::printf("  ...(%zu 더)\n", now.size() - 40);
 }
 
 // 플레이어 인벤토리를 나열한다.
@@ -1094,6 +1169,42 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 
 // 탈것·용병·캐릭터 카탈로그를 낸다. 모드와 같은 함수를 돌려 배포 전
 // 검증한다. roster [탈것|용병|캐릭터] [최대개수]
+// 살아 있는 액터를 걷어 캐릭터 이름을 붙인다 (모드의 근처 탭과 같은 코드).
+void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                char** argv) {
+    const bool all = (argc > 2) && std::strcmp(argv[2], "all") == 0;
+    std::uintptr_t mgr = 0;
+    if (!game::find_actor_manager(reader, rt, &mgr)) {
+        std::printf("액터 매니저를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::printf("액터 매니저 0x%llX\n", static_cast<unsigned long long>(mgr));
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
+    }
+    std::vector<game::LiveActor> list;
+    if (!game::snapshot_live_actors(reader, mgr, &list)) {
+        std::printf("액터 걷기 실패.\n");
+        return;
+    }
+    std::size_t comp = 0, named = 0;
+    for (const auto& a : list) {
+        if (a.is_companion()) ++comp;
+        if (!a.name.empty()) ++named;
+    }
+    std::printf("액터 %zu개, 이름 풀림 %zu, 동반자 타입 %zu\n", list.size(), named,
+                comp);
+    for (const auto& a : list) {
+        if (!all && !a.is_companion()) continue;
+        std::printf("  0x%llX  행 %5u  키 %6u  타입행 %2d  %s%s%s\n",
+                    static_cast<unsigned long long>(a.actor), a.row, a.key,
+                    a.is_companion() ? static_cast<int>(a.merc_row) : -1,
+                    a.name.empty() ? "(이름 없음)" : a.name.c_str(),
+                    game::roster_is_wild(a.name) ? "  [야생]" : "",
+                    a.hirable ? "  [고용가능]" : "");
+    }
+}
+
 void cmd_roster(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 char** argv) {
     struct Tbl {
@@ -1569,6 +1680,30 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 
 void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                char** argv) {
+    if (argc > 2 && std::strcmp(argv[2], "diag") == 0) {
+        // 모든 장비 컴포넌트를 클래스·조각수·플레이어신호와 함께 나열한다.
+        const auto objs = rt.find_objects("EquipSlotActorComponent", 128);
+        std::printf("EquipSlotActorComponent: %zu\n", objs.size());
+        for (const auto& o : objs) {
+            game::EquipTable t;
+            if (!game::find_equip_table(reader, o.address, &t)) continue;
+            t.comp = o.address;
+            std::vector<game::WornPiece> ps;
+            if (!game::read_worn_gear(reader, t, &ps) || ps.size() < 3) continue;
+            std::uint64_t ch = 0;
+            reader.read_value(o.address + 0x08, &ch);
+            const std::uintptr_t arr =
+                game::player_gauge_array(reader, ch);
+            std::int32_t hpmax = 0;
+            if (arr) reader.read_value(arr + 0x18, &hpmax);
+            const bool isp = game::char_is_player(reader, ch);
+            std::printf("  [%s] comp=0x%llX pieces=%zu char=0x%llX gauge=%s "
+                        "hpmax=%d player=%d\n",
+                        o.cls.c_str(), (unsigned long long)o.address, ps.size(),
+                        (unsigned long long)ch, arr ? "Y" : "N", hpmax, isp);
+        }
+        return;
+    }
     if (argc > 2) {
         const std::uintptr_t comp =
             std::strtoull(argv[2], nullptr, 16);
@@ -1614,6 +1749,360 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                         w.sockets[k].marker, w.sockets[k].index);
         std::printf("\n");
     }
+}
+
+// B-1 검증: 스탯 블록 후보를 덤프한다. 플레이어 것은 값이 캐릭터 시트
+// (x1000 이라 여기 값 ÷1000)와 맞는 블록이다. 인자로 액터 주소를 주면
+// 그 액터만 스캔한다.
+// status 컴포넌트(및 그 포인터 1단계)에서 주어진 값을 int32/float/x1000 으로
+// 찾는다. 시트 수치를 넣어 오프셋을 못박는 용도.
+void scan_status_for_value(const mem::Rtti& rt, const mem::Reader& reader,
+                           int val) {
+    const auto objs = rt.find_objects("StatusActorComponent", 512);
+    std::printf("=== 값 %d 스캔 (StatusActorComponent %zu개) ===\n", val,
+                objs.size());
+    int hits = 0;
+    for (const auto& o : objs) {
+        for (std::size_t off = 0; off <= 0xC00 && hits < 60; off += 4) {
+            std::int32_t iv = 0;
+            float fv = 0.0f;
+            if (reader.read_value(o.address + off, &iv)) {
+                if (iv == val || iv == val * 1000) {
+                    std::printf("  [%s] 0x%llX +0x%03zX = %d (int)\n",
+                                o.cls.c_str(), (unsigned long long)o.address,
+                                off, iv);
+                    ++hits;
+                }
+            }
+            if (reader.read_value(o.address + off, &fv)) {
+                if (fv == static_cast<float>(val)) {
+                    std::printf("  [%s] 0x%llX +0x%03zX = %.1f (float)\n",
+                                o.cls.c_str(), (unsigned long long)o.address,
+                                off, fv);
+                    ++hits;
+                }
+            }
+        }
+    }
+    std::printf("총 %d 히트\n", hits);
+}
+
+// 주어진 주소의 int32(및 float)를 훑어 그럴듯한 스탯 값을 덤프한다. 이미지
+// 로드가 필요 없어 빠르다.
+void dump_status_ints(const mem::Reader& reader, std::uintptr_t base) {
+    std::printf("=== 0x%llX int32 덤프 (1..3,000,000) ===\n",
+                (unsigned long long)base);
+    for (std::size_t off = 0; off <= 0xC00; off += 4) {
+        std::int32_t iv = 0;
+        if (!reader.read_value(base + off, &iv)) continue;
+        if (iv >= 1 && iv <= 3000000) {
+            float fv = 0.0f;
+            reader.read_value(base + off, &fv);
+            std::printf("  +0x%03zX = %d\n", off, iv);
+        }
+    }
+}
+
+void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+                int argc, char** argv) {
+    // player find : 실제 discovery(스티키·조각최다) 를 돌려 결과를 본다.
+    if (argc > 2 && std::strcmp(argv[2], "find") == 0) {
+        // 프로브에서는 equip 캐시가 비어 있으므로 equip_discover 로 채운 뒤
+        // player_discover(값싼, equip_player_comp 사용)를 부른다.
+        game::equip_discover(rt, reader);
+        game::player_discover(reader);
+        const auto v = game::player_vitals(reader);
+        std::printf("player_char=0x%llX  HP %d/%d STA %d/%d SPI %d/%d ok=%d\n",
+                    (unsigned long long)game::player_char(), v.hp_cur, v.hp_max,
+                    v.sta_cur, v.sta_max, v.spi_cur, v.spi_max, v.ok);
+        // 게이지 배열의 HP(entry0)·스태미나(entry12) 전체 i64 필드. 피해 전후
+        // diff 로 어느 필드가 줄어드는지(=live HP) 특정한다.
+        const std::uintptr_t ch = game::player_char();
+        const std::uintptr_t arr = game::player_gauge_array(reader, ch);
+        if (arr) {
+            auto dumpe = [&](const char* nm, std::uintptr_t e) {
+                std::printf("  %s i64:", nm);
+                for (std::size_t o = 0x08; o <= 0x38; o += 8) {
+                    std::int64_t x = 0;
+                    reader.read_value(e + o, &x);
+                    std::printf(" +%zX=%lld", o, (long long)x);
+                }
+                std::printf("\n");
+            };
+            dumpe("HP(e0) ", arr);
+            dumpe("STA(e12)", arr + 12 * 0x90);
+        }
+        return;
+    }
+    // player scan <값>  : 시트 수치로 오프셋 탐색
+    if (argc > 3 && std::strcmp(argv[2], "scan") == 0) {
+        scan_status_for_value(rt, reader, std::atoi(argv[3]));
+        return;
+    }
+    // player dump <addr> [addr2...] : 주소들의 int32 덤프
+    if (argc > 3 && std::strcmp(argv[2], "dump") == 0) {
+        for (int i = 3; i < argc; ++i)
+            dump_status_ints(reader, std::strtoull(argv[i], nullptr, 16));
+        return;
+    }
+    // player status : 플레이어 액터가 가리키는 StatusActorComponent 를 찾아 덤프.
+    if (argc > 2 && std::strcmp(argv[2], "status") == 0) {
+        game::EquipTable pt;
+        std::vector<game::WornPiece> ps;
+        if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+            std::printf("플레이어 장비 테이블 못 찾음\n");
+            return;
+        }
+        std::uint64_t actor = 0;
+        reader.read_value(pt.comp + 0x08, &actor);
+        std::printf("player actor=0x%llX\n", (unsigned long long)actor);
+        // 액터가 가리키는 포인터 중 클래스명에 Status 가 든 것을 찾는다.
+        for (std::size_t off = 0; off <= 0x800; off += 8) {
+            std::uint64_t p = 0;
+            if (!reader.read_value(actor + off, &p)) continue;
+            if (p < 0x100000000ULL) continue;
+            const std::string cls = rt.class_of_object(p);
+            if (cls.find("Status") == std::string::npos) continue;
+            std::printf("  actor+0x%03zX -> [%s] 0x%llX\n", off, cls.c_str(),
+                        (unsigned long long)p);
+            // 이 컴포넌트의 cur/max 쌍(8 또는 0x10 간격)을 덤프한다.
+            for (std::size_t o = 0; o <= 0x900; o += 4) {
+                std::int32_t cu = 0, m8 = 0, m10 = 0;
+                reader.read_value(p + o, &cu);
+                reader.read_value(p + o + 8, &m8);
+                reader.read_value(p + o + 0x10, &m10);
+                if (cu >= 1 && cu <= 3000000) {
+                    if (m8 >= cu && m8 <= 3000000 && m8 - cu <= m8)
+                        std::printf("      +0x%03zX %d / +8 %d\n", o, cu, m8);
+                    else if (m10 >= cu && m10 <= 3000000)
+                        std::printf("      +0x%03zX %d / +10 %d\n", o, cu, m10);
+                }
+            }
+        }
+        return;
+    }
+    // player maxes <a> <b> <c> : 세 최대값(안 변함)이 가까이 모인 구조체를 찾는다.
+    // 재생성으로 현재값 스캔이 막혀도, 최대값들은 고정이라 스탯 블록을 짚는다.
+    if (argc > 4 && std::strcmp(argv[2], "maxes") == 0) {
+        const std::int32_t A = std::atoi(argv[3]);
+        const std::int32_t B = std::atoi(argv[4]);
+        const std::int32_t C = (argc > 5) ? std::atoi(argv[5]) : 0;
+        const auto regs = r.regions();
+        std::printf("=== %d & %d & %d 가 0x200 내 모인 곳 ===\n", A, B, C);
+        std::vector<std::uint8_t> buf;
+        int hits = 0;
+        for (const auto& reg : regs) {
+            if (!reg.writable || reg.is_image) continue;
+            if (reg.size == 0 || reg.size > (512u << 20)) continue;
+            buf.resize(reg.size);
+            if (!r.read(reg.base, buf.data(), buf.size())) continue;
+            const std::size_t win = 0x200;
+            for (std::size_t i = 0; i + 4 <= buf.size(); i += 4) {
+                std::int32_t v = 0;
+                std::memcpy(&v, buf.data() + i, 4);
+                if (v != A) continue;
+                // 근처에서 B, C 를 찾는다.
+                bool hasB = false, hasC = (C == 0);
+                const std::size_t lo = (i > win) ? i - win : 0;
+                const std::size_t hi =
+                    (i + win < buf.size()) ? i + win : buf.size() - 4;
+                for (std::size_t j = lo; j <= hi; j += 4) {
+                    std::int32_t w = 0;
+                    std::memcpy(&w, buf.data() + j, 4);
+                    if (w == B) hasB = true;
+                    if (C != 0 && w == C) hasC = true;
+                }
+                if (hasB && hasC) {
+                    std::printf("  0x%llX (%d 위치)\n",
+                                (unsigned long long)(reg.base + i), A);
+                    if (++hits >= 40) { std::printf("(멈춤)\n"); return; }
+                }
+            }
+        }
+        std::printf("%d곳\n", hits);
+        return;
+    }
+    // player hpwatch : 체인 영역(actor+0x68+0x20+0x18) 안에서 HP 변화 diff.
+    //   1회차: 스냅샷 저장. 2회차(HP 바꾼 뒤): 값이 바뀐 오프셋만 = HP 후보.
+    if (argc > 2 && std::strcmp(argv[2], "hpwatch") == 0) {
+        game::EquipTable pt;
+        std::vector<game::WornPiece> ps;
+        if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+            std::printf("플레이어 장비 테이블 못 찾음\n");
+            return;
+        }
+        std::uint64_t actor = 0, s1 = 0, s2 = 0, base = 0;
+        reader.read_value(pt.comp + 0x08, &actor);
+        reader.read_value(actor + 0x68, &s1);
+        reader.read_value(s1 + 0x20, &s2);
+        reader.read_value(s2 + 0x18, &base);
+        std::printf("actor=0x%llX base=0x%llX\n", (unsigned long long)actor,
+                    (unsigned long long)base);
+        if (base < 0x100000000ULL) {
+            std::printf("체인 무효\n");
+            return;
+        }
+        const char* path = "hpwatch.txt";
+        // 이전 스냅샷 로드: "offset value" 행들.
+        std::vector<std::pair<std::size_t, std::int32_t>> prev;
+        if (std::FILE* f = std::fopen(path, "r")) {
+            unsigned long long o = 0;
+            long long v = 0;
+            while (std::fscanf(f, "%llx %lld", &o, &v) == 2)
+                prev.emplace_back(static_cast<std::size_t>(o),
+                                  static_cast<std::int32_t>(v));
+            std::fclose(f);
+        }
+        if (prev.empty()) {
+            // 스냅샷: HP 처럼 보이는 값(1..3,000,000)을 전부 저장.
+            std::FILE* f = std::fopen(path, "w");
+            int n = 0;
+            for (std::size_t o = 0; o <= 0x800; o += 4) {
+                std::int32_t v = 0;
+                if (!reader.read_value(base + o, &v)) continue;
+                if (v >= 1 && v <= 3000000) {
+                    if (f) std::fprintf(f, "%zX %d\n", o, v);
+                    ++n;
+                }
+            }
+            if (f) std::fclose(f);
+            std::printf("스냅샷 %d개 저장. 이제 게임에서 HP 를 바꾼 뒤 다시 실행.\n",
+                        n);
+        } else {
+            std::printf("바뀐 오프셋(HP 후보):\n");
+            for (const auto& kv : prev) {
+                std::int32_t v = 0;
+                if (!reader.read_value(base + kv.first, &v)) continue;
+                if (v != kv.second && v >= 1 && v <= 3000000)
+                    std::printf("  +0x%03zX  %d -> %d\n", kv.first, kv.second,
+                                v);
+            }
+            std::remove(path);
+            std::printf("(끝. 다시 하려면 한 번 더 실행해 새 스냅샷)\n");
+        }
+        return;
+    }
+    // player chain : CT 검증 게이지 배열을 라이브 확인.
+    //   char+0x68 actor, +0x20 marker, +0x18 root, +0x58 array, 0x90 stride.
+    //   entry: +0x00 i32 type, +0x08 i64 cur, +0x30 i64 cap. entry[0] 타입==0(체력).
+    if (argc > 2 && std::strcmp(argv[2], "chain") == 0) {
+        game::EquipTable pt;
+        std::vector<game::WornPiece> ps;
+        if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+            std::printf("플레이어 장비 테이블 못 찾음\n");
+            return;
+        }
+        auto q = [&](std::uint64_t a, std::size_t o) {
+            std::uint64_t v = 0;
+            reader.read_value(a + o, &v);
+            return v;
+        };
+        std::uint64_t ch = 0;
+        reader.read_value(pt.comp + 0x08, &ch);
+        const std::uint64_t actor = q(ch, 0x68);
+        const std::uint64_t mark = q(actor, 0x20);
+        const std::uint64_t root = q(mark, 0x18);
+        const std::uint64_t arr = q(root, 0x58);
+        std::printf("char=0x%llX actor=0x%llX mark=0x%llX root=0x%llX arr=0x%llX\n",
+                    (unsigned long long)ch, (unsigned long long)actor,
+                    (unsigned long long)mark, (unsigned long long)root,
+                    (unsigned long long)arr);
+        std::int32_t t0 = -1;
+        reader.read_value(arr + 0x00, &t0);
+        std::printf("entry[0] type=%d %s\n", t0,
+                    t0 == 0 ? "(Health 게이트 통과)" : "(체력 아님 - 체인 의심)");
+        // CDR 평면 오프셋(godmode 대상) 검증: cur/max.
+        auto pr = [&](const char* nm, std::size_t oc, std::size_t om) {
+            std::int32_t c = 0, m = 0;
+            reader.read_value(arr + oc, &c);
+            reader.read_value(arr + om, &m);
+            std::printf("  %s: cur(+0x%zX)=%d  max(+0x%zX)=%d\n", nm, oc, c, om,
+                        m);
+        };
+        pr("HP  ", 0x08, 0x18);
+        pr("STA ", 0x6C8, 0x6D8);
+        pr("SPI ", 0x758, 0x768);
+        // 엔트리[0](체력) 전체 필드(i64) - 피해가 어느 필드를 줄이는지 본다.
+        //   +0x00 type +0x08 cur +0x18 base +0x20 norm +0x28 floor +0x30 cap
+        std::printf("entry[0] raw i64:");
+        for (std::size_t o = 0x08; o <= 0x38; o += 8) {
+            std::int64_t v = 0;
+            reader.read_value(arr + o, &v);
+            std::printf(" +%zX=%lld", o, (long long)v);
+        }
+        std::printf("\n");
+        auto tyname = [](int t) {
+            switch (t) {
+                case 0: return "Health";
+                case 17: return "HEAT(핀금지)";
+                case 18: return "COMBUSTION(핀금지)";
+                case 19: return "MOUNT gallop/flight";
+                case 20: return "sprint stamina";
+                case 21: return "spirit pool";
+                case 22: return "stamina pool";
+                case 23: return "spirit variant";
+                case 48: return "MOUNT fire(탈것만)";
+                default: return "";
+            }
+        };
+        for (int k = 0; k < 64; ++k) {
+            const std::uint64_t e = arr + static_cast<std::uint64_t>(k) * 0x90;
+            std::int32_t ty = 0;
+            std::int64_t cur = 0, cap = 0;
+            reader.read_value(e + 0x00, &ty);
+            reader.read_value(e + 0x08, &cur);
+            reader.read_value(e + 0x30, &cap);
+            if (ty < 0 || ty > 4096) continue;
+            if (k > 0 && ty == 0 && cur == 0 && cap == 0) continue;
+            std::printf("  [%2d] type=%-3d cur=%-10lld cap=%-10lld  %s\n", k, ty,
+                        (long long)cur, (long long)cap, tyname(ty));
+        }
+        return;
+    }
+    // 기본: 플레이어 액터를 equip 앵커로 얻어 status 컴포넌트를 덤프(진단).
+    game::EquipTable pt;
+    std::vector<game::WornPiece> ps;
+    if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+        std::printf("플레이어 장비 테이블 못 찾음\n");
+        return;
+    }
+    std::uint64_t pactor = 0;
+    reader.read_value(pt.comp + 0x08, &pactor);
+    std::printf("플레이어 actor=0x%llX\n", (unsigned long long)pactor);
+
+    // StatusActorComponent 중 백참조(+0x00..+0x40)가 플레이어 액터인 것을 찾는다.
+    const auto objs = rt.find_objects("StatusActorComponent", 64);
+    std::uintptr_t pcomp = 0;
+    for (const auto& o : objs) {
+        for (std::size_t bo = 0; bo <= 0x40; bo += 8) {
+            std::uint64_t v = 0;
+            if (reader.read_value(o.address + bo, &v) && v == pactor) {
+                std::printf("플레이어 status=[%s] 0x%llX (백참조 +0x%zX)\n",
+                            o.cls.c_str(), (unsigned long long)o.address, bo);
+                if (pcomp == 0) pcomp = o.address;
+            }
+        }
+    }
+    if (pcomp == 0) {
+        std::printf("액터 백참조로 status 컴포넌트를 못 찾음. 앞 3개 덤프:\n");
+        for (int i = 0; i < 3 && i < static_cast<int>(objs.size()); ++i)
+            std::printf("  [%s] 0x%llX\n", objs[i].cls.c_str(),
+                        (unsigned long long)objs[i].address);
+        return;
+    }
+
+    // 컴포넌트의 int32 를 훑어 그럴듯한 (cur,max) 자원 쌍을 찾는다.
+    std::printf("--- status 0x%llX int32 스캔 (cur<=max, 0<max<5e7) ---\n",
+                (unsigned long long)pcomp);
+    for (std::size_t off = 0; off <= 0xA00; off += 4) {
+        std::int32_t cu = 0, mx = 0;
+        if (!reader.read_value(pcomp + off, &cu)) continue;
+        if (!reader.read_value(pcomp + off + 0x10, &mx)) continue;
+        if (mx > 0 && mx < 50000000 && cu >= 0 && cu <= mx && mx >= 10) {
+            std::printf("  +0x%03zX  %d / (+0x10) %d\n", off, cu, mx);
+        }
+    }
+    std::printf("체력/스태미나/정신력을 시트 값과 맞춰 오프셋을 확정하세요.\n");
 }
 
 void cmd_itemmap(const mem::Rtti& rt, const mem::Reader& reader, int argc,
@@ -2458,6 +2947,10 @@ int main(int argc, char** argv) {
         cmd_heapfind(r, argc, argv);
         return 0;
     }
+    if (cmd == "hpscan") {
+        cmd_hpscan(r, argc, argv);
+        return 0;
+    }
     if (cmd == "heapptr") {
         cmd_heapptr(r, argc, argv);
         return 0;
@@ -2666,11 +3159,16 @@ int main(int argc, char** argv) {
         cmd_items(rt, reader, argc, argv);
         return 0;
     }
+    if (cmd == "nearby") {
+        cmd_nearby(rt, reader, argc, argv);
+        return 0;
+    }
     if (cmd == "roster") {
         cmd_roster(rt, reader, argc, argv);
         return 0;
     }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
+    if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
         return 0;

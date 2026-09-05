@@ -329,23 +329,12 @@ void draw_stash_panel(bool* open) {
                 const unsigned int k = grant_item_key();
                 if (k != 0) {
                     // 키만 담으면 꺼낼 때 맨 아이템이 나온다. 지급
-                    // 칸에서 고른 담금질과 소켓도 함께 담는다.
+                    // 칸에서 고른 담금질도 함께 담는다. 소켓은 지급
+                    // 경로로 못 넣으므로 담지 않는다(인벤토리에서
+                    // "보관함에" 로 담으면 원본 소켓은 기록된다).
                     game::StashEntry e{k, grant_item_count()};
                     e.temper = grant_temper();
                     e.sharpness = grant_sharpness();
-                    unsigned int gems[game::kGiveMaxSockets]{};
-                    const int gn =
-                        grant_socket_keys(gems, game::kGiveMaxSockets);
-                    for (int gi = 0; gi < gn; ++gi) {
-                        game::StashSocket ss;
-                        ss.slot = static_cast<std::uint32_t>(gi);
-                        ss.key = gems[gi];
-                        // 파일에 남길 원본 바이트도 같은 조립기로
-                        // 만든다. 대응표가 없으면 키만 남는다 -
-                        // 꺼낼 때 다시 조립하므로 그래도 된다.
-                        game::socket_bytes_for_key(ss.key, ss.raw);
-                        e.sockets.push_back(ss);
-                    }
                     set->items.push_back(std::move(e));
                     g_dirty = true;
                 }

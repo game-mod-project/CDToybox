@@ -343,6 +343,11 @@ void draw_inventory_panel(bool* open) {
         return;
     }
 
+    // 가방 확장은 되돌렸다. 등록 컨테이너 18개 전부에 무차별로 쓰면
+    // 그중 임시 버퍼(게임이 유지하는 4개 평행 사본 중 2개)를 건드려
+    // 게임이 크래시하고 지급 경로까지 손상됐다(2026-09-05 실측). CT 처럼
+    // 어느 사본이 안전한지 구조로 식별한 뒤에 다시 붙인다.
+
     draw_filter_bar();
 
     const int want_grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
@@ -424,9 +429,8 @@ void draw_inventory_panel(bool* open) {
             // 주고, 고쳐서 새로 지급하게 한다.
             ImGui::BeginDisabled(r.key == 0);
             if (ImGui::SmallButton("지급 칸으로")) {
-                set_grant_item(r.key, r.count, r.temper, r.sharpness,
-                               r.gem_keys.data(),
-                               static_cast<int>(r.gem_keys.size()));
+                // 소켓은 옮기지 않는다 - 지급 경로로는 못 넣는다.
+                set_grant_item(r.key, r.count, r.temper, r.sharpness);
             }
             ImGui::EndDisabled();
 

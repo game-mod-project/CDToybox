@@ -12,9 +12,12 @@
 #include <string>
 
 #include "game/equip.h"
+#include "game/actors.h"
+#include "game/companion.h"
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
+#include "game/player.h"
 #include "game/roster.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -202,6 +205,8 @@ void auto_analysis_loop() {
     spawn_resolve_message(rtti, reader);
     spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
+    // 동반자 획득 경로 메시지 캡처(Phase 1, 진단). 길들이기 때 뜬다.
+    companion_capture_install(rtti, reader);
     // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
     // 늑대의 한손검. 인벤토리 첫 칸이고 현지화에 이름이 있다.
     table_probe_install(rtti, reader, 1163042);
@@ -220,6 +225,7 @@ void auto_analysis_loop() {
         // 탈것·용병·캐릭터 카탈로그. 아이템 표와 같은 인프라라 여기
         // 얹는다. 이름까지 풀리면 스스로 빠진다.
         discover_roster(rtti, reader);
+        discover_actor_manager(rtti, reader);
         log_new_actors(rtti, reader);
         if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
@@ -244,6 +250,7 @@ void auto_analysis_loop() {
         discover_item_ids(rtti, reader);
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
+        discover_actor_manager(rtti, reader);
         if (discover_items(rtti, reader) && inventory_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
@@ -280,15 +287,17 @@ void auto_analysis_loop() {
         }
         ++spin;
 
-        // 장비 에디터. 전체 발견(equip_discover)은 힙 전수 스캔이라 비싸므로
-        // **아직 못 잡았거나 패널이 새로고침을 요청했을 때만** 돈다. 평소엔
-        // 캐시된 착용 테이블에서 값싸게 다시 읽기만 한다(장착 상태 반영).
-        // 예전엔 5주기마다 힙을 훑어 인벤토리 발견까지 함께 느려졌다.
+        // 장비 에디터(힙 스캔은 못 잡았을 때만). 플레이어 = 정신력 풀 + 착용
+        // 최다로 고른다.
         if (equip_take_refresh() || !equip_ready()) {
             equip_discover(rtti, reader);
         } else {
             equip_refresh_pieces(reader);
         }
+
+        // 플레이어 치트(B-1). **힙 스캔 없음** - equip 이 고른 플레이어 comp 에서
+        // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
+        player_discover(reader);
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

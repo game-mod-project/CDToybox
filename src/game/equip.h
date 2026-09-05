@@ -46,6 +46,7 @@ struct EquipTable {
     std::uintptr_t arr = 0;
     std::uint32_t cnt = 0;
     std::uint32_t stride = 0;
+    std::uintptr_t comp = 0;   // 이 테이블을 유도한 장비 컴포넌트(액터 앵커용)
 };
 
 // 확정된 컴포넌트에서 착용장비 배열을 유도한다. 서로 다른 슬롯 태그 수로
@@ -61,6 +62,16 @@ struct WornSocket {
     bool filled() const { return marker == 0xFFFF && gem != 0xFFFF; }
 };
 
+// 염색 레코드 하나. entry+0x78 벡터, 16바이트/레코드. zone 이 정체성이다
+// (행 번호가 아님) - 한 조각은 12 zone 중 일부만 레코드로 가진다.
+struct WornDye {
+    int rec = 0;                 // 벡터 안 인덱스(both-realms 쓰기 인자)
+    std::uint8_t zone = 0xFF;    // +6, 정체성
+    std::uint8_t r = 0;          // +7
+    std::uint8_t g = 0;          // +8
+    std::uint8_t b = 0;          // +9
+};
+
 struct WornPiece {
     std::uintptr_t entry = 0;
     std::uint64_t instance = 0;   // +0x00, both-realms 매칭 키
@@ -69,6 +80,7 @@ struct WornPiece {
     std::uint16_t slot_tag = 0;   // +(stride-8)
     int unlocked = 0;             // 열린 소켓 수
     WornSocket sockets[5]{};      // entry+0x60 벡터
+    std::vector<WornDye> dyes;    // entry+0x78 벡터 (있으면)
 };
 
 // 착용 장비 목록을 읽는다(빈 슬롯 제외). 실패면 false.
@@ -98,6 +110,13 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader);
 // 캐시된 플레이어 착용장비 스냅샷(UI 용). 없으면 false.
 bool equip_snapshot(std::vector<WornPiece>* out);
 bool equip_ready();
+
+// 캐시된 플레이어 장비 컴포넌트(액터 앵커용, comp+0x08=char). 없으면 0.
+std::uintptr_t equip_player_comp();
+
+// 캐시된 both-realms 장비 테이블 전체를 복사한다(NPC 포함). 플레이어 치트가
+// 클라·서버 양쪽 게이지를 찾을 때 쓴다(사망 판정은 서버 게이지가 권위).
+void equip_tables_copy(std::vector<EquipTable>* out);
 
 // 패널이 즉시 새로고침을 요청. 분석 스레드가 다음 주기에 처리한다.
 void equip_request_refresh();

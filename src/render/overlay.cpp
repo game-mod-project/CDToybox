@@ -23,9 +23,12 @@
 #include "render/item_panel.h"
 #include "render/roster_panel.h"
 #include "render/equip_panel.h"
+#include "render/player_panel.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
+#include "game/player.h"
+#include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
 // 접근해야 하므로 익명 네임스페이스를 쓸 수 없다.
@@ -352,6 +355,7 @@ struct WindowFlags {
     bool inventory = true;
     bool roster = false;   // 탈것·용병·캐릭터 뷰어. 필요할 때 연다
     bool equip = false;    // 장비 소켓/연마 에디터. 필요할 때 연다
+    bool player = false;   // 플레이어 치트(Godmode 등). 필요할 때 연다
     bool camera = false;   // 개발 진단이다. 필요할 때만 연다
 };
 WindowFlags g_show;
@@ -367,6 +371,7 @@ void draw_windows() {
     }
     if (g_show.roster) cdtb::render::draw_roster_panel(&g_show.roster);
     if (g_show.equip) cdtb::render::draw_equip_panel(&g_show.equip);
+    if (g_show.player) cdtb::render::draw_player_panel(&g_show.player);
     if (g_show.camera) cdtb::render::draw_camera_panel(&g_show.camera);
 }
 
@@ -386,6 +391,8 @@ void draw_ui() {
     ImGui::Checkbox("인벤토리", &g_show.inventory);
     ImGui::Checkbox("탈것·용병·캐릭터", &g_show.roster);
     ImGui::Checkbox("장비 소켓·연마", &g_show.equip);
+    ImGui::SameLine();
+    ImGui::Checkbox("플레이어 치트", &g_show.player);
     ImGui::Checkbox("카메라 분석", &g_show.camera);
 
     ImGui::Separator();
@@ -529,6 +536,14 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         input::cursor_guard_install(&cdtb::overlay::is_visible);
     }
     input::cursor_guard_sync(cdtb::overlay::is_visible());
+
+    // 플레이어 치트 freeze 는 **가시성과 무관하게** 매 Present(~16ms) 적용한다.
+    // 예전엔 아래 !g_visible return 뒤에 있어, 게임하려 오버레이를 숨기면
+    // freeze 가 멈춰 무적이 안 먹었다. 발견/게이지 캐시는 분석 루프가 담당.
+    {
+        const mem::LocalReader reader;
+        cdtb::game::player_apply(reader);
+    }
 
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
 

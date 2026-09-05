@@ -67,18 +67,22 @@ add_library(cdtoybox SHARED
     src/render/inventory_panel.cpp
     src/render/roster_panel.cpp
     src/render/equip_panel.cpp
+    src/render/player_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
     src/game/localization.cpp
     src/game/items.cpp
     src/game/roster.cpp
+    src/game/companion.cpp
+    src/game/actors.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/equip.cpp
+    src/game/player.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/proxy/exports.def
@@ -110,6 +114,9 @@ add_executable(cdtb_tests
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
     tests/stash_tests.cpp
+    tests/roster_tests.cpp
+    tests/companion_tests.cpp
+    tests/actors_tests.cpp
     tests/image_dump_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
@@ -119,6 +126,9 @@ add_executable(cdtb_tests
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
+    src/game/roster.cpp
+    src/game/companion.cpp
+    src/game/actors.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -144,12 +154,15 @@ add_executable(cdtb_probe
     src/game/localization.cpp
     src/game/items.cpp
     src/game/roster.cpp
+    src/game/companion.cpp
+    src/game/actors.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/equip.cpp
+    src/game/player.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)

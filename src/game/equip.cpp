@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 
+#include "game/player.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -340,6 +341,23 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
                 if (s.index != 0xFF && s.index == k) ++w.unlocked;
             }
         }
+        // 염색 레코드: entry+0x78 벡터, +0x80 개수(<=12), 16바이트/레코드.
+        // zone 은 +6, RGB 는 +7/8/9. rec 는 both-realms 쓰기 인자로 쓴다.
+        const std::uintptr_t dp = rd64(reader, e + 0x78);
+        const std::uint32_t dc = rd32(reader, e + 0x80);
+        if (ptr_reads(reader, dp) && dc > 0 && dc <= 12) {
+            for (std::uint32_t d = 0; d < dc; ++d) {
+                const std::uintptr_t a =
+                    dp + static_cast<std::uintptr_t>(d) * 16;
+                WornDye dy;
+                dy.rec = static_cast<int>(d);
+                dy.zone = rd8(reader, a + 6);
+                dy.r = rd8(reader, a + 7);
+                dy.g = rd8(reader, a + 8);
+                dy.b = rd8(reader, a + 9);
+                w.dyes.push_back(dy);
+            }
+        }
         out->push_back(w);
     }
     return true;
@@ -351,11 +369,14 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
     if (out == nullptr) return 0;
     out->clear();
     // 서버·클라 장비 컴포넌트를 한 번의 힙 스캔으로 모두 찾는다(부분일치).
-    const auto objs = rtti.find_objects("EquipSlotActorComponent", 64);
+    // 상한을 넉넉히. 월드에 장비 컴포넌트가 128개+ 있어(NPC·동행 다수) 64 로
+    // 자르면 힙 순서에 따라 플레이어 comp 가 빠져 목록이 NPC 로 샜다.
+    const auto objs = rtti.find_objects("EquipSlotActorComponent", 512);
     std::vector<WornPiece> tmp;
     for (const auto& o : objs) {
         EquipTable t;
         if (!find_equip_table(reader, o.address, &t)) continue;
+        t.comp = o.address;   // 액터 앵커용(comp+0x08 백참조)
         if (!read_worn_gear(reader, t, &tmp) || tmp.size() < 3) continue;
         bool dup = false;
         for (const auto& e : *out) {
@@ -384,9 +405,19 @@ bool pick_player_table(const mem::Reader& reader,
         const int dt = distinct_tags(tmp);
         const int n = static_cast<int>(tmp.size());
         if (n == 0 || dt * 2 < n) continue;  // 태그가 조각 수의 절반 미만이면 잡음
+        // 플레이어 식별: (1) 정신력 풀 보유(char_is_player) - 단 동행(companion)
+        // 도 풀 게이지가 있어 참이 된다. (2) 그중 플레이어는 **착용 조각이 가장
+        // 많다**(전 슬롯 착용, 실측 18 vs 동행 11). 그래서 정신력-풀 게이트를
+        // 강하게 주되, 그 안에서는 조각 수(dt)로 가른다. prefer 는 **동률일 때만**
+        // 깨는 +1 로 둔다(예전 +1000 은 먼저 잡힌 동행을 고정시켜 목록이 동행으로
+        // 새는 원인이었다).
         int score = dt;
-        if (t.arr == prefer_arr && dt >= 3) score += 1000;  // 안정화 가산
-        if (t.stride == 0xD0) score += 1;                   // 확정 stride 우대
+        if (t.comp != 0) {
+            const std::uintptr_t ch = rd64(reader, t.comp + 0x08);
+            if (char_is_player(reader, ch)) score += 10000;
+        }
+        if (t.arr == prefer_arr && dt >= 3) score += 1;   // 동률 안정화만
+        if (t.stride == 0xD0) score += 1;                 // 확정 stride 우대
         if (score > bestScore) {
             bestScore = score;
             best = t;
@@ -418,12 +449,13 @@ std::atomic<bool> g_eq_refresh{false};
 
 void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
-    collect_equip_tables(rtti, reader, &tabs);
+    collect_equip_tables(rtti, reader, &tabs);   // both-realms 쓰기 대상 전체
     std::uintptr_t prefer = 0;
     {
         std::lock_guard<std::mutex> lk(g_eq_mutex);
-        prefer = g_eq_player_table.arr;  // 이전에 고른 것 우선(안정화)
+        prefer = g_eq_player_table.arr;   // 이전 선택 유지(동률 안정화)
     }
+    // 플레이어 = 정신력 풀 보유 + 착용 조각 최다(pick_player_table 이 점수화).
     EquipTable pt;
     std::vector<WornPiece> pieces;
     const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces);
@@ -447,6 +479,17 @@ void equip_refresh_pieces(const mem::Reader& reader) {
     if (!read_worn_gear(reader, pt, &pieces)) return;
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_pieces = std::move(pieces);
+}
+
+std::uintptr_t equip_player_comp() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_ready ? g_eq_player_table.comp : 0;
+}
+
+void equip_tables_copy(std::vector<EquipTable>* out) {
+    if (out == nullptr) return;
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    *out = g_eq_tables;
 }
 
 bool equip_snapshot(std::vector<WornPiece>* out) {

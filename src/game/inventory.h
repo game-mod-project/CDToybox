@@ -129,6 +129,12 @@ bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader);
 bool inventory_ready();
 std::uintptr_t inventory_component();
 
+// 가방 확장(bag_expand_all)은 되돌렸다. 등록 컨테이너 전부에 무차별로
+// 쓰면 임시 버퍼(4개 평행 사본 중 2개)를 건드려 게임이 크래시하고 지급
+// 경로까지 손상됐다(2026-09-05 실측). CT 처럼 어느 사본이 안전한지 구조로
+// 식별하는 리버스를 마친 뒤 다시 붙인다. 설계는
+// docs/superpowers/specs/2026-09-05-player-teleport-port.md 아래에 추가 예정.
+
 // 캐시를 버린다. 게임이 인벤토리를 새로 만들면(재접속 등) 옛 주소가
 // 남으므로 화면에서 다시 찾을 수 있어야 한다. 버리면 곧 다시 찾도록
 // 요청까지 남긴다 - 한쪽만 부르는 자리를 만들지 않는다.
