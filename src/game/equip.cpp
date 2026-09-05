@@ -373,6 +373,7 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
     for (const auto& o : objs) {
         EquipTable t;
         if (!find_equip_table(reader, o.address, &t)) continue;
+        t.comp = o.address;   // 액터 앵커용(comp+0x08 백참조)
         if (!read_worn_gear(reader, t, &tmp) || tmp.size() < 3) continue;
         bool dup = false;
         for (const auto& e : *out) {

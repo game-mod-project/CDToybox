@@ -46,6 +46,7 @@ struct EquipTable {
     std::uintptr_t arr = 0;
     std::uint32_t cnt = 0;
     std::uint32_t stride = 0;
+    std::uintptr_t comp = 0;   // 이 테이블을 유도한 장비 컴포넌트(액터 앵커용)
 };
 
 // 확정된 컴포넌트에서 착용장비 배열을 유도한다. 서로 다른 슬롯 태그 수로

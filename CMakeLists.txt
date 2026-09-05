@@ -79,6 +79,7 @@ add_library(cdtoybox SHARED
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/equip.cpp
+    src/game/player.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/proxy/exports.def
@@ -152,6 +153,7 @@ add_executable(cdtb_probe
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/equip.cpp
+    src/game/player.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)
