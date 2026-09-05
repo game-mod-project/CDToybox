@@ -1814,6 +1814,23 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                     (unsigned long long)game::player_char(),
                     (unsigned long long)game::player_comp(), v.hp_cur, v.hp_max,
                     v.sta_cur, v.sta_max, v.spi_cur, v.spi_max, v.ok);
+        // 게이지 배열의 HP(entry0)·스태미나(entry12) 전체 i64 필드. 피해 전후
+        // diff 로 어느 필드가 줄어드는지(=live HP) 특정한다.
+        const std::uintptr_t ch = game::player_char();
+        const std::uintptr_t arr = game::player_gauge_array(reader, ch);
+        if (arr) {
+            auto dumpe = [&](const char* nm, std::uintptr_t e) {
+                std::printf("  %s i64:", nm);
+                for (std::size_t o = 0x08; o <= 0x38; o += 8) {
+                    std::int64_t x = 0;
+                    reader.read_value(e + o, &x);
+                    std::printf(" +%zX=%lld", o, (long long)x);
+                }
+                std::printf("\n");
+            };
+            dumpe("HP(e0) ", arr);
+            dumpe("STA(e12)", arr + 12 * 0x90);
+        }
         return;
     }
     // player scan <값>  : 시트 수치로 오프셋 탐색

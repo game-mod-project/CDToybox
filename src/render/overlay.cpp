@@ -537,6 +537,14 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     }
     input::cursor_guard_sync(cdtb::overlay::is_visible());
 
+    // 플레이어 치트 freeze 는 **가시성과 무관하게** 매 Present(~16ms) 적용한다.
+    // 예전엔 아래 !g_visible return 뒤에 있어, 게임하려 오버레이를 숨기면
+    // freeze 가 멈춰 무적이 안 먹었다. 발견/게이지 캐시는 분석 루프가 담당.
+    {
+        const mem::LocalReader reader;
+        cdtb::game::player_apply(reader);
+    }
+
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
 
     const UINT idx = sc->GetCurrentBackBufferIndex();
@@ -561,14 +569,6 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-
-    // 플레이어 치트 freeze 는 매 프레임(~16ms) 적용한다. 분석 루프는 2초
-    // 주기라 그걸로 고정하면 피해가 훨씬 빨라 죽는다(참고 모드도 50ms 타이머).
-    // 발견/게이지 캐시는 분석 루프가 담당하고, 여기선 캐시로 값싸게 쓴다.
-    {
-        const mem::LocalReader reader;
-        cdtb::game::player_apply(reader);
-    }
 
     g_frame_stage = kStageDrawUi;
     draw_ui();
