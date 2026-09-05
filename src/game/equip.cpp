@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 
+#include "game/player.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -403,6 +404,12 @@ bool pick_player_table(const mem::Reader& reader,
         const int n = static_cast<int>(tmp.size());
         if (n == 0 || dt * 2 < n) continue;  // 태그가 조각 수의 절반 미만이면 잡음
         int score = dt;
+        // 결정적 신호: 이 comp 의 액터가 정신력 풀을 가진 플레이어인가.
+        // 주변 NPC 장비 테이블과 확실히 구분돼 목록 흔들림을 없앤다.
+        if (t.comp != 0) {
+            const std::uintptr_t ch = rd64(reader, t.comp + 0x08);
+            if (char_is_player(reader, ch)) score += 100000;
+        }
         if (t.arr == prefer_arr && dt >= 3) score += 1000;  // 안정화 가산
         if (t.stride == 0xD0) score += 1;                   // 확정 stride 우대
         if (score > bestScore) {
@@ -465,6 +472,11 @@ void equip_refresh_pieces(const mem::Reader& reader) {
     if (!read_worn_gear(reader, pt, &pieces)) return;
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_pieces = std::move(pieces);
+}
+
+std::uintptr_t equip_player_comp() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_ready ? g_eq_player_table.comp : 0;
 }
 
 bool equip_snapshot(std::vector<WornPiece>* out) {

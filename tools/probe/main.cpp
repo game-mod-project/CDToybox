@@ -1929,7 +1929,9 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
         }
         return;
     }
-    // player chain : 참고 모드 경로(actor→+0x20→+0x18→+0x58 게이지)를 라이브 검증.
+    // player chain : CT 검증 게이지 배열을 라이브 확인.
+    //   char+0x68 actor, +0x20 marker, +0x18 root, +0x58 array, 0x90 stride.
+    //   entry: +0x00 i32 type, +0x08 i64 cur, +0x30 i64 cap. entry[0] 타입==0(체력).
     if (argc > 2 && std::strcmp(argv[2], "chain") == 0) {
         game::EquipTable pt;
         std::vector<game::WornPiece> ps;
@@ -1937,59 +1939,65 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
             std::printf("플레이어 장비 테이블 못 찾음\n");
             return;
         }
-        std::uint64_t actor = 0;
-        reader.read_value(pt.comp + 0x08, &actor);
-        std::printf("player actor=0x%llX\n", (unsigned long long)actor);
-        auto deref = [&](std::uint64_t a, std::size_t o) {
+        auto q = [&](std::uint64_t a, std::size_t o) {
             std::uint64_t v = 0;
             reader.read_value(a + o, &v);
             return v;
         };
-        // 여러 해석을 시도한다.
-        std::uint64_t chains[3] = {0, 0, 0};
-        chains[0] = deref(deref(deref(actor, 0x20), 0x18), 0x58);
-        chains[1] = deref(deref(actor, 0x20), 0x18);  // 게이지 컨테이너 자체?
-        chains[2] = deref(deref(deref(actor, 0x68), 0x20), 0x18);
-        const char* names[3] = {"actor+20+18+58", "actor+20+18", "actor+68+20+18"};
-        for (int c = 0; c < 3; ++c) {
-            const std::uint64_t g = chains[c];
-            std::printf("--- %s = 0x%llX ---\n", names[c],
-                        (unsigned long long)g);
-            if (g < 0x100000000ULL) continue;
-            for (std::size_t off = 0; off <= 0x400; off += 4) {
-                std::int32_t iv = 0;
-                float fv = 0.0f;
-                reader.read_value(g + off, &iv);
-                reader.read_value(g + off, &fv);
-                const bool inti = iv >= 1 && iv <= 3000000;
-                const bool flt = fv >= 1.0f && fv <= 3000000.0f &&
-                                 (fv - static_cast<int>(fv) == 0.0f ||
-                                  fv > 10.0f);
-                if (inti || flt)
-                    std::printf("    +0x%03zX  int=%d  float=%.1f\n", off, iv,
-                                fv);
+        std::uint64_t ch = 0;
+        reader.read_value(pt.comp + 0x08, &ch);
+        const std::uint64_t actor = q(ch, 0x68);
+        const std::uint64_t mark = q(actor, 0x20);
+        const std::uint64_t root = q(mark, 0x18);
+        const std::uint64_t arr = q(root, 0x58);
+        std::printf("char=0x%llX actor=0x%llX mark=0x%llX root=0x%llX arr=0x%llX\n",
+                    (unsigned long long)ch, (unsigned long long)actor,
+                    (unsigned long long)mark, (unsigned long long)root,
+                    (unsigned long long)arr);
+        std::int32_t t0 = -1;
+        reader.read_value(arr + 0x00, &t0);
+        std::printf("entry[0] type=%d %s\n", t0,
+                    t0 == 0 ? "(Health 게이트 통과)" : "(체력 아님 - 체인 의심)");
+        // CDR 평면 오프셋(godmode 대상) 검증: cur/max.
+        auto pr = [&](const char* nm, std::size_t oc, std::size_t om) {
+            std::int32_t c = 0, m = 0;
+            reader.read_value(arr + oc, &c);
+            reader.read_value(arr + om, &m);
+            std::printf("  %s: cur(+0x%zX)=%d  max(+0x%zX)=%d\n", nm, oc, c, om,
+                        m);
+        };
+        pr("HP  ", 0x08, 0x18);
+        pr("STA ", 0x6C8, 0x6D8);
+        pr("SPI ", 0x758, 0x768);
+        auto tyname = [](int t) {
+            switch (t) {
+                case 0: return "Health";
+                case 17: return "HEAT(핀금지)";
+                case 18: return "COMBUSTION(핀금지)";
+                case 19: return "MOUNT gallop/flight";
+                case 20: return "sprint stamina";
+                case 21: return "spirit pool";
+                case 22: return "stamina pool";
+                case 23: return "spirit variant";
+                case 48: return "MOUNT fire(탈것만)";
+                default: return "";
             }
+        };
+        for (int k = 0; k < 64; ++k) {
+            const std::uint64_t e = arr + static_cast<std::uint64_t>(k) * 0x90;
+            std::int32_t ty = 0;
+            std::int64_t cur = 0, cap = 0;
+            reader.read_value(e + 0x00, &ty);
+            reader.read_value(e + 0x08, &cur);
+            reader.read_value(e + 0x30, &cap);
+            if (ty < 0 || ty > 4096) continue;
+            if (k > 0 && ty == 0 && cur == 0 && cap == 0) continue;
+            std::printf("  [%2d] type=%-3d cur=%-10lld cap=%-10lld  %s\n", k, ty,
+                        (long long)cur, (long long)cap, tyname(ty));
         }
         return;
     }
-    if (argc > 2 && std::strcmp(argv[2], "scan") != 0) {
-        const std::uintptr_t actor = std::strtoull(argv[2], nullptr, 16);
-        std::printf("actor=0x%llX 스캔\n", (unsigned long long)actor);
-        const std::uintptr_t blk = game::stat_block_in_actor(reader, actor);
-        if (blk == 0) {
-            std::printf("  스탯 블록 없음\n");
-            return;
-        }
-        game::StatBlock b;
-        b.addr = blk;
-        b.actor = actor;
-        game::read_stat_block(reader, &b);
-        std::printf("  blk=0x%llX  HP %d/%d  STA %d/%d  SPI %d/%d\n",
-                    (unsigned long long)blk, b.health.cur, b.health.max,
-                    b.stamina.cur, b.stamina.max, b.spirit.cur, b.spirit.max);
-        return;
-    }
-    // 플레이어 액터를 equip 앵커로 얻는다.
+    // 기본: 플레이어 액터를 equip 앵커로 얻어 status 컴포넌트를 덤프(진단).
     game::EquipTable pt;
     std::vector<game::WornPiece> ps;
     if (!game::read_player_worn(rt, reader, &pt, &ps)) {
