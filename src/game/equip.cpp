@@ -138,6 +138,20 @@ bool dye_set_entry(const mem::Reader& r, std::uintptr_t entry, int rec,
     return rd8(r, a + 7) == rr;
 }
 
+// 착용장비 식별용: 서로 다른 슬롯 태그 수(0..21). 진짜 착용 테이블은 슬롯마다
+// 하나씩이라 조각 수와 거의 같고, 잡음/보관 배열은 훨씬 작다.
+int distinct_tags(const std::vector<WornPiece>& ps) {
+    bool seen[64] = {false};
+    int n = 0;
+    for (const auto& w : ps) {
+        if (w.slot_tag < 64 && !seen[w.slot_tag]) {
+            seen[w.slot_tag] = true;
+            ++n;
+        }
+    }
+    return n;
+}
+
 // 테이블에서 인스턴스 ID 로 entry 를 찾는다(빈 슬롯 제외).
 std::uintptr_t entry_by_instance(const mem::Reader& r, const EquipTable& t,
                                  std::uint64_t inst) {
@@ -352,24 +366,44 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
     return static_cast<int>(out->size());
 }
 
-bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
-                      EquipTable* table_out, std::vector<WornPiece>* pieces_out) {
-    std::vector<EquipTable> tabs;
-    collect_equip_tables(rtti, reader, &tabs);
+// 여러 테이블 중 플레이어 착용 테이블을 고른다. "조각 수 최다"는 보관/잡음
+// 배열에 밀려 불안정했다. 대신 **서로 다른 슬롯 태그 수**로 고른다(진짜
+// 착용은 슬롯마다 하나). prefer_arr 가 여전히 좋은 후보면 그대로 유지해
+// 매 주기 목록이 튀지 않게 한다.
+bool pick_player_table(const mem::Reader& reader,
+                       const std::vector<EquipTable>& tabs,
+                       std::uintptr_t prefer_arr, EquipTable* table_out,
+                       std::vector<WornPiece>* pieces_out) {
     EquipTable best;
-    std::size_t bestN = 0;
+    int bestScore = 0;
     std::vector<WornPiece> bestPieces, tmp;
     for (const auto& t : tabs) {
-        if (read_worn_gear(reader, t, &tmp) && tmp.size() > bestN) {
-            bestN = tmp.size();
+        if (!read_worn_gear(reader, t, &tmp)) continue;
+        // 진짜 착용 테이블은 슬롯마다 하나라 서로 다른 슬롯태그가 조각 수와
+        // 거의 같다. 잡음(전부 슬롯0, index 반복)은 distinct=1 이라 걸러진다.
+        const int dt = distinct_tags(tmp);
+        const int n = static_cast<int>(tmp.size());
+        if (n == 0 || dt * 2 < n) continue;  // 태그가 조각 수의 절반 미만이면 잡음
+        int score = dt;
+        if (t.arr == prefer_arr && dt >= 3) score += 1000;  // 안정화 가산
+        if (t.stride == 0xD0) score += 1;                   // 확정 stride 우대
+        if (score > bestScore) {
+            bestScore = score;
             best = t;
             bestPieces = tmp;
         }
     }
-    if (bestN == 0) return false;
+    if (bestScore == 0) return false;
     if (table_out) *table_out = best;
     if (pieces_out) *pieces_out = std::move(bestPieces);
     return true;
+}
+
+bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
+                      EquipTable* table_out, std::vector<WornPiece>* pieces_out) {
+    std::vector<EquipTable> tabs;
+    collect_equip_tables(rtti, reader, &tabs);
+    return pick_player_table(reader, tabs, 0, table_out, pieces_out);
 }
 
 // -------------------------------------------------------------------- 캐시
@@ -385,9 +419,14 @@ std::atomic<bool> g_eq_refresh{false};
 void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);
+    std::uintptr_t prefer = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_eq_mutex);
+        prefer = g_eq_player_table.arr;  // 이전에 고른 것 우선(안정화)
+    }
     EquipTable pt;
     std::vector<WornPiece> pieces;
-    const bool ok = read_player_worn(rtti, reader, &pt, &pieces);
+    const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces);
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_tables = std::move(tabs);
     if (ok) {

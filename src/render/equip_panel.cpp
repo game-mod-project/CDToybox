@@ -105,16 +105,16 @@ void draw_equip_panel(bool* open) {
     constexpr ImGuiTableFlags kF = ImGuiTableFlags_Borders |
                                    ImGuiTableFlags_RowBg |
                                    ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("worn", 4, kF)) {
-        ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    if (ImGui::BeginTable("worn", 3, kF)) {
+        ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+        ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 10.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
+        int rowid = 0;
         for (const auto& w : pieces) {
-            ImGui::PushID(static_cast<int>(w.instance));
+            ImGui::PushID(rowid++);
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
@@ -151,10 +151,10 @@ void draw_equip_panel(bool* open) {
                 const auto& s = w.sockets[k];
                 ImGui::PushID(k);
                 if (s.index == 0xFF) {
-                    ImGui::TextDisabled("[잠김]");
+                    ImGui::TextDisabled("%d: [잠김]", k);
                 } else if (s.marker == 0xFFFF && s.gem != 0xFFFF) {
                     const char* gn = name_of_sunbeon(s.gem);
-                    ImGui::TextUnformatted(gn ? gn : "(보석)");
+                    ImGui::Text("%d: %s", k, gn ? gn : "(보석)");
                     if (gn && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", gn);
                     ImGui::SameLine();
                     if (ImGui::SmallButton("비우기")) {
@@ -164,6 +164,8 @@ void draw_equip_panel(bool* open) {
                         game::equip_refresh_pieces(reader);
                     }
                 } else {
+                    ImGui::Text("%d:", k);
+                    ImGui::SameLine();
                     if (ImGui::SmallButton("채우기")) {
                         g_gem_inst = w.instance;
                         g_gem_k = k;
@@ -171,7 +173,6 @@ void draw_equip_panel(bool* open) {
                         g_open_gem = true;
                     }
                 }
-                if (k != 4) ImGui::SameLine();
                 ImGui::PopID();
             }
 
