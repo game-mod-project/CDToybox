@@ -129,23 +129,11 @@ bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader);
 bool inventory_ready();
 std::uintptr_t inventory_component();
 
-// ------------------------------------------------------------- 가방 확장
-// 모든 등록 컨테이너(가방·보관함)의 확장 슬롯 수를 조정한다. **모드(주입
-// DLL)에서만** 부른다 - 같은 주소공간에 SEH 로 직접 쓴다.
-//
-// 참고 모드(CT) 실측: 저장이 담는 값은 컨테이너+0x1A(_varyExpandSlotCount).
-// +0x14(용량)는 그 파생 캐시(= 기본슬롯 + 확장)라, +0x1A 만 쓰면 버프/동기화
-// 가 재계산해 되돌린다. 그래서 +0x1A·+0x16·+0x18(버프 경로)·+0x14(캐시)를
-// 함께 쓴다. 기본슬롯 = 용량 - 확장 으로 유도한다(종류별 표 불필요).
-//
-// target 은 원하는 **총 슬롯**. 기본슬롯보다 작으면 그 컨테이너는 확장 0
-// 이 된다(기본 밑으로는 못 줄인다). restore=true 면 전부 기본값(확장 0).
-struct BagResult {
-    int ok = 0;     // 확장 수를 읽어 되확인한 컨테이너
-    int fail = 0;   // 썼으나 되읽기 불일치
-    int skip = 0;   // 용량<확장 등 모르는 모양 - 건드리지 않음
-};
-BagResult bag_expand_all(const mem::Reader& reader, int target, bool restore);
+// 가방 확장(bag_expand_all)은 되돌렸다. 등록 컨테이너 전부에 무차별로
+// 쓰면 임시 버퍼(4개 평행 사본 중 2개)를 건드려 게임이 크래시하고 지급
+// 경로까지 손상됐다(2026-09-05 실측). CT 처럼 어느 사본이 안전한지 구조로
+// 식별하는 리버스를 마친 뒤 다시 붙인다. 설계는
+// docs/superpowers/specs/2026-09-05-player-teleport-port.md 아래에 추가 예정.
 
 // 캐시를 버린다. 게임이 인벤토리를 새로 만들면(재접속 등) 옛 주소가
 // 남으므로 화면에서 다시 찾을 수 있어야 한다. 버리면 곧 다시 찾도록

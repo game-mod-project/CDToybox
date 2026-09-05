@@ -1,7 +1,5 @@
 #include "game/inventory.h"
 
-#include <windows.h>
-
 #include <atomic>
 #include <cstring>
 #include <utility>
@@ -208,60 +206,6 @@ bool inventory_ready() {
 
 std::uintptr_t inventory_component() {
     return g_component.load(std::memory_order_acquire);
-}
-
-namespace {
-// 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
-bool bag_wr16(std::uintptr_t a, std::uint16_t v) {
-    __try {
-        *reinterpret_cast<volatile std::uint16_t*>(a) = v;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-}  // namespace
-
-BagResult bag_expand_all(const mem::Reader& reader, int target, bool restore) {
-    BagResult r;
-    const std::uintptr_t comp = inventory_component();
-    if (comp == 0) return r;
-    std::vector<InventoryContainer> cs;
-    if (!read_inventory_containers(reader, comp, &cs)) return r;
-
-    for (const auto& c : cs) {
-        std::uint16_t maxs = 0;   // +0x14 용량(캐시)
-        std::uint16_t exp = 0;    // +0x1A 확장(저장이 담는 값)
-        if (!reader.read_value(c.address + 0x14, &maxs) ||
-            !reader.read_value(c.address + 0x1A, &exp)) {
-            ++r.skip;
-            continue;
-        }
-        if (maxs < exp) {   // 모르는 모양은 건드리지 않는다
-            ++r.skip;
-            continue;
-        }
-        const int def = static_cast<int>(maxs) - static_cast<int>(exp);
-        int want = restore ? 0 : (target - def);
-        if (want < 0) want = 0;
-        if (want > 60000) want = 60000;
-        int ncap = def + want;
-        if (ncap > 65535) ncap = 65535;
-        const auto w = static_cast<std::uint16_t>(want);
-
-        bag_wr16(c.address + 0x1A, w);   // 저장이 담는 확장 수
-        bag_wr16(c.address + 0x16, w);   // 버프 경로가 캡을 이걸로 재계산
-        bag_wr16(c.address + 0x18, w);
-        bag_wr16(c.address + 0x14, static_cast<std::uint16_t>(ncap));  // 캐시
-
-        std::uint16_t rb = 0;
-        if (reader.read_value(c.address + 0x1A, &rb) && rb == w) {
-            ++r.ok;
-        } else {
-            ++r.fail;
-        }
-    }
-    return r;
 }
 
 void forget_inventory() {
