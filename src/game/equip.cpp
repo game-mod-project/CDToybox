@@ -377,6 +377,7 @@ namespace {
 std::mutex g_eq_mutex;
 std::vector<EquipTable> g_eq_tables;   // both-realms 테이블(발견 캐시)
 std::vector<WornPiece> g_eq_pieces;    // 플레이어 착용장비
+EquipTable g_eq_player_table;           // 플레이어 테이블(빠른 재읽기용)
 bool g_eq_ready = false;
 std::atomic<bool> g_eq_refresh{false};
 }  // namespace
@@ -390,9 +391,23 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_tables = std::move(tabs);
     if (ok) {
+        g_eq_player_table = pt;
         g_eq_pieces = std::move(pieces);
         g_eq_ready = true;
     }
+}
+
+void equip_refresh_pieces(const mem::Reader& reader) {
+    EquipTable pt;
+    {
+        std::lock_guard<std::mutex> lk(g_eq_mutex);
+        if (!g_eq_ready) return;
+        pt = g_eq_player_table;
+    }
+    std::vector<WornPiece> pieces;
+    if (!read_worn_gear(reader, pt, &pieces)) return;
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    g_eq_pieces = std::move(pieces);
 }
 
 bool equip_snapshot(std::vector<WornPiece>* out) {

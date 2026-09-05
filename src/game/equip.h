@@ -103,6 +103,10 @@ bool equip_ready();
 void equip_request_refresh();
 bool equip_take_refresh();
 
+// 쓰기 직후용 빠른 재읽기: 힙 스캔 없이 캐시된 플레이어 테이블에서
+// 착용장비만 다시 읽어 스냅샷을 갱신한다(렌더 스레드에서 값싸다).
+void equip_refresh_pieces(const mem::Reader& reader);
+
 // ------------------------------------------------------------------ 쓰기 (인프로세스)
 // **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 직접 쓴다.
 // 전부 SEH 로 감싸고 read-back 으로 검증한다. 잠긴 소켓은 거부한다.
