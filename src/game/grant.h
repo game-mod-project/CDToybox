@@ -158,10 +158,6 @@ bool find_entity_lookup(const std::uint8_t* body, std::size_t n,
 // 계속 조회하므로 횟수로 가린다 - 세션 때와 같은 수법이다.
 bool entity_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 
-// 소켓(어비스기어) 페이로드 캡처 진단 훅. 게임이 실제로 소켓을 박을
-// 때 들어오는 와이어 페이로드를 로그로 낸다 - 형식을 배운 뒤 뗀다.
-bool socket_capture_install(const mem::Rtti& rtti,
-                            const mem::Reader& reader);
 int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap);
 
 // 표 조회 함수를 후킹해 "이 키를 어느 표에서 찾는지" 를 잡는다.
