@@ -90,6 +90,19 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
 bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
                       EquipTable* table_out, std::vector<WornPiece>* pieces_out);
 
+// ------------------------------------------------------------------ 캐시/발견
+// 분석 스레드에서 주기적으로 부른다(힙 스캔이라 값싸지 않음). 플레이어
+// 착용장비와 both-realms 테이블을 캐시한다. UI/쓰기는 캐시를 쓴다.
+void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 캐시된 플레이어 착용장비 스냅샷(UI 용). 없으면 false.
+bool equip_snapshot(std::vector<WornPiece>* out);
+bool equip_ready();
+
+// 패널이 즉시 새로고침을 요청. 분석 스레드가 다음 주기에 처리한다.
+void equip_request_refresh();
+bool equip_take_refresh();
+
 // ------------------------------------------------------------------ 쓰기 (인프로세스)
 // **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 직접 쓴다.
 // 전부 SEH 로 감싸고 read-back 으로 검증한다. 잠긴 소켓은 거부한다.
@@ -98,16 +111,15 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
 // entry 를 찾아 각각에 쓴다. 쓴 realm 수를 돌려준다(0 이면 실패).
 
 // 이미 열린 소켓 k(0..4)에 보석 순번을 박는다. gem==0xFFFF 면 비운다.
-int eq_write_socket(const mem::Rtti& rtti, const mem::Reader& reader,
-                    std::uint64_t instance, int k, std::uint16_t gem);
+int eq_write_socket(const mem::Reader& reader, std::uint64_t instance,
+                    int k, std::uint16_t gem);
 
 // 연마(refinement)를 설정한다.
-int eq_write_refine(const mem::Rtti& rtti, const mem::Reader& reader,
-                    std::uint64_t instance, std::uint16_t level);
+int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
+                    std::uint16_t level);
 
 // 염색 레코드 rec 의 RGB 를 설정한다.
-int eq_write_dye(const mem::Rtti& rtti, const mem::Reader& reader,
-                 std::uint64_t instance, int rec, std::uint8_t r,
-                 std::uint8_t g, std::uint8_t b);
+int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
+                 std::uint8_t r, std::uint8_t g, std::uint8_t b);
 
 }  // namespace cdtb::game

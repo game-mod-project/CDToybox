@@ -4,6 +4,9 @@
 
 #include <windows.h>
 
+#include <atomic>
+#include <mutex>
+
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -369,12 +372,58 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
     return true;
 }
 
-// op: 0=socket 1=refine 2=dye
-static int eq_write_all(const mem::Rtti& rtti, const mem::Reader& reader,
-                        std::uint64_t instance, int op, int a, std::uint16_t b,
-                        std::uint8_t g, std::uint8_t bl) {
+// -------------------------------------------------------------------- 캐시
+namespace {
+std::mutex g_eq_mutex;
+std::vector<EquipTable> g_eq_tables;   // both-realms 테이블(발견 캐시)
+std::vector<WornPiece> g_eq_pieces;    // 플레이어 착용장비
+bool g_eq_ready = false;
+std::atomic<bool> g_eq_refresh{false};
+}  // namespace
+
+void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);
+    EquipTable pt;
+    std::vector<WornPiece> pieces;
+    const bool ok = read_player_worn(rtti, reader, &pt, &pieces);
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    g_eq_tables = std::move(tabs);
+    if (ok) {
+        g_eq_pieces = std::move(pieces);
+        g_eq_ready = true;
+    }
+}
+
+bool equip_snapshot(std::vector<WornPiece>* out) {
+    if (out == nullptr) return false;
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    if (!g_eq_ready) return false;
+    *out = g_eq_pieces;
+    return true;
+}
+
+bool equip_ready() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_ready;
+}
+
+void equip_request_refresh() {
+    g_eq_refresh.store(true, std::memory_order_release);
+}
+bool equip_take_refresh() {
+    return g_eq_refresh.exchange(false, std::memory_order_acq_rel);
+}
+
+// op: 0=socket 1=refine 2=dye
+static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
+                        int op, int a, std::uint16_t b, std::uint8_t g,
+                        std::uint8_t bl) {
+    std::vector<EquipTable> tabs;
+    {
+        std::lock_guard<std::mutex> lk(g_eq_mutex);
+        tabs = g_eq_tables;
+    }
     int wrote = 0;
     for (const auto& t : tabs) {
         const std::uintptr_t e = entry_by_instance(reader, t, instance);
@@ -389,20 +438,19 @@ static int eq_write_all(const mem::Rtti& rtti, const mem::Reader& reader,
     return wrote;
 }
 
-int eq_write_socket(const mem::Rtti& rtti, const mem::Reader& reader,
-                    std::uint64_t instance, int k, std::uint16_t gem) {
-    return eq_write_all(rtti, reader, instance, 0, k, gem, 0, 0);
+int eq_write_socket(const mem::Reader& reader, std::uint64_t instance, int k,
+                    std::uint16_t gem) {
+    return eq_write_all(reader, instance, 0, k, gem, 0, 0);
 }
 
-int eq_write_refine(const mem::Rtti& rtti, const mem::Reader& reader,
-                    std::uint64_t instance, std::uint16_t level) {
-    return eq_write_all(rtti, reader, instance, 1, 0, level, 0, 0);
+int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
+                    std::uint16_t level) {
+    return eq_write_all(reader, instance, 1, 0, level, 0, 0);
 }
 
-int eq_write_dye(const mem::Rtti& rtti, const mem::Reader& reader,
-                 std::uint64_t instance, int rec, std::uint8_t r,
-                 std::uint8_t g, std::uint8_t b) {
-    return eq_write_all(rtti, reader, instance, 2, rec, r, g, b);
+int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
+                 std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    return eq_write_all(reader, instance, 2, rec, r, g, b);
 }
 
 }  // namespace cdtb::game

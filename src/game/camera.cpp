@@ -11,6 +11,7 @@
 #include "game/analysis.h"
 #include <string>
 
+#include "game/equip.h"
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
@@ -278,6 +279,12 @@ void auto_analysis_loop() {
             discover_inventory(rtti, reader);
         }
         ++spin;
+
+        // 장비 에디터: 착용장비/소켓/연마/염색 캐시. 힙 스캔이라 5주기에
+        // 한 번(약 50초)만, 또는 패널의 새로고침 요청이 있으면 즉시.
+        if (equip_take_refresh() || (spin % 5) == 0) {
+            equip_discover(rtti, reader);
+        }
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

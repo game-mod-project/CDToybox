@@ -190,3 +190,65 @@ A → D → B 순. C 는 아이템 유무 조사 뒤 판단. 첫 실측은 A안(
   B안의 가치는 "아이템 사용" 한 번을 줄이는 것뿐이라, 우선순위는 낮다.
   더 큰 남은 질문은 **다른 탈것(Dragon·Wyvern·Elephant 등)과 다른 펫에
   대응하는 아이템이 있는가** — `_consumableTypeList` 로 훑는 C안 선행 조사.
+
+## 7. 아이템 대응 전수 조사 (2026-09-05, 실측) — 부적 6종이 전부다
+
+질문: 드래곤·와이번·코끼리 등 나머지 탈것과 다른 펫에 대응하는 아이템이
+있는가. 라이브 메모리에서 아이템 6813 → 사용정보 10137 → 스킬 2061 을
+사슬로 걸어 답했다(스크래치 `item_scan.py`, ctypes ReadProcessMemory).
+
+### 사슬 구조 (재사용 가능)
+
+- `ItemInfo._itemUseInfoList`(+0x80) = `{u32* 색인배열, u32 개수}`.
+  원소는 **ItemUseInfoManager 레코드의 행 색인**(키 아님).
+- `ItemUseInfo` 레코드(0x60): +0x00 키, +0x08 `_stringKey`("<아이템>_item_use_N",
+  동작을 안 알려줌), **+0x18 → 동작 객체(다형)**. 객체 vtable 의 RTTI 로
+  동작 클래스가 나온다. 20종: Skill 3656, RegisterReserveSlot 1604,
+  PlaySequencerOnly 1401, FeedToTarget 1155, Inspect 1111, RandomBox 441,
+  SealToEquip 412, SummonGimmickWithCatch 149, SendEventToDockingGimmick 99,
+  SummonCharacterWithCatch 34(전부 물고기 방생), DestroyOnly 26, OpenUI 14,
+  UseSealed 10, SubLevelUp 8, CustomizeCharacter 6, ExpandInventorySlot 4,
+  ExpandFarmSlot 3, InventoryBuff 2, TeleportRevivePoint 1, ConvertCharacter 1.
+  **"고용" 전용 동작 클래스는 없다.**
+- `ItemUseData_Skill` 객체: +0x30 → `{u32 스킬 행색인, u32 1}` 배열, +0x38 개수.
+- `SkillInfoManager`(인스턴스 0x479083CD000, 2061행): 레코드 +0x00 u16 키,
+  +0x08 `_stringKey`.
+
+### 결과
+
+부적의 사용 = `ItemUseData_Skill` → 스킬 `Active_Hire_*` 부여(+ 두 번째
+사용정보 RandomBox 는 부수). 스킬 표 2061행 중 `Active_Hire_*` 는 **정확히
+6개**이고, 각각을 주는 아이템은 **부적 6종뿐**이다:
+
+| 스킬 행 | 스킬 | 아이템 |
+|---|---|---|
+| 0x637 | Active_Hire_Riding_Bear_Amulet | 1003843 Riding_Bear_Amulet |
+| 0x638 | Active_Hire_Riding_Wolf_Amulet | 1003844 Riding_Wolf_Amulet |
+| 0x639 | Active_Hire_Riding_Deer_Amulet | 1003845 Riding_Deer_Amulet |
+| 0x63A | Active_Hire_Riding_Warthog_Amulet | 1003847 Riding_Warthog_Amulet |
+| 0x63B | Active_Hire_Riding_AlpineIbex_Amulet | 1003846 Riding_AlpineIbex_Amulet |
+| 0x63C | Active_Hire_Pet_Phoenix_Amulet | 1003921 Pet_Phoenix_Amulet |
+
+아이템 내부 이름 전수 검색(riding/pet/dragon/wyvern/elephant/camel/iguana/
+cucu/carmabird/warmachine/wagon/ship/dokev/domestic…)도 위 6종 외에 등록
+아이템이 없음을 뒷받침한다. 관련이지만 "추가"가 아닌 것:
+
+- `Item_Rare_Collect_opuntia`(1000397) → `Skill_CallDragon`,
+  `Item_Rare_Collect_Taro`(1002090) → `Skill_CallVehicle`: **이미 가진**
+  탈것을 부르는 스킬. 소유 추가 아님.
+- `Pet_Slot_Expansion_*` 8종(type 54): 펫 슬롯 확장. 펫 자체 아님.
+- `Pet_Phoenix_Feather`(1003920): 사용정보 없음(재료/퀘스트).
+- `*_Horse_Report`·`Legend_*_Report`(type 54): 도감/보고서.
+- 말먹이 `HorseFeed_*`, 아비스기어 `AddHorseExp/AddPetFriendly`: 성장 보조.
+
+### 판정
+
+- **아이템으로 추가 가능한 동반자 = 특수 탑승물 5 + 반려동물 1, 이미 A안으로
+  전부 지급·등록 완료.** 이 방향은 더 확장할 것이 없다.
+- 말(Vehicle_Horse), 드래곤·ATAG(전투기계), 개·새 펫 등은 아이템이 아니라
+  **스토리/포획(`TrocTrCatchBySummonReq`)/퀘스트로 부여**된다. 이를
+  오버레이에서 넣으려면 `HireMercenaryToTargetReq`(대상 NPC 고용) 또는
+  저수준 소환+고용 조립이 필요 — 기존 판정대로 대공사·고위험. 비권장.
+- 남는 실용 후보: **D안(소유 목록 뷰)**, 그리고 `Skill_CallDragon/
+  CallVehicle` 스킬을 주는 수집 아이템 2종은 "탈것 즉시 호출" 편의로
+  쓸 수 있는지 시험할 가치가 있다(지급→사용, 새 코드 없음).

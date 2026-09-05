@@ -66,6 +66,7 @@ add_library(cdtoybox SHARED
     src/render/stash_panel.cpp
     src/render/inventory_panel.cpp
     src/render/roster_panel.cpp
+    src/render/equip_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
