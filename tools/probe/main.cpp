@@ -1807,12 +1807,13 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                 int argc, char** argv) {
     // player find : 실제 discovery(스티키·조각최다) 를 돌려 결과를 본다.
     if (argc > 2 && std::strcmp(argv[2], "find") == 0) {
-        game::player_discover(rt, reader);
+        // 프로브에서는 equip 캐시가 비어 있으므로 equip_discover 로 채운 뒤
+        // player_discover(값싼, equip_player_comp 사용)를 부른다.
+        game::equip_discover(rt, reader);
+        game::player_discover(reader);
         const auto v = game::player_vitals(reader);
-        std::printf("player_char=0x%llX comp=0x%llX  HP %d/%d STA %d/%d SPI "
-                    "%d/%d ok=%d\n",
-                    (unsigned long long)game::player_char(),
-                    (unsigned long long)game::player_comp(), v.hp_cur, v.hp_max,
+        std::printf("player_char=0x%llX  HP %d/%d STA %d/%d SPI %d/%d ok=%d\n",
+                    (unsigned long long)game::player_char(), v.hp_cur, v.hp_max,
                     v.sta_cur, v.sta_max, v.spi_cur, v.spi_max, v.ok);
         // 게이지 배열의 HP(entry0)·스태미나(entry12) 전체 i64 필드. 피해 전후
         // diff 로 어느 필드가 줄어드는지(=live HP) 특정한다.

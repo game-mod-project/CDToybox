@@ -287,17 +287,17 @@ void auto_analysis_loop() {
         }
         ++spin;
 
-        // 플레이어 치트(B-1). 로컬 플레이어를 스티키로 고정한다(먼저 실행해서
-        // equip 이 같은 대상을 앵커로 쓰게 한다). 실제 freeze 는 렌더 프레임
-        // (~16ms)에서 돈다 - 2초로 고정하면 피해가 빨라 죽는다.
-        player_discover(rtti, reader);
-
-        // 장비 에디터. player 가 고정한 플레이어 comp 를 앵커로 쓴다.
+        // 장비 에디터(힙 스캔은 못 잡았을 때만). 플레이어 = 정신력 풀 + 착용
+        // 최다로 고른다.
         if (equip_take_refresh() || !equip_ready()) {
             equip_discover(rtti, reader);
         } else {
             equip_refresh_pieces(reader);
         }
+
+        // 플레이어 치트(B-1). **힙 스캔 없음** - equip 이 고른 플레이어 comp 에서
+        // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
+        player_discover(reader);
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};
