@@ -203,6 +203,8 @@ std::atomic<const std::vector<ItemCatalogEntry>*> g_catalog{&kEmptyCatalog};
 std::vector<std::unique_ptr<std::vector<ItemCatalogEntry>>> g_versions;
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_named{false};
+std::atomic<std::size_t> g_named_count{0};
+std::atomic<std::size_t> g_total_count{0};
 
 }  // namespace
 
@@ -241,6 +243,8 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 목록을 먼저 채우고 나서 준비 플래그를 세운다. 그리는 쪽은
     // 플래그를 먼저 보므로 반쯤 채워진 목록을 읽지 않는다.
     const std::size_t total = built->size();
+    g_total_count.store(total, std::memory_order_release);
+    g_named_count.store(named, std::memory_order_release);
     const auto* p = built.get();
     g_versions.push_back(std::move(built));
     g_catalog.store(p, std::memory_order_release);
@@ -254,6 +258,14 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
 bool items_ready() { return g_ready.load(std::memory_order_acquire); }
 
 bool items_named() { return g_named.load(std::memory_order_acquire); }
+
+std::size_t items_named_count() {
+    return g_named_count.load(std::memory_order_acquire);
+}
+
+std::size_t items_total_count() {
+    return g_total_count.load(std::memory_order_acquire);
+}
 
 const std::vector<ItemCatalogEntry>& item_catalog() {
     return *g_catalog.load(std::memory_order_acquire);

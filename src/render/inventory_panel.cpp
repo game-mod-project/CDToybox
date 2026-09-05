@@ -40,6 +40,10 @@ struct Row {
 };
 
 std::vector<Row> g_rows;
+// g_rows 를 만들 때 쓴 카탈로그 판(포인터). 이름은 현지화 후 뒤늦게
+// 채워지며 새 판으로 갈리는데, 개수는 그대로라 크기로는 못 가른다.
+// 판이 바뀌면 자동으로 다시 읽어 '(순번 N)' 이 이름으로 채워진다.
+const void* g_rows_cat_ptr = nullptr;
 std::string g_status = "아직 안 읽었습니다";
 
 // 컴포넌트가 생기기를 기다리는 중인가. 생기는 순간 스스로 읽는다.
@@ -163,6 +167,7 @@ void refresh(const mem::Reader& reader) {
     }
 
     g_containers = containers;
+    g_rows_cat_ptr = game::item_catalog().data();
     build_category_labels(&g_categories, &g_category_labels);
 
     char buf[128];
@@ -306,9 +311,38 @@ void draw_inventory_panel(bool* open) {
         g_waiting = false;
         const mem::LocalReader reader;
         refresh(reader);
+    } else if (!g_waiting && game::inventory_ready() &&
+               g_rows_cat_ptr != game::item_catalog().data()) {
+        // 이름이 뒤늦게 풀려 카탈로그 판이 갈렸다 - 손 안 대도 다시 읽어
+        // '(순번 N)' 을 이름으로 바꾼다.
+        const mem::LocalReader reader;
+        refresh(reader);
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
+
+    // 컴포넌트·대응표·이름이 다 준비될 때까지 로딩을 보여 준다. 이름은
+    // 현지화 후에야 채워지므로 그 전에는 '(순번 N)' 만 나온다. 진행
+    // 단계를 명시해 느린 로드인지 멈춘 것인지 가릴 수 있게 한다.
+    const bool fully_ready = game::inventory_ready() &&
+                             game::item_ids_ready() && game::items_named();
+    if (!fully_ready) {
+        char dots[5] = {0};
+        const int nd = 1 + (static_cast<int>(ImGui::GetTime() * 3.0) % 3);
+        for (int i = 0; i < nd; ++i) dots[i] = '.';
+        const char* what = !game::inventory_ready()
+                               ? "인벤토리 컴포넌트를 찾는 중"
+                               : !game::item_ids_ready()
+                                     ? "아이템 대응표를 읽는 중"
+                                     : "아이템 이름 불러오는 중";
+        ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "%s%s", what, dots);
+        ImGui::TextWrapped(
+            "월드 진입 후 자동으로 채워집니다 (보통 5~10초, 상황에 따라 더 "
+            "걸릴 수 있습니다). 이 표시가 사라지지 않고 계속 남아 있으면 "
+            "로드 실패입니다.");
+        ImGui::End();
+        return;
+    }
 
     draw_filter_bar();
 
