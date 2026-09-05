@@ -1792,6 +1792,102 @@ void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             dump_status_ints(reader, std::strtoull(argv[i], nullptr, 16));
         return;
     }
+    // player status : 플레이어 액터가 가리키는 StatusActorComponent 를 찾아 덤프.
+    if (argc > 2 && std::strcmp(argv[2], "status") == 0) {
+        game::EquipTable pt;
+        std::vector<game::WornPiece> ps;
+        if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+            std::printf("플레이어 장비 테이블 못 찾음\n");
+            return;
+        }
+        std::uint64_t actor = 0;
+        reader.read_value(pt.comp + 0x08, &actor);
+        std::printf("player actor=0x%llX\n", (unsigned long long)actor);
+        // 액터가 가리키는 포인터 중 클래스명에 Status 가 든 것을 찾는다.
+        for (std::size_t off = 0; off <= 0x800; off += 8) {
+            std::uint64_t p = 0;
+            if (!reader.read_value(actor + off, &p)) continue;
+            if (p < 0x100000000ULL) continue;
+            const std::string cls = rt.class_of_object(p);
+            if (cls.find("Status") == std::string::npos) continue;
+            std::printf("  actor+0x%03zX -> [%s] 0x%llX\n", off, cls.c_str(),
+                        (unsigned long long)p);
+            // 이 컴포넌트의 cur/max 쌍(8 또는 0x10 간격)을 덤프한다.
+            for (std::size_t o = 0; o <= 0x900; o += 4) {
+                std::int32_t cu = 0, m8 = 0, m10 = 0;
+                reader.read_value(p + o, &cu);
+                reader.read_value(p + o + 8, &m8);
+                reader.read_value(p + o + 0x10, &m10);
+                if (cu >= 1 && cu <= 3000000) {
+                    if (m8 >= cu && m8 <= 3000000 && m8 - cu <= m8)
+                        std::printf("      +0x%03zX %d / +8 %d\n", o, cu, m8);
+                    else if (m10 >= cu && m10 <= 3000000)
+                        std::printf("      +0x%03zX %d / +10 %d\n", o, cu, m10);
+                }
+            }
+        }
+        return;
+    }
+    // player hpwatch : 체인 영역(actor+0x68+0x20+0x18) 안에서 HP 변화 diff.
+    //   1회차: 스냅샷 저장. 2회차(HP 바꾼 뒤): 값이 바뀐 오프셋만 = HP 후보.
+    if (argc > 2 && std::strcmp(argv[2], "hpwatch") == 0) {
+        game::EquipTable pt;
+        std::vector<game::WornPiece> ps;
+        if (!game::read_player_worn(rt, reader, &pt, &ps)) {
+            std::printf("플레이어 장비 테이블 못 찾음\n");
+            return;
+        }
+        std::uint64_t actor = 0, s1 = 0, s2 = 0, base = 0;
+        reader.read_value(pt.comp + 0x08, &actor);
+        reader.read_value(actor + 0x68, &s1);
+        reader.read_value(s1 + 0x20, &s2);
+        reader.read_value(s2 + 0x18, &base);
+        std::printf("actor=0x%llX base=0x%llX\n", (unsigned long long)actor,
+                    (unsigned long long)base);
+        if (base < 0x100000000ULL) {
+            std::printf("체인 무효\n");
+            return;
+        }
+        const char* path = "hpwatch.txt";
+        // 이전 스냅샷 로드: "offset value" 행들.
+        std::vector<std::pair<std::size_t, std::int32_t>> prev;
+        if (std::FILE* f = std::fopen(path, "r")) {
+            unsigned long long o = 0;
+            long long v = 0;
+            while (std::fscanf(f, "%llx %lld", &o, &v) == 2)
+                prev.emplace_back(static_cast<std::size_t>(o),
+                                  static_cast<std::int32_t>(v));
+            std::fclose(f);
+        }
+        if (prev.empty()) {
+            // 스냅샷: HP 처럼 보이는 값(1..3,000,000)을 전부 저장.
+            std::FILE* f = std::fopen(path, "w");
+            int n = 0;
+            for (std::size_t o = 0; o <= 0x800; o += 4) {
+                std::int32_t v = 0;
+                if (!reader.read_value(base + o, &v)) continue;
+                if (v >= 1 && v <= 3000000) {
+                    if (f) std::fprintf(f, "%zX %d\n", o, v);
+                    ++n;
+                }
+            }
+            if (f) std::fclose(f);
+            std::printf("스냅샷 %d개 저장. 이제 게임에서 HP 를 바꾼 뒤 다시 실행.\n",
+                        n);
+        } else {
+            std::printf("바뀐 오프셋(HP 후보):\n");
+            for (const auto& kv : prev) {
+                std::int32_t v = 0;
+                if (!reader.read_value(base + kv.first, &v)) continue;
+                if (v != kv.second && v >= 1 && v <= 3000000)
+                    std::printf("  +0x%03zX  %d -> %d\n", kv.first, kv.second,
+                                v);
+            }
+            std::remove(path);
+            std::printf("(끝. 다시 하려면 한 번 더 실행해 새 스냅샷)\n");
+        }
+        return;
+    }
     // player chain : 참고 모드 경로(actor→+0x20→+0x18→+0x58 게이지)를 라이브 검증.
     if (argc > 2 && std::strcmp(argv[2], "chain") == 0) {
         game::EquipTable pt;
