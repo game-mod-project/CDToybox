@@ -239,6 +239,77 @@ bool companion_capture_install(const mem::Rtti& rtti,
     return true;
 }
 
+
+// --------------------------------------------------- 고용 작업 추적
+
+namespace {
+
+// (컴포넌트, &결과, &핸들, 0, 플래그) - 스택 인자 1개까지 그대로 넘긴다.
+using HireWorkFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint32_t*,
+                                      std::uint32_t, std::uint8_t);
+HireWorkFn g_orig_hire_work = nullptr;
+std::atomic<bool> g_hire_trace{false};
+std::atomic<int> g_hire_logs{0};
+std::mutex g_hire_mutex;
+HireWorkResult g_last_hire_work;
+constexpr int kHireLogMax = 60;
+
+void* __fastcall det_hire_work(void* comp, std::uint32_t* result,
+                               std::uint32_t* handle, std::uint32_t z,
+                               std::uint8_t flag) {
+    void* r = g_orig_hire_work(comp, result, handle, z, flag);
+    if (g_hire_logs.load(std::memory_order_relaxed) < kHireLogMax) {
+        g_hire_logs.fetch_add(1, std::memory_order_relaxed);
+        std::uint32_t hv = 0, code = 0;
+        if (handle != nullptr) hv = *handle;
+        if (result != nullptr) code = *result;
+        log::infof("고용 작업: 핸들 0x{:08X} 플래그 {} -> 코드 {} ({})", hv, flag,
+                   code, code == 0 ? "성공" : "거부");
+        std::lock_guard<std::mutex> lock(g_hire_mutex);
+        g_last_hire_work.valid = true;
+        g_last_hire_work.handle = hv;
+        g_last_hire_work.flag = flag;
+        g_last_hire_work.code = code;
+    }
+    return r;
+}
+
+}  // namespace
+
+HireWorkResult last_hire_work() {
+    std::lock_guard<std::mutex> lock(g_hire_mutex);
+    return g_last_hire_work;
+}
+
+bool companion_hire_trace_installed() {
+    return g_hire_trace.load(std::memory_order_acquire);
+}
+
+bool companion_hire_trace_install(const mem::Reader& reader) {
+    if (g_hire_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+    const std::uintptr_t fn = reader.module_base() + kHireWorkRva;
+    // 프롤로그가 기대와 다르면(패치로 밀렸으면) 걸지 않는다.
+    // 0x2ADE280: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi / mov [rsp+0x20],rdi
+    std::uint8_t head[8]{};
+    if (!reader.read(fn, head, sizeof(head))) return false;
+    if (!(head[0] == 0x48 && head[1] == 0x89 && head[2] == 0x5C &&
+          head[3] == 0x24 && head[4] == 0x10)) {
+        log::warnf("고용 작업 추적: RVA 0x{:X} 프롤로그가 다르다 ({:02X} {:02X} "
+                   "{:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kHireWorkRva, head[0], head[1], head[2], head[3], head[4]);
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(fn), &det_hire_work,
+                           reinterpret_cast<void**>(&g_orig_hire_work))) {
+        log::warnf("고용 작업 추적: 후킹 실패");
+        return false;
+    }
+    g_hire_trace.store(true, std::memory_order_release);
+    log::infof("고용 작업 추적 설치 (RVA 0x{:X}) - 거부 코드를 찍는다", kHireWorkRva);
+    return true;
+}
+
 // --------------------------------------------------- 2976 구동
 
 namespace {

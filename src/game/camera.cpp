@@ -211,6 +211,7 @@ void auto_analysis_loop() {
     // 2976(아이템 사용) 구동 준비 + 명령 파일 감시(밖에서 실험을 건다).
     companion_use_item_resolve(rtti, reader);
     companion_resolve_messages(rtti, reader);
+    companion_hire_trace_install(reader);
     companion_command_start(reader);
     // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
     // 늑대의 한손검. 인벤토리 첫 칸이고 현지화에 이름이 있다.

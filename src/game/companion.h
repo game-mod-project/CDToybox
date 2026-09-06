@@ -50,6 +50,31 @@ bool companion_capture_install(const mem::Rtti& rtti,
                                const mem::Reader& reader);
 bool companion_capture_installed();
 
+// 고용 작업 함수 추적 (진단).
+//
+// `TrocTrHireMercenaryToTargetReq`(2338) 역직렬화는 게이트를 지난 뒤
+// **RVA 0x2ADE280** 을 부르고, 그 함수가 낸 u32 코드가 0 이면 성공,
+// 아니면 그 코드를 0x3f5 태그로 클라이언트에 오류 알림으로 보낸다
+// (역직렬화 0x2960CA0 실측, 2026-09-06).
+//
+//   rcx = MercenaryClanActorComponent ([[세션액터+0x68]+0x110])
+//   rdx = &결과 u32      r8 = &핸들 u32      r9d = 0
+//   [rsp+0x20] = 플래그 u8
+//
+// 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
+// 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
+inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
+bool companion_hire_trace_install(const mem::Reader& reader);
+bool companion_hire_trace_installed();
+// 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
+struct HireWorkResult {
+    bool valid = false;
+    std::uint32_t handle = 0;
+    std::uint8_t flag = 0;
+    std::uint32_t code = 0;
+};
+HireWorkResult last_hire_work();
+
 // ----------------------------------------------------------------------
 // 아이템 사용 구동 (`TrocTrUseItemByItemInfoReq`, ID 2976)
 //
