@@ -362,8 +362,16 @@ const char* const kMessageClasses[] = {
     "TrocTrHireMercenaryFromInventoryReq", // 2454 인벤 고용
     "TrocTrCatchBySummonReq",              // 2386 붙잡기
     "TrocTrSelectMercenarySpawnReq",       // 2894 스폰 선택
+    // 등록 뒤 상태를 바로잡거나 되돌리는 것들. 획득이 "소환된 상태"로
+    // 들어가 다른 개체 소환까지 막는 문제를 풀려고 넣었다
+    // (실측 2026-09-06: 목록에는 뜨는데 주위에 없고 해제도 안 됨).
+    "TrocTrRequestSwitchMercenarySummonStateReq",   // 2992 u64 번호 + u8 상태
+    "TrocTrUnSetMainPetAndUnSpawnReq",             // 3022 u64 번호
+    "TrocTrCompleteCalculateSummonAfterRegistReq", // 2962 u64 번호 + float3
+    "TrocTrFireMercenaryReq",                      // 2465 u64 번호
+    "TrocTrDisbandMercenaryReq",                   // 2248 u32
 };
-constexpr int kMessageMax = 8;
+constexpr int kMessageMax = 24;
 MessageDesc g_msgs[kMessageMax];
 int g_msg_count = 0;
 
