@@ -165,72 +165,19 @@ bool stash_is_favorite(unsigned int key) {
     return g_stash.is_favorite(key);
 }
 
-void stash_enqueue(const std::vector<game::StashEntry>& items) {
-    if (items.empty()) return;
-    // 앞선 지급이 다 끝났으면 큐를 비우고 새로 시작한다 - 안 그러면
-    // 옛 목록이 앞에 그대로 쌓여 무한히 커진다.
-    if (g_queue_at >= g_queue.size()) {
-        g_queue.clear();
-        g_queue_at = 0;
-    }
-    g_queue.insert(g_queue.end(), items.begin(), items.end());
-}
+void draw_stash_panel(bool* open) {
+    if (!g_loaded) load();
 
-std::size_t stash_queue_remaining() {
-    return g_queue_at < g_queue.size() ? g_queue.size() - g_queue_at : 0;
-}
-std::size_t stash_queue_total() { return g_queue.size(); }
-
-// 지급이 실제로 성공할 세션을 고른다.
-//
-// 누적 호출 1위(best_actor_index)도, 살아있음(best_live_session_index)도
-// 부족했다 - 실측 2026-09-06: 다른 세이브를 여러 번 로드하면 서버 세션이
-// 표에 여럿 쌓이고, 호출 1위 서버 세션조차 게이트 사슬
-// ([+0xA0]->[+0x68]->[+0x130])이 끊겨 지급이 "사슬이 끊겼다" 로 조용히
-// 실패했다. 그래서 **게이트가 실제로 풀리는** 서버 세션만 후보로 삼고,
-// 그중 최근에 살아있고 호출이 가장 많은 것을 고른다. gate_object 는
-// 안전 읽기라 풀린(freed) 세션은 자연히 걸러진다.
-std::uintptr_t pick_give_session() {
-    std::uintptr_t seen[16]{};
-    std::uint32_t hits[16]{};
-    const int n = game::seen_sessions(seen, hits, 16);
-    if (n == 0) return 0;
-
-    std::uint64_t last[16]{};
-    std::uint64_t newest = 0;
-    for (int i = 0; i < n; ++i) {
-        last[i] = game::session_last_seen(i);
-        if (last[i] > newest) newest = last[i];
-    }
-
-    const mem::LocalReader rd;
-    std::uintptr_t best = 0;
-    std::uint32_t best_hits = 0;
-    std::uintptr_t gate = 0;
-    for (int i = 0; i < n; ++i) {
-        if (!game::session_is_server(i)) continue;
-        // 가장 최근 세션보다 크게 뒤처진 것은 죽은 것으로 본다.
-        if (last[i] == 0 || (newest > last[i] &&
-                             newest - last[i] > game::kSessionFreshMs)) {
-            continue;
-        }
-        // 게이트가 풀려야 지급이 실제로 통한다.
-        if (!game::gate_object(rd, seen[i], &gate)) continue;
-        if (best == 0 || hits[i] >= best_hits) {
-            best = seen[i];
-            best_hits = hits[i];
-        }
-    }
-    return best;
-}
-
-// 큐에서 한 개를 지급 시도한다. request_give 가 쿨다운에 걸리면
-// false 를 주므로 다음 프레임에 다시 시도한다. overlay 가 매 프레임
-// 부른다 - 보관함 창을 열지 않아도 지급이 진행된다.
-void stash_queue_pump() {
+    // 큐가 남아 있으면 한 개씩 흘려보낸다. request_give 가 쿨다운에
+    // 걸리면 false 를 주므로 다음 프레임에 다시 시도한다.
     if (g_queue_at < g_queue.size() && !game::spawn_pending()) {
-        const std::uintptr_t session = pick_give_session();
-        if (session != 0) {
+        std::uintptr_t seen[16]{};
+        std::uint32_t hits[16]{};
+        const int n = game::seen_sessions(seen, hits, 16);
+        bool server[16]{};
+        for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
+        const int pick = game::best_actor_index(hits, server, n);
+        if (pick >= 0) {
             const auto& e = g_queue[g_queue_at];
             // 담금질은 아이템마다 상한이 있고 넘으면 게임이 조용히
             // 거절한다 - 그러면 큐가 그 자리에서 영영 멈춘다. 파일에
@@ -291,18 +238,14 @@ void stash_queue_pump() {
                 ++extras.socket_count;
             }
 
-            if (game::request_give(session, e.key, e.count, extras)) {
+            if (game::request_give(seen[pick], e.key, e.count, extras)) {
                 ++g_queue_at;
             }
+        } else {
+            g_queue.clear();     // 세션이 없으면 접는다
+            g_queue_at = 0;
         }
-        // 쓸 세션이 없으면 큐를 접지 않고 다음 프레임에 다시 본다 -
-        // 월드 로딩·세이브 전환 중일 수 있다. import 도중에 접으면
-        // 남은 아이템이 다 날아간다(예전엔 여기서 clear 했다).
     }
-}
-
-void draw_stash_panel(bool* open) {
-    if (!g_loaded) load();
 
     ImGui::SetNextWindowPos(ImVec2(1180, 340), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 400.0f), ImGuiCond_FirstUseEver);

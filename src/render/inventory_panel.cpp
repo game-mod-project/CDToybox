@@ -14,6 +14,7 @@
 
 #include "game/inventory.h"
 #include "game/equip.h"
+#include "game/grant.h"
 #include "mem/reader.h"
 #include "game/items.h"
 #include "game/stash.h"
@@ -72,6 +73,12 @@ bool g_sort_asc = true;
 
 // Export/Import 결과 한 줄. 버튼을 누른 뒤 무슨 일이 났는지 남긴다.
 std::string g_io_status;
+
+// 가져오기 전용 지급 큐. 보관함(stash)의 큐와 완전히 분리한다 - 보관함
+// 지급 기능을 손대지 않기 위해서다. overlay 가 inventory_import_pump 를
+// 매 프레임 부른다(창을 열지 않아도 진행).
+std::vector<game::StashEntry> g_import_queue;
+std::size_t g_import_at = 0;
 
 // 파일은 DLL 옆에 둔다(보관함·아이콘 아틀라스와 같은 자리).
 std::wstring inv_file_path() {
@@ -422,6 +429,38 @@ void do_export(const mem::Reader& reader) {
     g_io_status = buf;
 }
 
+// 지급이 실제로 성공할 세션을 고른다. 게이트 사슬이 풀리는 살아있는
+// 서버 세션만 후보로 삼는다(stale 세션은 "사슬이 끊겼다"로 조용히 실패).
+std::uintptr_t import_pick_session() {
+    std::uintptr_t seen[16]{};
+    std::uint32_t hits[16]{};
+    const int n = game::seen_sessions(seen, hits, 16);
+    if (n == 0) return 0;
+    std::uint64_t last[16]{};
+    std::uint64_t newest = 0;
+    for (int i = 0; i < n; ++i) {
+        last[i] = game::session_last_seen(i);
+        if (last[i] > newest) newest = last[i];
+    }
+    const mem::LocalReader rd;
+    std::uintptr_t best = 0;
+    std::uint32_t best_hits = 0;
+    std::uintptr_t gate = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!game::session_is_server(i)) continue;
+        if (last[i] == 0 || (newest > last[i] &&
+                             newest - last[i] > game::kSessionFreshMs)) {
+            continue;
+        }
+        if (!game::gate_object(rd, seen[i], &gate)) continue;
+        if (best == 0 || hits[i] >= best_hits) {
+            best = seen[i];
+            best_hits = hits[i];
+        }
+    }
+    return best;
+}
+
 // 파일을 읽어 지급 큐에 태운다. 빈 인벤토리·다른 세이브에서도 아이템을
 // 다시 만들어 넣는다(2초 간격). 소켓·보석·염색은 이월되지 않는다.
 void do_import() {
@@ -446,7 +485,12 @@ void do_import() {
         g_io_status = "파일에 지급할 아이템이 없습니다";
         return;
     }
-    stash_enqueue(all);
+    // 앞선 가져오기가 다 끝났으면 큐를 비우고 새로 시작한다.
+    if (g_import_at >= g_import_queue.size()) {
+        g_import_queue.clear();
+        g_import_at = 0;
+    }
+    g_import_queue.insert(g_import_queue.end(), all.begin(), all.end());
     char buf[160];
     std::snprintf(buf, sizeof(buf),
                   "%zu개 지급 대기 (2초 간격). 소켓·보석·염색은 이월 안 됨",
@@ -455,6 +499,37 @@ void do_import() {
 }
 
 }  // namespace
+
+// 가져오기 큐를 한 개씩 지급한다. overlay 가 매 프레임 부른다(보관함과
+// 무관, 가시성 무관). 소켓은 request_give 가 어차피 0 으로 밀므로 넣지
+// 않는다. 담금질·연마·내구도는 아이템 표 상한으로 자른다.
+void inventory_import_pump() {
+    if (g_import_at >= g_import_queue.size()) return;
+    if (game::spawn_pending()) return;
+    const std::uintptr_t session = import_pick_session();
+    if (session == 0) return;   // 살아있는 세션 없음 - 다음 프레임에 다시
+
+    const game::StashEntry& e = g_import_queue[g_import_at];
+    std::uint32_t cap_t = 0;
+    for (const auto& c : game::item_catalog()) {
+        if (c.key == e.key) { cap_t = c.max_temper; break; }
+    }
+    game::GiveExtras extras;
+    extras.temper =
+        static_cast<std::uint16_t>(e.temper > cap_t ? cap_t : e.temper);
+    const std::int16_t sc = game::max_sharpness_for(e.key);
+    extras.sharpness = static_cast<std::uint16_t>(
+        (sc > 0 && e.sharpness > static_cast<std::uint32_t>(sc))
+            ? sc
+            : e.sharpness);
+    const std::uint16_t full = game::full_endurance_for(e.key);
+    extras.endurance =
+        (e.endurance == game::kStashNoEndurance)
+            ? full
+            : static_cast<std::uint16_t>(e.endurance > full ? full
+                                                            : e.endurance);
+    if (game::request_give(session, e.key, e.count, extras)) ++g_import_at;
+}
 
 void draw_inventory_panel(bool* open) {
     ImGui::SetNextWindowPos(ImVec2(400, 600), ImGuiCond_FirstUseEver);
@@ -505,13 +580,13 @@ void draw_inventory_panel(bool* open) {
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("가져오기")) do_import();
-    // 지급 진행 표시.
-    const std::size_t remain = stash_queue_remaining();
+    // 지급 진행 표시(가져오기 전용 큐).
+    const std::size_t total = g_import_queue.size();
+    const std::size_t remain = g_import_at < total ? total - g_import_at : 0;
     if (remain > 0) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
-                           "지급 중 %zu / %zu",
-                           stash_queue_total() - remain, stash_queue_total());
+                           "지급 중 %zu / %zu", total - remain, total);
     } else if (!g_io_status.empty()) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s",
