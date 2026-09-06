@@ -75,6 +75,26 @@ inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
 // 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
 // 알 수 있다. 읽고 찍기만 한다.
 inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
+// 마지막 소환 결과. 코드 0 이 성공이다.
+//
+// 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).
+// 그 구간에는 어떤 개체를 넣어도 0x533C0A53 으로 거부된다 - 실측
+// 2026-09-06: 방금 소환한 개체도, 전에 잘 되던 개체도 똑같이
+// 거부됐고, 몇 분 뒤에는 여섯 번 연속 전부 성공했다.
+//
+// 이것을 몰라서 "획득한 개체는 재적재가 필요하다"고 오진했다.
+// 화면에 코드를 띄워 다음에는 바로 알아보게 한다.
+struct SpawnWorkResult {
+    bool valid = false;
+    std::uint64_t merc_no = 0;
+    std::uint32_t code = 0;
+};
+SpawnWorkResult last_spawn_work();
+
+// 소환 쿨타임으로 보이는 거부 코드. 실측값이라 다른 이유도 이 코드를
+// 쓸 수 있다 - 화면에는 "쿨타임으로 보임" 정도로만 적는다.
+inline constexpr std::uint32_t kSpawnCooldownCode = 0x533C0A53;
+
 bool companion_spawn_trace_install(const mem::Reader& reader);
 bool companion_spawn_trace_installed();
 bool companion_hire_trace_install(const mem::Reader& reader);

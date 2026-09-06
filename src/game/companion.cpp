@@ -319,6 +319,8 @@ SpawnWorkFn g_orig_spawn_work = nullptr;
 std::atomic<bool> g_spawn_trace{false};
 std::atomic<int> g_spawn_logs{0};
 constexpr int kSpawnLogMax = 60;
+std::mutex g_spawn_mutex;
+SpawnWorkResult g_last_spawn;
 
 void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
                                 std::uint64_t merc_no, float* pos) {
@@ -326,6 +328,12 @@ void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
     if (g_spawn_logs.load(std::memory_order_relaxed) < kSpawnLogMax) {
         g_spawn_logs.fetch_add(1, std::memory_order_relaxed);
         const std::uint32_t code = (result != nullptr) ? *result : 0xFFFFFFFFu;
+        {
+            std::lock_guard<std::mutex> lock(g_spawn_mutex);
+            g_last_spawn.valid = true;
+            g_last_spawn.merc_no = merc_no;
+            g_last_spawn.code = code;
+        }
         if (pos != nullptr) {
             log::infof("소환 작업: 번호 {} 좌표 ({:.1f}, {:.1f}, {:.1f}) "
                        "-> 코드 {} ({})",
@@ -340,6 +348,11 @@ void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
 }
 
 }  // namespace
+
+SpawnWorkResult last_spawn_work() {
+    std::lock_guard<std::mutex> lock(g_spawn_mutex);
+    return g_last_spawn;
+}
 
 bool companion_spawn_trace_installed() {
     return g_spawn_trace.load(std::memory_order_acquire);

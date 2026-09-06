@@ -247,12 +247,25 @@ void draw_nearby_tab() {
     ImGui::Text("%zu / %zu 액터", view.size(), all.size());
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 액터 주소가 복사됩니다");
-    // 실측 2026-09-06: 획득한 개체는 그 자리에서는 목록에만 들어가고
-    // 소환에 아무 반응이 없다. 월드를 다시 불러오면 정상이 된다 -
-    // 세이브/로드뿐 아니라 다른 지역으로 이동해도 된다. 등록 기록은
-    // 바로 생기지만 실행 시점 객체는 지역 적재 때 만들어지는 모양이다.
-    ImGui::TextDisabled(
-        "획득한 개체는 다른 지역으로 이동하거나 세이브/로드하면 소환됩니다");
+    // 획득한 개체가 소환이 안 되는 것은 우리 결함이 아니라 게임의
+    // 소환 쿨타임이다 - 실측 2026-09-06: 그 구간에는 방금 소환한
+    // 개체도 전에 잘 되던 개체도 똑같이 0x533C0A53 으로 거부되고,
+    // 몇 분 뒤에는 여섯 번 연속 전부 성공했다. 앞서 "재적재가
+    // 필요하다"고 적었던 안내는 오진이라 지운다.
+    const game::SpawnWorkResult sr = game::last_spawn_work();
+    if (sr.valid && sr.code != 0) {
+        if (sr.code == game::kSpawnCooldownCode) {
+            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
+                               "소환 거부 (번호 %llu) - 소환 쿨타임으로 보입니다. "
+                               "잠시 뒤 다시 시도하세요",
+                               static_cast<unsigned long long>(sr.merc_no));
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                               "소환 거부 (번호 %llu) 코드 0x%08X",
+                               static_cast<unsigned long long>(sr.merc_no),
+                               sr.code);
+        }
+    }
 
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).
@@ -373,7 +386,7 @@ void draw_nearby_tab() {
                 if (ImGui::IsItemHovered() && can) {
                     ImGui::SetTooltip(
                         "이 개체를 동반자로 등록합니다.\n"
-                        "다른 지역으로 이동하거나 세이브/로드해야 소환됩니다.\n"
+                        "소환이 안 되면 게임의 소환 쿨타임입니다.\n"
                         "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
                 }
                 ImGui::PopID();
