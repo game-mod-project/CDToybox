@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "game/nofall.h"
 #include "game/player.h"
 #include "mem/reader.h"
 
@@ -37,6 +38,20 @@ void draw_player_panel(bool* open) {
     if (ImGui::Checkbox("무한 스태미나", &sta)) game::player_set_inf_stamina(sta);
     bool spi = game::player_inf_spirit();
     if (ImGui::Checkbox("무한 정신력", &spi)) game::player_set_inf_spirit(spi);
+
+    // 낙사 방지는 코드 훅이라 별도(전투 무적과 분리). 훅 미설치면 비활성.
+    ImGui::Separator();
+    if (game::nofall_installed()) {
+        bool nf = game::nofall_enabled();
+        if (ImGui::Checkbox("낙사 방지 (No Fall Damage)", &nf))
+            game::nofall_set(nf);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(한 번 낙하해야 학습)");
+    } else if (game::nofall_unsupported()) {
+        ImGui::TextDisabled("낙사 방지: 이 게임 빌드 미지원 (사이트 재추출 필요)");
+    } else {
+        ImGui::TextDisabled("낙사 방지: 훅 준비 중...");
+    }
 
     ImGui::Separator();
     ImGui::TextWrapped(

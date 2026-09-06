@@ -1,0 +1,154 @@
+# 세션 이관 문서 — 동반자(탈것·반려동물) 소환·획득 (2026-09-05)
+
+이 세션에서 한 일을 한 곳에 모은다. 세부 근거는 각 절이 가리키는
+spec 문서에 있다. **커밋 4건, 배포 완료, 작업 트리 깨끗.**
+
+- 브랜치: `feat/equip-editor` (다른 세션의 장비 에디터 브랜치 위에 얹힘, 미푸시)
+- 배포된 DLL: 2026-09-05 18:58 빌드 (커밋 8e4fc9c 과 동일)
+- 테스트: 305개 통과
+- 같은 저장소에서 다른 세션(장비 에디터·텔레포트)이 동시에 작업했다. 중간에
+  그 세션이 내 변경을 `git stash` 로 치웠다가 되돌린 일이 있어, 이후 단계마다
+  내 파일만 골라 커밋했다.
+
+---
+
+## 1. 결론 요약
+
+| 질문 | 답 |
+|---|---|
+| 오버레이에서 탈것·반려동물을 추가할 수 있나 | **된다.** 아이템 `동행의 부적` 6종을 지급하고 인벤에서 쓰면 특수 탑승물 5 + 반려동물 1이 등록된다(실측). |
+| 용병이 왜 얽히나 | 엔진은 말·탈것·마차·펫·가축을 전부 `MercenaryInfo` 타입(21행)으로 관리한다. 탈것 등록 = 타입 2 용병 고용. 우회 경로 없음. |
+| 아이템으로 더 추가할 수 있는 종이 있나 | **없다.** 스킬 표 2061행 중 `Active_Hire_*` 는 6개뿐이고 각각 부적 1종이 준다. 말·드래곤·전투기계·개/새 펫은 스토리·포획 부여. |
+| 포획으로 얻는 목록 | 캐릭터 표 7250 × 용병 표 21 교차. 야생(`_Wild`) 말 38마리(7품종)+전설마 3, 특수 탑승물(늑대·곰·사자·호랑이) 25, 짐승 탈것(낙타·황소·롱혼·하미시·물소) 15, 펫 약 120종, 가축 10, 물고기 41. |
+| 게임 탭에 들어가면 소환되나 | **된다.** 부르기 기능은 등록 목록을 대상으로 하므로 획득만 성공하면 소환은 게임 UI가 한다. |
+| 획득 경로 | ① `TrocTrHireMercenaryToTargetReq`(2338, `u32 액터핸들+u8`) 역직렬화 구동, ② 즉시 포획 패치(Nexus 방식, 우리 exe 재검증 필요). 둘 다 Phase 2. |
+
+---
+
+## 2. 시간순 진행
+
+### 2.1 폴더 확인
+게임 폴더·`E:\CDToybox` 상태 확인. 배포 DLL 이 빌드보다 오래됐음을 지적.
+
+### 2.2 기능 검토 → `specs/2026-09-05-vehicle-pet-add-review.md`
+- 실행 중인 게임에서 `MercenaryInfoManager` 21행을 직접 읽어 타입 표 확정
+  (Mercenary_Main, Vehicle_Horse, Vehicle_Dragon, …, Pet, Domestic, Fish, Insect).
+- 요청 메시지 101개 중 소유를 늘리는 것은 `HireMercenaryFromInventoryReq`(2454)
+  와 `HireMercenaryToTargetReq`(2338) 둘. 치트 3종은 스텁.
+- 2454 역직렬화(0x2965510) 정적 분석: 본문 u16 두 개, 상태표로 이중 등록 거부.
+- 아이템 표에 `동행의 부적` 6종(1003843~1003847, 1003921) 존재.
+- A(지급만)/B(원클릭)/C(임의 키, 비권장)/D(소유 뷰) 안 제시.
+
+### 2.3 A안 실행 — 성공
+- `bin64/cdtoybox_stash.txt` 에 세트 "동반자 부적"(6종) 추가. 원본 `.bak`.
+- 보관함 패널 "다시 읽기" 버튼(파일 편집을 재시작 없이 반영).
+- 실측: 6종 전부 등록(특수 탑승물 5, 반려동물 피닉스 1). 크래시·오염 없음.
+
+### 2.4 아이템 대응 전수 조사 — 부적 6종이 전부
+`ItemInfo._itemUseInfoList`(+0x80, 행 색인) → `ItemUseInfo`+0x18 동작 객체
+(vtable RTTI, 20종) → `ItemUseData_Skill`+0x30 스킬 행 → `SkillInfoManager`.
+`Active_Hire_*` 6개 = 부적 6종. 부수: `Item_Rare_Collect_opuntia/Taro` 가
+`Skill_CallDragon/CallVehicle`(이미 가진 탈것 호출).
+
+### 2.5 포획 목록 추출 → `specs/2026-09-05-catchable-companions.md`
+`CharacterInfo._mercenaryInfo`(+0xBE) = 용병 표 **행 번호**. `_isCatchable`
+은 거의 전부 1이라 판별에 못 쓰고 `_Wild` 접미사로 본다. 타입별 표 전체
+수록.
+
+### 2.6 소환·획득 기능 구상 → `specs/2026-09-05-companion-summon-acquire-design.md`
+2338 역직렬화(0x2960CA0) 정적 분석: `u32 핸들 + u8`, 핸들→액터 조회
+(0x2ADE280, 전역 `0x6C29C70+0x48` 표), 상태표 게이트. `CatchBySummonReq` 는
+기존 액터 두 개 조회일 뿐 소환 아님. 패널 구성(목록/근처/소유)과 Phase 0~4
+계획.
+
+### 2.7 Phase 0 — 커밋 2ab9059
+- 로스터: 캐릭터 동반자 필드(행·고용·포획·유니크), 용병 표 느슨한 판정
+  (+0x00 이 포인터라 엄격 검증이 실패하던 버그 수정), 이름 규칙 도우미.
+- 패널 **동반자 탭**(타입 콤보·야생만·고용 가능만), 용병 탭 → 용병 타입.
+- 실측: `로스터: 탈것 34개, 캐릭터 7250개(동반자 880개), 용병 타입 21개`.
+- 소유 탭은 미구현(진영 컴포넌트 스캔 실패).
+
+### 2.8 Phase 1 — 커밋 ebe803d
+- `game/companion` 캡처 훅 9경로(서술자 vtable[2] 역직렬화 후킹).
+  2338 은 핸들·플래그로 디코드. 순수 디코더 테스트 4개.
+- **동작 확인**: `[스폰선택] ID 2894` 캡처 — 본문 `u64 MercenaryNo + float3`.
+  Req 는 와이어를 탄다. Ack(소유목록)는 로드 때 안 잡힘(로컬 서버가 객체로
+  넘기는 듯).
+- Nexus "Crimson Desert Enhanced Ultimate" CT/ASI 분석: 즉시 포획 AOB
+  (`C5 FA 11 13 0F 9A D0 3C 01`, `[rbx+1C]`→`[rbx]`), 신뢰도 +0x28, 살아 있는
+  캐릭터 걷기(+0xB8/+0xC0). **우리 exe 에선 AOB 전부 0건**(빌드 2692용).
+
+### 2.9 근처 탭 — 커밋 8e4fc9c (사용자 조작 없이 진행)
+블라인드 스캔(키·레코드 포인터·문자열·매니저 포인터, 깊이 3) 전부 실패
+→ 게임 메타 시스템의 접근 함수 `GameMeta_ClassFunctionTemplate<…CharacterKey…, CommonActor>`
+인스턴스 +0x20 → RVA 0x17544D0 → **`[[a+0x68]+0x20]+0x30` u16 = 캐릭터 표
+행 번호**(키 아님, 조회 함수 0x383200 이 증명, 전역 0x6C29FF8 = 매니저).
+- `ClientActorManager` 버킷 `+0x128..` `{배열, u32, 용량}`. 두 번째 u32 는
+  살아 있는 수가 아니라(130→0) 널/쓰레기까지 걷는다.
+- `game/actors` + 패널 **근처 탭** + `probe nearby [all]`.
+- 라이브 검증: 액터 249, 이름 131, 동반자 27 — **전설마 흑마
+  `Animal_Black_Horse_Wild_31378` 가 플레이어 근처에 있음**.
+
+---
+
+## 3. 커밋 목록
+
+| 커밋 | 내용 |
+|---|---|
+| 2ab9059 | 로스터: 동반자 탭 + 용병 타입 표 읽기 + 캐릭터 동반자 플래그 |
+| ebe803d | 동반자 Phase 1: 획득 경로 메시지 캡처 훅 (진단) |
+| 8e4fc9c | 동반자: 근처 탭 - 살아 있는 액터를 캐릭터 이름으로 식별 |
+
+(A안의 보관함 "다시 읽기" 버튼과 검토 문서는 다른 세션의 머지 커밋에 함께 들어갔다.)
+
+---
+
+## 4. 확정된 사실 (재사용)
+
+| 항목 | 값 |
+|---|---|
+| 동반자 타입 표 | `MercenaryInfoManager` 21행, 행 번호가 키. `_mercenaryType` +0x20 (2 탈것·3 마차·4 펫·5 가축) |
+| 캐릭터 → 동반자 | `CharacterInfo` +0xBE u16 행, +0x148 catchable, +0x14B unique, +0x156 hirable |
+| 액터 → 캐릭터 | `[[a+0x68]+0x20]+0x30` u16 = 레코드 배열 행. 전역 0x6C29FF8 = CharacterInfoManager |
+| 액터 매니저 | `ClientActorManager` +0x128 부터 0x10 간격 버킷, 널 종료 |
+| 획득 메시지 | 2338 `u32 액터핸들 + u8`, 역직렬화 0x2960CA0, 핸들 조회 0x29B39D0(`[0x6C29C70]+0x48`) |
+| 부르기 메시지 | 2894 `u64 MercenaryNo + float3` |
+| 아이템 등록 | 2454 `u16 ×2`(인벤 슬롯), 부적 6종 = `Active_Hire_*` 스킬 |
+| 아이템 사용 사슬 | ItemInfo+0x80 → ItemUseInfo(+0x18 동작, 20종) → ItemUseData_Skill+0x30 |
+
+---
+
+## 5. 남은 일 (우선순위 순)
+
+1. **Phase 1 실측**: 게임에서 야생 개체를 한 마리 길들이면 로그에
+   `획득 대상: 액터 핸들 …`. 그 핸들로 `[0x6C29C70]+0x48` 표를 역추적해
+   핸들 ↔ 액터 포인터 대응을 만든다(근처 탭에 핸들 열 추가).
+2. **Phase 2 획득**: (a) 2338 구동 — 근처 탭의 핸들로 버릴 세이브에서 1회.
+   서버 게이트(`+0x3B0` 플래그·상태표) 통과 여부가 관건. (b) 즉시 포획
+   패치 — 우리 exe 에서 게이지 저장 지점을 다시 찾아야 함.
+3. **소유 탭**: Ack 캡처가 안 되므로 부르기(2894) 캡처의 MercenaryNo 와
+   스폰된 액터를 짝지어 학습하거나 진영 컴포넌트 구조를 다시 본다.
+4. 근처 탭에 **거리**(액터 월드 좌표) 추가.
+5. 로스터 한글 표시명(캐릭터 현지화 키) — 미해결 유지.
+
+---
+
+## 6. 파일 지도
+
+```
+src/game/roster.{h,cpp}        캐릭터·용병·탈것 표 + 동반자 필드 + character_by_row
+src/game/actors.{h,cpp}        살아 있는 액터 걷기 + 캐릭터 신원 사슬
+src/game/companion.{h,cpp}     획득 경로 메시지 캡처 훅 (9경로)
+src/render/roster_panel.cpp    동반자 / 근처 / 탈것 / 용병 타입 / 캐릭터 탭
+src/render/stash_panel.cpp     "다시 읽기" 버튼
+tools/probe/main.cpp           probe nearby [all]
+tests/{roster,companion,actors}_tests.cpp
+docs/superpowers/specs/2026-09-05-vehicle-pet-add-review.md
+docs/superpowers/specs/2026-09-05-catchable-companions.md
+docs/superpowers/specs/2026-09-05-companion-summon-acquire-design.md  (§1~9)
+bin64/cdtoybox_stash.txt       세트 "동반자 부적"
+```
+
+스크래치(세션 임시, `%TEMP%\claude\...\scratchpad`): `item_scan.py`,
+`catch_scan.py`, `actor_index.py` 등 라이브 메모리 스크립트, Nexus 압축
+해제본(`nexus_ct`, `nexus_asi`).
