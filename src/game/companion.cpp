@@ -309,6 +309,68 @@ bool companion_hire_trace_install(const mem::Reader& reader) {
     return true;
 }
 
+// --------------------------------------------------- 소환 작업 추적
+
+namespace {
+
+using SpawnWorkFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint64_t,
+                                       float*);
+SpawnWorkFn g_orig_spawn_work = nullptr;
+std::atomic<bool> g_spawn_trace{false};
+std::atomic<int> g_spawn_logs{0};
+constexpr int kSpawnLogMax = 60;
+
+void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
+                                std::uint64_t merc_no, float* pos) {
+    void* r = g_orig_spawn_work(gate, result, merc_no, pos);
+    if (g_spawn_logs.load(std::memory_order_relaxed) < kSpawnLogMax) {
+        g_spawn_logs.fetch_add(1, std::memory_order_relaxed);
+        const std::uint32_t code = (result != nullptr) ? *result : 0xFFFFFFFFu;
+        if (pos != nullptr) {
+            log::infof("소환 작업: 번호 {} 좌표 ({:.1f}, {:.1f}, {:.1f}) "
+                       "-> 코드 {} ({})",
+                       merc_no, pos[0], pos[1], pos[2], code,
+                       code == 0 ? "성공" : "거부");
+        } else {
+            log::infof("소환 작업: 번호 {} 좌표 없음 -> 코드 {} ({})", merc_no,
+                       code, code == 0 ? "성공" : "거부");
+        }
+    }
+    return r;
+}
+
+}  // namespace
+
+bool companion_spawn_trace_installed() {
+    return g_spawn_trace.load(std::memory_order_acquire);
+}
+
+bool companion_spawn_trace_install(const mem::Reader& reader) {
+    if (g_spawn_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+    const std::uintptr_t fn = reader.module_base() + kSpawnWorkRva;
+    // 프롤로그가 기대와 다르면 걸지 않는다.
+    // 0x2ACF600: mov rax,rsp / mov [rax+0x20],r9 / mov [rax+0x18],r8
+    std::uint8_t head[8]{};
+    if (!reader.read(fn, head, sizeof(head))) return false;
+    if (!(head[0] == 0x48 && head[1] == 0x8B && head[2] == 0xC4 &&
+          head[3] == 0x4C && head[4] == 0x89)) {
+        log::warnf("소환 작업 추적: RVA 0x{:X} 프롤로그가 다르다 ({:02X} {:02X} "
+                   "{:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kSpawnWorkRva, head[0], head[1], head[2], head[3], head[4]);
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(fn), &det_spawn_work,
+                           reinterpret_cast<void**>(&g_orig_spawn_work))) {
+        log::warnf("소환 작업 추적: 후킹 실패");
+        return false;
+    }
+    g_spawn_trace.store(true, std::memory_order_release);
+    log::infof("소환 작업 추적 설치 (RVA 0x{:X}) - 소환이 어디서 갈리는지 찍는다",
+               kSpawnWorkRva);
+    return true;
+}
+
 // --------------------------------------------------- 2976 구동
 
 namespace {

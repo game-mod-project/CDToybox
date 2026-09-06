@@ -64,6 +64,19 @@ bool companion_capture_installed();
 // 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
 // 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
 inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
+
+// 소환 작업 함수. 2894 처리기(RVA 0x29621E0)가 관문을 통과한 뒤
+// 이것을 부른다 - 정상 소환에서 실제로 일하는 자리다.
+//
+//   f(문객체, u32* 결과, u64 용병번호, float* 좌표)
+//
+// 획득한 개체가 지역 재적재 전에는 소환이 안 되는데, 그때 클라이언트가
+// 2894 를 아예 안 보낸다(실측 2026-09-06). 그래서 이 함수가 불리기는
+// 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
+// 알 수 있다. 읽고 찍기만 한다.
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
+bool companion_spawn_trace_install(const mem::Reader& reader);
+bool companion_spawn_trace_installed();
 bool companion_hire_trace_install(const mem::Reader& reader);
 bool companion_hire_trace_installed();
 // 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
