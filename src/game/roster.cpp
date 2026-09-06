@@ -276,20 +276,44 @@ std::atomic<bool> g_ready{false};
 
 }  // namespace
 
+std::uint32_t roster_name_suffix(const std::string& name) {
+    std::size_t end = name.size();
+    std::size_t begin = end;
+    while (begin > 0 && name[begin - 1] >= '0' && name[begin - 1] <= '9') {
+        --begin;
+    }
+    if (begin == end) return 0;              // 끝이 숫자가 아니다
+    if (begin == 0) return 0;                // 전부 숫자면 이름이 아니다
+    if (name[begin - 1] != '_') return 0;    // "_숫자" 꼴만 본다
+    if (end - begin > 9) return 0;           // u32 를 넘길 만큼 길면 버린다
+    std::uint32_t v = 0;
+    for (std::size_t i = begin; i < end; ++i) {
+        v = v * 10 + static_cast<std::uint32_t>(name[i] - '0');
+    }
+    return v;
+}
+
 std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
                                std::vector<RosterEntry>* entries) {
     if (entries == nullptr) return 0;
     std::size_t named = 0;
     for (auto& e : *entries) {
-        if (e.key == 0) continue;
-        std::string text;
-        if (!resolve(reader, sys, loc_key(e.key, kCharNameField), &text,
-                     nullptr)) {
-            continue;  // 없는 행이 많다. 조용히 넘긴다.
+        // 레코드 키로 먼저, 안 되면 내부 이름 끝의 숫자로. 둘이
+        // 일치하는 행도 많지만 어긋나는 행도 그만큼 많다.
+        std::uint32_t candidates[2] = {e.key, roster_name_suffix(e.name)};
+        if (candidates[1] == candidates[0]) candidates[1] = 0;
+        for (const std::uint32_t entity : candidates) {
+            if (entity == 0) continue;
+            std::string text;
+            if (!resolve(reader, sys, loc_key(entity, kCharNameField), &text,
+                         nullptr)) {
+                continue;  // 없는 행이 많다. 조용히 넘긴다.
+            }
+            if (text.empty()) continue;
+            e.label = std::move(text);
+            ++named;
+            break;
         }
-        if (text.empty()) continue;
-        e.label = std::move(text);
-        ++named;
     }
     return named;
 }

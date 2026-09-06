@@ -140,6 +140,14 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
 bool roster_is_wild(const std::string& name);       // "_Wild" 가 든다
 std::string roster_species(const std::string& name); // 접미사 뗀 종 이름
 
+// 내부 이름 끝의 숫자. 없으면 0.
+//
+// 현지화 엔티티가 레코드 키와 다른 행이 많다 - 실측 2026-09-06:
+// Animal_Parrot_Wild_32884 는 엔티티 32884 에 '스픽스마코 앵무새'가
+// 있는데 레코드 키는 그 값이 아니라 조회가 빗나갔다.
+// Animal_Wolf_Wild_30019 의 키가 17969 인 것도 같은 어긋남이다.
+std::uint32_t roster_name_suffix(const std::string& name);
+
 // 표시명을 채운다. 현지화에 없는 행은 건드리지 않는다(내부 이름으로
 // 물러난다). 카탈로그 생성과 나눠 둔 이유는, 생성 쪽은 가짜 메모리로
 // 시험하는데 현지화까지 끌고 들어가면 시험이 무거워지기 때문이다.

@@ -218,3 +218,29 @@ TEST(apply_roster_labels_skips_key_zero) {
              static_cast<std::size_t>(0));
     CHECK(v[0].label.empty());
 }
+
+// 현지화 엔티티가 레코드 키가 아니라 내부 이름 끝의 숫자인 행이 있다.
+// 실측 2026-09-06: Animal_Parrot_Wild_32884 는 엔티티 32884 에
+// '스픽스마코 앵무새'가 있는데 레코드 키가 달라 빗나갔다.
+TEST(roster_name_suffix_reads_the_trailing_number) {
+    CHECK_EQ(cdtb::game::roster_name_suffix("Animal_Parrot_Wild_32884"),
+             32884u);
+    CHECK_EQ(cdtb::game::roster_name_suffix("Animal_Bear_Wild_30048"), 30048u);
+    CHECK_EQ(cdtb::game::roster_name_suffix("Animal_AmericanBullDog_Domestic_05"),
+             5u);
+}
+
+TEST(roster_name_suffix_says_none_without_an_underscore_number) {
+    CHECK_EQ(cdtb::game::roster_name_suffix("Animal_Black_Cat_Domestic"), 0u);
+    CHECK_EQ(cdtb::game::roster_name_suffix("Damian"), 0u);
+    CHECK_EQ(cdtb::game::roster_name_suffix(""), 0u);
+    // "_" 없이 붙은 숫자는 접미사로 보지 않는다.
+    CHECK_EQ(cdtb::game::roster_name_suffix("Wolf30019"), 0u);
+    // 전부 숫자면 이름이 아니다.
+    CHECK_EQ(cdtb::game::roster_name_suffix("30019"), 0u);
+}
+
+TEST(roster_name_suffix_rejects_an_overlong_run) {
+    // u32 를 넘길 만큼 긴 숫자는 버린다. 넘치면 엉뚱한 엔티티가 된다.
+    CHECK_EQ(cdtb::game::roster_name_suffix("Animal_X_1234567890"), 0u);
+}
