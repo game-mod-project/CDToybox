@@ -305,6 +305,29 @@ constexpr std::size_t kItemValueSize = 0x400;
 bool request_give(std::uintptr_t session, std::uint32_t item_key,
                   std::int64_t count, const GiveExtras& extras = {});
 
+// ----------------------------------------------------------------------
+// 범용 메시지 구동 (역직렬화 함수 직접 호출).
+//
+// 게임 요청 메시지(TrocTr*Req)는 처리기가 역직렬화 함수(서술자
+// vtable[2]) 안에 인라인돼 있어, `deser(서술자, &결과, 패킷, ?)` 로 부르면
+// 곧 처리다. 패킷은 [+0x10] u16 전체길이 · [+0x18] 페이로드 포인터 ·
+// [+0x38] 플래그 0 이면 된다(소켓 Phase 2 실측, 2026-09-05). 페이로드
+// 머리 5바이트 = [ID u16][u8][본문길이 u16].
+//
+// 지급과 같은 대기열(게임 스레드 실행 지점·SEH·쿨다운)을 탄다.
+struct MessageDesc {
+    std::uintptr_t descriptor = 0;  // 정적 초기화가 vtable 을 넣는 전역
+    std::uintptr_t deser = 0;       // vtable[2]
+    std::uint32_t id = 0;           // 서술자 +0x0C
+};
+// RTTI 클래스 이름(예: "TrocTrUseItemByItemInfoReq")으로 해석한다.
+bool resolve_message(const mem::Rtti& rtti, const mem::Reader& reader,
+                     const char* class_name, MessageDesc* out);
+// 와이어(머리 포함)를 걸어 둔다. 대기열이 차 있거나 쿨다운이면 false.
+inline constexpr std::size_t kMessageWireMax = 128;
+bool request_message(std::uintptr_t session, const MessageDesc& msg,
+                     const std::uint8_t* wire, std::size_t len);
+
 // 인벤토리 직행을 쓸 수 있는가.
 bool give_ready();
 

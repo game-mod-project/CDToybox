@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <string>
 
 #include "core/log.h"
 #include "mem/hook.h"
@@ -139,7 +140,7 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance, CharSpawn };
+enum class Kind { Ground, Inventory, Endurance, CharSpawn, Message };
 
 struct Pending {
     Kind kind = Kind::Inventory;
@@ -151,6 +152,10 @@ struct Pending {
     GiveExtras extras;           // 담금질·소켓 (TrItemValue 칸들)
     std::uint16_t a = 0;         // 내구도 인자
     std::uint16_t b = 0;
+    // 범용 메시지 구동(Message) 인자. 와이어는 머리 5바이트 포함.
+    MessageDesc msg;
+    std::uint8_t wire[kMessageWireMax]{};
+    std::size_t wire_len = 0;
 };
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
@@ -162,6 +167,8 @@ void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
 void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
                     std::uint32_t b, std::uint8_t flag, const float pos[3],
                     SpawnOutcome* out);
+void run_message(std::uintptr_t session, const MessageDesc& msg,
+                 const std::uint8_t* wire, std::size_t len, SpawnOutcome* out);
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
@@ -371,6 +378,10 @@ bool run_pending_if_any() {
                 run_char_spawn(req.session, req.key,
                                static_cast<std::uint32_t>(req.count), req.a,
                                req.pos, &g_outcome);
+                break;
+            case Kind::Message:
+                run_message(req.session, req.msg, req.wire, req.wire_len,
+                            &g_outcome);
                 break;
         }
     }
@@ -628,6 +639,18 @@ int seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
     *addr = reinterpret_cast<std::uintptr_t>(
         ep->ExceptionRecord->ExceptionAddress);
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+using DeserFn = void*(__fastcall*)(void*, void*, void*, void*);
+bool call_deser_guarded(DeserFn fn, void* descriptor, std::uint32_t* result,
+                        void* packet, std::uint32_t* seh_out,
+                        std::uintptr_t* fault_out) {
+    __try {
+        fn(descriptor, result, packet, nullptr);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, fault_out)) {
+        return false;
+    }
 }
 
 bool call_endur_guarded(EndurFn fn, void* self, void* packet,
@@ -1710,6 +1733,128 @@ bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
 bool give_ready() {
     return g_give_msg.handler != 0 && g_item_value_ctor != nullptr &&
            g_orig_actor_getter != nullptr && g_reader != nullptr;
+}
+
+namespace {
+
+void run_message(std::uintptr_t session, const MessageDesc& msg,
+                 const std::uint8_t* wire, std::size_t len, SpawnOutcome* out) {
+    SpawnOutcome o;
+    if (msg.deser == 0 || msg.descriptor == 0 || wire == nullptr || len < 5 ||
+        len > kMessageWireMax) {
+        log::warnf("메시지 구동: 인자 불량 (deser 0x{:X} len {})", msg.deser, len);
+        if (out != nullptr) *out = o;
+        return;
+    }
+    alignas(16) std::uint8_t buf[kMessageWireMax]{};
+    std::memcpy(buf, wire, len);
+    // 패킷: [+0x10] u16 전체길이 · [+0x18] 페이로드 포인터 · [+0x38] 플래그 0.
+    // [+0x00] 은 성공 경로에서 안 쓰지만 실패 경로 대비로 세션을 둔다.
+    std::uint64_t packet[8]{};
+    packet[0] = static_cast<std::uint64_t>(session);
+    packet[2] = static_cast<std::uint64_t>(len);           // +0x10
+    packet[3] = reinterpret_cast<std::uint64_t>(&buf[0]);  // +0x18
+    packet[7] = 0;                                         // +0x38
+    std::uint32_t result = 0;
+    log::infof("메시지 구동 ID {}: 세션 0x{:X} 길이 {}", msg.id, session, len);
+    o.called = true;
+    o.crashed = !call_deser_guarded(reinterpret_cast<DeserFn>(msg.deser),
+                                    reinterpret_cast<void*>(msg.descriptor),
+                                    &result, packet, &o.seh, &o.fault);
+    o.result = result;
+    if (o.crashed) {
+        log::errorf("메시지 구동 ID {} 가 게임 안에서 죽었다: 0x{:X} (RVA 0x{:X})",
+                    msg.id, o.seh,
+                    g_reader != nullptr ? o.fault - g_reader->module_base() : o.fault);
+    } else {
+        log::infof("메시지 구동 ID {} 끝 (결과 {})", msg.id, result);
+    }
+    if (out != nullptr) *out = o;
+}
+
+}  // namespace
+
+bool resolve_message(const mem::Rtti& rtti, const mem::Reader& reader,
+                     const char* class_name, MessageDesc* out) {
+    if (out == nullptr || class_name == nullptr) return false;
+    const std::string want = std::string(".?AV") + class_name + "@pa@@";
+    std::uintptr_t td = 0;
+    for (const auto& t : rtti.find_types(class_name, 8)) {
+        if (t.name == want) {
+            td = t.descriptor;
+            break;
+        }
+    }
+    if (td == 0) {
+        log::warnf("메시지 {}: 클래스를 못 찾음", class_name);
+        return false;
+    }
+    const auto vts = rtti.vtables_for(td);
+    if (vts.empty()) return false;
+    const std::uintptr_t vtable = vts[0];
+    const std::uint64_t vtable_rva = vtable - reader.module_base();
+
+    // 정적 초기화가 vtable 을 넣는 전역이 곧 메시지 서술자다.
+    //   48 8D 05 <-vtable>   lea rax,[rip+..]
+    //   48 89 05 <-서술자>   mov [rip+..],rax
+    const auto& img = rtti.image();
+    std::uint64_t desc_rva = 0;
+    int hits = 0;
+    for (std::size_t i = 0; i + 14 <= img.size(); ++i) {
+        if (img[i] != 0x48 || img[i + 1] != 0x8D || img[i + 2] != 0x05) continue;
+        if (img[i + 7] != 0x48 || img[i + 8] != 0x89 || img[i + 9] != 0x05) {
+            continue;
+        }
+        std::int32_t d1 = 0, d2 = 0;
+        std::memcpy(&d1, img.data() + i + 3, 4);
+        std::memcpy(&d2, img.data() + i + 10, 4);
+        if (static_cast<std::uint64_t>(i + 7 + d1) != vtable_rva) continue;
+        desc_rva = static_cast<std::uint64_t>(i + 14 + d2);
+        if (++hits > 1) break;
+    }
+    if (hits != 1) {
+        log::warnf("메시지 {}: 서술자를 {}곳에서 찾았다", class_name, hits);
+        return false;
+    }
+    MessageDesc m;
+    m.descriptor = reader.module_base() + static_cast<std::uintptr_t>(desc_rva);
+    std::uintptr_t vptr = 0;
+    if (!reader.read(m.descriptor, &vptr, sizeof(vptr)) || vptr != vtable) {
+        log::warnf("메시지 {}: 서술자 vptr 이 다르다", class_name);
+        return false;
+    }
+    reader.read(m.descriptor + 0x0C, &m.id, sizeof(m.id));
+    if (!reader.read(vtable + 0x10, &m.deser, sizeof(m.deser)) || m.deser == 0) {
+        return false;
+    }
+    log::infof("메시지 {}: ID {} 서술자 0x{:X} 역직렬화 RVA 0x{:X}", class_name,
+               m.id, m.descriptor, m.deser - reader.module_base());
+    *out = m;
+    return true;
+}
+
+bool request_message(std::uintptr_t session, const MessageDesc& msg,
+                     const std::uint8_t* wire, std::size_t len) {
+    if (session == 0 || msg.deser == 0 || wire == nullptr) return false;
+    if (len < 5 || len > kMessageWireMax) return false;
+    if (g_reader == nullptr) return false;
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+    g_pending = Pending{};
+    g_pending.kind = Kind::Message;
+    g_pending.session = session;
+    g_pending.msg = msg;
+    std::memcpy(g_pending.wire, wire, len);
+    g_pending.wire_len = len;
+    g_outcome = SpawnOutcome{};
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("메시지 구동 요청을 걸었다 (ID {} 길이 {}) - 게임 스레드를 기다린다",
+               msg.id, len);
+    return true;
 }
 
 bool request_give(std::uintptr_t session, std::uint32_t item_key,

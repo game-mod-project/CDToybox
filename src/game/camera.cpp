@@ -208,6 +208,9 @@ void auto_analysis_loop() {
     entity_hook_install(rtti, reader);
     // 동반자 획득 경로 메시지 캡처(Phase 1, 진단). 길들이기 때 뜬다.
     companion_capture_install(rtti, reader);
+    // 2976(아이템 사용) 구동 준비 + 명령 파일 감시(밖에서 실험을 건다).
+    companion_use_item_resolve(rtti, reader);
+    companion_command_start(reader);
     // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
     // 늑대의 한손검. 인벤토리 첫 칸이고 현지화에 이름이 있다.
     table_probe_install(rtti, reader, 1163042);
@@ -346,6 +349,7 @@ void start_auto_analysis() {
 
 void stop_auto_analysis() {
     g_stop.store(true);
+    companion_command_stop();
     if (g_auto.joinable()) g_auto.join();
 }
 

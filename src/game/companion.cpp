@@ -1,11 +1,35 @@
 #include "game/companion.h"
 
+#include <windows.h>
+
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "core/log.h"
+#include "game/grant.h"
 #include "mem/hook.h"
+
+namespace {
+// 이 코드가 든 모듈(DLL 또는 exe)의 디렉터리. dllmain 의 self_directory 와
+// 같지만 테스트·프로브도 링크할 수 있게 여기 둔다.
+std::wstring module_directory() {
+    HMODULE self = nullptr;
+    ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&module_directory), &self);
+    wchar_t buf[MAX_PATH]{};
+    const DWORD n = ::GetModuleFileNameW(self, buf, MAX_PATH);
+    std::wstring s(buf, n);
+    const std::size_t slash = s.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : s.substr(0, slash + 1);
+}
+}  // namespace
 
 namespace cdtb::game {
 
@@ -46,6 +70,23 @@ std::string hex_bytes(const std::uint8_t* p, std::size_t n, std::size_t cap) {
     }
     if (n > cap) s += " \xE2\x80\xA6";  // …
     return s;
+}
+
+bool build_use_item_wire(std::uint32_t item_key, std::uint32_t b, std::uint8_t c,
+                         std::uint32_t d, std::uint8_t* out, std::size_t cap,
+                         std::size_t* len_out) {
+    if (out == nullptr || cap < kUseItemWireLen) return false;
+    const std::uint16_t id = kUseItemByInfoId;
+    const std::uint16_t body = 13;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &item_key, 4);
+    std::memcpy(out + 9, &b, 4);
+    out[13] = c;
+    std::memcpy(out + 14, &d, 4);
+    if (len_out) *len_out = kUseItemWireLen;
+    return true;
 }
 
 // --------------------------------------------------- 캡처 훅
@@ -112,6 +153,8 @@ CDTB_COMP_DETOUR(call_quick, "부르기")
 CDTB_COMP_DETOUR(data_list, "소유목록")
 CDTB_COMP_DETOUR(after_regist, "등록후소환")
 CDTB_COMP_DETOUR(hire_response, "획득응답")
+CDTB_COMP_DETOUR(use_item, "아이템사용")
+CDTB_COMP_DETOUR(use_item_info, "아이템사용/정보")
 #undef CDTB_COMP_DETOUR
 
 // 클래스 이름 -> 서술자 vtable[2] (역직렬화). 부분일치가 여럿이면
@@ -186,11 +229,194 @@ bool companion_capture_install(const mem::Rtti& rtti,
     CDTB_HOOK("TrocTrSummonMercenaryAfterRegistAck", after_regist, "등록후소환");
     CDTB_HOOK("TrocTrResponseHiredMercenaryToTargetAck", hire_response,
               "획득응답");
+    // 아이템 사용 두 경로. 부적을 게임이 어떻게 쓰는지(본문 A·B·C·D) 배운다.
+    CDTB_HOOK("TrocTrUseItemReq", use_item, "아이템사용");
+    CDTB_HOOK("TrocTrUseItemByItemInfoReq", use_item_info, "아이템사용/정보");
 #undef CDTB_HOOK
     if (n == 0) return false;
     g_installed.store(true, std::memory_order_release);
-    log::infof("동반자 캡처 준비됨 ({}경로) - 길들이기·등록·부르기를 하면 뜬다", n);
+    log::infof("동반자 캡처 준비됨 ({}경로) - 길들이기·등록·부르기·아이템 사용을 하면 뜬다", n);
     return true;
+}
+
+// --------------------------------------------------- 2976 구동
+
+namespace {
+
+MessageDesc g_use_item_msg;
+std::atomic<bool> g_use_item_ready{false};
+
+}  // namespace
+
+bool companion_use_item_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_use_item_ready.load(std::memory_order_acquire)) return true;
+    MessageDesc m;
+    if (!resolve_message(rtti, reader, "TrocTrUseItemByItemInfoReq", &m)) {
+        return false;
+    }
+    if (m.id != kUseItemByInfoId) {
+        log::warnf("아이템 사용 메시지: ID 가 {} (기대 {})", m.id, kUseItemByInfoId);
+    }
+    g_use_item_msg = m;
+    g_use_item_ready.store(true, std::memory_order_release);
+    return true;
+}
+
+bool companion_use_item_ready() {
+    return g_use_item_ready.load(std::memory_order_acquire);
+}
+
+bool request_use_item(std::uintptr_t session, std::uint32_t item_key,
+                      std::uint32_t b, std::uint8_t c, std::uint32_t d) {
+    if (!companion_use_item_ready() || session == 0 || item_key == 0) return false;
+    std::uint8_t wire[32]{};
+    std::size_t len = 0;
+    if (!build_use_item_wire(item_key, b, c, d, wire, sizeof(wire), &len)) {
+        return false;
+    }
+    log::infof("아이템 사용 구동(2976) 요청: 키 {} B {} C 0x{:X} D {}", item_key, b,
+               c, d);
+    return request_message(session, g_use_item_msg, wire, len);
+}
+
+// --------------------------------------------------- 명령 파일
+
+namespace {
+
+std::atomic<bool> g_cmd_stop{false};
+std::thread g_cmd_thread;
+const mem::Reader* g_cmd_reader = nullptr;
+
+// 그란트 패널과 같은 규칙: 서버 세션 중 가장 유력한 것.
+std::uintptr_t pick_server_session() {
+    std::uintptr_t seen[16]{};
+    std::uint32_t hits[16]{};
+    const int n = seen_sessions(seen, hits, 16);
+    if (n == 0) return 0;
+    bool server[16]{};
+    for (int i = 0; i < n; ++i) server[i] = session_is_server(i);
+    const int pick = best_actor_index(hits, server, n);
+    if (pick < 0 || pick >= n || !server[pick]) return 0;
+    return seen[pick];
+}
+
+std::uint32_t parse_u32(const std::string& s, std::uint32_t dflt) {
+    if (s.empty()) return dflt;
+    return static_cast<std::uint32_t>(std::strtoul(s.c_str(), nullptr, 0));
+}
+
+std::vector<std::string> split_ws(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char ch : line) {
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(ch);
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+std::wstring command_path() { return module_directory() + L"cdtoybox_cmd.txt"; }
+
+std::string read_and_delete(const std::wstring& path) {
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return {};
+    std::string text;
+    LARGE_INTEGER size{};
+    if (::GetFileSizeEx(h, &size) && size.QuadPart > 0 && size.QuadPart < 65536) {
+        text.resize(static_cast<std::size_t>(size.QuadPart));
+        DWORD got = 0;
+        if (!::ReadFile(h, text.data(), static_cast<DWORD>(text.size()), &got,
+                        nullptr)) {
+            text.clear();
+        } else {
+            text.resize(got);
+        }
+    }
+    ::CloseHandle(h);
+    ::DeleteFileW(path.c_str());
+    return text;
+}
+
+void command_loop() {
+    const std::wstring path = command_path();
+    while (!g_cmd_stop.load(std::memory_order_acquire)) {
+        const std::string text = read_and_delete(path);
+        if (!text.empty()) {
+            std::size_t pos = 0;
+            while (pos < text.size()) {
+                std::size_t nl = text.find('\n', pos);
+                if (nl == std::string::npos) nl = text.size();
+                const std::string line = text.substr(pos, nl - pos);
+                pos = nl + 1;
+                if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
+                if (line[0] == '#') continue;
+                std::string reply;
+                const bool ok = companion_run_command(line, &reply);
+                log::infof("명령 [{}] -> {}{}", line, ok ? "실행" : "거부",
+                           reply.empty() ? "" : (": " + reply));
+                // 대기열은 한 번에 하나뿐이다. 다음 줄은 쿨다운 뒤에.
+                for (int i = 0; i < 25 && !g_cmd_stop.load(); ++i) ::Sleep(100);
+            }
+        }
+        for (int i = 0; i < 5 && !g_cmd_stop.load(); ++i) ::Sleep(100);
+    }
+}
+
+}  // namespace
+
+bool companion_run_command(const std::string& line, std::string* reply) {
+    const auto args = split_ws(line);
+    if (args.empty()) return false;
+    const std::string& cmd = args[0];
+    auto say = [&](const std::string& s) {
+        if (reply) *reply = s;
+    };
+    if (cmd == "give") {
+        if (args.size() < 2) { say("give <키> [개수]"); return false; }
+        const std::uint32_t key = parse_u32(args[1], 0);
+        const std::int64_t count = args.size() > 2 ? static_cast<std::int64_t>(parse_u32(args[2], 1)) : 1;
+        const std::uintptr_t session = pick_server_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!give_ready()) { say("지급 준비 안 됨"); return false; }
+        const bool ok = request_give(session, key, count, GiveExtras{});
+        say(ok ? "지급 요청" : "지급 거부(대기열/쿨다운)");
+        return ok;
+    }
+    if (cmd == "useitem") {
+        if (args.size() < 2) { say("useitem <키> [B] [C] [D]"); return false; }
+        const std::uint32_t key = parse_u32(args[1], 0);
+        const std::uint32_t b = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        const std::uint8_t c = static_cast<std::uint8_t>(
+            args.size() > 3 ? parse_u32(args[3], kUseItemByInfoKindC) : kUseItemByInfoKindC);
+        const std::uint32_t d = args.size() > 4 ? parse_u32(args[4], 0) : 0;
+        const std::uintptr_t session = pick_server_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!companion_use_item_ready()) { say("2976 미해석"); return false; }
+        const bool ok = request_use_item(session, key, b, c, d);
+        say(ok ? "사용 요청" : "사용 거부(대기열/쿨다운)");
+        return ok;
+    }
+    say("모르는 명령");
+    return false;
+}
+
+void companion_command_start(const mem::Reader& reader) {
+    if (g_cmd_thread.joinable()) return;
+    g_cmd_reader = &reader;
+    g_cmd_stop.store(false, std::memory_order_release);
+    g_cmd_thread = std::thread(command_loop);
+    log::infof("명령 파일 감시 시작: cdtoybox_cmd.txt (give / useitem)");
+}
+
+void companion_command_stop() {
+    g_cmd_stop.store(true, std::memory_order_release);
+    if (g_cmd_thread.joinable()) g_cmd_thread.join();
 }
 
 }  // namespace cdtb::game

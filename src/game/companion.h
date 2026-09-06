@@ -50,4 +50,43 @@ bool companion_capture_install(const mem::Rtti& rtti,
                                const mem::Reader& reader);
 bool companion_capture_installed();
 
+// ----------------------------------------------------------------------
+// 아이템 사용 구동 (`TrocTrUseItemByItemInfoReq`, ID 2976)
+//
+// 역직렬화(RVA 0x29373D0)가 읽는 본문 13바이트: u32 A, u32 B, u8 C, u32 D.
+// A 는 아이템(ItemInfo) 키로 추정, C 는 0x0D 를 검사한다, B·D 는 미상
+// (0 으로 시작). 컨테이너 핸들을 쓰지 않아 소켓을 막았던 핸들 월드
+// 문제가 없다. 지급한 부적을 이것으로 사용시켜 등록 경로를 캡처한다.
+inline constexpr std::uint16_t kUseItemByInfoId = 2976;
+inline constexpr std::uint8_t kUseItemByInfoKindC = 0x0D;
+inline constexpr std::size_t kUseItemWireLen = 5 + 13;
+
+// 머리 5바이트 + 본문 13바이트를 조립한다. out 은 kUseItemWireLen 이상.
+bool build_use_item_wire(std::uint32_t item_key, std::uint32_t b, std::uint8_t c,
+                         std::uint32_t d, std::uint8_t* out, std::size_t cap,
+                         std::size_t* len_out);
+
+// 2976 서술자·역직렬화를 해석해 둔다(한 번). 성공하면 true.
+bool companion_use_item_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
+bool companion_use_item_ready();
+
+// 세션의 게임 스레드에서 2976 을 구동한다(grant 의 대기열 재사용).
+bool request_use_item(std::uintptr_t session, std::uint32_t item_key,
+                      std::uint32_t b = 0, std::uint8_t c = kUseItemByInfoKindC,
+                      std::uint32_t d = 0);
+
+// ----------------------------------------------------------------------
+// 명령 파일 (DLL 옆 cdtoybox_cmd.txt)
+//
+// 오버레이를 누르지 않고도 밖에서 실험을 걸 수 있게 한다. 한 줄에
+// 명령 하나. 읽으면 파일을 지운다.
+//   give <아이템키> [개수]
+//   useitem <아이템키> [B] [C] [D]      (C·D 는 10진 또는 0x 16진)
+//   hire <액터핸들>                     (2338, 아직 없음 - 예약)
+// 세션은 그란트 패널과 같은 규칙(서버 세션 중 가장 유력한 것)으로 고른다.
+void companion_command_start(const mem::Reader& reader);
+void companion_command_stop();
+// 명령 한 줄을 처리한다(시험용으로 공개). 실행했으면 true.
+bool companion_run_command(const std::string& line, std::string* reply);
+
 }  // namespace cdtb::game

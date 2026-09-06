@@ -48,3 +48,38 @@ TEST(companion_hex_bytes_caps_and_marks_overflow) {
     CHECK_EQ(hex_bytes(p, 4, 2), std::string("00 AB \xE2\x80\xA6"));
     CHECK_EQ(hex_bytes(p, 0, 8), std::string(""));
 }
+
+TEST(companion_use_item_wire_layout) {
+    using cdtb::game::build_use_item_wire;
+    std::uint8_t w[32]{};
+    std::size_t len = 0;
+    CHECK(build_use_item_wire(1003843, 0, 0x0D, 0, w, sizeof(w), &len));
+    CHECK_EQ(len, static_cast<std::size_t>(18));
+    // 머리: ID 2976 = 0x0BA0, 본문길이 13
+    CHECK_EQ(w[0], static_cast<std::uint8_t>(0xA0));
+    CHECK_EQ(w[1], static_cast<std::uint8_t>(0x0B));
+    CHECK_EQ(w[2], static_cast<std::uint8_t>(0));
+    CHECK_EQ(w[3], static_cast<std::uint8_t>(13));
+    CHECK_EQ(w[4], static_cast<std::uint8_t>(0));
+    // 본문: A=1003843 (0x000F5143), B=0, C=0x0D, D=0
+    CHECK_EQ(w[5], static_cast<std::uint8_t>(0x43));
+    CHECK_EQ(w[6], static_cast<std::uint8_t>(0x51));
+    CHECK_EQ(w[7], static_cast<std::uint8_t>(0x0F));
+    CHECK_EQ(w[8], static_cast<std::uint8_t>(0x00));
+    CHECK_EQ(w[13], static_cast<std::uint8_t>(0x0D));
+    std::uint16_t id = 0, body = 0;
+    CHECK(cdtb::game::decode_message_header(w, len, &id, &body));
+    CHECK_EQ(id, static_cast<std::uint16_t>(2976));
+    CHECK_EQ(body, static_cast<std::uint16_t>(13));
+    // 버퍼가 작으면 거부
+    CHECK(!build_use_item_wire(1, 0, 0x0D, 0, w, 10, &len));
+}
+
+TEST(companion_command_parser_rejects_unknown) {
+    std::string reply;
+    CHECK(!cdtb::game::companion_run_command("frobnicate 1", &reply));
+    CHECK(!cdtb::game::companion_run_command("", &reply));
+    // 인자 부족
+    CHECK(!cdtb::game::companion_run_command("useitem", &reply));
+    CHECK(!cdtb::game::companion_run_command("give", &reply));
+}
