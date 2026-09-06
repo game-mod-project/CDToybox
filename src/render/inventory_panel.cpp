@@ -364,8 +364,8 @@ void do_export(const mem::Reader& reader) {
     int skipped = 0;
     for (const auto& r : g_rows) {
         if (r.key == 0) continue;   // 대응표에 없는 순번은 지급 못 함
-        // 특수/어비스 계열 동적 아이템은 키가 비정상적으로 크다(391M+).
-        // 지급 경로로 재생성이 안 돼 깨진 아이템→크래시라 담지 않는다.
+        // 키가 큰 별도 콘텐츠 클래스(판금 세트·장신구·도구 등, 키 10M+)는
+        // 치트 지급으로 재생성이 안 돼 깨진 아이템→크래시라 담지 않는다.
         if (r.key >= game::kMaxGrantableItemKey) {
             ++skipped;
             continue;
@@ -636,8 +636,8 @@ void draw_inventory_panel(bool* open) {
                 ImGui::TextUnformatted(r.text.sockets.c_str());
             }
             ImGui::TableNextColumn();
-            // 키가 비정상적으로 큰 특수/어비스 동적 아이템은 지급으로
-            // 재생성이 안 돼 깨진 아이템→크래시라 아예 막는다.
+            // 키가 큰 별도 콘텐츠 클래스(판금 세트·장신구·도구 등, 키 10M+)는
+            // 치트 지급으로 재생성이 안 돼 깨진 아이템→크래시라 막는다.
             const bool grantable =
                 r.key != 0 && r.key < game::kMaxGrantableItemKey;
             // 제자리 수정은 게임이 되쓴다. 대신 값을 지급 칸에 채워
