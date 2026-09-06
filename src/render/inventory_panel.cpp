@@ -14,6 +14,7 @@
 
 #include "game/inventory.h"
 #include "game/equip.h"
+#include "game/grant.h"
 #include "mem/reader.h"
 #include "game/items.h"
 #include "game/stash.h"
@@ -360,8 +361,15 @@ void do_export(const mem::Reader& reader) {
     game::Stash out;
     const int inv_set = out.add_set("인벤토리");
     int inv_n = 0;
+    int skipped = 0;
     for (const auto& r : g_rows) {
         if (r.key == 0) continue;   // 대응표에 없는 순번은 지급 못 함
+        // 특수/어비스 계열 동적 아이템은 키가 비정상적으로 크다(391M+).
+        // 지급 경로로 재생성이 안 돼 깨진 아이템→크래시라 담지 않는다.
+        if (r.key >= game::kMaxGrantableItemKey) {
+            ++skipped;
+            continue;
+        }
         game::StashEntry e;
         e.key = r.key;
         e.count = r.count;
@@ -390,6 +398,10 @@ void do_export(const mem::Reader& reader) {
         for (const auto& w : worn) {
             const auto it = id2key.find(w.key);
             if (it == id2key.end()) continue;
+            if (it->second >= game::kMaxGrantableItemKey) {
+                ++skipped;
+                continue;
+            }
             game::StashEntry e;
             e.key = it->second;
             e.count = 1;
@@ -407,17 +419,18 @@ void do_export(const mem::Reader& reader) {
         g_io_status = "파일을 쓰지 못했습니다";
         return;
     }
-    char buf[192];
+    char buf[224];
     if (worn_n == 0 && !equip_ok) {
         std::snprintf(buf, sizeof(buf),
                       "내보냈습니다: 인벤 %d개 (착용 미발견 - 잠시 후 다시 "
-                      "내보내면 착용도 포함) -> cdtoybox_inventory.txt",
-                      inv_n);
+                      "내보내면 착용도 포함, 지급불가 %d개 제외)",
+                      inv_n, skipped);
     } else {
         std::snprintf(
             buf, sizeof(buf),
-            "내보냈습니다: 인벤 %d개 + 착용 %d개 -> cdtoybox_inventory.txt",
-            inv_n, worn_n);
+            "내보냈습니다: 인벤 %d개 + 착용 %d개 (지급불가 %d개 제외) -> "
+            "cdtoybox_inventory.txt",
+            inv_n, worn_n, skipped);
     }
     g_io_status = buf;
 }
@@ -623,9 +636,13 @@ void draw_inventory_panel(bool* open) {
                 ImGui::TextUnformatted(r.text.sockets.c_str());
             }
             ImGui::TableNextColumn();
+            // 키가 비정상적으로 큰 특수/어비스 동적 아이템은 지급으로
+            // 재생성이 안 돼 깨진 아이템→크래시라 아예 막는다.
+            const bool grantable =
+                r.key != 0 && r.key < game::kMaxGrantableItemKey;
             // 제자리 수정은 게임이 되쓴다. 대신 값을 지급 칸에 채워
             // 주고, 고쳐서 새로 지급하게 한다.
-            ImGui::BeginDisabled(r.key == 0);
+            ImGui::BeginDisabled(!grantable);
             if (ImGui::SmallButton("지급 칸으로")) {
                 // 소켓은 옮기지 않는다 - 지급 경로로는 못 넣는다.
                 set_grant_item(r.key, r.count, r.temper, r.sharpness);
@@ -637,7 +654,7 @@ void draw_inventory_panel(bool* open) {
             // 두 곳이 어긋난다.
             ImGui::SameLine();
             const int set = stash_open_set();
-            ImGui::BeginDisabled(r.key == 0 || set < 0);
+            ImGui::BeginDisabled(!grantable || set < 0);
             if (ImGui::SmallButton("보관함에")) {
                 game::StashEntry e;
                 e.key = r.key;

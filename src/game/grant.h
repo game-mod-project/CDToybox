@@ -355,6 +355,15 @@ bool fill_item_value(void* buf, std::size_t n, std::uint32_t item_key,
 constexpr std::size_t kItemValueMinSize = 0x1B4;
 constexpr std::size_t kItemValueSize = 0x400;
 
+// 지급 가능한 아이템 키의 상한.
+//
+// 실측 2026-09-06: 아이템 표의 정상 키는 전부 ~1.52M 미만인데, 특수/동적
+// 항목 몇 개가 391M~1.56B 대의 키로 카탈로그에 섞여 들어온다. 그런 키를
+// 지급하면 게임의 생성자는 통과시키지만("지급 끝") 깨진 아이템이 인벤토리에
+// 쌓여 잠시 뒤 크래시했다. 정상 키의 상한(~1.5M)보다 훨씬 위, 쓰레기 키
+// (391M+)보다 훨씬 아래인 10M 로 자른다. 부르는 쪽(지급 큐)에서 미리 거른다.
+constexpr std::uint32_t kMaxGrantableItemKey = 10'000'000u;
+
 // 바닥이 아니라 인벤토리로 바로 넣는다.
 // (CreateItemFromTrItemValueCheatReq, ID 2944)
 //
