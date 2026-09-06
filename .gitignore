@@ -9,3 +9,11 @@ out/
 *.lib
 *.obj
 compile_commands.json
+
+# 파이썬 도구 부산물
+__pycache__/
+cheat_report.txt
+
+# 도구 상태 (추적 안 함)
+.omc/
+.semgrep/
