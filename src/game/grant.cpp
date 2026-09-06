@@ -1652,17 +1652,15 @@ void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
 
     // 처리기가 조용히 실패하므로, 그 판정 경로를 그대로 재현해 어디서
     // 빠지는지 먼저 로그로 남긴다.
-    CharTrace t;
-    const bool trace_ok =
-        trace_char_path(session, key, g_reader->module_base(), &t);
-    if (!trace_ok) {
-        log::warnf("[추적] {}단계에서 예외 (스포너 0x{:X})", t.step, t.spawner);
-    } else {
-        log::infof("[추적] 스포너 0x{:X} 컨텍스트+0x10={} 게이트객체 0x{:X} "
-                   "게이트결과={} 키조회레코드 0x{:X} 순번={}",
-                   t.spawner, t.ctx_byte, t.gate, t.gate_ok, t.record,
-                   t.ordinal);
-    }
+    // 추적 재현은 부르지 않는다. 게임 함수를 우리가 직접 호출하는
+    // 방식이라, 주소나 인자가 어긋나면 그 안에서 상태가 깨진다 -
+    // 실측 2026-09-06: 하드코딩된 주소가 밀린 것을 고쳐 다시 돌렸다가
+    // 게임이 통째로 죽었다. 예외 가드는 우리 스레드의 접근 위반만
+    // 잡을 뿐, 게임 함수 안에서 벌어진 일은 못 되돌린다.
+    //
+    // 이 관문 값을 보려면 재현하지 말고 그 함수에 **수동 훅**을 걸어
+    // 원본이 돌려준 것을 읽어야 한다(소환 작업 추적과 같은 방식).
+    // trace_char_path 는 코드로만 남겨 둔다.
 
     std::uint64_t packet[8]{};
     packet[0] = static_cast<std::uint64_t>(session);
