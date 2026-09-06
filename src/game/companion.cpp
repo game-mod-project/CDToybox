@@ -722,6 +722,33 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         say(ok ? "사용 요청" : "사용 거부(대기열/쿨다운)");
         return ok;
     }
+    if (cmd == "spawnchar") {
+        // 캐릭터 키로 개체를 내 앞에 스폰한다(SpawnCharacterCheatReq,
+        // ID 2510). 근처에 없는 종을 획득하려면 먼저 불러와야 한다.
+        //
+        // 이 치트는 몸통이 살아 있다 - 역직렬화(RVA 0x28F1530)가
+        // 본문을 읽은 뒤 0x2B6E530 을 부른다. 용병 치트 3종이
+        // 비어 있던 것과 다르다(2026-09-06 확인).
+        if (args.size() < 2) { say("spawnchar <캐릭터키> [B] [플래그]"); return false; }
+        const std::uint32_t key = parse_u32(args[1], 0);
+        if (key == 0) { say("키가 0이다"); return false; }
+        const std::uint32_t b = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        const std::uint8_t flag = static_cast<std::uint8_t>(
+            args.size() > 3 ? parse_u32(args[3], 0) : 0);
+        float pos[3]{};
+        if (g_position_fn == nullptr || !g_position_fn(pos)) {
+            say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
+            return false;
+        }
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!char_spawn_ready()) { say("2510 미해석"); return false; }
+        log::infof("캐릭터 소환: 키 {} B {} 플래그 {} 좌표 ({:.1f}, {:.1f}, {:.1f})",
+                   key, b, flag, pos[0], pos[1], pos[2]);
+        const bool ok = request_char_spawn(session, key, b, flag, pos);
+        say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
     if (cmd == "summon") {
         if (args.size() < 2) { say("summon <용병번호> [x y z]"); return false; }
         const std::uint64_t no = std::strtoull(args[1].c_str(), nullptr, 0);
