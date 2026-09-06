@@ -444,6 +444,47 @@ bool build_inv_context(const mem::Rtti& rt, const mem::Reader& reader,
     return true;
 }
 
+// 인벤토리에서 **열린 소켓**을 가진 레코드를 찾아 덤프한다(both-realms 쓰기
+// 실측 대상 선정용). 열림 = 소켓 raw[4] != 0xFF.
+void cmd_invsock(const mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_inventory(rt, reader)) {
+        std::printf("인벤토리 컴포넌트 못 찾음\n");
+        return;
+    }
+    const std::uintptr_t comp = game::inventory_component();
+    std::vector<game::InventoryContainer> conts;
+    if (!game::read_inventory_containers(reader, comp, &conts)) {
+        std::printf("컨테이너 못 읽음\n");
+        return;
+    }
+    int found = 0;
+    for (const auto& c : conts) {
+        std::vector<game::InventoryRecord> recs;
+        if (!game::read_inventory_records(reader, c, &recs)) continue;
+        for (const auto& rec : recs) {
+            std::vector<game::InventorySocket> socks;
+            if (!game::read_inventory_sockets(reader, rec, &socks)) continue;
+            bool has_open = false;
+            for (const auto& s : socks) {
+                if (s.raw[4] != 0xFF) { has_open = true; break; }
+            }
+            if (!has_open) continue;
+            std::printf("종류%u rec=0x%llX inst=%llu 순번=%u sockptr=0x%llX cnt=%u\n",
+                        c.kind, (unsigned long long)rec.address,
+                        (unsigned long long)rec.instance_id, rec.index,
+                        (unsigned long long)rec.sockets, rec.socket_count);
+            for (std::size_t i = 0; i < socks.size(); ++i) {
+                const auto& s = socks[i];
+                std::printf("   [%zu] %02X %02X %02X %02X %02X %02X  %s\n", i,
+                            s.raw[0], s.raw[1], s.raw[2], s.raw[3], s.raw[4],
+                            s.raw[5], s.raw[4] == 0xFF ? "잠김" : "열림");
+            }
+            if (++found >= 12) { std::printf("(멈춤)\n"); return; }
+        }
+    }
+    std::printf("열린 소켓 아이템 %d개\n", found);
+}
+
 void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
                  const Remote& r, int argc, char** argv) {
     // invlist raw : 아직 뜻을 모르는 칸까지 낸다.
@@ -3192,6 +3233,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "aob") { cmd_aob(rt, reader, argc, argv); return 0; }
+    if (cmd == "invsock") { cmd_invsock(rt, reader); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {
