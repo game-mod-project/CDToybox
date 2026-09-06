@@ -80,6 +80,7 @@ std::uint64_t g_sess_last[kSeenCap]{};
 std::atomic<int> g_sess_count{0};
 // 구동이 죽은 세션. 같은 자리로 또 보내면 또 죽는다.
 std::atomic<std::uintptr_t> g_drive_fault{0};
+
 std::atomic<int> g_seen_count{0};
 
 // 바닥 스폰. 인자는 전부 포인터다 - 디스어셈블에서 확인했다.
@@ -175,6 +176,26 @@ void run_message(std::uintptr_t session, const MessageDesc& msg,
 
 Pending g_pending;
 std::atomic<bool> g_has_pending{false};
+
+// 요청을 건 시각. 게임 스레드가 집어 가지 않으면 대기열이 영영 막힌다
+// - 실측 2026-09-06: 메뉴 화면에서 건 요청 하나가 6분 넘게 남아 그 뒤
+// 모든 요청이 거부됐다. 실행 지점은 월드가 돌 때만 불리므로, 오래
+// 묵은 요청은 버리고 새 요청을 받는다.
+std::atomic<std::uint64_t> g_pending_at{0};
+constexpr std::uint64_t kPendingMaxMs = 15000;
+
+// 묵은 요청이면 버린다. 버렸으면 true.
+bool drop_stale_pending() {
+    if (!g_has_pending.load(std::memory_order_acquire)) return false;
+    const std::uint64_t at = g_pending_at.load(std::memory_order_acquire);
+    if (at == 0 || GetTickCount64() - at < kPendingMaxMs) return false;
+    if (!g_has_pending.exchange(false, std::memory_order_acq_rel)) return false;
+    log::warnf("대기열: {}ms 동안 실행되지 않은 요청을 버린다 - 월드가 돌고 "
+               "있어야 실행된다",
+               GetTickCount64() - at);
+    return true;
+}
+
 
 // 게임 함수를 후킹 안에서 부르면, 그 후킹이 걸린 자리가 이미 락을
 // 쥐고 있을 때 교착한다 - 실측에서 세 번째 호출이 돌아오지 않고
@@ -1748,6 +1769,7 @@ bool endurance_ready() {
 bool request_endurance(std::uintptr_t session, std::uint16_t a,
                        std::uint16_t b) {
     if (!endurance_ready() || session == 0) return false;
+    drop_stale_pending();
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
@@ -1760,6 +1782,7 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
     g_pending.a = a;
     g_pending.b = b;
     g_outcome = SpawnOutcome{};
+    g_pending_at.store(GetTickCount64(), std::memory_order_release);
     g_has_pending.store(true, std::memory_order_release);
     log::infof("내구도 요청을 걸었다");
     return true;
@@ -1909,6 +1932,7 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
     if (len < 5 || len > kMessageWireMax) return false;
     if (g_reader == nullptr) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
+    drop_stale_pending();
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
@@ -1922,6 +1946,7 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
     std::memcpy(g_pending.wire, wire, len);
     g_pending.wire_len = len;
     g_outcome = SpawnOutcome{};
+    g_pending_at.store(GetTickCount64(), std::memory_order_release);
     g_has_pending.store(true, std::memory_order_release);
     log::infof("메시지 구동 요청을 걸었다 (ID {} 길이 {}) - 게임 스레드를 기다린다",
                msg.id, len);
@@ -1933,6 +1958,7 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     if (!give_ready()) return false;
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
+    drop_stale_pending();
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
@@ -1956,6 +1982,7 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     safe.socket_count = 0;
     g_pending.extras = safe;
     g_outcome = SpawnOutcome{};
+    g_pending_at.store(GetTickCount64(), std::memory_order_release);
     g_has_pending.store(true, std::memory_order_release);
     log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}) -"
                " 게임 스레드를 기다린다",
@@ -1969,6 +1996,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
         return false;
     }
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
+    drop_stale_pending();
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
@@ -1985,6 +2013,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     g_pending.pos[1] = pos[1];
     g_pending.pos[2] = pos[2];
     g_outcome = SpawnOutcome{};
+    g_pending_at.store(GetTickCount64(), std::memory_order_release);
     g_has_pending.store(true, std::memory_order_release);
     log::infof("바닥 스폰 요청을 걸었다 - 게임 스레드를 기다린다");
     return true;
@@ -1996,6 +2025,7 @@ bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
         return false;
     }
     if (char_key == 0 || session == 0) return false;
+    drop_stale_pending();
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
@@ -2013,6 +2043,7 @@ bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
     g_pending.pos[1] = pos[1];
     g_pending.pos[2] = pos[2];
     g_outcome = SpawnOutcome{};
+    g_pending_at.store(GetTickCount64(), std::memory_order_release);
     g_has_pending.store(true, std::memory_order_release);
     log::infof("캐릭터 소환 요청을 걸었다 (키 {} B {} 플래그 {}) -"
                " 게임 스레드를 기다린다",
