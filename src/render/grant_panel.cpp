@@ -1,7 +1,10 @@
 #include "render/grant_panel.h"
 
+#include <windows.h>  // GetTickCount64
+
 #include <imgui.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -198,8 +201,19 @@ void draw_grant_panel(bool* open) {
     }
 
     bool server[16]{};
-    for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
-    if (!g_picked_by_hand) g_pick = game::best_actor_index(hits, server, n);
+    std::uint64_t last[16]{};
+    for (int i = 0; i < n; ++i) {
+        server[i] = game::session_is_server(i);
+        last[i] = game::session_last_seen(i);
+    }
+    // 누적 호출 1위가 아니라 살아 있는 세션을 고른다. 다른 세이브를
+    // 로드하면 옛 세션 주소가 풀리는데 표에 남아 계속 뽑혀 "사슬이
+    // 끊겼다" 로 지급이 조용히 실패한다(실측 2026-09-06).
+    if (!g_picked_by_hand) {
+        g_pick = game::best_live_session_index(
+            hits, server, last, n, ::GetTickCount64(), game::kSessionFreshMs);
+        if (g_pick < 0) g_pick = 0;   // 손 선택 UI 를 위해 유효 인덱스 유지
+    }
 
     // --- 무엇을 줄 것인가 -------------------------------------------
     const game::ItemCatalogEntry* item = selected_item();

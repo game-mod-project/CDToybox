@@ -190,8 +190,18 @@ void stash_queue_pump() {
         std::uint32_t hits[16]{};
         const int n = game::seen_sessions(seen, hits, 16);
         bool server[16]{};
-        for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
-        const int pick = game::best_actor_index(hits, server, n);
+        std::uint64_t last[16]{};
+        for (int i = 0; i < n; ++i) {
+            server[i] = game::session_is_server(i);
+            last[i] = game::session_last_seen(i);
+        }
+        // 누적 호출 횟수만 보면 안 된다. 세션 표는 지워지지 않으므로
+        // 다른 세이브를 로드(재접속)하면 옛 세션이 1위로 남아 계속
+        // 뽑히고, 그 풀린 포인터로 지급하면 "사슬이 끊겼다" 로 조용히
+        // 실패한다(실측 2026-09-06, 세이브 간 이월에서 바로 이 케이스).
+        // 살아 있는 세션만 고른다.
+        const int pick = game::best_live_session_index(
+            hits, server, last, n, ::GetTickCount64(), game::kSessionFreshMs);
         if (pick >= 0) {
             const auto& e = g_queue[g_queue_at];
             // 담금질은 아이템마다 상한이 있고 넘으면 게임이 조용히

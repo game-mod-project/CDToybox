@@ -382,8 +382,9 @@ void do_export(const mem::Reader& reader) {
     // 착용 장비: 순번을 지급 키로 바꿔 아이템만 담는다(연마·소켓·염색은
     // 지급으로 이월 불가 - 새 세이브에서 장착 후 장비 에디터로).
     int worn_n = 0;
+    const bool equip_ok = game::equip_ready();
     std::vector<game::WornPiece> worn;
-    if (game::equip_snapshot(&worn) && !worn.empty()) {
+    if (equip_ok && game::equip_snapshot(&worn) && !worn.empty()) {
         const auto id2key = build_id2key();
         const int worn_set = out.add_set("착용");
         for (const auto& w : worn) {
@@ -395,6 +396,10 @@ void do_export(const mem::Reader& reader) {
             out.set_at(worn_set)->items.push_back(std::move(e));
             ++worn_n;
         }
+    } else if (!equip_ok) {
+        // 아직 착용 장비를 못 찾았다 - 다음 분석 주기에 찾도록 요청만
+        // 남긴다. 인벤토리 export 자체는 그대로 진행한다.
+        game::equip_request_refresh();
     }
 
     const std::wstring p = inv_file_path();
@@ -402,10 +407,18 @@ void do_export(const mem::Reader& reader) {
         g_io_status = "파일을 쓰지 못했습니다";
         return;
     }
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  "내보냈습니다: 인벤 %d개 + 착용 %d개 -> cdtoybox_inventory.txt",
-                  inv_n, worn_n);
+    char buf[192];
+    if (worn_n == 0 && !equip_ok) {
+        std::snprintf(buf, sizeof(buf),
+                      "내보냈습니다: 인벤 %d개 (착용 미발견 - 잠시 후 다시 "
+                      "내보내면 착용도 포함) -> cdtoybox_inventory.txt",
+                      inv_n);
+    } else {
+        std::snprintf(
+            buf, sizeof(buf),
+            "내보냈습니다: 인벤 %d개 + 착용 %d개 -> cdtoybox_inventory.txt",
+            inv_n, worn_n);
+    }
     g_io_status = buf;
 }
 
