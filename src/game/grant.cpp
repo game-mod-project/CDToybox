@@ -1126,6 +1126,23 @@ int best_live_session_index(const std::uint32_t* hits, const bool* is_server,
     return best;
 }
 
+bool session_looks_live(const mem::Reader& reader, std::uintptr_t session) {
+    if (session == 0) return false;
+    // 사용자 공간 주소인가. 커널 쪽이나 정렬이 어긋난 값은 세션이
+    // 아니다.
+    if (session < 0x10000 || session >= 0x7FFFFFFFFFFF) return false;
+    if ((session & 7) != 0) return false;
+    std::uintptr_t gate = 0;
+    if (!reader.read_value(session + 0x88, &gate)) return false;
+    if (gate < 0x10000 || gate >= 0x7FFFFFFFFFFF) return false;
+    if ((gate & 7) != 0) return false;
+    // 처리기는 여기서 바이트 하나를 본다. 읽히지 않으면 그 자리에서
+    // 죽는다 - 우리가 먼저 읽어 본다.
+    std::uint8_t flag = 0;
+    if (!reader.read_value(gate + 1, &flag)) return false;
+    return true;
+}
+
 std::uintptr_t drive_fault_session() {
     return g_drive_fault.load(std::memory_order_acquire);
 }

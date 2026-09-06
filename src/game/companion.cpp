@@ -490,6 +490,12 @@ std::uintptr_t pick_server_session_impl() {
         return 0;
     }
     const std::uintptr_t session = seen[pick];
+    // 시각만으로는 멈춘 게임과 죽은 세션이 구별되지 않는다. 처리기가
+    // 만지는 자리를 직접 읽어 본다.
+    if (g_cmd_reader != nullptr && !session_looks_live(*g_cmd_reader, session)) {
+        log::warnf("세션 0x{:X} 는 살아 있지 않다 - 구동하지 않는다", session);
+        return 0;
+    }
     // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
     if (session != 0 && session != drive_fault_session()) clear_drive_fault();
     return session;
