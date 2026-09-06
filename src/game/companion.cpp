@@ -440,6 +440,48 @@ bool build_hire_wire(std::uint32_t handle, std::uint8_t flag, std::uint8_t* out,
 
 bool hire_target_ready() { return find_message(kHireToTargetId) != nullptr; }
 
+namespace {
+PositionFn g_position_fn = nullptr;
+}  // namespace
+
+void companion_set_position_source(PositionFn fn) { g_position_fn = fn; }
+
+bool complete_summon_ready() {
+    return find_message(kCompleteSummonId) != nullptr;
+}
+
+bool build_complete_summon_wire(std::uint64_t merc_no, const float pos[3],
+                                std::uint8_t* out, std::size_t cap,
+                                std::size_t* len_out) {
+    constexpr std::size_t kLen = 5 + 8 + 12;
+    if (out == nullptr || pos == nullptr || cap < kLen) return false;
+    const std::uint16_t id = kCompleteSummonId;
+    const std::uint16_t body = 8 + 12;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &merc_no, 8);
+    std::memcpy(out + 13, pos, 12);
+    if (len_out != nullptr) *len_out = kLen;
+    return true;
+}
+
+bool request_complete_summon(std::uintptr_t session, std::uint64_t merc_no,
+                             const float pos[3]) {
+    const MessageDesc* m = find_message(kCompleteSummonId);
+    if (m == nullptr || session == 0 || merc_no == 0 || pos == nullptr) {
+        return false;
+    }
+    std::uint8_t wire[32]{};
+    std::size_t len = 0;
+    if (!build_complete_summon_wire(merc_no, pos, wire, sizeof(wire), &len)) {
+        return false;
+    }
+    log::infof("등록 후 소환: 번호 {} 좌표 ({:.1f}, {:.1f}, {:.1f})", merc_no,
+               pos[0], pos[1], pos[2]);
+    return request_message(session, *m, wire, len);
+}
+
 bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
                          std::uint8_t flag) {
     const MessageDesc* m = find_message(kHireToTargetId);
@@ -603,6 +645,30 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         if (!companion_use_item_ready()) { say("2976 미해석"); return false; }
         const bool ok = request_use_item(session, key, b, c, d);
         say(ok ? "사용 요청" : "사용 거부(대기열/쿨다운)");
+        return ok;
+    }
+    if (cmd == "summon") {
+        if (args.size() < 2) { say("summon <용병번호> [x y z]"); return false; }
+        const std::uint64_t no = std::strtoull(args[1].c_str(), nullptr, 0);
+        if (no == 0) { say("번호가 0이다"); return false; }
+        float pos[3]{};
+        if (args.size() >= 5) {
+            for (int i = 0; i < 3; ++i) {
+                pos[i] = std::strtof(args[static_cast<std::size_t>(2 + i)].c_str(),
+                                     nullptr);
+            }
+        } else {
+            // 바닥 스폰이 쓰는 것과 같은 자리 - 카메라 초점이다.
+            if (g_position_fn == nullptr || !g_position_fn(pos)) {
+                say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
+                return false;
+            }
+        }
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!complete_summon_ready()) { say("2962 미해석"); return false; }
+        const bool ok = request_complete_summon(session, no, pos);
+        say(ok ? "등록 후 소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
     }
     if (cmd == "msg") {

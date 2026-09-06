@@ -95,6 +95,33 @@ bool build_use_item_wire(std::uint32_t item_key, std::uint32_t b, std::uint8_t c
 bool companion_use_item_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
 bool companion_use_item_ready();
 
+// 등록 뒤 소환을 마무리한다(TrocTrCompleteCalculateSummonAfterRegistReq).
+//
+// 획득(2338)만으로는 목록에 들어가기만 하고 소환이 안 된다 - 실측
+// 2026-09-06: 같은 날 추가한 진돗개·참새가 목록에는 있는데 소환에
+// 아무 반응이 없었다. 부적 경로에는 등록 뒤 이 단계가 있고
+// (SummonMercenaryAfterRegistAck 가 그 응답이다) 우리는 그것을
+// 건너뛰고 있었다.
+//
+// 본문은 u64 용병번호 + float3 좌표다(deser RVA 0x2965E40 에서
+// 8바이트 그리고 12바이트를 읽는다). 좌표는 카메라 초점을 쓴다 -
+// 바닥 스폰이 쓰는 것과 같은 자리다.
+//
+// 주의: 작업 함수가 0 이 아닌 코드를 돌려주면 게임이 오류 1013 을
+// 만들어 로그아웃한다. 번호가 유효할 때만 부를 것.
+inline constexpr std::uint16_t kCompleteSummonId = 2962;
+// 좌표를 어디서 얻을지는 밖에서 준다. 카메라 코드는 시험 대상에
+// 링크되지 않으므로 이쪽이 그것을 직접 부르면 안 된다.
+using PositionFn = bool (*)(float out[3]);
+void companion_set_position_source(PositionFn fn);
+
+bool complete_summon_ready();
+bool build_complete_summon_wire(std::uint64_t merc_no, const float pos[3],
+                                std::uint8_t* out, std::size_t cap,
+                                std::size_t* len_out);
+bool request_complete_summon(std::uintptr_t session, std::uint64_t merc_no,
+                             const float pos[3]);
+
 // 세션의 게임 스레드에서 2976 을 구동한다(grant 의 대기열 재사용).
 bool request_use_item(std::uintptr_t session, std::uint32_t item_key,
                       std::uint32_t b = 0, std::uint8_t c = kUseItemByInfoKindC,

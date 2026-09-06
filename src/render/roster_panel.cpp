@@ -236,6 +236,11 @@ void draw_nearby_tab() {
     ImGui::Text("%zu / %zu 액터", view.size(), all.size());
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 액터 주소가 복사됩니다");
+    // 실측 2026-09-06: 획득한 개체는 그 자리에서는 목록에만 들어가고
+    // 소환에 아무 반응이 없다. 세이브/로드를 한 번 하면 정상이 된다.
+    // 등록 기록은 바로 생기지만 실행 시점 상태는 월드를 다시 불러올
+    // 때 완성되는 것으로 보인다.
+    ImGui::TextDisabled("획득한 개체는 세이브/로드 후에 소환됩니다");
 
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).
@@ -347,8 +352,12 @@ void draw_nearby_tab() {
                 }
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered() && can) {
-                    ImGui::SetTooltip("이 개체를 동반자로 등록합니다. 되돌리려면 "
-                                      "게임의 반려동물 풀어주기를 쓰세요.");
+                    ImGui::SetTooltip(
+                        "이 개체를 동반자로 등록합니다.
+"
+                        "세이브/로드를 한 번 해야 소환할 수 있습니다.
+"
+                        "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
                 }
                 ImGui::PopID();
             }
