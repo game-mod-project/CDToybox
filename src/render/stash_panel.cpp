@@ -229,18 +229,6 @@ std::uintptr_t pick_give_session() {
 // 부른다 - 보관함 창을 열지 않아도 지급이 진행된다.
 void stash_queue_pump() {
     if (g_queue_at < g_queue.size() && !game::spawn_pending()) {
-        // 쓰레기 키(특수/동적 항목이 카탈로그에 섞인 것)는 지급하면
-        // 깨진 아이템이 쌓여 크래시한다. 지급 전에 걸러 큐만 넘긴다 -
-        // 세션 유무와 무관하게 먼저 처리한다(옛 파일도 안전하게).
-        while (g_queue_at < g_queue.size() &&
-               (g_queue[g_queue_at].key == 0 ||
-                g_queue[g_queue_at].key >= game::kMaxGrantableItemKey)) {
-            log::warnf("지급 건너뜀: 비정상 아이템 키 {}",
-                       g_queue[g_queue_at].key);
-            ++g_queue_at;
-        }
-        if (g_queue_at >= g_queue.size()) return;
-
         const std::uintptr_t session = pick_give_session();
         if (session != 0) {
             const auto& e = g_queue[g_queue_at];
