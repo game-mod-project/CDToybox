@@ -1,5 +1,7 @@
 #include "render/inventory_panel.h"
 
+#include <windows.h>
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <vector>
 
 #include "game/inventory.h"
+#include "game/inv_io.h"
 #include "mem/reader.h"
 #include "game/items.h"
 #include "game/stash.h"
@@ -66,6 +69,59 @@ int g_containers = 0;
 // 뒤에는 g_rows 를 건드리지 않는다.
 int g_sort_col = -1;
 bool g_sort_asc = true;
+
+// Export/Import 결과 한 줄. 버튼을 누른 뒤 무슨 일이 났는지 남긴다.
+std::string g_io_status;
+
+// 파일은 DLL 옆에 둔다(보관함·아이콘 아틀라스와 같은 자리).
+std::wstring inv_file_path() {
+    HMODULE self = nullptr;
+    if (!::GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&inv_file_path), &self)) {
+        return {};
+    }
+    wchar_t path[MAX_PATH]{};
+    const DWORD n = ::GetModuleFileNameW(self, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    std::wstring s(path, n);
+    const auto slash = s.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return {};
+    return s.substr(0, slash + 1) + L"cdtoybox_inventory.txt";
+}
+
+bool write_text_file(const std::wstring& p, const std::string& text) {
+    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD wrote = 0;
+    const bool ok = ::WriteFile(h, text.data(),
+                                static_cast<DWORD>(text.size()), &wrote,
+                                nullptr) != 0;
+    ::CloseHandle(h);
+    return ok && wrote == text.size();
+}
+
+bool read_text_file(const std::wstring& p, std::string* out) {
+    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size{};
+    bool ok = false;
+    if (::GetFileSizeEx(h, &size) && size.QuadPart > 0 &&
+        size.QuadPart < (16 << 20)) {
+        out->resize(static_cast<std::size_t>(size.QuadPart));
+        DWORD got = 0;
+        if (::ReadFile(h, out->data(), static_cast<DWORD>(out->size()), &got,
+                       nullptr)) {
+            out->resize(got);
+            ok = true;
+        }
+    }
+    ::CloseHandle(h);
+    return ok;
+}
 
 void refresh(const mem::Reader& reader) {
     g_rows.clear();
@@ -281,6 +337,62 @@ void draw_filter_bar() {
     }
 }
 
+// 라이브 인벤토리를 통째로 읽어 파일로 남긴다.
+void do_export(const mem::Reader& reader) {
+    if (!game::inventory_ready()) {
+        g_io_status = "인벤토리 컴포넌트가 아직 없습니다";
+        return;
+    }
+    std::vector<game::InvItemSnap> items;
+    if (!game::inventory_export(reader, &items)) {
+        g_io_status = "인벤토리를 읽지 못했습니다";
+        return;
+    }
+    const std::wstring p = inv_file_path();
+    if (p.empty() || !write_text_file(p, game::inv_serialize(items))) {
+        g_io_status = "파일을 쓰지 못했습니다";
+        return;
+    }
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+                  "내보냈습니다: 아이템 %zu개 -> cdtoybox_inventory.txt",
+                  items.size());
+    g_io_status = buf;
+}
+
+// 파일을 읽어 현재 인벤토리에 제자리 복원한다. 끝나면 목록을 다시 읽어
+// 바뀐 값이 화면에 보이게 한다.
+void do_import(const mem::Reader& reader) {
+    if (!game::inventory_ready()) {
+        g_io_status = "인벤토리 컴포넌트가 아직 없습니다";
+        return;
+    }
+    const std::wstring p = inv_file_path();
+    std::string text;
+    if (p.empty() || !read_text_file(p, &text)) {
+        g_io_status = "cdtoybox_inventory.txt 를 찾지 못했습니다";
+        return;
+    }
+    std::vector<game::InvItemSnap> items;
+    if (!game::inv_parse(text, &items) || items.empty()) {
+        g_io_status = "파일을 읽었지만 복원할 아이템이 없습니다";
+        return;
+    }
+    game::ImportResult res;
+    if (!game::inventory_import(reader, items, &res)) {
+        g_io_status = "복원에 실패했습니다";
+        return;
+    }
+    char buf[224];
+    std::snprintf(
+        buf, sizeof(buf),
+        "복원: 짝 %d개 (담금질 %d·연마 %d·보석 %d칸) / 잠김 %d·없음 %d·실패 %d",
+        res.matched, res.temper_set, res.sharp_set, res.gems_set,
+        res.locked_skipped, res.not_found, res.write_failed);
+    g_io_status = buf;
+    refresh(reader);   // 바뀐 값 반영
+}
+
 }  // namespace
 
 void draw_inventory_panel(bool* open) {
@@ -319,6 +431,26 @@ void draw_inventory_panel(bool* open) {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
+
+    // Export / Import. 라이브 인벤토리를 통째로 파일에 남기고, 다시
+    // 읽을 때는 이미 있는 아이템을 제자리로 복원한다(담금질·연마·열린
+    // 소켓 보석). 잠긴 소켓 열기와 없는 아이템 지급은 하지 않는다.
+    ImGui::BeginDisabled(!game::inventory_ready());
+    if (ImGui::Button("내보내기")) {
+        const mem::LocalReader reader;
+        do_export(reader);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("가져오기")) {
+        const mem::LocalReader reader;
+        do_import(reader);
+    }
+    ImGui::EndDisabled();
+    if (!g_io_status.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s",
+                           g_io_status.c_str());
+    }
 
     // 컴포넌트·대응표·이름이 다 준비될 때까지 로딩을 보여 준다. 이름은
     // 현지화 후에야 채워지므로 그 전에는 '(순번 N)' 만 나온다. 진행
@@ -469,8 +601,9 @@ void draw_inventory_panel(bool* open) {
         ImGui::TextDisabled("보관함에 담으려면 보관함 창에서 세트를 먼저"
                             " 펼치세요");
     }
-    ImGui::TextDisabled("제자리 수정은 게임이 되쓴다 - 값을 지급 칸으로"
-                        " 옮겨 고친 뒤 새로 지급하고 원본은 버린다");
+    ImGui::TextDisabled("내보내기/가져오기 = 담금질·연마·열린 소켓 보석을"
+                        " 제자리로 복원(저장 생존). 잠긴 소켓 열기·없는 아이템"
+                        " 지급은 안 함 - 그건 지급 칸/보관함으로");
     ImGui::End();
 }
 

@@ -77,6 +77,7 @@ add_library(cdtoybox SHARED
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/inventory.cpp
+    src/game/inv_io.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/grant.cpp
@@ -119,12 +120,14 @@ add_executable(cdtb_tests
     tests/companion_tests.cpp
     tests/actors_tests.cpp
     tests/image_dump_tests.cpp
+    tests/inv_io_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/localization.cpp
     src/game/items.cpp
     src/game/inventory.cpp
+    src/game/inv_io.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/roster.cpp
