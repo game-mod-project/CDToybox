@@ -477,7 +477,18 @@ std::uintptr_t pick_server_session_impl() {
     const int pick = best_live_session_index(hits, server, last, n,
                                              ::GetTickCount64(),
                                              kSessionFreshMs);
-    if (pick < 0 || pick >= n) return 0;
+    if (pick < 0 || pick >= n) {
+        // 못 골랐으면 왜 못 골랐는지 표를 그대로 남긴다. 문턱을
+        // 추측으로 정하지 않으려면 실제 간격이 보여야 한다.
+        const std::uint64_t now = ::GetTickCount64();
+        log::warnf("살아 있는 서버 세션 없음 - 후보 {}개", n);
+        for (int i = 0; i < n; ++i) {
+            log::warnf("  [{}] 0x{:X} {} 호출 {} 마지막 {}ms 전", i, seen[i],
+                       server[i] ? "서버" : "클라", hits[i],
+                       last[i] == 0 ? 0 : now - last[i]);
+        }
+        return 0;
+    }
     const std::uintptr_t session = seen[pick];
     // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
     if (session != 0 && session != drive_fault_session()) clear_drive_fault();

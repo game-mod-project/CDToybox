@@ -1108,13 +1108,19 @@ int best_live_session_index(const std::uint32_t* hits, const bool* is_server,
     if (hits == nullptr || is_server == nullptr || last_seen == nullptr) {
         return -1;
     }
+    // 서버 쪽 중 가장 최근에 본 시각. 견줄 기준이 된다.
+    std::uint64_t newest = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!is_server[i] || last_seen[i] == 0) continue;
+        if (last_seen[i] > newest) newest = last_seen[i];
+    }
+    if (newest == 0) return -1;
+    // 가장 최근 것조차 오래됐으면 전부 멈춘 것이다 - 로딩 화면.
+    if (now_ms > newest && now_ms - newest > kSessionDeadMs) return -1;
     int best = -1;
     for (int i = 0; i < n; ++i) {
-        if (!is_server[i]) continue;
-        // 아직 한 번도 못 봤거나(0) 오래전에 본 자리는 죽었다고 본다.
-        if (last_seen[i] == 0) continue;
-        if (now_ms < last_seen[i]) continue;
-        if (now_ms - last_seen[i] > max_age_ms) continue;
+        if (!is_server[i] || last_seen[i] == 0) continue;
+        if (newest - last_seen[i] > max_age_ms) continue;
         if (best < 0 || hits[i] > hits[best]) best = i;
     }
     return best;

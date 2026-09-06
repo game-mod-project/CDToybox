@@ -124,11 +124,13 @@ TEST(best_actor_returns_none_when_empty) {
 // 게임 안에서 0xC0000005 로 죽는다(실측 2026-09-06, 네 번 반복한 뒤
 // 클라이언트가 메인 화면으로 떨어졌다). 그래서 최근에 본 것만 고른다.
 TEST(best_live_session_skips_the_stale_winner) {
+    // 접속이 다시 맺어지면 옛 세션은 그 자리에 멈추고 새 세션만
+    // 앞으로 간다. 누적 호출 1위여도 멈춘 쪽은 죽은 것이다.
     const std::uint32_t hits[2] = {17020, 12};
     const bool server[2] = {true, true};
-    const std::uint64_t last[2] = {1000, 99000};  // 0번은 옛 접속
+    const std::uint64_t last[2] = {90000, 99900};
     CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
-                                                 3000),
+                                                 5000),
              1);
 }
 
@@ -137,27 +139,40 @@ TEST(best_live_session_takes_the_busiest_among_fresh) {
     const bool server[3] = {true, true, true};
     const std::uint64_t last[3] = {99500, 99800, 99900};
     CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 3, 100000,
-                                                 3000),
+                                                 5000),
              1);
 }
 
+// 서버 쪽 세션이 얼마나 자주 불리는지는 모른다. 절대 시각으로
+// 자르면 답이 그 추측에 끌려간다 - 실측 2026-09-06: 3초로 잘랐더니
+// 월드 안인데도 후보가 없었다. 서로 견주기만 하면 간격은 상관없다.
+TEST(best_live_session_does_not_care_how_often_it_is_called) {
+    const std::uint32_t hits[2] = {900, 4};
+    const bool server[2] = {true, true};
+    // 둘 다 20초 전에 봤다. 절대 기준이면 둘 다 탈락했을 것이다.
+    const std::uint64_t last[2] = {80000, 79000};
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
+                                                 5000),
+             0);
+}
+
 TEST(best_live_session_ignores_never_seen) {
-    // 시각 0 은 "한 번도 못 봤다" 다. 시각을 안 남긴 자리를 살아
-    // 있다고 보면 안 된다.
     const std::uint32_t hits[2] = {900, 3};
     const bool server[2] = {true, true};
     const std::uint64_t last[2] = {0, 99900};
     CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
-                                                 3000),
+                                                 5000),
              1);
 }
 
-TEST(best_live_session_returns_none_when_all_stale) {
+// 전부 멈췄으면 월드 밖이다(로딩 화면). 그때는 아무것도 고르지
+// 않는다 - 죽은 포인터로 구동하면 게임이 죽는다.
+TEST(best_live_session_returns_none_when_everything_stopped) {
     const std::uint32_t hits[2] = {900, 30};
     const bool server[2] = {true, true};
     const std::uint64_t last[2] = {10, 20};
     CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
-                                                 3000),
+                                                 5000),
              -1);
 }
 
@@ -166,7 +181,7 @@ TEST(best_live_session_still_skips_client_side) {
     const bool server[2] = {false, true};
     const std::uint64_t last[2] = {99900, 99900};
     CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
-                                                 3000),
+                                                 5000),
              1);
 }
 

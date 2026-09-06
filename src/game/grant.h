@@ -151,15 +151,27 @@ bool session_is_server(int index);
 // 있는지다.
 std::uint64_t session_last_seen(int index);
 
-// 서버 쪽이면서 최근에 본 세션 중 호출이 가장 많은 자리. 없으면 -1.
-// 시각을 인자로 받는 순수 함수라 시험할 수 있다.
+// 살아 있는 서버 세션 중 호출이 가장 많은 자리. 없으면 -1.
+//
+// 살아 있는지를 절대 시각으로 자르지 않는다. 서버 쪽 세션이 얼마나
+// 자주 불리는지 모르는 채로 문턱을 정하면 답이 그 추측에 끌려간다 -
+// 실측 2026-09-06: 3초로 잘랐더니 월드 안인데도 후보가 없었다.
+//
+// 대신 서로 견준다. 죽은 세션은 아예 안 불리므로 시각이 그 자리에
+// 멈추고, 살아 있는 것들은 계속 앞으로 간다. 가장 최근 것보다
+// max_age_ms 넘게 뒤처진 자리는 죽었다고 본다.
+//
+// now_ms 는 "전부 멈췄는가"만 본다. 로딩 화면이면 살아 있는 것이
+// 없으니 아무것도 고르지 않는 편이 맞다.
 int best_live_session_index(const std::uint32_t* hits, const bool* is_server,
                             const std::uint64_t* last_seen, int n,
                             std::uint64_t now_ms, std::uint64_t max_age_ms);
 
-// 세션이 살아 있다고 볼 시간. 액터 조회는 프레임마다 불리므로
-// 넉넉하게 잡아도 죽은 세션은 걸러진다.
-constexpr std::uint64_t kSessionFreshMs = 3000;
+// 가장 최근 세션보다 이만큼 뒤처지면 죽었다고 본다.
+constexpr std::uint64_t kSessionFreshMs = 5000;
+
+// 가장 최근 세션조차 이만큼 오래됐으면 월드 밖이다.
+constexpr std::uint64_t kSessionDeadMs = 30000;
 
 // 구동이 게임 안에서 죽은 그 세션. 죽은 적이 없으면 0.
 //
