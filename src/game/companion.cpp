@@ -99,7 +99,6 @@ constexpr std::size_t kPacketLen = 0x10;      // u16 전체길이
 constexpr std::size_t kPacketPayload = 0x18;  // 페이로드 포인터
 constexpr int kMaxDumps = 80;
 constexpr std::size_t kHexCap = 768;
-constexpr std::uint16_t kHireToTargetId = 2338;
 
 std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
@@ -414,6 +413,36 @@ bool companion_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader
     return g_msg_count > 0;
 }
 
+
+// --------------------------------------------------- 획득 (2338)
+
+bool build_hire_wire(std::uint32_t handle, std::uint8_t flag, std::uint8_t* out,
+                     std::size_t cap, std::size_t* len_out) {
+    if (out == nullptr || cap < kHireWireLen) return false;
+    const std::uint16_t id = kHireToTargetId;
+    const std::uint16_t body = 5;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &handle, 4);
+    out[9] = flag;
+    if (len_out) *len_out = kHireWireLen;
+    return true;
+}
+
+bool hire_target_ready() { return find_message(kHireToTargetId) != nullptr; }
+
+bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
+                         std::uint8_t flag) {
+    const MessageDesc* m = find_message(kHireToTargetId);
+    if (m == nullptr || session == 0 || handle == 0) return false;
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    if (!build_hire_wire(handle, flag, wire, sizeof(wire), &len)) return false;
+    log::infof("획득 요청: 대상 핸들 0x{:08X} 플래그 {}", handle, flag);
+    return request_message(session, *m, wire, len);
+}
+
 // --------------------------------------------------- 명령 파일
 
 namespace {
@@ -423,7 +452,7 @@ std::thread g_cmd_thread;
 const mem::Reader* g_cmd_reader = nullptr;
 
 // 그란트 패널과 같은 규칙: 서버 세션 중 가장 유력한 것.
-std::uintptr_t pick_server_session() {
+std::uintptr_t pick_server_session_impl() {
     std::uintptr_t seen[16]{};
     std::uint32_t hits[16]{};
     const int n = seen_sessions(seen, hits, 16);
@@ -505,6 +534,8 @@ void command_loop() {
 
 }  // namespace
 
+std::uintptr_t companion_pick_session() { return pick_server_session_impl(); }
+
 bool companion_run_command(const std::string& line, std::string* reply) {
     const auto args = split_ws(line);
     if (args.empty()) return false;
@@ -516,7 +547,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         if (args.size() < 2) { say("give <키> [개수]"); return false; }
         const std::uint32_t key = parse_u32(args[1], 0);
         const std::int64_t count = args.size() > 2 ? static_cast<std::int64_t>(parse_u32(args[2], 1)) : 1;
-        const std::uintptr_t session = pick_server_session();
+        const std::uintptr_t session = companion_pick_session();
         if (session == 0) { say("서버 세션 없음"); return false; }
         if (!give_ready()) { say("지급 준비 안 됨"); return false; }
         const bool ok = request_give(session, key, count, GiveExtras{});
@@ -530,7 +561,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         const std::uint8_t c = static_cast<std::uint8_t>(
             args.size() > 3 ? parse_u32(args[3], kUseItemByInfoKindC) : kUseItemByInfoKindC);
         const std::uint32_t d = args.size() > 4 ? parse_u32(args[4], 0) : 0;
-        const std::uintptr_t session = pick_server_session();
+        const std::uintptr_t session = companion_pick_session();
         if (session == 0) { say("서버 세션 없음"); return false; }
         if (!companion_use_item_ready()) { say("2976 미해석"); return false; }
         const bool ok = request_use_item(session, key, b, c, d);
@@ -557,7 +588,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         }
         const MessageDesc* m = find_message(id);
         if (m == nullptr) { say("그 ID 는 해석돼 있지 않다"); return false; }
-        const std::uintptr_t session = pick_server_session();
+        const std::uintptr_t session = companion_pick_session();
         if (session == 0) { say("서버 세션 없음"); return false; }
         const bool ok = request_message(session, *m, wire, len);
         say(ok ? "구동 요청" : "구동 거부(대기열/쿨다운)");

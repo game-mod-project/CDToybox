@@ -110,6 +110,31 @@ bool parse_hex_bytes(const std::string& text, std::uint8_t* out, std::size_t cap
                      std::size_t* len_out);
 
 // ----------------------------------------------------------------------
+// 획득 (`TrocTrHireMercenaryToTargetReq`, ID 2338)
+//
+// 월드에 있는 동반자 타입 액터를 그 자리에서 동반자로 등록한다.
+// **부적 없이 되는 것이 실측으로 확인됐다**(2026-09-06): 진돗개·고양이·
+// 야생 참새는 반려동물 탭에, 사육 말은 이름 붙은 탑승물 탭에 들어갔다.
+// 거부되는 대상도 있다(유니크 전설마·스토리 동료·일부 야생). 거부는
+// 조용히 코드만 남기고 게임 상태를 바꾸지 않는다.
+//
+// 대상 핸들은 game/actors 의 근처 목록에서 얻는다.
+inline constexpr std::uint16_t kHireToTargetId = 2338;
+inline constexpr std::size_t kHireWireLen = 5 + 5;
+
+// 머리 5바이트 + 본문 5바이트(u32 핸들, u8 플래그)를 조립한다.
+bool build_hire_wire(std::uint32_t handle, std::uint8_t flag, std::uint8_t* out,
+                     std::size_t cap, std::size_t* len_out);
+
+// 2338 을 게임 스레드에서 구동한다. 대기열이 차 있으면 false.
+bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
+                         std::uint8_t flag = 0);
+// 2338 이 해석돼 있는가.
+bool hire_target_ready();
+// 그란트 패널과 같은 규칙으로 서버 세션을 고른다. 없으면 0.
+std::uintptr_t companion_pick_session();
+
+// ----------------------------------------------------------------------
 // 명령 파일 (DLL 옆 cdtoybox_cmd.txt)
 //
 // 오버레이를 누르지 않고도 밖에서 실험을 걸 수 있게 한다. 한 줄에

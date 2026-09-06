@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <utility>
 
 #include "core/log.h"
 #include "game/roster.h"
@@ -110,16 +111,77 @@ bool actor_character_row(const mem::Reader& reader, std::uintptr_t actor,
     return true;
 }
 
+
+bool read_actor_handles(const mem::Reader& reader, std::uintptr_t manager,
+                        std::vector<std::pair<std::uintptr_t, std::uint32_t>>* out) {
+    if (out == nullptr || manager == 0) return false;
+    std::uint64_t container = 0;
+    if (!reader.read_value(manager + kActorContainerOff, &container) ||
+        container == 0) {
+        return false;
+    }
+    const auto c = static_cast<std::uintptr_t>(container);
+    std::uint32_t nbuckets = 0;
+    std::uint64_t buckets = 0, nodes = 0;
+    if (!reader.read_value(c + kContainerBucketCount, &nbuckets)) return false;
+    if (!reader.read_value(c + kContainerBuckets, &buckets)) return false;
+    if (!reader.read_value(c + kContainerNodes, &nodes)) return false;
+    if (nbuckets == 0 || nbuckets > kMaxBuckets || buckets == 0 || nodes == 0) {
+        return false;
+    }
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> found;
+    for (std::uint32_t b = 0; b < nbuckets; ++b) {
+        const std::uintptr_t at =
+            static_cast<std::uintptr_t>(buckets) + b * kBucketStride;
+        std::uint32_t count = 0;
+        if (!reader.read_value(at, &count)) continue;
+        // 버킷 하나에 담기는 수는 작다. 이상하면 건너뛴다.
+        if (count > (kBucketStride - 8) / 8) continue;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t key = 0, idx = 0;
+            if (!reader.read_value(at + 8 + i * 8, &key)) break;
+            if (!reader.read_value(at + 8 + i * 8 + 4, &idx)) break;
+            std::uint64_t node = 0;
+            if (!reader.read_value(static_cast<std::uintptr_t>(nodes) +
+                                       static_cast<std::uintptr_t>(idx) * 8,
+                                   &node) ||
+                node == 0) {
+                continue;
+            }
+            std::uint32_t node_key = 0;
+            std::uint64_t actor = 0;
+            if (!reader.read_value(static_cast<std::uintptr_t>(node) + 4,
+                                   &node_key) ||
+                node_key != key) {
+                continue;
+            }
+            if (!reader.read_value(static_cast<std::uintptr_t>(node) + 8,
+                                   &actor) ||
+                actor == 0) {
+                continue;
+            }
+            found.emplace_back(static_cast<std::uintptr_t>(actor), key);
+        }
+    }
+    *out = std::move(found);
+    return true;
+}
+
 bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
                           std::vector<LiveActor>* out) {
     if (out == nullptr) return false;
     std::vector<std::uintptr_t> ptrs;
     if (!walk_actor_pointers(reader, manager, &ptrs)) return false;
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> handles;
+    read_actor_handles(reader, manager, &handles);
     std::vector<LiveActor> list;
     list.reserve(ptrs.size());
     for (const auto a : ptrs) {
         LiveActor la;
         la.actor = a;
+        for (const auto& hp : handles) {
+            if (hp.first == a) { la.handle = hp.second; break; }
+        }
         std::uint16_t row = 0;
         if (actor_character_row(reader, a, &row)) {
             la.row = row;

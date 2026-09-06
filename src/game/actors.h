@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mem/reader.h"
@@ -30,6 +31,7 @@ namespace cdtb::game {
 
 struct LiveActor {
     std::uintptr_t actor = 0;
+    std::uint32_t handle = 0;     // 액터 핸들. 0 이면 못 찾음
     std::uint16_t row = 0xFFFF;      // 캐릭터 행 번호. 0xFFFF 못 읽음
     std::uint32_t key = 0;           // 캐릭터 키 (row 가 풀렸을 때)
     std::string name;                // 내부 이름
@@ -43,6 +45,27 @@ inline constexpr std::size_t kActorBucketLast = 0x338;   // 포함
 inline constexpr std::size_t kActorBucketStride = 0x10;
 inline constexpr std::uint32_t kActorBucketMaxCap = 8192;
 
+
+// --- 액터 핸들 ---------------------------------------------------------
+//
+// 핸들은 액터 안에 없다. `ClientActorManager` 의 컨테이너(매니저 +0x08)가
+// 핸들 -> 액터 사전을 들고 있다(실측 2026-09-06):
+//
+//   컨테이너 +0x88 버킷 수 · +0x98 버킷 배열 · +0xA0 노드 포인터 배열
+//   버킷 = 0x100 바이트 = { u32 개수, ..., +0x08 부터 {u32 키, u32 색인} 쌍 }
+//   노드 = { u32 ?, +0x04 핸들 키, +0x08 액터 포인터 }
+//
+// 사용자 액터는 0x9010 네임스페이스, 일반 액터는 0xB010 이다.
+inline constexpr std::size_t kActorContainerOff = 0x08;
+inline constexpr std::size_t kContainerBucketCount = 0x88;
+inline constexpr std::size_t kContainerBuckets = 0x98;
+inline constexpr std::size_t kContainerNodes = 0xA0;
+inline constexpr std::size_t kBucketStride = 0x100;
+inline constexpr std::uint32_t kMaxBuckets = 4096;
+
+// 매니저의 핸들 사전을 걸어 {액터 -> 핸들} 을 채운다.
+bool read_actor_handles(const mem::Reader& reader, std::uintptr_t manager,
+                        std::vector<std::pair<std::uintptr_t, std::uint32_t>>* out);
 // 매니저가 진짜인지: 버킷 하나라도 개수 1 이상·용량 상한 이내·첫 포인터가
 // 읽히면 된다.
 bool looks_like_actor_manager(const mem::Reader& reader, std::uintptr_t manager);

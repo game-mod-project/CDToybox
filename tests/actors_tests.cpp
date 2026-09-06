@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "fake_memory.h"
@@ -23,6 +24,11 @@ struct Fixture {
     static constexpr std::size_t kArrB = 0x1100;
     static constexpr std::size_t kActor = 0x2000;
     static constexpr std::size_t kAux = 0x3000;
+    static constexpr std::size_t kCont = 0x3800;
+    static constexpr std::size_t kBucket = 0x3A00;
+    static constexpr std::size_t kNodes = 0x3B00;
+    static constexpr std::size_t kNode0 = 0x3B40;
+    static constexpr std::size_t kNode1 = 0x3B80;
 
     std::uintptr_t actor(int i) const { return mem.heap_addr(kActor + i * 0x200); }
 
@@ -52,6 +58,22 @@ struct Fixture {
         mem.put_u64(kArrA + 24, actor(2));  // 끝 너머의 옛 포인터 - 걷지 않아야
         mem.put_u64(kArrB + 0, actor(1));   // 다른 버킷에 중복 - 한 번만
         mem.put_u64(kArrB + 8, 0xFFFFFFFFFFFFFFFFull);  // 쓰레기 끝
+        // 핸들 컨테이너: 매니저 +0x08 -> 컨테이너, 버킷 1개, 노드 2개
+        mem.put_u64(kMgr + 0x08, mem.heap_addr(kCont));
+        mem.put_u32(kCont + 0x88, 1);
+        mem.put_u64(kCont + 0x98, mem.heap_addr(kBucket));
+        mem.put_u64(kCont + 0xA0, mem.heap_addr(kNodes));
+        mem.put_u32(kBucket + 0, 2);                       // 이 버킷의 항목 수
+        mem.put_u32(kBucket + 8 + 0, 0xB0100001);          // 키
+        mem.put_u32(kBucket + 8 + 4, 0);                   // 노드 색인
+        mem.put_u32(kBucket + 16 + 0, 0xB0100002);
+        mem.put_u32(kBucket + 16 + 4, 1);
+        mem.put_u64(kNodes + 0, mem.heap_addr(kNode0));
+        mem.put_u64(kNodes + 8, mem.heap_addr(kNode1));
+        mem.put_u32(kNode0 + 4, 0xB0100001);
+        mem.put_u64(kNode0 + 8, actor(0));
+        mem.put_u32(kNode1 + 4, 0xB0100002);
+        mem.put_u64(kNode1 + 8, actor(1));
         put_actor(0, 4074);
         put_actor(1, 3);
         put_actor(2, 100);
@@ -111,5 +133,33 @@ TEST(actors_snapshot_fills_rows_without_roster) {
         CHECK(la.row == 4074 || la.row == 3);
         CHECK(la.name.empty());
         CHECK(!la.is_companion());
+    }
+}
+
+TEST(actors_handles_are_read_from_container) {
+    Fixture f;
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> hs;
+    CHECK(cdtb::game::read_actor_handles(f.mem, f.mem.heap_addr(Fixture::kMgr), &hs));
+    CHECK_EQ(hs.size(), static_cast<std::size_t>(2));
+    bool ok0 = false, ok1 = false;
+    for (const auto& p : hs) {
+        if (p.first == f.actor(0) && p.second == 0xB0100001u) ok0 = true;
+        if (p.first == f.actor(1) && p.second == 0xB0100002u) ok1 = true;
+    }
+    CHECK(ok0);
+    CHECK(ok1);
+    // 노드의 키가 버킷과 다르면 버린다
+    f.mem.put_u32(Fixture::kNode0 + 4, 0xDEADBEEF);
+    CHECK(cdtb::game::read_actor_handles(f.mem, f.mem.heap_addr(Fixture::kMgr), &hs));
+    CHECK_EQ(hs.size(), static_cast<std::size_t>(1));
+}
+
+TEST(actors_snapshot_fills_handles) {
+    Fixture f;
+    std::vector<cdtb::game::LiveActor> list;
+    CHECK(cdtb::game::snapshot_live_actors(f.mem, f.mem.heap_addr(Fixture::kMgr), &list));
+    CHECK_EQ(list.size(), static_cast<std::size_t>(2));
+    for (const auto& la : list) {
+        CHECK(la.handle == 0xB0100001u || la.handle == 0xB0100002u);
     }
 }

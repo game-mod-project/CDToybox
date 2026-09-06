@@ -99,3 +99,30 @@ TEST(companion_parse_hex_bytes) {
     CHECK(!parse_hex_bytes("", w, sizeof(w), &n));          // 비어 있음
     CHECK(!parse_hex_bytes("00112233445566778899", w, 4, &n));  // 버퍼 초과
 }
+
+TEST(companion_hire_wire_layout) {
+    using cdtb::game::build_hire_wire;
+    std::uint8_t w[16]{};
+    std::size_t len = 0;
+    CHECK(build_hire_wire(0xB0100153, 0, w, sizeof(w), &len));
+    CHECK_EQ(len, static_cast<std::size_t>(10));
+    // 머리: ID 2338 = 0x0922, 본문길이 5
+    CHECK_EQ(w[0], static_cast<std::uint8_t>(0x22));
+    CHECK_EQ(w[1], static_cast<std::uint8_t>(0x09));
+    CHECK_EQ(w[3], static_cast<std::uint8_t>(5));
+    // 본문: 핸들 LE + 플래그
+    CHECK_EQ(w[5], static_cast<std::uint8_t>(0x53));
+    CHECK_EQ(w[6], static_cast<std::uint8_t>(0x01));
+    CHECK_EQ(w[7], static_cast<std::uint8_t>(0x10));
+    CHECK_EQ(w[8], static_cast<std::uint8_t>(0xB0));
+    CHECK_EQ(w[9], static_cast<std::uint8_t>(0));
+    std::uint16_t id = 0, body = 0;
+    CHECK(cdtb::game::decode_message_header(w, len, &id, &body));
+    CHECK_EQ(id, static_cast<std::uint16_t>(2338));
+    // 실측한 진돗개 획득 와이어와 바이트가 같아야 한다
+    std::uint32_t handle = 0;
+    std::uint8_t flag = 0;
+    CHECK(cdtb::game::decode_hire_to_target(w, len, &handle, &flag));
+    CHECK_EQ(handle, 0xB0100153u);
+    CHECK(!build_hire_wire(1, 0, w, 4, &len));
+}
