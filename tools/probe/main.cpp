@@ -52,6 +52,9 @@ void usage() {
         "  setf <주소> <값>            float 쓰기 (실행 중 게임에 반영)\n"
         "  poke <주소> <16진바이트>    바이트를 그대로 쓴다\n"
         "  heapfind <16진바이트>       힙에서 바이트 서명 찾기\n"
+        "  heapdump <16진바이트> [앞] [뒤]  서명 자리마다 앞뒤 덤프\n"
+        "  dumpmany <바이트수> <주소들>  여러 주소를 한 번에 덤프\n"
+        "  instcount <이름조각들>       클래스별 인스턴스 개수만\n"
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
         "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
         "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
@@ -442,6 +445,47 @@ bool build_inv_context(const mem::Rtti& rt, const mem::Reader& reader,
         }
     }
     return true;
+}
+
+// 인벤토리에서 **열린 소켓**을 가진 레코드를 찾아 덤프한다(both-realms 쓰기
+// 실측 대상 선정용). 열림 = 소켓 raw[4] != 0xFF.
+void cmd_invsock(const mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_inventory(rt, reader)) {
+        std::printf("인벤토리 컴포넌트 못 찾음\n");
+        return;
+    }
+    const std::uintptr_t comp = game::inventory_component();
+    std::vector<game::InventoryContainer> conts;
+    if (!game::read_inventory_containers(reader, comp, &conts)) {
+        std::printf("컨테이너 못 읽음\n");
+        return;
+    }
+    int found = 0;
+    for (const auto& c : conts) {
+        std::vector<game::InventoryRecord> recs;
+        if (!game::read_inventory_records(reader, c, &recs)) continue;
+        for (const auto& rec : recs) {
+            std::vector<game::InventorySocket> socks;
+            if (!game::read_inventory_sockets(reader, rec, &socks)) continue;
+            bool has_open = false;
+            for (const auto& s : socks) {
+                if (s.raw[4] != 0xFF) { has_open = true; break; }
+            }
+            if (!has_open) continue;
+            std::printf("종류%u rec=0x%llX inst=%llu 순번=%u sockptr=0x%llX cnt=%u\n",
+                        c.kind, (unsigned long long)rec.address,
+                        (unsigned long long)rec.instance_id, rec.index,
+                        (unsigned long long)rec.sockets, rec.socket_count);
+            for (std::size_t i = 0; i < socks.size(); ++i) {
+                const auto& s = socks[i];
+                std::printf("   [%zu] %02X %02X %02X %02X %02X %02X  %s\n", i,
+                            s.raw[0], s.raw[1], s.raw[2], s.raw[3], s.raw[4],
+                            s.raw[5], s.raw[4] == 0xFF ? "잠김" : "열림");
+            }
+            if (++found >= 12) { std::printf("(멈춤)\n"); return; }
+        }
+    }
+    std::printf("열린 소켓 아이템 %d개\n", found);
 }
 
 void cmd_invlist(const mem::Rtti& rt, const mem::Reader& reader,
@@ -857,6 +901,149 @@ void cmd_heapfind(const Remote& r, int argc, char** argv) {
     std::printf("모두 %zu곳, 훑은 양 %.1f GB\n", found,
                 scanned / 1073741824.0);
 }
+
+// 서명이 나온 자리마다 그 앞뒤를 덤프한다.
+//
+// heapfind 로 자리를 찾고 dump 로 하나씩 보면 붙을 때마다 350MB
+// 이미지를 다시 읽어야 해서 한 건에 2~3분이 든다. 후보가 수십 개면
+// 그것만으로 하루가 간다. 한 번 붙어서 전부 뜬다.
+//
+// 정상 표본과 불량 표본의 레코드를 나란히 놓고 다른 칸을 찾는 데
+// 쓴다(동반자 등록 조사, 2026-09-06).
+// 주소 여러 개를 한 번 붙어서 덤프한다.
+//
+// dump 는 한 번에 하나라, 붙을 때마다 350MB 이미지를 다시 읽어
+// 한 건에 2~3분이 든다. 레코드와 그것이 가리키는 하위 객체들을
+// 나란히 보려면 대여섯 번을 붙어야 해서 그것만으로 시간이 다 간다.
+//
+// 정상 표본과 불량 표본을 비교하는 데 쓴다(동반자 등록 조사,
+// 2026-09-06). 서식은 dump 와 같아 비교 스크립트가 그대로 읽는다.
+void cmd_dumpmany(const Remote& r, int argc, char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: dumpmany <바이트수> <주소> [주소 ...]\n");
+        return;
+    }
+    std::size_t n = std::strtoull(argv[2], nullptr, 0);
+    if (n == 0) n = 0x100;
+    if (n > 0x4000) n = 0x4000;
+    std::vector<std::uint8_t> buf(n);
+    for (int i = 3; i < argc; ++i) {
+        const auto addr =
+            static_cast<std::uintptr_t>(std::strtoull(argv[i], nullptr, 0));
+        std::printf("\n=== 히트 %d  0x%llX  (창 0x%llX)\n", i - 3,
+                    static_cast<unsigned long long>(addr),
+                    static_cast<unsigned long long>(addr));
+        if (!r.read(addr, buf.data(), buf.size())) {
+            std::printf("(읽기 실패)\n");
+            continue;
+        }
+        for (std::size_t o = 0; o < n; o += 16) {
+            std::printf("0x%llX  ",
+                        static_cast<unsigned long long>(addr + o));
+            for (std::size_t k = 0; k < 16; ++k) {
+                if (o + k < n) {
+                    std::printf("%02X ", buf[o + k]);
+                } else {
+                    std::printf("   ");
+                }
+            }
+            std::printf(" |");
+            for (std::size_t k = 0; k < 16 && o + k < n; ++k) {
+                const std::uint8_t c = buf[o + k];
+                std::printf("%c", (c >= 32 && c < 127) ? c : '.');
+            }
+            std::printf("|\n");
+        }
+    }
+}
+
+void cmd_heapdump(const Remote& r, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: heapdump <16진 바이트들> [앞=0x40] [뒤=0xC0]\n");
+        return;
+    }
+    // 마지막 인자 둘이 10진/16진 수면 창 크기로 본다. 16진 서명과
+    // 섞이지 않게 "0x" 가 붙은 것만 창으로 인정한다.
+    std::size_t before = 0x40, after = 0xC0;
+    int last = argc;
+    while (last > 3) {
+        const char* a = argv[last - 1];
+        if (a[0] != '0' || (a[1] != 'x' && a[1] != 'X')) break;
+        --last;
+        if (argc - last > 2) break;
+    }
+    if (argc - last >= 1) before = std::strtoull(argv[last], nullptr, 0);
+    if (argc - last >= 2) after = std::strtoull(argv[last + 1], nullptr, 0);
+    if (before > 0x1000) before = 0x1000;
+    if (after > 0x1000) after = 0x1000;
+
+    std::string hex;
+    for (int i = 2; i < last; ++i) {
+        for (const char* p = argv[i]; *p != '\0'; ++p) {
+            if (*p != ' ' && *p != ',') hex += *p;
+        }
+    }
+    if (hex.empty() || (hex.size() % 2) != 0) {
+        std::printf("16진 바이트가 짝이 안 맞습니다: %zu 글자\n", hex.size());
+        return;
+    }
+    std::vector<std::uint8_t> want;
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const auto hi = hex_digit(hex[i]);
+        const auto lo = hex_digit(hex[i + 1]);
+        if (hi < 0 || lo < 0) {
+            std::printf("16진이 아닌 글자: %c%c\n", hex[i], hex[i + 1]);
+            return;
+        }
+        want.push_back(static_cast<std::uint8_t>((hi << 4) | lo));
+    }
+
+    std::printf("서명 %zu바이트, 창 -0x%zX .. +0x%zX\n", want.size(), before,
+                after);
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size < want.size() || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        for (std::size_t i = 0; i + want.size() <= buf.size(); ++i) {
+            if (std::memcmp(buf.data() + i, want.data(), want.size()) != 0) {
+                continue;
+            }
+            const std::size_t lo = (i > before) ? i - before : 0;
+            std::size_t hi = i + after;
+            if (hi > buf.size()) hi = buf.size();
+            std::printf("\n=== 히트 %zu  0x%llX  (창 0x%llX)\n", found,
+                        static_cast<unsigned long long>(reg.base + i),
+                        static_cast<unsigned long long>(reg.base + lo));
+            // dump 와 같은 서식이라 비교 스크립트가 그대로 읽는다.
+            for (std::size_t o = lo; o < hi; o += 16) {
+                std::printf("0x%llX  ",
+                            static_cast<unsigned long long>(reg.base + o));
+                for (std::size_t k = 0; k < 16; ++k) {
+                    if (o + k < hi) {
+                        std::printf("%02X ", buf[o + k]);
+                    } else {
+                        std::printf("   ");
+                    }
+                }
+                std::printf(" |");
+                for (std::size_t k = 0; k < 16 && o + k < hi; ++k) {
+                    const std::uint8_t c = buf[o + k];
+                    std::printf("%c", (c >= 32 && c < 127) ? c : '.');
+                }
+                std::printf("|\n");
+            }
+            if (++found >= 80) {
+                std::printf("(80개에서 멈춥니다)\n");
+                return;
+            }
+        }
+    }
+    std::printf("\n모두 %zu곳\n", found);
+}
+
 
 // findptr 은 모듈 이미지만 본다. 메시지 서술자를 가리키는 표는
 // 이미지에 없고 힙에 있어서 이게 필요했다.
@@ -2376,6 +2563,30 @@ void cmd_instances(mem::Rtti& rt, const Remote& r, const char* name,
     (void)r;
 }
 
+// 이름에 조각이 든 클래스들의 인스턴스 개수를 한 번에 센다.
+//
+// instances 는 클래스 하나뿐이라, 붙을 때마다 350MB 이미지를 다시
+// 읽는 비용이 클래스 수만큼 곱해진다. 지역 이동 전후를 비교하려면
+// 같은 측정을 두 번 해야 하므로 그 비용이 두 배가 된다.
+//
+// 개수만 찍는다. 무엇이 늘었는지 보려는 것이지 주소가 필요한 게
+// 아니다(동반자 등록 조사, 2026-09-06).
+void cmd_instcount(mem::Rtti& rt, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: instcount <이름조각> [이름조각 ...]\n");
+        return;
+    }
+    for (int i = 2; i < argc; ++i) {
+        const auto types = rt.find_types(argv[i], 400);
+        std::printf("\n=== \"%s\" 에 걸린 클래스 %zu개\n", argv[i], types.size());
+        for (const auto& t : types) {
+            const auto inst = rt.instances_of_class(t.name, 4000);
+            if (inst.empty()) continue;   // 0개는 잡음이라 뺀다
+            std::printf("  %6zu  %s\n", inst.size(), t.name.c_str());
+        }
+    }
+}
+
 void cmd_dump(const Remote& r, std::uintptr_t addr, std::size_t n) {
     std::vector<std::uint8_t> buf(n);
     if (!r.read(addr, buf.data(), n)) {
@@ -2971,6 +3182,14 @@ int main(int argc, char** argv) {
         cmd_heapfind(r, argc, argv);
         return 0;
     }
+    if (cmd == "heapdump") {
+        cmd_heapdump(r, argc, argv);
+        return 0;
+    }
+    if (cmd == "dumpmany") {
+        cmd_dumpmany(r, argc, argv);
+        return 0;
+    }
     if (cmd == "hpscan") {
         cmd_hpscan(r, argc, argv);
         return 0;
@@ -3156,6 +3375,10 @@ int main(int argc, char** argv) {
         cmd_fields(rt, r, parse_addr(argv[2]), n);
         return 0;
     }
+    if (cmd == "instcount") {
+        cmd_instcount(rt, argc, argv);
+        return 0;
+    }
     if (cmd == "instances") {
         if (argc < 3) { usage(); return 1; }
         const std::size_t max = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
@@ -3192,6 +3415,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "aob") { cmd_aob(rt, reader, argc, argv); return 0; }
+    if (cmd == "invsock") { cmd_invsock(rt, reader); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {

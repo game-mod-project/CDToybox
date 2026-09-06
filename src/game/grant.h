@@ -170,8 +170,23 @@ int best_live_session_index(const std::uint32_t* hits, const bool* is_server,
 // 가장 최근 세션보다 이만큼 뒤처지면 죽었다고 본다.
 constexpr std::uint64_t kSessionFreshMs = 5000;
 
-// 가장 최근 세션조차 이만큼 오래됐으면 월드 밖이다.
-constexpr std::uint64_t kSessionDeadMs = 30000;
+// 가장 최근 세션조차 이만큼 오래됐으면 손을 뗀다.
+//
+// 넉넉하게 잡는다. 멈춘 게임과 죽은 세션은 시간만으로 구별되지
+// 않는다 - 실측 2026-09-06: 창을 내려 둔 5분 사이에 모든 세션이
+// 한 번도 안 불려, 멀쩡한 세션까지 죽었다고 판정했다. 죽었는지는
+// 시간이 아니라 session_looks_live() 로 직접 읽어서 가린다.
+constexpr std::uint64_t kSessionDeadMs = 600000;
+
+// 세션이 아직 살아 있는가. 처리기가 만지는 자리를 우리가 먼저
+// 읽어 본다.
+//
+//   [세션 + 0x88] -> 그 포인터 + 1 을 읽는다
+//
+// 처리기가 죽은 자리가 바로 여기다(실측 2026-09-06, RVA 0x2962533·
+// 0x2960DDD). 풀린 세션은 널이 아니면서 +0x88 이 쓰레기라 널 검사를
+// 통과해 버린다. 그래서 그 다음 칸까지 실제로 읽어 봐야 안다.
+bool session_looks_live(const mem::Reader& reader, std::uintptr_t session);
 
 // 구동이 게임 안에서 죽은 그 세션. 죽은 적이 없으면 0.
 //

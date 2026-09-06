@@ -35,9 +35,11 @@ struct LiveActor {
     std::uint16_t row = 0xFFFF;      // 캐릭터 행 번호. 0xFFFF 못 읽음
     std::uint32_t key = 0;           // 캐릭터 키 (row 가 풀렸을 때)
     std::string name;                // 내부 이름
+    std::string label;               // 인게임 표시명 (없으면 빈 문자열)
     std::uint16_t merc_row = 0xFFFF; // 동반자 타입 행 번호. 0xFFFF 없음
     bool hirable = false;
     bool is_companion() const { return merc_row != 0xFFFF; }
+    const std::string& display() const { return label.empty() ? name : label; }
 };
 
 inline constexpr std::size_t kActorBucketFirst = 0x128;

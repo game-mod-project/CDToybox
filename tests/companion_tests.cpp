@@ -126,3 +126,40 @@ TEST(companion_hire_wire_layout) {
     CHECK_EQ(handle, 0xB0100153u);
     CHECK(!build_hire_wire(1, 0, w, 4, &len));
 }
+
+// 등록 뒤 소환을 마무리하는 요청. 역직렬화(RVA 0x2965E40)가 8바이트
+// 그리고 12바이트를 읽고 커서가 본문 길이와 같은지 확인하므로,
+// 본문은 정확히 20바이트여야 한다.
+TEST(complete_summon_wire_is_number_then_position) {
+    const float pos[3] = {1.5f, -2.25f, 3.0f};
+    std::uint8_t wire[32]{};
+    std::size_t len = 0;
+    CHECK(cdtb::game::build_complete_summon_wire(0x000F4412ull, pos, wire,
+                                                 sizeof(wire), &len));
+    CHECK_EQ(len, static_cast<std::size_t>(25));
+    std::uint16_t id = 0, body = 0;
+    cdtb::game::decode_message_header(wire, len, &id, &body);
+    CHECK_EQ(id, static_cast<std::uint16_t>(2962));
+    CHECK_EQ(body, static_cast<std::uint16_t>(20));
+    std::uint64_t no = 0;
+    std::memcpy(&no, wire + 5, sizeof(no));
+    CHECK_EQ(no, 0x000F4412ull);
+    float back[3]{};
+    std::memcpy(back, wire + 13, sizeof(back));
+    CHECK(back[0] == 1.5f && back[1] == -2.25f && back[2] == 3.0f);
+}
+
+TEST(complete_summon_wire_rejects_a_small_buffer) {
+    const float pos[3] = {0.0f, 0.0f, 0.0f};
+    std::uint8_t wire[8]{};
+    std::size_t len = 0;
+    CHECK(!cdtb::game::build_complete_summon_wire(1, pos, wire, sizeof(wire),
+                                                  &len));
+}
+
+TEST(complete_summon_wire_rejects_a_null_position) {
+    std::uint8_t wire[32]{};
+    std::size_t len = 0;
+    CHECK(!cdtb::game::build_complete_summon_wire(1, nullptr, wire,
+                                                  sizeof(wire), &len));
+}

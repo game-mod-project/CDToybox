@@ -64,6 +64,39 @@ bool companion_capture_installed();
 // 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
 // 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
 inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
+
+// 소환 작업 함수. 2894 처리기(RVA 0x29621E0)가 관문을 통과한 뒤
+// 이것을 부른다 - 정상 소환에서 실제로 일하는 자리다.
+//
+//   f(문객체, u32* 결과, u64 용병번호, float* 좌표)
+//
+// 획득한 개체가 지역 재적재 전에는 소환이 안 되는데, 그때 클라이언트가
+// 2894 를 아예 안 보낸다(실측 2026-09-06). 그래서 이 함수가 불리기는
+// 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
+// 알 수 있다. 읽고 찍기만 한다.
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
+// 마지막 소환 결과. 코드 0 이 성공이다.
+//
+// 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).
+// 그 구간에는 어떤 개체를 넣어도 0x533C0A53 으로 거부된다 - 실측
+// 2026-09-06: 방금 소환한 개체도, 전에 잘 되던 개체도 똑같이
+// 거부됐고, 몇 분 뒤에는 여섯 번 연속 전부 성공했다.
+//
+// 이것을 몰라서 "획득한 개체는 재적재가 필요하다"고 오진했다.
+// 화면에 코드를 띄워 다음에는 바로 알아보게 한다.
+struct SpawnWorkResult {
+    bool valid = false;
+    std::uint64_t merc_no = 0;
+    std::uint32_t code = 0;
+};
+SpawnWorkResult last_spawn_work();
+
+// 소환 쿨타임으로 보이는 거부 코드. 실측값이라 다른 이유도 이 코드를
+// 쓸 수 있다 - 화면에는 "쿨타임으로 보임" 정도로만 적는다.
+inline constexpr std::uint32_t kSpawnCooldownCode = 0x533C0A53;
+
+bool companion_spawn_trace_install(const mem::Reader& reader);
+bool companion_spawn_trace_installed();
 bool companion_hire_trace_install(const mem::Reader& reader);
 bool companion_hire_trace_installed();
 // 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
@@ -94,6 +127,33 @@ bool build_use_item_wire(std::uint32_t item_key, std::uint32_t b, std::uint8_t c
 // 2976 서술자·역직렬화를 해석해 둔다(한 번). 성공하면 true.
 bool companion_use_item_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
 bool companion_use_item_ready();
+
+// 등록 뒤 소환을 마무리한다(TrocTrCompleteCalculateSummonAfterRegistReq).
+//
+// 획득(2338)만으로는 목록에 들어가기만 하고 소환이 안 된다 - 실측
+// 2026-09-06: 같은 날 추가한 진돗개·참새가 목록에는 있는데 소환에
+// 아무 반응이 없었다. 부적 경로에는 등록 뒤 이 단계가 있고
+// (SummonMercenaryAfterRegistAck 가 그 응답이다) 우리는 그것을
+// 건너뛰고 있었다.
+//
+// 본문은 u64 용병번호 + float3 좌표다(deser RVA 0x2965E40 에서
+// 8바이트 그리고 12바이트를 읽는다). 좌표는 카메라 초점을 쓴다 -
+// 바닥 스폰이 쓰는 것과 같은 자리다.
+//
+// 주의: 작업 함수가 0 이 아닌 코드를 돌려주면 게임이 오류 1013 을
+// 만들어 로그아웃한다. 번호가 유효할 때만 부를 것.
+inline constexpr std::uint16_t kCompleteSummonId = 2962;
+// 좌표를 어디서 얻을지는 밖에서 준다. 카메라 코드는 시험 대상에
+// 링크되지 않으므로 이쪽이 그것을 직접 부르면 안 된다.
+using PositionFn = bool (*)(float out[3]);
+void companion_set_position_source(PositionFn fn);
+
+bool complete_summon_ready();
+bool build_complete_summon_wire(std::uint64_t merc_no, const float pos[3],
+                                std::uint8_t* out, std::size_t cap,
+                                std::size_t* len_out);
+bool request_complete_summon(std::uintptr_t session, std::uint64_t merc_no,
+                             const float pos[3]);
 
 // 세션의 게임 스레드에서 2976 을 구동한다(grant 의 대기열 재사용).
 bool request_use_item(std::uintptr_t session, std::uint32_t item_key,

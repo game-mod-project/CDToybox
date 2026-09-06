@@ -165,13 +165,24 @@ TEST(best_live_session_ignores_never_seen) {
              1);
 }
 
-// 전부 멈췄으면 월드 밖이다(로딩 화면). 그때는 아무것도 고르지
-// 않는다 - 죽은 포인터로 구동하면 게임이 죽는다.
-TEST(best_live_session_returns_none_when_everything_stopped) {
+// 창을 내려 두면 엔진이 멈춘다. 그 사이 모든 세션이 안 불리지만
+// 세션은 멀쩡하다 - 실측 2026-09-06: 5분을 멈춰 두었더니 30초
+// 기준에 걸려 멀쩡한 세션까지 죽었다고 판정했다. 멈춤과 죽음은
+// 시간으로 못 가른다. 시간은 아주 오래됐을 때만 손을 떼는 용도다.
+TEST(best_live_session_tolerates_a_paused_game) {
+    const std::uint32_t hits[2] = {900, 30};
+    const bool server[2] = {true, true};
+    const std::uint64_t last[2] = {700000, 699000};  // 5분 전
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 1000000,
+                                                 5000),
+             0);
+}
+
+TEST(best_live_session_returns_none_when_everything_stopped_for_long) {
     const std::uint32_t hits[2] = {900, 30};
     const bool server[2] = {true, true};
     const std::uint64_t last[2] = {10, 20};
-    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 1000000,
                                                  5000),
              -1);
 }
@@ -183,6 +194,43 @@ TEST(best_live_session_still_skips_client_side) {
     CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
                                                  5000),
              1);
+}
+
+// 풀린 세션은 널이 아니면서 +0x88 이 쓰레기다. 처리기의 널 검사를
+// 통과해 버리고 그 다음 칸에서 죽는다(실측 2026-09-06). 그래서
+// 처리기가 만지는 자리를 우리가 먼저 읽어 본다.
+TEST(session_looks_live_accepts_a_readable_chain) {
+    cdtb::tests::FakeMemory mem;
+    mem.heap.assign(0x4000, 0);
+    const std::uintptr_t session = cdtb::tests::FakeMemory::kHeapBase + 0x1000;
+    const std::uintptr_t gate = cdtb::tests::FakeMemory::kHeapBase + 0x2000;
+    std::memcpy(mem.heap.data() + 0x1088, &gate, sizeof(gate));
+    CHECK(cdtb::game::session_looks_live(mem, session));
+}
+
+TEST(session_looks_live_rejects_a_garbage_gate) {
+    cdtb::tests::FakeMemory mem;
+    mem.heap.assign(0x4000, 0);
+    const std::uintptr_t session = cdtb::tests::FakeMemory::kHeapBase + 0x1000;
+    // 풀린 메모리를 흉내낸다 - 읽히기는 하는데 안의 값이 엉뚱하다.
+    const std::uintptr_t gate = 0x00000000DEADBEEFull;
+    std::memcpy(mem.heap.data() + 0x1088, &gate, sizeof(gate));
+    CHECK(!cdtb::game::session_looks_live(mem, session));
+}
+
+TEST(session_looks_live_rejects_unreadable_session) {
+    cdtb::tests::FakeMemory mem;
+    mem.heap.assign(0x100, 0);
+    CHECK(!cdtb::game::session_looks_live(
+        mem, cdtb::tests::FakeMemory::kHeapBase + 0x80000));
+}
+
+TEST(session_looks_live_rejects_null_and_misaligned) {
+    cdtb::tests::FakeMemory mem;
+    mem.heap.assign(0x4000, 0);
+    CHECK(!cdtb::game::session_looks_live(mem, 0));
+    CHECK(!cdtb::game::session_looks_live(
+        mem, cdtb::tests::FakeMemory::kHeapBase + 0x1003));
 }
 
 TEST(best_live_session_handles_null) {

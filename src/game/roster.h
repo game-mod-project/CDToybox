@@ -51,6 +51,12 @@ struct RosterEntry {
     std::uint32_t key = 0;   // u16 키를 담는다. 용병 표는 행 번호.
     std::uint32_t row = 0;   // 레코드 포인터 배열의 행 번호. 액터가 이 값으로 참조한다.
     std::string name;        // 내부 이름 (빈 문자열이면 못 읽음)
+    std::string label;       // 인게임 표시명 (없는 행도 있다 - 그때는 빈 문자열)
+
+    // 보여 줄 이름. 표시명이 있으면 그것, 없으면 내부 이름.
+    const std::string& display() const {
+        return label.empty() ? name : label;
+    }
 
     // 캐릭터 표 전용. 다른 표는 기본값이다.
     std::uint16_t merc_row = 0xFFFF;  // MercenaryInfo 행 번호. 0xFFFF 없음
@@ -63,6 +69,15 @@ struct RosterEntry {
 
     bool is_companion() const { return merc_row != 0xFFFF; }
 };
+
+// 캐릭터의 인게임 표시명이 든 현지화 필드.
+//
+// 실측 2026-09-06: 엔티티 30048(Animal_Bear_Wild_30048) 을 훑으니
+// 0x30 [cat 3] '곰', 0x31 'Animal_Bear', 0x32 '탈것 등록' 이었다.
+// 0x30 이 표시명이다. 다만 모든 행에 있지는 않다 - 키 20955
+// (Animal_Wolf_Wild_30020) 는 어느 필드에도 없었다. 없으면 내부
+// 이름으로 물러난다.
+inline constexpr std::uint32_t kCharNameField = 0x30;
 
 enum class RosterKind { Vehicle, Mercenary, Character };
 
@@ -124,6 +139,21 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
 // (specs/2026-09-05-catchable-companions.md "읽는 법").
 bool roster_is_wild(const std::string& name);       // "_Wild" 가 든다
 std::string roster_species(const std::string& name); // 접미사 뗀 종 이름
+
+// 내부 이름 끝의 숫자. 없으면 0.
+//
+// 현지화 엔티티가 레코드 키와 다른 행이 많다 - 실측 2026-09-06:
+// Animal_Parrot_Wild_32884 는 엔티티 32884 에 '스픽스마코 앵무새'가
+// 있는데 레코드 키는 그 값이 아니라 조회가 빗나갔다.
+// Animal_Wolf_Wild_30019 의 키가 17969 인 것도 같은 어긋남이다.
+std::uint32_t roster_name_suffix(const std::string& name);
+
+// 표시명을 채운다. 현지화에 없는 행은 건드리지 않는다(내부 이름으로
+// 물러난다). 카탈로그 생성과 나눠 둔 이유는, 생성 쪽은 가짜 메모리로
+// 시험하는데 현지화까지 끌고 들어가면 시험이 무거워지기 때문이다.
+// 채운 개수를 돌려준다.
+std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
+                                std::vector<RosterEntry>* entries);
 
 // 배경에서 카탈로그를 만들어 캐시한다. 준비 전에는 조용히 false -
 // 재시도 루프에서 부른다.

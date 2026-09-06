@@ -188,6 +188,7 @@ bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
             if (const RosterEntry* e = character_by_row(row)) {
                 la.key = e->key;
                 la.name = e->name;
+                la.label = e->label;
                 la.merc_row = e->merc_row;
                 la.hirable = e->hirable;
             }

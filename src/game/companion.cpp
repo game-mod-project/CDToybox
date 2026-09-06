@@ -309,6 +309,81 @@ bool companion_hire_trace_install(const mem::Reader& reader) {
     return true;
 }
 
+// --------------------------------------------------- 소환 작업 추적
+
+namespace {
+
+using SpawnWorkFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint64_t,
+                                       float*);
+SpawnWorkFn g_orig_spawn_work = nullptr;
+std::atomic<bool> g_spawn_trace{false};
+std::atomic<int> g_spawn_logs{0};
+constexpr int kSpawnLogMax = 60;
+std::mutex g_spawn_mutex;
+SpawnWorkResult g_last_spawn;
+
+void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
+                                std::uint64_t merc_no, float* pos) {
+    void* r = g_orig_spawn_work(gate, result, merc_no, pos);
+    if (g_spawn_logs.load(std::memory_order_relaxed) < kSpawnLogMax) {
+        g_spawn_logs.fetch_add(1, std::memory_order_relaxed);
+        const std::uint32_t code = (result != nullptr) ? *result : 0xFFFFFFFFu;
+        {
+            std::lock_guard<std::mutex> lock(g_spawn_mutex);
+            g_last_spawn.valid = true;
+            g_last_spawn.merc_no = merc_no;
+            g_last_spawn.code = code;
+        }
+        if (pos != nullptr) {
+            log::infof("소환 작업: 번호 {} 좌표 ({:.1f}, {:.1f}, {:.1f}) "
+                       "-> 코드 {} ({})",
+                       merc_no, pos[0], pos[1], pos[2], code,
+                       code == 0 ? "성공" : "거부");
+        } else {
+            log::infof("소환 작업: 번호 {} 좌표 없음 -> 코드 {} ({})", merc_no,
+                       code, code == 0 ? "성공" : "거부");
+        }
+    }
+    return r;
+}
+
+}  // namespace
+
+SpawnWorkResult last_spawn_work() {
+    std::lock_guard<std::mutex> lock(g_spawn_mutex);
+    return g_last_spawn;
+}
+
+bool companion_spawn_trace_installed() {
+    return g_spawn_trace.load(std::memory_order_acquire);
+}
+
+bool companion_spawn_trace_install(const mem::Reader& reader) {
+    if (g_spawn_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+    const std::uintptr_t fn = reader.module_base() + kSpawnWorkRva;
+    // 프롤로그가 기대와 다르면 걸지 않는다.
+    // 0x2ACF600: mov rax,rsp / mov [rax+0x20],r9 / mov [rax+0x18],r8
+    std::uint8_t head[8]{};
+    if (!reader.read(fn, head, sizeof(head))) return false;
+    if (!(head[0] == 0x48 && head[1] == 0x8B && head[2] == 0xC4 &&
+          head[3] == 0x4C && head[4] == 0x89)) {
+        log::warnf("소환 작업 추적: RVA 0x{:X} 프롤로그가 다르다 ({:02X} {:02X} "
+                   "{:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kSpawnWorkRva, head[0], head[1], head[2], head[3], head[4]);
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(fn), &det_spawn_work,
+                           reinterpret_cast<void**>(&g_orig_spawn_work))) {
+        log::warnf("소환 작업 추적: 후킹 실패");
+        return false;
+    }
+    g_spawn_trace.store(true, std::memory_order_release);
+    log::infof("소환 작업 추적 설치 (RVA 0x{:X}) - 소환이 어디서 갈리는지 찍는다",
+               kSpawnWorkRva);
+    return true;
+}
+
 // --------------------------------------------------- 2976 구동
 
 namespace {
@@ -440,6 +515,48 @@ bool build_hire_wire(std::uint32_t handle, std::uint8_t flag, std::uint8_t* out,
 
 bool hire_target_ready() { return find_message(kHireToTargetId) != nullptr; }
 
+namespace {
+PositionFn g_position_fn = nullptr;
+}  // namespace
+
+void companion_set_position_source(PositionFn fn) { g_position_fn = fn; }
+
+bool complete_summon_ready() {
+    return find_message(kCompleteSummonId) != nullptr;
+}
+
+bool build_complete_summon_wire(std::uint64_t merc_no, const float pos[3],
+                                std::uint8_t* out, std::size_t cap,
+                                std::size_t* len_out) {
+    constexpr std::size_t kLen = 5 + 8 + 12;
+    if (out == nullptr || pos == nullptr || cap < kLen) return false;
+    const std::uint16_t id = kCompleteSummonId;
+    const std::uint16_t body = 8 + 12;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &merc_no, 8);
+    std::memcpy(out + 13, pos, 12);
+    if (len_out != nullptr) *len_out = kLen;
+    return true;
+}
+
+bool request_complete_summon(std::uintptr_t session, std::uint64_t merc_no,
+                             const float pos[3]) {
+    const MessageDesc* m = find_message(kCompleteSummonId);
+    if (m == nullptr || session == 0 || merc_no == 0 || pos == nullptr) {
+        return false;
+    }
+    std::uint8_t wire[32]{};
+    std::size_t len = 0;
+    if (!build_complete_summon_wire(merc_no, pos, wire, sizeof(wire), &len)) {
+        return false;
+    }
+    log::infof("등록 후 소환: 번호 {} 좌표 ({:.1f}, {:.1f}, {:.1f})", merc_no,
+               pos[0], pos[1], pos[2]);
+    return request_message(session, *m, wire, len);
+}
+
 bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
                          std::uint8_t flag) {
     const MessageDesc* m = find_message(kHireToTargetId);
@@ -490,6 +607,12 @@ std::uintptr_t pick_server_session_impl() {
         return 0;
     }
     const std::uintptr_t session = seen[pick];
+    // 시각만으로는 멈춘 게임과 죽은 세션이 구별되지 않는다. 처리기가
+    // 만지는 자리를 직접 읽어 본다.
+    if (g_cmd_reader != nullptr && !session_looks_live(*g_cmd_reader, session)) {
+        log::warnf("세션 0x{:X} 는 살아 있지 않다 - 구동하지 않는다", session);
+        return 0;
+    }
     // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
     if (session != 0 && session != drive_fault_session()) clear_drive_fault();
     return session;
@@ -597,6 +720,57 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         if (!companion_use_item_ready()) { say("2976 미해석"); return false; }
         const bool ok = request_use_item(session, key, b, c, d);
         say(ok ? "사용 요청" : "사용 거부(대기열/쿨다운)");
+        return ok;
+    }
+    if (cmd == "spawnchar") {
+        // 캐릭터 키로 개체를 내 앞에 스폰한다(SpawnCharacterCheatReq,
+        // ID 2510). 근처에 없는 종을 획득하려면 먼저 불러와야 한다.
+        //
+        // 이 치트는 몸통이 살아 있다 - 역직렬화(RVA 0x28F1530)가
+        // 본문을 읽은 뒤 0x2B6E530 을 부른다. 용병 치트 3종이
+        // 비어 있던 것과 다르다(2026-09-06 확인).
+        if (args.size() < 2) { say("spawnchar <캐릭터키> [B] [플래그]"); return false; }
+        const std::uint32_t key = parse_u32(args[1], 0);
+        if (key == 0) { say("키가 0이다"); return false; }
+        const std::uint32_t b = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        const std::uint8_t flag = static_cast<std::uint8_t>(
+            args.size() > 3 ? parse_u32(args[3], 0) : 0);
+        float pos[3]{};
+        if (g_position_fn == nullptr || !g_position_fn(pos)) {
+            say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
+            return false;
+        }
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!char_spawn_ready()) { say("2510 미해석"); return false; }
+        log::infof("캐릭터 소환: 키 {} B {} 플래그 {} 좌표 ({:.1f}, {:.1f}, {:.1f})",
+                   key, b, flag, pos[0], pos[1], pos[2]);
+        const bool ok = request_char_spawn(session, key, b, flag, pos);
+        say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
+    if (cmd == "summon") {
+        if (args.size() < 2) { say("summon <용병번호> [x y z]"); return false; }
+        const std::uint64_t no = std::strtoull(args[1].c_str(), nullptr, 0);
+        if (no == 0) { say("번호가 0이다"); return false; }
+        float pos[3]{};
+        if (args.size() >= 5) {
+            for (int i = 0; i < 3; ++i) {
+                pos[i] = std::strtof(args[static_cast<std::size_t>(2 + i)].c_str(),
+                                     nullptr);
+            }
+        } else {
+            // 바닥 스폰이 쓰는 것과 같은 자리 - 카메라 초점이다.
+            if (g_position_fn == nullptr || !g_position_fn(pos)) {
+                say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
+                return false;
+            }
+        }
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!complete_summon_ready()) { say("2962 미해석"); return false; }
+        const bool ok = request_complete_summon(session, no, pos);
+        say(ok ? "등록 후 소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
     }
     if (cmd == "msg") {
