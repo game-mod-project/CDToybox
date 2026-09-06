@@ -83,3 +83,19 @@ TEST(companion_command_parser_rejects_unknown) {
     CHECK(!cdtb::game::companion_run_command("useitem", &reply));
     CHECK(!cdtb::game::companion_run_command("give", &reply));
 }
+
+TEST(companion_parse_hex_bytes) {
+    using cdtb::game::parse_hex_bytes;
+    std::uint8_t w[8]{};
+    std::size_t n = 0;
+    CHECK(parse_hex_bytes("A0 0B 00", w, sizeof(w), &n));
+    CHECK_EQ(n, static_cast<std::size_t>(3));
+    CHECK_EQ(w[0], static_cast<std::uint8_t>(0xA0));
+    CHECK_EQ(w[1], static_cast<std::uint8_t>(0x0B));
+    CHECK(parse_hex_bytes("a00b00", w, sizeof(w), &n));
+    CHECK_EQ(n, static_cast<std::size_t>(3));
+    CHECK(!parse_hex_bytes("A0 0", w, sizeof(w), &n));      // 홀수 자릿수
+    CHECK(!parse_hex_bytes("zz", w, sizeof(w), &n));        // 16진 아님
+    CHECK(!parse_hex_bytes("", w, sizeof(w), &n));          // 비어 있음
+    CHECK(!parse_hex_bytes("00112233445566778899", w, 4, &n));  // 버퍼 초과
+}

@@ -75,6 +75,15 @@ bool request_use_item(std::uintptr_t session, std::uint32_t item_key,
                       std::uint32_t b = 0, std::uint8_t c = kUseItemByInfoKindC,
                       std::uint32_t d = 0);
 
+// 실험용으로 미리 해석해 두는 메시지들. 이름·ID 는 companion.cpp 의 표.
+// 한 번만 해석하고, 명령 파일의 `msg` 가 ID 로 골라 쓴다.
+bool companion_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader);
+// 해석된 메시지 수.
+int companion_message_count();
+// 16진 문자열("A0 0B 00 ..." 또는 "a00b00...")을 바이트로. 실패하면 false.
+bool parse_hex_bytes(const std::string& text, std::uint8_t* out, std::size_t cap,
+                     std::size_t* len_out);
+
 // ----------------------------------------------------------------------
 // 명령 파일 (DLL 옆 cdtoybox_cmd.txt)
 //
@@ -82,7 +91,8 @@ bool request_use_item(std::uintptr_t session, std::uint32_t item_key,
 // 명령 하나. 읽으면 파일을 지운다.
 //   give <아이템키> [개수]
 //   useitem <아이템키> [B] [C] [D]      (C·D 는 10진 또는 0x 16진)
-//   hire <액터핸들>                     (2338, 아직 없음 - 예약)
+//   msg <16진 와이어>                   미리 해석한 메시지를 그대로 구동
+//                                      (2676·2976·2338·2454·2386·2894)
 // 세션은 그란트 패널과 같은 규칙(서버 세션 중 가장 유력한 것)으로 고른다.
 void companion_command_start(const mem::Reader& reader);
 void companion_command_stop();

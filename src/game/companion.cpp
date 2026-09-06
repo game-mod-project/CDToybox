@@ -279,6 +279,70 @@ bool request_use_item(std::uintptr_t session, std::uint32_t item_key,
     return request_message(session, g_use_item_msg, wire, len);
 }
 
+
+// --------------------------------------------------- 실험용 메시지 표
+
+namespace {
+
+// 이 이름들만 미리 해석해 둔다. 명령 파일의 `msg` 가 와이어 머리의 ID 로 고른다.
+const char* const kMessageClasses[] = {
+    "TrocTrUseItemReq",                    // 2676 아이템 사용 (부적이 이것)
+    "TrocTrUseItemByItemInfoReq",          // 2976
+    "TrocTrHireMercenaryToTargetReq",      // 2338 대상 고용(획득)
+    "TrocTrHireMercenaryFromInventoryReq", // 2454 인벤 고용
+    "TrocTrCatchBySummonReq",              // 2386 붙잡기
+    "TrocTrSelectMercenarySpawnReq",       // 2894 스폰 선택
+};
+constexpr int kMessageMax = 8;
+MessageDesc g_msgs[kMessageMax];
+int g_msg_count = 0;
+
+const MessageDesc* find_message(std::uint16_t id) {
+    for (int i = 0; i < g_msg_count; ++i) {
+        if (g_msgs[i].id == id) return &g_msgs[i];
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+bool parse_hex_bytes(const std::string& text, std::uint8_t* out, std::size_t cap,
+                     std::size_t* len_out) {
+    if (out == nullptr) return false;
+    std::size_t n = 0;
+    int hi = -1;
+    for (char ch : text) {
+        int v;
+        if (ch >= '0' && ch <= '9') v = ch - '0';
+        else if (ch >= 'a' && ch <= 'f') v = ch - 'a' + 10;
+        else if (ch >= 'A' && ch <= 'F') v = ch - 'A' + 10;
+        else if (ch == ' ' || ch == '\t' || ch == ',') continue;
+        else return false;
+        if (hi < 0) { hi = v; continue; }
+        if (n >= cap) return false;
+        out[n++] = static_cast<std::uint8_t>((hi << 4) | v);
+        hi = -1;
+    }
+    if (hi >= 0) return false;   // 홀수 자릿수
+    if (len_out) *len_out = n;
+    return n > 0;
+}
+
+int companion_message_count() { return g_msg_count; }
+
+bool companion_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader) {
+    if (g_msg_count > 0) return true;
+    for (const char* cls : kMessageClasses) {
+        if (g_msg_count >= kMessageMax) break;
+        MessageDesc m;
+        if (!resolve_message(rtti, reader, cls, &m)) continue;
+        g_msgs[g_msg_count++] = m;
+    }
+    log::infof("실험용 메시지 {}개 해석됨 - 명령 파일 `msg <16진 와이어>` 로 구동",
+               g_msg_count);
+    return g_msg_count > 0;
+}
+
 // --------------------------------------------------- 명령 파일
 
 namespace {
@@ -402,6 +466,32 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         say(ok ? "사용 요청" : "사용 거부(대기열/쿨다운)");
         return ok;
     }
+    if (cmd == "msg") {
+        if (args.size() < 2) { say("msg <16진 와이어(머리 포함)>"); return false; }
+        std::string hex;
+        for (std::size_t i = 1; i < args.size(); ++i) hex += args[i];
+        std::uint8_t wire[kMessageWireMax]{};
+        std::size_t len = 0;
+        if (!parse_hex_bytes(hex, wire, sizeof(wire), &len) || len < 5) {
+            say("16진 파싱 실패"); return false;
+        }
+        std::uint16_t id = 0, body = 0;
+        decode_message_header(wire, len, &id, &body);
+        if (body + 5u != len) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "머리 본문길이 %u 인데 실제 %zu", body,
+                          len - 5);
+            say(buf);
+            return false;
+        }
+        const MessageDesc* m = find_message(id);
+        if (m == nullptr) { say("그 ID 는 해석돼 있지 않다"); return false; }
+        const std::uintptr_t session = pick_server_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        const bool ok = request_message(session, *m, wire, len);
+        say(ok ? "구동 요청" : "구동 거부(대기열/쿨다운)");
+        return ok;
+    }
     say("모르는 명령");
     return false;
 }
@@ -411,7 +501,7 @@ void companion_command_start(const mem::Reader& reader) {
     g_cmd_reader = &reader;
     g_cmd_stop.store(false, std::memory_order_release);
     g_cmd_thread = std::thread(command_loop);
-    log::infof("명령 파일 감시 시작: cdtoybox_cmd.txt (give / useitem)");
+    log::infof("명령 파일 감시 시작: cdtoybox_cmd.txt (give / useitem / msg)");
 }
 
 void companion_command_stop() {
