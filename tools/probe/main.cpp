@@ -54,6 +54,7 @@ void usage() {
         "  heapfind <16진바이트>       힙에서 바이트 서명 찾기\n"
         "  heapdump <16진바이트> [앞] [뒤]  서명 자리마다 앞뒤 덤프\n"
         "  dumpmany <바이트수> <주소들>  여러 주소를 한 번에 덤프\n"
+        "  instcount <이름조각들>       클래스별 인스턴스 개수만\n"
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
         "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
         "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
@@ -2562,6 +2563,30 @@ void cmd_instances(mem::Rtti& rt, const Remote& r, const char* name,
     (void)r;
 }
 
+// 이름에 조각이 든 클래스들의 인스턴스 개수를 한 번에 센다.
+//
+// instances 는 클래스 하나뿐이라, 붙을 때마다 350MB 이미지를 다시
+// 읽는 비용이 클래스 수만큼 곱해진다. 지역 이동 전후를 비교하려면
+// 같은 측정을 두 번 해야 하므로 그 비용이 두 배가 된다.
+//
+// 개수만 찍는다. 무엇이 늘었는지 보려는 것이지 주소가 필요한 게
+// 아니다(동반자 등록 조사, 2026-09-06).
+void cmd_instcount(mem::Rtti& rt, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: instcount <이름조각> [이름조각 ...]\n");
+        return;
+    }
+    for (int i = 2; i < argc; ++i) {
+        const auto types = rt.find_types(argv[i], 400);
+        std::printf("\n=== \"%s\" 에 걸린 클래스 %zu개\n", argv[i], types.size());
+        for (const auto& t : types) {
+            const auto inst = rt.instances_of_class(t.name, 4000);
+            if (inst.empty()) continue;   // 0개는 잡음이라 뺀다
+            std::printf("  %6zu  %s\n", inst.size(), t.name.c_str());
+        }
+    }
+}
+
 void cmd_dump(const Remote& r, std::uintptr_t addr, std::size_t n) {
     std::vector<std::uint8_t> buf(n);
     if (!r.read(addr, buf.data(), n)) {
@@ -3348,6 +3373,10 @@ int main(int argc, char** argv) {
         const std::size_t n = (argc > 3) ? std::strtoull(argv[3], nullptr, 10)
                                          : 24;
         cmd_fields(rt, r, parse_addr(argv[2]), n);
+        return 0;
+    }
+    if (cmd == "instcount") {
+        cmd_instcount(rt, argc, argv);
         return 0;
     }
     if (cmd == "instances") {
