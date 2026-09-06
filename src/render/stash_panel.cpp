@@ -165,11 +165,26 @@ bool stash_is_favorite(unsigned int key) {
     return g_stash.is_favorite(key);
 }
 
-void draw_stash_panel(bool* open) {
-    if (!g_loaded) load();
+void stash_enqueue(const std::vector<game::StashEntry>& items) {
+    if (items.empty()) return;
+    // 앞선 지급이 다 끝났으면 큐를 비우고 새로 시작한다 - 안 그러면
+    // 옛 목록이 앞에 그대로 쌓여 무한히 커진다.
+    if (g_queue_at >= g_queue.size()) {
+        g_queue.clear();
+        g_queue_at = 0;
+    }
+    g_queue.insert(g_queue.end(), items.begin(), items.end());
+}
 
-    // 큐가 남아 있으면 한 개씩 흘려보낸다. request_give 가 쿨다운에
-    // 걸리면 false 를 주므로 다음 프레임에 다시 시도한다.
+std::size_t stash_queue_remaining() {
+    return g_queue_at < g_queue.size() ? g_queue.size() - g_queue_at : 0;
+}
+std::size_t stash_queue_total() { return g_queue.size(); }
+
+// 큐에서 한 개를 지급 시도한다. request_give 가 쿨다운에 걸리면
+// false 를 주므로 다음 프레임에 다시 시도한다. overlay 가 매 프레임
+// 부른다 - 보관함 창을 열지 않아도 지급이 진행된다.
+void stash_queue_pump() {
     if (g_queue_at < g_queue.size() && !game::spawn_pending()) {
         std::uintptr_t seen[16]{};
         std::uint32_t hits[16]{};
@@ -246,6 +261,10 @@ void draw_stash_panel(bool* open) {
             g_queue_at = 0;
         }
     }
+}
+
+void draw_stash_panel(bool* open) {
+    if (!g_loaded) load();
 
     ImGui::SetNextWindowPos(ImVec2(1180, 340), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 400.0f), ImGuiCond_FirstUseEver);
