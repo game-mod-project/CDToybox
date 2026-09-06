@@ -55,7 +55,8 @@ bool matches_query(const game::RosterEntry& e) {
     if (g_query[0] == '\0') return true;
     char keybuf[16];
     std::snprintf(keybuf, sizeof(keybuf), "%u", e.key);
-    const bool by_name = !e.name.empty() && contains_ci(e.name, g_query);
+    const bool by_name = (!e.name.empty() && contains_ci(e.name, g_query)) ||
+                         (!e.label.empty() && contains_ci(e.label, g_query));
     const bool by_key = std::strstr(keybuf, g_query) != nullptr;
     return by_name || by_key;
 }
@@ -63,7 +64,7 @@ bool matches_query(const game::RosterEntry& e) {
 void select(const game::RosterEntry& e) {
     g_selected_key = e.key;
     std::snprintf(g_selected_name, sizeof(g_selected_name), "%s",
-                  e.name.c_str());
+                  e.display().c_str());
     char just_key[16];
     std::snprintf(just_key, sizeof(just_key), "%u", e.key);
     ImGui::SetClipboardText(just_key);
@@ -161,9 +162,10 @@ void draw_companion_tab() {
                                   ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY |
                                   ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("companions", 5, flags)) {
+    if (ImGui::BeginTable("companions", 6, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 52);
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
@@ -184,15 +186,21 @@ void draw_companion_tab() {
                     select(*e);
                 }
                 ImGui::TableSetColumnIndex(1);
+                if (e->label.empty()) {
+                    ImGui::TextDisabled("-");
+                } else {
+                    ImGui::TextUnformatted(e->label.c_str());
+                }
+                ImGui::TableSetColumnIndex(2);
                 ImGui::TextUnformatted(e->name.empty() ? "(이름 없음)"
                                                        : e->name.c_str());
-                ImGui::TableSetColumnIndex(2);
+                ImGui::TableSetColumnIndex(3);
                 ImGui::TextUnformatted(
                     type_label(e->merc_row, game::mercenary_type_name(e->merc_row)));
-                ImGui::TableSetColumnIndex(3);
+                ImGui::TableSetColumnIndex(4);
                 ImGui::TextUnformatted(game::roster_is_wild(e->name) ? "야생"
                                                                      : "");
-                ImGui::TableSetColumnIndex(4);
+                ImGui::TableSetColumnIndex(5);
                 ImGui::TextUnformatted(e->hirable ? "가능" : "");
             }
         }
@@ -229,7 +237,10 @@ void draw_nearby_tab() {
         if (g_query[0] != 0) {
             char keybuf[16];
             std::snprintf(keybuf, sizeof(keybuf), "%u", a.key);
-            if (!(contains_ci(a.name, g_query) || std::strstr(keybuf, g_query))) continue;
+            if (!(contains_ci(a.name, g_query) || contains_ci(a.label, g_query) ||
+                  std::strstr(keybuf, g_query))) {
+                continue;
+            }
         }
         view.push_back(&a);
     }
@@ -268,10 +279,11 @@ void draw_nearby_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("nearby", 7, flags)) {
+    if (ImGui::BeginTable("nearby", 8, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 104);
         ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed, 82);
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
@@ -309,21 +321,27 @@ void draw_nearby_tab() {
                     ImGui::TextDisabled("-");
                 }
                 ImGui::TableSetColumnIndex(2);
+                if (a->label.empty()) {
+                    ImGui::TextDisabled("-");
+                } else {
+                    ImGui::TextUnformatted(a->label.c_str());
+                }
+                ImGui::TableSetColumnIndex(3);
                 if (a->name.empty()) {
                     ImGui::TextDisabled("(행 %u)", a->row);
                 } else {
                     ImGui::TextUnformatted(a->name.c_str());
                 }
-                ImGui::TableSetColumnIndex(3);
+                ImGui::TableSetColumnIndex(4);
                 ImGui::TextUnformatted(
                     a->is_companion()
                         ? type_label(a->merc_row, game::mercenary_type_name(a->merc_row))
                         : "");
-                ImGui::TableSetColumnIndex(4);
-                ImGui::TextUnformatted(game::roster_is_wild(a->name) ? "야생" : "");
                 ImGui::TableSetColumnIndex(5);
-                ImGui::TextUnformatted(a->hirable ? "가능" : "");
+                ImGui::TextUnformatted(game::roster_is_wild(a->name) ? "야생" : "");
                 ImGui::TableSetColumnIndex(6);
+                ImGui::TextUnformatted(a->hirable ? "가능" : "");
+                ImGui::TableSetColumnIndex(7);
                 // 획득: 그 자리에서 동반자로 등록한다(2338). 실제 게임플레이
                 // 거래라 되돌리려면 게임의 반려동물 풀어주기를 쓴다.
                 const bool can = a->is_companion() && a->handle != 0 &&
@@ -353,10 +371,8 @@ void draw_nearby_tab() {
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered() && can) {
                     ImGui::SetTooltip(
-                        "이 개체를 동반자로 등록합니다.
-"
-                        "세이브/로드를 한 번 해야 소환할 수 있습니다.
-"
+                        "이 개체를 동반자로 등록합니다.\n"
+                        "세이브/로드를 한 번 해야 소환할 수 있습니다.\n"
                         "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
                 }
                 ImGui::PopID();
@@ -395,12 +411,19 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
                 if (show_merc_type) {
                     std::snprintf(line, sizeof(line), "%-4u  type %u  %s##r%d",
                                   e->key, e->merc_type,
-                                  e->name.empty() ? "(이름 없음)" : e->name.c_str(),
+                                  e->display().empty() ? "(이름 없음)"
+                                                       : e->display().c_str(),
                                   i);
-                } else {
+                } else if (e->label.empty()) {
                     std::snprintf(line, sizeof(line), "%-10u  %s##r%d", e->key,
                                   e->name.empty() ? "(이름 없음)" : e->name.c_str(),
                                   i);
+                } else {
+                    // 표시명을 앞에 두되 내부 이름을 지우지는 않는다.
+                    // 키를 찾는 작업에는 내부 이름이 있어야 한다.
+                    std::snprintf(line, sizeof(line), "%-10u  %s  (%s)##r%d",
+                                  e->key, e->label.c_str(),
+                                  e->name.empty() ? "?" : e->name.c_str(), i);
                 }
                 const bool sel = (e->key == g_selected_key);
                 if (ImGui::Selectable(line, sel)) select(*e);
@@ -425,7 +448,8 @@ void draw_roster_panel(bool* open) {
         ImGui::End();
         return;
     }
-    ImGui::TextDisabled("내부 이름입니다. 한글 표시명은 후속 조사 대상입니다.");
+    ImGui::TextDisabled(
+        "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
 
     if (ImGui::BeginTabBar("roster_tabs")) {
         if (ImGui::BeginTabItem("동반자")) { g_tab = 0; ImGui::EndTabItem(); }

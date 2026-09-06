@@ -276,6 +276,24 @@ std::atomic<bool> g_ready{false};
 
 }  // namespace
 
+std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
+                               std::vector<RosterEntry>* entries) {
+    if (entries == nullptr) return 0;
+    std::size_t named = 0;
+    for (auto& e : *entries) {
+        if (e.key == 0) continue;
+        std::string text;
+        if (!resolve(reader, sys, loc_key(e.key, kCharNameField), &text,
+                     nullptr)) {
+            continue;  // 없는 행이 많다. 조용히 넘긴다.
+        }
+        if (text.empty()) continue;
+        e.label = std::move(text);
+        ++named;
+    }
+    return named;
+}
+
 bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_ready.load(std::memory_order_acquire)) return true;
 
@@ -289,6 +307,15 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 탭의 타입 이름만 비고 목록은 그려진다.
     const bool ok_m = build_static_catalog(reader, rtti, kMercenaryClass,
                                            RosterKind::Mercenary, &m);
+
+    // 표시명. 현지화가 아직 안 올라왔으면 내부 이름만으로 간다 -
+    // 목록을 못 그리는 것보다 낫다.
+    LocSystem sys;
+    std::size_t labeled = 0;
+    if (find_loc_system(rtti, reader, &sys)) {
+        labeled += apply_roster_labels(reader, sys, &v);
+        labeled += apply_roster_labels(reader, sys, &c);
+    }
 
     const std::size_t vn = v.size(), cn = c.size(), mn = m.size();
     std::size_t companions = 0;
@@ -309,8 +336,9 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
     if (ok_m) g_mercenary.swap(std::move(m));
     g_ready.store(true, std::memory_order_release);
-    log::infof("로스터: 탈것 {}개, 캐릭터 {}개(동반자 {}개), 용병 타입 {}개",
-               vn, cn, companions, ok_m ? mn : 0);
+    log::infof(
+        "로스터: 탈것 {}개, 캐릭터 {}개(동반자 {}개), 용병 타입 {}개, 표시명 {}개",
+        vn, cn, companions, ok_m ? mn : 0, labeled);
     return true;
 }
 
