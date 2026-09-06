@@ -22,6 +22,9 @@ namespace cdtb::game {
 bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader);
 bool nofall_installed();
 
+// AOB 가 이 게임 빌드에서 유일 매칭되지 않아 설치 불가로 판정됨(안전, 무효).
+bool nofall_unsupported();
+
 // 낙하하는 개체(케이브가 기록)가 플레이어인지 판정해 고정한다. 분석 스레드에서
 // 주기적으로 부른다. 플레이어가 한 번 떨어져야 학습된다(첫 낙하는 아플 수 있음).
 void nofall_identify(const mem::Reader& reader);

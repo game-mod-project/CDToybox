@@ -47,6 +47,8 @@ void draw_player_panel(bool* open) {
             game::nofall_set(nf);
         ImGui::SameLine();
         ImGui::TextDisabled("(한 번 낙하해야 학습)");
+    } else if (game::nofall_unsupported()) {
+        ImGui::TextDisabled("낙사 방지: 이 게임 빌드 미지원 (사이트 재추출 필요)");
     } else {
         ImGui::TextDisabled("낙사 방지: 훅 준비 중...");
     }

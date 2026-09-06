@@ -19,6 +19,7 @@ constexpr const char* kSite =
     "48 89 5F ?? 48 8B 5C 24 ?? 48 89 77 ?? 66 89 6F";
 
 std::atomic<bool> g_installed{false};
+std::atomic<bool> g_unsupported{false};
 std::atomic<bool> g_enabled{false};
 std::uintptr_t g_site = 0;
 std::uintptr_t g_cave = 0;
@@ -77,6 +78,7 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     const mem::Range range{img.data(), img.size()};
     const auto hits = mem::find_all(range, *parsed, 2);
     if (hits.size() != 1) {   // 유일하지 않으면 패치 금지(안전)
+        g_unsupported.store(true, std::memory_order_release);
         log::warnf("낙사: 사이트 시그니처가 유일하지 않다({}) - 설치 안 함",
                    hits.size());
         return false;
@@ -155,6 +157,9 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
 }
 
 bool nofall_installed() { return g_installed.load(std::memory_order_acquire); }
+bool nofall_unsupported() {
+    return g_unsupported.load(std::memory_order_acquire);
+}
 
 void nofall_set(bool on) {
     g_enabled.store(on, std::memory_order_release);
