@@ -20,6 +20,7 @@ char g_query[128] = "";
 int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
 double g_near_last_refresh = 0.0;
+double g_near_busy_until = 0.0;   // 대기열이 밀렸다고 알리는 시각
 mem::LocalReader g_near_reader;
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
 char g_selected_name[128] = "";
@@ -235,6 +236,12 @@ void draw_nearby_tab() {
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 액터 주소가 복사됩니다");
 
+    // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
+    // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).
+    if (g_near_busy_until > now) {
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
+                           "요청이 밀렸습니다 - 앞의 작업이 끝나면 다시 누르세요");
+    }
     // 마지막 획득 결과. 게임은 거부를 조용히 코드로만 알려 준다.
     const game::HireWorkResult hr = game::last_hire_work();
     if (hr.valid) {
@@ -266,13 +273,16 @@ void draw_nearby_tab() {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                 const game::LiveActor* a = view[static_cast<std::size_t>(i)];
                 ImGui::TableNextRow();
+                // 줄마다 ID 를 분리한다. 라벨의 "##" 뒤가 ID 이므로 그것도
+                // 줄마다 다르게 준다 - 둘 중 하나만으로는 ImGui 가 같은 ID 를
+                // 두 개 봤다고 경고한다(실측 2026-09-06).
                 ImGui::PushID(i);
                 ImGui::TableSetColumnIndex(0);
-                char label[48];
-                std::snprintf(label, sizeof(label), "%llX##n",
-                              static_cast<unsigned long long>(a->actor));
+                char label[64];
+                std::snprintf(label, sizeof(label), "%llX##row%d",
+                              static_cast<unsigned long long>(a->actor), i);
                 // AllowOverlap 이 없으면 행 전체를 덮는 이 항목이 같은 줄의
-                // 버튼 클릭을 삼킨다 (실측 2026-09-06: 획득 버튼 무반응).
+                // 버튼 클릭을 삼킨다.
                 if (ImGui::Selectable(label, false,
                                       ImGuiSelectableFlags_SpanAllColumns |
                                           ImGuiSelectableFlags_AllowOverlap)) {
@@ -307,10 +317,14 @@ void draw_nearby_tab() {
                 // 거래라 되돌리려면 게임의 반려동물 풀어주기를 쓴다.
                 const bool can = a->is_companion() && a->handle != 0 &&
                                  game::hire_target_ready();
+                char btn[32];
+                std::snprintf(btn, sizeof(btn), "획득##hire%d", i);
                 ImGui::BeginDisabled(!can);
-                if (ImGui::SmallButton("획득")) {
+                if (ImGui::SmallButton(btn)) {
                     const std::uintptr_t sess = game::companion_pick_session();
-                    if (sess != 0) game::request_hire_target(sess, a->handle, 0);
+                    const bool queued =
+                        sess != 0 && game::request_hire_target(sess, a->handle, 0);
+                    if (!queued) g_near_busy_until = now + 3.0;
                 }
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered() && can) {
