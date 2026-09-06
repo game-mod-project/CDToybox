@@ -20,7 +20,8 @@ char g_query[128] = "";
 int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
 double g_near_last_refresh = 0.0;
-double g_near_busy_until = 0.0;   // 대기열이 밀렸다고 알리는 시각
+double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
+const char* g_near_busy_why = "";  // 왜 못 받았는지
 mem::LocalReader g_near_reader;
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
 char g_selected_name[128] = "";
@@ -239,8 +240,13 @@ void draw_nearby_tab() {
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).
     if (g_near_busy_until > now) {
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
-                           "요청이 밀렸습니다 - 앞의 작업이 끝나면 다시 누르세요");
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "%s", g_near_busy_why);
+    }
+    // 죽은 세션은 잠긴다. 왜 눌러도 안 되는지 화면에 그대로 쓴다.
+    if (game::drive_fault_session() != 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f),
+                           "구동이 게임 안에서 죽어 세션을 잠갔습니다. "
+                           "월드를 다시 들어가면 풀립니다.");
     }
     // 마지막 획득 결과. 게임은 거부를 조용히 코드로만 알려 준다.
     const game::HireWorkResult hr = game::last_hire_work();
@@ -324,7 +330,20 @@ void draw_nearby_tab() {
                     const std::uintptr_t sess = game::companion_pick_session();
                     const bool queued =
                         sess != 0 && game::request_hire_target(sess, a->handle, 0);
-                    if (!queued) g_near_busy_until = now + 3.0;
+                    if (!queued) {
+                        g_near_busy_until = now + 3.0;
+                        if (sess == 0) {
+                            g_near_busy_why =
+                                "살아 있는 서버 세션이 없습니다 - 월드에 "
+                                "들어가서 잠시 기다리세요";
+                        } else if (sess == game::drive_fault_session()) {
+                            g_near_busy_why = "세션이 잠겨 있습니다";
+                        } else {
+                            g_near_busy_why =
+                                "요청이 밀렸습니다 - 앞의 작업이 끝나면 "
+                                "다시 누르세요";
+                        }
+                    }
                 }
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered() && can) {

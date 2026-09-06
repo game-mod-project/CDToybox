@@ -119,6 +119,63 @@ TEST(best_actor_returns_none_when_empty) {
     CHECK_EQ(cdtb::game::best_actor_index(nullptr, nullptr, 0), -1);
 }
 
+// 세션 표는 지워지지 않는다. 접속이 다시 맺어지면 옛 세션이 누적
+// 호출 1위로 남는데 그 메모리는 이미 풀렸다 - 그것으로 구동하면
+// 게임 안에서 0xC0000005 로 죽는다(실측 2026-09-06, 네 번 반복한 뒤
+// 클라이언트가 메인 화면으로 떨어졌다). 그래서 최근에 본 것만 고른다.
+TEST(best_live_session_skips_the_stale_winner) {
+    const std::uint32_t hits[2] = {17020, 12};
+    const bool server[2] = {true, true};
+    const std::uint64_t last[2] = {1000, 99000};  // 0번은 옛 접속
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
+                                                 3000),
+             1);
+}
+
+TEST(best_live_session_takes_the_busiest_among_fresh) {
+    const std::uint32_t hits[3] = {5, 900, 40};
+    const bool server[3] = {true, true, true};
+    const std::uint64_t last[3] = {99500, 99800, 99900};
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 3, 100000,
+                                                 3000),
+             1);
+}
+
+TEST(best_live_session_ignores_never_seen) {
+    // 시각 0 은 "한 번도 못 봤다" 다. 시각을 안 남긴 자리를 살아
+    // 있다고 보면 안 된다.
+    const std::uint32_t hits[2] = {900, 3};
+    const bool server[2] = {true, true};
+    const std::uint64_t last[2] = {0, 99900};
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
+                                                 3000),
+             1);
+}
+
+TEST(best_live_session_returns_none_when_all_stale) {
+    const std::uint32_t hits[2] = {900, 30};
+    const bool server[2] = {true, true};
+    const std::uint64_t last[2] = {10, 20};
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
+                                                 3000),
+             -1);
+}
+
+TEST(best_live_session_still_skips_client_side) {
+    const std::uint32_t hits[2] = {99999, 4};
+    const bool server[2] = {false, true};
+    const std::uint64_t last[2] = {99900, 99900};
+    CHECK_EQ(cdtb::game::best_live_session_index(hits, server, last, 2, 100000,
+                                                 3000),
+             1);
+}
+
+TEST(best_live_session_handles_null) {
+    CHECK_EQ(cdtb::game::best_live_session_index(nullptr, nullptr, nullptr, 0,
+                                                 0, 3000),
+             -1);
+}
+
 // 처리기는 바이트 패턴으로 찍을 수 없다 - 거의 같은 함수가 하나 더
 // 있어서 40바이트까지 가야 갈리고, 그 40번째가 점프 변위라 패치에
 // 밀린다. 대신 역직렬화 함수 본문에서 호출 자리를 찾는다. 파싱을

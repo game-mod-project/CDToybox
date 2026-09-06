@@ -76,7 +76,10 @@ std::uint32_t g_sess_hits[kSeenCap]{};
 std::uintptr_t g_sess_actor[kSeenCap]{};
 char g_sess_class[kSeenCap][96]{};
 bool g_sess_server[kSeenCap]{};
+std::uint64_t g_sess_last[kSeenCap]{};
 std::atomic<int> g_sess_count{0};
+// 구동이 죽은 세션. 같은 자리로 또 보내면 또 죽는다.
+std::atomic<std::uintptr_t> g_drive_fault{0};
 std::atomic<int> g_seen_count{0};
 
 // 바닥 스폰. 인자는 전부 포인터다 - 디스어셈블에서 확인했다.
@@ -384,6 +387,15 @@ bool run_pending_if_any() {
                             &g_outcome);
                 break;
         }
+        // 종류를 가리지 않는다. 게임 안에서 죽었다는 것은 우리가
+        // 넘긴 세션이 이미 풀렸다는 뜻이고 - 실측 2026-09-06: 죽은
+        // 자리가 `mov rax,[세션+0x88]` 이었다 - 같은 자리로 또 보내면
+        // 또 죽는다. 그 반복이 클라이언트를 오류로 떨어뜨린다.
+        if (g_outcome.crashed && req.session != 0) {
+            g_drive_fault.store(req.session, std::memory_order_release);
+            log::warnf("세션 0x{:X} 를 잠갔다 - 새 세션이 잡힐 때까지 구동하지 않는다",
+                       req.session);
+        }
     }
     g_last_done.store(GetTickCount64(), std::memory_order_release);
     g_running.store(false, std::memory_order_release);
@@ -552,9 +564,13 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap, s);
         // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
         // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
+        const std::uint64_t tick = ::GetTickCount64();
         for (int i = 0; i < now; ++i) {
             if (g_sess[i] == s) {
                 g_sess_actor[i] = actor;
+                // 살아 있다는 유일한 증거. 표에서 지울 수는 없으니
+                // 언제 봤는지를 남겨 고를 때 거른다.
+                g_sess_last[i] = tick;
                 break;
             }
         }
@@ -1079,6 +1095,37 @@ const char* session_class(int index) {
 bool session_is_server(int index) {
     if (index < 0 || index >= kSeenCap) return false;
     return g_sess_server[index];
+}
+
+std::uint64_t session_last_seen(int index) {
+    if (index < 0 || index >= kSeenCap) return 0;
+    return g_sess_last[index];
+}
+
+int best_live_session_index(const std::uint32_t* hits, const bool* is_server,
+                            const std::uint64_t* last_seen, int n,
+                            std::uint64_t now_ms, std::uint64_t max_age_ms) {
+    if (hits == nullptr || is_server == nullptr || last_seen == nullptr) {
+        return -1;
+    }
+    int best = -1;
+    for (int i = 0; i < n; ++i) {
+        if (!is_server[i]) continue;
+        // 아직 한 번도 못 봤거나(0) 오래전에 본 자리는 죽었다고 본다.
+        if (last_seen[i] == 0) continue;
+        if (now_ms < last_seen[i]) continue;
+        if (now_ms - last_seen[i] > max_age_ms) continue;
+        if (best < 0 || hits[i] > hits[best]) best = i;
+    }
+    return best;
+}
+
+std::uintptr_t drive_fault_session() {
+    return g_drive_fault.load(std::memory_order_acquire);
+}
+
+void clear_drive_fault() {
+    g_drive_fault.store(0, std::memory_order_release);
 }
 
 namespace {
@@ -1838,6 +1885,7 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
     if (session == 0 || msg.deser == 0 || wire == nullptr) return false;
     if (len < 5 || len > kMessageWireMax) return false;
     if (g_reader == nullptr) return false;
+    if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
@@ -1861,6 +1909,7 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
                   std::int64_t count, const GiveExtras& extras) {
     if (!give_ready()) return false;
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
+    if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
     if (g_has_pending.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <

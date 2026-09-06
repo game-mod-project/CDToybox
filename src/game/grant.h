@@ -140,6 +140,37 @@ void set_session_class(int index, const char* name);
 const char* session_class(int index);
 bool session_is_server(int index);
 
+// 그 세션을 마지막으로 본 시각(GetTickCount64 기준, 못 봤으면 0).
+//
+// 세션 표는 한 번 들어온 주소가 영원히 남는다. 접속이 다시 맺어지면
+// 옛 주소는 이미 풀린 메모리인데 누적 호출 횟수가 가장 커서 계속
+// 뽑힌다 - 실측 2026-09-06: 월드 전환 뒤 같은 세션으로 메시지를
+// 구동했더니 게임 안에서 0xC0000005 로 죽었고, 그것을 네 번 반복한
+// 끝에 클라이언트가 오류를 내며 메인 화면으로 떨어졌다. 살아 있는
+// 세션은 게임 코드가 쉬지 않고 부르므로, 최근에 봤는지가 곧 살아
+// 있는지다.
+std::uint64_t session_last_seen(int index);
+
+// 서버 쪽이면서 최근에 본 세션 중 호출이 가장 많은 자리. 없으면 -1.
+// 시각을 인자로 받는 순수 함수라 시험할 수 있다.
+int best_live_session_index(const std::uint32_t* hits, const bool* is_server,
+                            const std::uint64_t* last_seen, int n,
+                            std::uint64_t now_ms, std::uint64_t max_age_ms);
+
+// 세션이 살아 있다고 볼 시간. 액터 조회는 프레임마다 불리므로
+// 넉넉하게 잡아도 죽은 세션은 걸러진다.
+constexpr std::uint64_t kSessionFreshMs = 3000;
+
+// 구동이 게임 안에서 죽은 그 세션. 죽은 적이 없으면 0.
+//
+// 한 번 죽은 세션으로 또 구동하면 같은 자리에서 또 죽는다. 그 반복이
+// 클라이언트를 망가뜨리므로, 죽은 세션은 잠가 두고 새 세션이 잡힐
+// 때까지 요청을 받지 않는다.
+std::uintptr_t drive_fault_session();
+
+// 죽은 세션 잠금을 푼다. 새 세션을 잡았을 때만 쓴다.
+void clear_drive_fault();
+
 // 역직렬화 함수 본문에서 처리기 호출 자리를 찾는다. 파싱을 마치고
 // 성공했을 때만 부르므로 "call rel32" 뒤에 "mov dword ptr [rbx],0"
 // 이 온다. 딱 한 곳에서 맞아야 한다.

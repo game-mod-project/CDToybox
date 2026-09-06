@@ -466,10 +466,22 @@ std::uintptr_t pick_server_session_impl() {
     const int n = seen_sessions(seen, hits, 16);
     if (n == 0) return 0;
     bool server[16]{};
-    for (int i = 0; i < n; ++i) server[i] = session_is_server(i);
-    const int pick = best_actor_index(hits, server, n);
-    if (pick < 0 || pick >= n || !server[pick]) return 0;
-    return seen[pick];
+    std::uint64_t last[16]{};
+    for (int i = 0; i < n; ++i) {
+        server[i] = session_is_server(i);
+        last[i] = session_last_seen(i);
+    }
+    // 호출 횟수만 보면 안 된다. 표는 지워지지 않으므로 접속이 다시
+    // 맺어진 뒤에도 옛 세션이 누적 횟수 1위로 남아 계속 뽑히고,
+    // 그 풀린 포인터로 구동하면 게임 안에서 죽는다 - 실측 2026-09-06.
+    const int pick = best_live_session_index(hits, server, last, n,
+                                             ::GetTickCount64(),
+                                             kSessionFreshMs);
+    if (pick < 0 || pick >= n) return 0;
+    const std::uintptr_t session = seen[pick];
+    // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
+    if (session != 0 && session != drive_fault_session()) clear_drive_fault();
+    return session;
 }
 
 std::uint32_t parse_u32(const std::string& s, std::uint32_t dflt) {
