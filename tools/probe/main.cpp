@@ -52,6 +52,8 @@ void usage() {
         "  setf <주소> <값>            float 쓰기 (실행 중 게임에 반영)\n"
         "  poke <주소> <16진바이트>    바이트를 그대로 쓴다\n"
         "  heapfind <16진바이트>       힙에서 바이트 서명 찾기\n"
+        "  heapdump <16진바이트> [앞] [뒤]  서명 자리마다 앞뒤 덤프\n"
+        "  dumpmany <바이트수> <주소들>  여러 주소를 한 번에 덤프\n"
         "  diff <주소> [개수] [ms]     시간차로 변하는 float 슬롯 찾기\n"
         "  findvec3 <x> <y> <z> [오차] [최대]  좌표와 일치하는 float3 전부\n"
         "  findquat [ms] [최대]        시점을 돌리는 동안 변하는 쿼터니언\n"
@@ -898,6 +900,149 @@ void cmd_heapfind(const Remote& r, int argc, char** argv) {
     std::printf("모두 %zu곳, 훑은 양 %.1f GB\n", found,
                 scanned / 1073741824.0);
 }
+
+// 서명이 나온 자리마다 그 앞뒤를 덤프한다.
+//
+// heapfind 로 자리를 찾고 dump 로 하나씩 보면 붙을 때마다 350MB
+// 이미지를 다시 읽어야 해서 한 건에 2~3분이 든다. 후보가 수십 개면
+// 그것만으로 하루가 간다. 한 번 붙어서 전부 뜬다.
+//
+// 정상 표본과 불량 표본의 레코드를 나란히 놓고 다른 칸을 찾는 데
+// 쓴다(동반자 등록 조사, 2026-09-06).
+// 주소 여러 개를 한 번 붙어서 덤프한다.
+//
+// dump 는 한 번에 하나라, 붙을 때마다 350MB 이미지를 다시 읽어
+// 한 건에 2~3분이 든다. 레코드와 그것이 가리키는 하위 객체들을
+// 나란히 보려면 대여섯 번을 붙어야 해서 그것만으로 시간이 다 간다.
+//
+// 정상 표본과 불량 표본을 비교하는 데 쓴다(동반자 등록 조사,
+// 2026-09-06). 서식은 dump 와 같아 비교 스크립트가 그대로 읽는다.
+void cmd_dumpmany(const Remote& r, int argc, char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: dumpmany <바이트수> <주소> [주소 ...]\n");
+        return;
+    }
+    std::size_t n = std::strtoull(argv[2], nullptr, 0);
+    if (n == 0) n = 0x100;
+    if (n > 0x4000) n = 0x4000;
+    std::vector<std::uint8_t> buf(n);
+    for (int i = 3; i < argc; ++i) {
+        const auto addr =
+            static_cast<std::uintptr_t>(std::strtoull(argv[i], nullptr, 0));
+        std::printf("\n=== 히트 %d  0x%llX  (창 0x%llX)\n", i - 3,
+                    static_cast<unsigned long long>(addr),
+                    static_cast<unsigned long long>(addr));
+        if (!r.read(addr, buf.data(), buf.size())) {
+            std::printf("(읽기 실패)\n");
+            continue;
+        }
+        for (std::size_t o = 0; o < n; o += 16) {
+            std::printf("0x%llX  ",
+                        static_cast<unsigned long long>(addr + o));
+            for (std::size_t k = 0; k < 16; ++k) {
+                if (o + k < n) {
+                    std::printf("%02X ", buf[o + k]);
+                } else {
+                    std::printf("   ");
+                }
+            }
+            std::printf(" |");
+            for (std::size_t k = 0; k < 16 && o + k < n; ++k) {
+                const std::uint8_t c = buf[o + k];
+                std::printf("%c", (c >= 32 && c < 127) ? c : '.');
+            }
+            std::printf("|\n");
+        }
+    }
+}
+
+void cmd_heapdump(const Remote& r, int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: heapdump <16진 바이트들> [앞=0x40] [뒤=0xC0]\n");
+        return;
+    }
+    // 마지막 인자 둘이 10진/16진 수면 창 크기로 본다. 16진 서명과
+    // 섞이지 않게 "0x" 가 붙은 것만 창으로 인정한다.
+    std::size_t before = 0x40, after = 0xC0;
+    int last = argc;
+    while (last > 3) {
+        const char* a = argv[last - 1];
+        if (a[0] != '0' || (a[1] != 'x' && a[1] != 'X')) break;
+        --last;
+        if (argc - last > 2) break;
+    }
+    if (argc - last >= 1) before = std::strtoull(argv[last], nullptr, 0);
+    if (argc - last >= 2) after = std::strtoull(argv[last + 1], nullptr, 0);
+    if (before > 0x1000) before = 0x1000;
+    if (after > 0x1000) after = 0x1000;
+
+    std::string hex;
+    for (int i = 2; i < last; ++i) {
+        for (const char* p = argv[i]; *p != '\0'; ++p) {
+            if (*p != ' ' && *p != ',') hex += *p;
+        }
+    }
+    if (hex.empty() || (hex.size() % 2) != 0) {
+        std::printf("16진 바이트가 짝이 안 맞습니다: %zu 글자\n", hex.size());
+        return;
+    }
+    std::vector<std::uint8_t> want;
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const auto hi = hex_digit(hex[i]);
+        const auto lo = hex_digit(hex[i + 1]);
+        if (hi < 0 || lo < 0) {
+            std::printf("16진이 아닌 글자: %c%c\n", hex[i], hex[i + 1]);
+            return;
+        }
+        want.push_back(static_cast<std::uint8_t>((hi << 4) | lo));
+    }
+
+    std::printf("서명 %zu바이트, 창 -0x%zX .. +0x%zX\n", want.size(), before,
+                after);
+    std::vector<std::uint8_t> buf;
+    std::size_t found = 0;
+    for (const auto& reg : r.regions()) {
+        if (!reg.writable || reg.is_image) continue;
+        if (reg.size < want.size() || reg.size > (512u << 20)) continue;
+        buf.resize(reg.size);
+        if (!r.read(reg.base, buf.data(), buf.size())) continue;
+        for (std::size_t i = 0; i + want.size() <= buf.size(); ++i) {
+            if (std::memcmp(buf.data() + i, want.data(), want.size()) != 0) {
+                continue;
+            }
+            const std::size_t lo = (i > before) ? i - before : 0;
+            std::size_t hi = i + after;
+            if (hi > buf.size()) hi = buf.size();
+            std::printf("\n=== 히트 %zu  0x%llX  (창 0x%llX)\n", found,
+                        static_cast<unsigned long long>(reg.base + i),
+                        static_cast<unsigned long long>(reg.base + lo));
+            // dump 와 같은 서식이라 비교 스크립트가 그대로 읽는다.
+            for (std::size_t o = lo; o < hi; o += 16) {
+                std::printf("0x%llX  ",
+                            static_cast<unsigned long long>(reg.base + o));
+                for (std::size_t k = 0; k < 16; ++k) {
+                    if (o + k < hi) {
+                        std::printf("%02X ", buf[o + k]);
+                    } else {
+                        std::printf("   ");
+                    }
+                }
+                std::printf(" |");
+                for (std::size_t k = 0; k < 16 && o + k < hi; ++k) {
+                    const std::uint8_t c = buf[o + k];
+                    std::printf("%c", (c >= 32 && c < 127) ? c : '.');
+                }
+                std::printf("|\n");
+            }
+            if (++found >= 80) {
+                std::printf("(80개에서 멈춥니다)\n");
+                return;
+            }
+        }
+    }
+    std::printf("\n모두 %zu곳\n", found);
+}
+
 
 // findptr 은 모듈 이미지만 본다. 메시지 서술자를 가리키는 표는
 // 이미지에 없고 힙에 있어서 이게 필요했다.
@@ -3010,6 +3155,14 @@ int main(int argc, char** argv) {
     }
     if (cmd == "heapfind") {
         cmd_heapfind(r, argc, argv);
+        return 0;
+    }
+    if (cmd == "heapdump") {
+        cmd_heapdump(r, argc, argv);
+        return 0;
+    }
+    if (cmd == "dumpmany") {
+        cmd_dumpmany(r, argc, argv);
         return 0;
     }
     if (cmd == "hpscan") {
