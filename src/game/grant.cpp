@@ -1578,7 +1578,11 @@ bool trace_char_path(std::uintptr_t session, std::uint32_t key,
 
         t->step = 2;
         alignas(16) std::uint8_t buf[0x80]{};
-        auto ctx = reinterpret_cast<CtxFn>(base + 0x1D48380);
+        // 2026-09-06: 0x1D48380 -> 0x1FB5B60 으로 고쳤다. 옛 주소를
+        // 부르다 매번 예외로 죽어 추적이 아무것도 못 보고 있었다.
+        // 작업 함수(0x2B6E530)가 스포너를 얻은 뒤 실제로 부르는 것이
+        // 이쪽이고, 그 결과 버퍼의 +0x10 이 0 이면 소환을 포기한다.
+        auto ctx = reinterpret_cast<CtxFn>(base + 0x1FB5B60);
         ctx(reinterpret_cast<void*>(t->spawner), buf);
         t->ctx_byte = buf[0x10];
 
