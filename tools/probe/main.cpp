@@ -1220,8 +1220,8 @@ void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 comp);
     for (const auto& a : list) {
         if (!all && !a.is_companion()) continue;
-        std::printf("  0x%llX  행 %5u  키 %6u  타입행 %2d  %s%s%s\n",
-                    static_cast<unsigned long long>(a.actor), a.row, a.key,
+        std::printf("  0x%llX  핸들 %08X  행 %5u  키 %6u  타입행 %2d  %s%s%s\n",
+                    static_cast<unsigned long long>(a.actor), a.handle, a.row, a.key,
                     a.is_companion() ? static_cast<int>(a.merc_row) : -1,
                     a.name.empty() ? "(이름 없음)" : a.name.c_str(),
                     game::roster_is_wild(a.name) ? "  [야생]" : "",

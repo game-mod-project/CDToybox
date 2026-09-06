@@ -224,7 +224,7 @@ void draw_nearby_tab() {
     view.clear();
     for (const auto& a : all) {
         if (g_near_companion_only && !a.is_companion()) continue;
-        if (g_query[0] != '\0') {
+        if (g_query[0] != 0) {
             char keybuf[16];
             std::snprintf(keybuf, sizeof(keybuf), "%u", a.key);
             if (!(contains_ci(a.name, g_query) || std::strstr(keybuf, g_query))) continue;
@@ -235,8 +235,6 @@ void draw_nearby_tab() {
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 액터 주소가 복사됩니다");
 
-    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
     // 마지막 획득 결과. 게임은 거부를 조용히 코드로만 알려 준다.
     const game::HireWorkResult hr = game::last_hire_work();
     if (hr.valid) {
@@ -250,9 +248,12 @@ void draw_nearby_tab() {
         }
     }
 
-    if (ImGui::BeginTable("nearby", 6, flags)) {
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+    if (ImGui::BeginTable("nearby", 7, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 110);
+        ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 104);
+        ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed, 82);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
@@ -265,50 +266,56 @@ void draw_nearby_tab() {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                 const game::LiveActor* a = view[static_cast<std::size_t>(i)];
                 ImGui::TableNextRow();
+                ImGui::PushID(i);
                 ImGui::TableSetColumnIndex(0);
                 char label[48];
-                std::snprintf(label, sizeof(label), "%llX##n%d",
-                              static_cast<unsigned long long>(a->actor), i);
-                if (ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAllColumns)) {
+                std::snprintf(label, sizeof(label), "%llX##n",
+                              static_cast<unsigned long long>(a->actor));
+                // AllowOverlap 이 없으면 행 전체를 덮는 이 항목이 같은 줄의
+                // 버튼 클릭을 삼킨다 (실측 2026-09-06: 획득 버튼 무반응).
+                if (ImGui::Selectable(label, false,
+                                      ImGuiSelectableFlags_SpanAllColumns |
+                                          ImGuiSelectableFlags_AllowOverlap)) {
                     char addr[32];
                     std::snprintf(addr, sizeof(addr), "0x%llX",
                                   static_cast<unsigned long long>(a->actor));
                     ImGui::SetClipboardText(addr);
                 }
                 ImGui::TableSetColumnIndex(1);
+                if (a->handle != 0) {
+                    ImGui::Text("%08X", a->handle);
+                } else {
+                    ImGui::TextDisabled("-");
+                }
+                ImGui::TableSetColumnIndex(2);
                 if (a->name.empty()) {
                     ImGui::TextDisabled("(행 %u)", a->row);
                 } else {
                     ImGui::TextUnformatted(a->name.c_str());
                 }
-                ImGui::TableSetColumnIndex(2);
+                ImGui::TableSetColumnIndex(3);
                 ImGui::TextUnformatted(
                     a->is_companion()
                         ? type_label(a->merc_row, game::mercenary_type_name(a->merc_row))
                         : "");
-                ImGui::TableSetColumnIndex(3);
-                ImGui::TextUnformatted(game::roster_is_wild(a->name) ? "야생" : "");
                 ImGui::TableSetColumnIndex(4);
-                ImGui::TextUnformatted(a->hirable ? "가능" : "");
+                ImGui::TextUnformatted(game::roster_is_wild(a->name) ? "야생" : "");
                 ImGui::TableSetColumnIndex(5);
+                ImGui::TextUnformatted(a->hirable ? "가능" : "");
+                ImGui::TableSetColumnIndex(6);
                 // 획득: 그 자리에서 동반자로 등록한다(2338). 실제 게임플레이
-                // 거래라 되돌리려면 게임의 "풀어주기"를 쓴다.
-                ImGui::PushID(i);
-                const bool can = a->is_companion() && game::hire_target_ready();
+                // 거래라 되돌리려면 게임의 반려동물 풀어주기를 쓴다.
+                const bool can = a->is_companion() && a->handle != 0 &&
+                                 game::hire_target_ready();
                 ImGui::BeginDisabled(!can);
                 if (ImGui::SmallButton("획득")) {
-                    const std::uintptr_t s = game::companion_pick_session();
-                    if (s == 0) {
-                        ImGui::SetClipboardText("서버 세션 없음");
-                    } else {
-                        game::request_hire_target(s, a->handle, 0);
-                    }
+                    const std::uintptr_t sess = game::companion_pick_session();
+                    if (sess != 0) game::request_hire_target(sess, a->handle, 0);
                 }
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered() && can) {
-                    ImGui::SetTooltip(
-                        "이 개체를 동반자로 등록합니다.\n"
-                        "되돌리려면 게임의 반려동물 '풀어주기' 를 쓰세요.");
+                    ImGui::SetTooltip("이 개체를 동반자로 등록합니다. 되돌리려면 "
+                                      "게임의 반려동물 풀어주기를 쓰세요.");
                 }
                 ImGui::PopID();
             }
