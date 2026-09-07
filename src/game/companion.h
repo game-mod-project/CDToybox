@@ -140,6 +140,20 @@ inline constexpr std::uint64_t kSpawnContextRva = 0x1FB5B60;
 // 알아야 그것을 흉내낼 수 있다. 넣는 값의 vtable 을 찍어 둔다.
 inline constexpr std::uint64_t kSpawnContextSetRva = 0x1FB5BF0;
 
+// 관문을 지난 뒤 실제로 개체를 만드는 자리. 인자 둘이다.
+//
+//   f(컨텍스트, 결과버퍼)
+//     rax = [컨텍스트 + 0x68]
+//     rcx = [rax + 0x1A0]
+//     call [rcx vtable + 0x140](rcx, 결과버퍼)
+//
+// 결과버퍼는 관문과 같은 배치다 - +0x10 이 "값이 있나" 바이트다.
+// 작업 함수는 이 바이트가 0 이면 오류 메시지도 만들지 않고 조용히
+// 정리하고 끝낸다(0x2B6E8D5 -> 0x2B6EB29). 실측 2026-09-07: 유효한
+// 키(20961)로 크래시 없이 끝까지 돌았는데 개체가 나오지 않았다.
+// 남은 조용한 이탈은 여기뿐이다.
+inline constexpr std::uint64_t kSpawnMakeRva = 0x1763570;
+
 struct CharCheatGate {
     bool valid = false;
     std::uint32_t key = 0;         // 요청한 캐릭터 키

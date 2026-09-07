@@ -503,6 +503,34 @@ void* __fastcall det_spawn_context_set(void* spawner, void* value) {
     return g_orig_spawn_context_set(spawner, value);
 }
 
+using SpawnMakeFn = void*(__fastcall*)(void*, void*);
+SpawnMakeFn g_orig_spawn_make = nullptr;
+
+// 만들기가 왜 빈손으로 돌아오는지 본다. 실제 판단은 vtable[0x140] 안에
+// 있으므로 그 함수의 RVA 도 같이 남긴다 - 그것을 읽어야 조건을 안다.
+void* __fastcall det_spawn_make(void* ctx, void* out) {
+    void* r = g_orig_spawn_make(ctx, out);
+    if (!t_in_char_cheat) return r;
+    if (g_gate_logs.fetch_add(1, std::memory_order_relaxed) >= kGateLogMax) {
+        return r;
+    }
+
+    std::uint64_t comp = 0, sub = 0, vtbl = 0, fn = 0;
+    const std::uint64_t c = reinterpret_cast<std::uint64_t>(ctx);
+    if (c != 0 && read_ptr_guarded(c + 0x68, &comp) && comp != 0 &&
+        read_ptr_guarded(comp + 0x1A0, &sub) && sub != 0 &&
+        read_ptr_guarded(sub, &vtbl) && vtbl != 0) {
+        read_ptr_guarded(vtbl + 0x140, &fn);
+    }
+    const std::uint8_t has =
+        (out != nullptr) ? *(reinterpret_cast<std::uint8_t*>(out) + 0x10) : 0xFF;
+
+    log::infof("소환 만들기: 컴포넌트 0x{:X} 하위 0x{:X} vtable 0x{:X} "
+               "vt[0x140] 0x{:X} -> {}",
+               comp, sub, vtbl, fn, has == 0 ? "빈손" : "값 있음");
+    return r;
+}
+
 void __fastcall det_char_cheat_work(void* self, void* packet,
                                     const std::uint32_t* key,
                                     const std::uint32_t* b, const float* pos,
@@ -580,6 +608,19 @@ bool companion_char_cheat_trace_install(const mem::Reader& reader) {
         log::warnf("소환 치트 관문: 관문 후킹 실패");
         return false;
     }
+    // 만들기 훅. 실패해도 측정을 포기하지 않는다.
+    // 0x1763570: mov [rsp+0x10],rdx / push rbx / sub rsp,0x30
+    const std::uintptr_t make = reader.module_base() + kSpawnMakeRva;
+    std::uint8_t mh[6]{};
+    if (reader.read(make, mh, sizeof(mh)) && mh[0] == 0x48 && mh[1] == 0x89 &&
+        mh[2] == 0x54 && mh[3] == 0x24 && mh[4] == 0x10 && mh[5] == 0x53) {
+        mem::hook_install(reinterpret_cast<void*>(make), &det_spawn_make,
+                          reinterpret_cast<void**>(&g_orig_spawn_make));
+    } else {
+        log::warnf("소환 만들기 0x{:X} 프롤로그가 다르다 - 건너뛴다",
+                   kSpawnMakeRva);
+    }
+
     // 설정자는 실패해도 측정을 포기하지 않는다 - 곁가지다.
     const std::uintptr_t set = reader.module_base() + kSpawnContextSetRva;
     std::uint8_t sh[5]{};
