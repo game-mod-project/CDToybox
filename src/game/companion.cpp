@@ -103,6 +103,31 @@ bool decode_catch(const std::uint8_t* payload, std::size_t len,
     return true;
 }
 
+bool decode_hire_inv(const std::uint8_t* payload, std::size_t len,
+                     std::uint16_t* a_out, std::uint16_t* b_out) {
+    if (payload == nullptr || len != kHireInvWireLen) return false;
+    std::uint16_t id = 0, body = 0;
+    decode_message_header(payload, len, &id, &body);
+    if (id != kHireFromInvId || body != 4) return false;
+    if (a_out != nullptr) std::memcpy(a_out, payload + 5, 2);
+    if (b_out != nullptr) std::memcpy(b_out, payload + 7, 2);
+    return true;
+}
+
+bool build_hire_inv_wire(std::uint16_t a, std::uint16_t b, std::uint8_t* out,
+                         std::size_t cap, std::size_t* len_out) {
+    if (out == nullptr || cap < kHireInvWireLen) return false;
+    const std::uint16_t id = kHireFromInvId;
+    const std::uint16_t body = 4;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &a, 2);
+    std::memcpy(out + 7, &b, 2);
+    if (len_out != nullptr) *len_out = kHireInvWireLen;
+    return true;
+}
+
 bool build_catch_wire(std::uint32_t self, std::uint32_t target,
                       std::uint8_t* out, std::size_t cap,
                       std::size_t* len_out) {
@@ -150,6 +175,12 @@ void dump_payload(void* packet, const char* tag) {
     decode_message_header(pl, len, &id, &body);
     log::infof("동반자 캡처 [{}] ID {} 본문 {}바이트 (전체 {}): {}", tag, id,
                body, len, hex_bytes(pl, len, kHexCap));
+    if (id == kHireFromInvId) {
+        std::uint16_t fa = 0, fb = 0;
+        if (decode_hire_inv(pl, len, &fa, &fb)) {
+            log::infof("부적 등록 본문: A {} B {}", fa, fb);
+        }
+    }
     if (id == kCatchBySummonId) {
         std::uint32_t self = 0, target = 0;
         if (decode_catch(pl, len, &self, &target)) {
@@ -861,6 +892,82 @@ CatchCapture last_catch() {
 
 bool catch_ready() { return find_message(kCatchBySummonId) != nullptr; }
 
+bool hire_from_inventory_ready() {
+    return find_message(kHireFromInvId) != nullptr;
+}
+
+bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
+                                 std::uint16_t b) {
+    const MessageDesc* m = find_message(kHireFromInvId);
+    if (m == nullptr || session == 0) return false;
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    if (!build_hire_inv_wire(a, b, wire, sizeof(wire), &len)) return false;
+    log::infof("부적 등록 요청: A {} B {}", a, b);
+    return request_message(session, *m, wire, len);
+}
+
+namespace {
+
+using HireInvWorkFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint16_t,
+                                         std::uint16_t);
+HireInvWorkFn g_orig_hire_inv = nullptr;
+std::atomic<bool> g_hire_inv_trace{false};
+std::atomic<int> g_hire_inv_logs{0};
+constexpr int kHireInvLogMax = 60;
+std::mutex g_hire_inv_mutex;
+HireInvResult g_last_hire_inv;
+
+void* __fastcall det_hire_inv_work(void* clan, std::uint32_t* result,
+                                   std::uint16_t a, std::uint16_t b) {
+    void* r = g_orig_hire_inv(clan, result, a, b);
+    if (g_hire_inv_logs.load(std::memory_order_relaxed) < kHireInvLogMax) {
+        g_hire_inv_logs.fetch_add(1, std::memory_order_relaxed);
+        const std::uint32_t code = (result != nullptr) ? *result : 0xFFFFFFFFu;
+        {
+            std::lock_guard<std::mutex> lock(g_hire_inv_mutex);
+            g_last_hire_inv.valid = true;
+            g_last_hire_inv.a = a;
+            g_last_hire_inv.b = b;
+            g_last_hire_inv.code = code;
+        }
+        log::infof("부적 등록 작업: A {} B {} -> 코드 0x{:08X} ({})", a, b, code,
+                   code == 0 ? "성공" : "거부");
+    }
+    return r;
+}
+
+}  // namespace
+
+HireInvResult last_hire_inv() {
+    std::lock_guard<std::mutex> lock(g_hire_inv_mutex);
+    return g_last_hire_inv;
+}
+
+bool companion_hire_inv_trace_install(const mem::Reader& reader) {
+    if (g_hire_inv_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+    const std::uintptr_t fn = reader.module_base() + kHireInvWorkRva;
+    // 0x2AD1FC0: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi
+    std::uint8_t h[10]{};
+    if (!reader.read(fn, h, sizeof(h))) return false;
+    if (!(h[0] == 0x48 && h[1] == 0x89 && h[2] == 0x5C && h[3] == 0x24 &&
+          h[4] == 0x10 && h[5] == 0x48 && h[6] == 0x89 && h[7] == 0x74)) {
+        log::warnf("부적 등록 추적: RVA 0x{:X} 프롤로그가 다르다 - 걸지 않는다",
+                   kHireInvWorkRva);
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(fn), &det_hire_inv_work,
+                           reinterpret_cast<void**>(&g_orig_hire_inv))) {
+        log::warnf("부적 등록 추적: 후킹 실패");
+        return false;
+    }
+    g_hire_inv_trace.store(true, std::memory_order_release);
+    log::infof("부적 등록 추적 설치 (RVA 0x{:X}) - 거부 코드를 찍는다",
+               kHireInvWorkRva);
+    return true;
+}
+
 bool request_catch(std::uintptr_t session, std::uint32_t target,
                    std::uint32_t self) {
     const MessageDesc* m = find_message(kCatchBySummonId);
@@ -1090,6 +1197,19 @@ bool companion_run_command(const std::string& line, std::string* reply) {
                    key, b, flag, pos[0], pos[1], pos[2]);
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
+    if (cmd == "hireitem") {
+        // 부적이 쓰는 등록 경로를 직접 구동한다. A 가 캐릭터 키로 보인다.
+        if (args.size() < 2) { say("hireitem <A> [B]"); return false; }
+        const std::uint16_t fa = static_cast<std::uint16_t>(parse_u32(args[1], 0));
+        const std::uint16_t fb = static_cast<std::uint16_t>(
+            args.size() > 2 ? parse_u32(args[2], 0) : 0);
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!hire_from_inventory_ready()) { say("2454 미해석"); return false; }
+        const bool ok = request_hire_from_inventory(session, fa, fb);
+        say(ok ? "부적 등록 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
     }
     if (cmd == "catch") {

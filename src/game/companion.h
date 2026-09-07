@@ -317,6 +317,59 @@ std::uintptr_t companion_pick_session();
 // 그러니 이 메시지만으로는 새 동반자를 얻을 수 없다. 알을 지급해
 // (render/roster_panel 의 동반자 아이템 탭) 게임의 절차를 그대로
 // 밟는 것이 실제로 되는 길이다. 조립·해석은 표본이 있으니 남겨 둔다.
+// ----------------------------------------------------------------------
+// 부적 등록 (`TrocTrHireMercenaryFromInventoryReq`, ID 2454)
+//
+// **원하는 종을 그 자리에서 동반자로 올리는 길이다.** 월드에 개체가
+// 있을 필요도, 둥지도, 대기도 없다. 동행의 부적이 쓰는 경로다.
+//
+// 역직렬화(RVA 0x2965510)가 읽는 본문은 u16 두 개뿐이다.
+//
+//   [ID 2454][00][본문길이 4][u16 A][u16 B]
+//
+// 처리기는 그것을 용병단 컴포넌트에 넘긴다.
+//
+//   rcx = [[세션액터+0x68]+0x110]   MercenaryClanActorComponent
+//   rdx = &결과 u32                  0 이면 성공
+//   r8w = A       r9w = B
+//   call 0x2AD1FC0
+//
+// 등록 작업(0x2AD1FC0)이 하는 첫 두 가지:
+//
+//   A 로 표를 찾는다(0x8752A40). 못 찾으면 0xFFFF 를 돌려주고, 그러면
+//   오류 코드를 쓰고 끝낸다. 이 표는 u16 -> u16 이고 "없음"이 0xFFFF 다 -
+//   캐릭터 표의 _mercenaryInfo(동반자 타입 행, 0xFFFF 없음)와 같은
+//   센티널이다. **A 가 캐릭터 키이고 그 조회가 "이 종이 동반자가 될 수
+//   있는가"를 묻는 것으로 보인다.**
+//   B 가 0xFFFF 면 다른 오류 코드로 끝낸다.
+//
+// B 의 뜻은 아직 모른다. 종마다 다르면 종 관련이고, 같으면 아이템이나
+// 슬롯이다.
+inline constexpr std::uint16_t kHireFromInvId = 2454;
+inline constexpr std::size_t kHireInvWireLen = 5 + 4;
+
+// 머리 5바이트 + 본문 4바이트(u16 A, u16 B)를 조립한다.
+bool build_hire_inv_wire(std::uint16_t a, std::uint16_t b, std::uint8_t* out,
+                         std::size_t cap, std::size_t* len_out);
+// 본문 4바이트를 읽는다. 길이나 ID 가 다르면 false.
+bool decode_hire_inv(const std::uint8_t* payload, std::size_t len,
+                     std::uint16_t* a_out, std::uint16_t* b_out);
+// 2454 를 게임 스레드에서 구동한다.
+bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
+                                 std::uint16_t b);
+bool hire_from_inventory_ready();
+
+// 등록 작업 함수. 거부 코드를 찍는다. 읽기만 한다.
+inline constexpr std::uint64_t kHireInvWorkRva = 0x2AD1FC0;
+struct HireInvResult {
+    bool valid = false;
+    std::uint16_t a = 0;
+    std::uint16_t b = 0;
+    std::uint32_t code = 0;  // 0 이면 성공
+};
+HireInvResult last_hire_inv();
+bool companion_hire_inv_trace_install(const mem::Reader& reader);
+
 inline constexpr std::uint16_t kCatchBySummonId = 2386;
 inline constexpr std::size_t kCatchWireLen = 5 + 8;
 // 표본 네 개가 전부 이 값이었다. 세션마다 달라질 수 있으니 캡처에서

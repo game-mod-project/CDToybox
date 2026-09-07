@@ -208,3 +208,34 @@ TEST(catch_wire_rejects_a_small_buffer) {
     std::size_t len = 0;
     CHECK(!cdtb::game::build_catch_wire(1, 2, wire, sizeof(wire), &len));
 }
+
+TEST(hire_inv_wire_round_trips) {
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    CHECK(cdtb::game::build_hire_inv_wire(18578, 7, wire, sizeof(wire), &len));
+    CHECK_EQ(len, cdtb::game::kHireInvWireLen);
+    // 머리: ID 2454 = 0x0996, 본문길이 4
+    CHECK_EQ(wire[0], 0x96);
+    CHECK_EQ(wire[1], 0x09);
+    CHECK_EQ(wire[2], 0x00);
+    CHECK_EQ(wire[3], 0x04);
+    CHECK_EQ(wire[4], 0x00);
+    std::uint16_t a = 0, b = 0;
+    CHECK(cdtb::game::decode_hire_inv(wire, len, &a, &b));
+    CHECK_EQ(a, 18578u);
+    CHECK_EQ(b, 7u);
+}
+
+TEST(hire_inv_decode_rejects_a_wrong_length) {
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    CHECK(cdtb::game::build_hire_inv_wire(1, 2, wire, sizeof(wire), &len));
+    std::uint16_t a = 0, b = 0;
+    CHECK(!cdtb::game::decode_hire_inv(wire, len - 1, &a, &b));
+}
+
+TEST(hire_inv_wire_rejects_a_small_buffer) {
+    std::uint8_t wire[4]{};
+    std::size_t len = 0;
+    CHECK(!cdtb::game::build_hire_inv_wire(1, 2, wire, sizeof(wire), &len));
+}
