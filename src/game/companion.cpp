@@ -13,6 +13,7 @@
 
 #include "core/log.h"
 #include "game/grant.h"
+#include "game/roster.h"
 #include "mem/hook.h"
 
 namespace {
@@ -411,6 +412,10 @@ CharCheatGate g_last_gate;
 thread_local bool t_in_char_cheat = false;
 thread_local std::uint32_t t_char_cheat_key = 0;
 
+// 표시가 새더라도 로그가 무한히 쌓이지는 않게 한다. 두 번째 방어선이다.
+std::atomic<int> g_gate_logs{0};
+constexpr int kGateLogMax = 200;
+
 // 죽지 않고 읽는다. 관문 함수는 게임의 어느 스레드에서든 불린다.
 bool read_ptr_guarded(std::uint64_t at, std::uint64_t* out) {
     __try {
@@ -457,6 +462,9 @@ void* __fastcall det_spawn_context(void* spawner, void* out) {
         g_last_gate.forced = forced;
     }
 
+    if (g_gate_logs.fetch_add(1, std::memory_order_relaxed) >= kGateLogMax) {
+        return r;
+    }
     log::infof("소환 치트 관문: 스포너 0x{:X} 컨텍스트 0x{:X} -> {}{}",
                reinterpret_cast<std::uint64_t>(spawner),
                ctx_ok ? context : 0,
@@ -507,6 +515,11 @@ void __fastcall det_char_cheat_work(void* self, void* packet,
 }
 
 }  // namespace
+
+void companion_char_cheat_mark(bool inside) {
+    t_in_char_cheat = inside;
+    if (inside) g_gate_logs.store(0, std::memory_order_relaxed);
+}
 
 CharCheatGate last_char_cheat_gate() {
     std::lock_guard<std::mutex> lock(g_gate_mutex);
@@ -933,6 +946,23 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         if (args.size() < 2) { say("spawnchar <캐릭터키> [B] [플래그]"); return false; }
         const std::uint32_t key = parse_u32(args[1], 0);
         if (key == 0) { say("키가 0이다"); return false; }
+        // 표에 없는 키를 넣으면 처리기가 관문을 지난 뒤 이름 해시를
+        // 널 버퍼로 돌려 그 자리에서 죽는다 - 실측 2026-09-07: 키 1 로
+        // RVA 0x3A84F0(xxHash 루프)에서 0xC0000005. 카탈로그가 읽혀
+        // 있으면 미리 막는다.
+        if (roster_ready()) {
+            const std::vector<RosterEntry>& cat = character_catalog();
+            const RosterEntry* found = nullptr;
+            for (const RosterEntry& e : cat) {
+                if (e.key == key) { found = &e; break; }
+            }
+            if (found == nullptr) {
+                say("캐릭터 표에 없는 키다 - chardump 로 찾아보라");
+                return false;
+            }
+            log::infof("캐릭터 소환 대상: 키 {} {} ({})", key, found->display(),
+                       found->name);
+        }
         const std::uint32_t b = args.size() > 2 ? parse_u32(args[2], 0) : 0;
         const std::uint8_t flag = static_cast<std::uint8_t>(
             args.size() > 3 ? parse_u32(args[3], 0) : 0);
@@ -949,6 +979,34 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
+    }
+    if (cmd == "chardump") {
+        // 캐릭터 표에서 이름 조각으로 찾아 키를 로그에 낸다.
+        // spawnchar 에 넣을 유효한 키를 여기서 얻는다.
+        if (args.size() < 2) { say("chardump <이름조각> [개수]"); return false; }
+        if (!roster_ready()) { say("카탈로그가 아직 안 읽혔다"); return false; }
+        const std::size_t limit =
+            args.size() > 2 ? static_cast<std::size_t>(parse_u32(args[2], 20)) : 20;
+        const std::string& frag = args[1];
+        const std::vector<RosterEntry>& cat = character_catalog();
+        std::size_t hits = 0;
+        for (const RosterEntry& e : cat) {
+            if (hits >= limit) break;
+            if (e.name.find(frag) == std::string::npos &&
+                e.label.find(frag) == std::string::npos) {
+                continue;
+            }
+            ++hits;
+            log::infof("캐릭터: 키 {} 행 {} {} ({}) 동반자 {} 고용 {}", e.key,
+                       e.row, e.display(), e.name,
+                       e.is_companion() ? "예" : "아니오",
+                       e.hirable ? "예" : "아니오");
+        }
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%zu개 찾음 (총 %zu행) - 로그를 보라",
+                      hits, cat.size());
+        say(buf);
+        return true;
     }
     if (cmd == "charforce") {
         // 소환 치트 관문을 강제로 연다. 컨텍스트가 살아 있을 때만

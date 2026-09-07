@@ -150,6 +150,15 @@ struct CharCheatGate {
 };
 CharCheatGate last_char_cheat_gate();
 
+// 작업 함수에 들어가고 나오는 것을 바깥에서 표시한다.
+//
+// 훅 안에서 표시를 걷는 것만으로는 부족하다. 처리기가 게임 안에서
+// 죽으면 SEH 가 우리 훅 프레임을 건너뛰어 되감기 때문에, 훅의 복원
+// 줄이 실행되지 않는다 - 실측 2026-09-07: 그 한 번으로 표시가 켜진
+// 채 남아 관문 로그가 8만 줄 쌓였다. 구동을 감싸는 쪽(run_char_spawn)
+// 에서 확실히 걷는다.
+void companion_char_cheat_mark(bool inside);
+
 bool companion_char_cheat_trace_install(const mem::Reader& reader);
 bool companion_char_cheat_trace_installed();
 
