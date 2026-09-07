@@ -215,6 +215,8 @@ void auto_analysis_loop() {
     companion_resolve_messages(rtti, reader);
     companion_hire_trace_install(reader);
     companion_spawn_trace_install(reader);
+    companion_char_cheat_trace_install(reader);
+    companion_hire_inv_trace_install(reader);
     // 좌표는 카메라 쪽만 안다. 동반자 코드에 넣어 준다.
     companion_set_position_source([](float out[3]) {
         const CameraSet& set = cameras();

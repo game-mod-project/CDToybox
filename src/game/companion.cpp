@@ -9,10 +9,13 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <algorithm>
 #include <vector>
 
 #include "core/log.h"
 #include "game/grant.h"
+#include "game/roster.h"
+#include "game/actors.h"
 #include "mem/hook.h"
 
 namespace {
@@ -89,6 +92,57 @@ bool build_use_item_wire(std::uint32_t item_key, std::uint32_t b, std::uint8_t c
     return true;
 }
 
+bool decode_catch(const std::uint8_t* payload, std::size_t len,
+                  std::uint32_t* self_out, std::uint32_t* target_out) {
+    if (payload == nullptr || len != kCatchWireLen) return false;
+    std::uint16_t id = 0, body = 0;
+    decode_message_header(payload, len, &id, &body);
+    if (id != kCatchBySummonId || body != 8) return false;
+    if (self_out != nullptr) std::memcpy(self_out, payload + 5, 4);
+    if (target_out != nullptr) std::memcpy(target_out, payload + 9, 4);
+    return true;
+}
+
+bool decode_hire_inv(const std::uint8_t* payload, std::size_t len,
+                     std::uint16_t* a_out, std::uint16_t* b_out) {
+    if (payload == nullptr || len != kHireInvWireLen) return false;
+    std::uint16_t id = 0, body = 0;
+    decode_message_header(payload, len, &id, &body);
+    if (id != kHireFromInvId || body != 4) return false;
+    if (a_out != nullptr) std::memcpy(a_out, payload + 5, 2);
+    if (b_out != nullptr) std::memcpy(b_out, payload + 7, 2);
+    return true;
+}
+
+bool build_hire_inv_wire(std::uint16_t a, std::uint16_t b, std::uint8_t* out,
+                         std::size_t cap, std::size_t* len_out) {
+    if (out == nullptr || cap < kHireInvWireLen) return false;
+    const std::uint16_t id = kHireFromInvId;
+    const std::uint16_t body = 4;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &a, 2);
+    std::memcpy(out + 7, &b, 2);
+    if (len_out != nullptr) *len_out = kHireInvWireLen;
+    return true;
+}
+
+bool build_catch_wire(std::uint32_t self, std::uint32_t target,
+                      std::uint8_t* out, std::size_t cap,
+                      std::size_t* len_out) {
+    if (out == nullptr || cap < kCatchWireLen) return false;
+    const std::uint16_t id = kCatchBySummonId;
+    const std::uint16_t body = 8;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &self, 4);
+    std::memcpy(out + 9, &target, 4);
+    if (len_out != nullptr) *len_out = kCatchWireLen;
+    return true;
+}
+
 // --------------------------------------------------- 캡처 훅
 
 namespace {
@@ -104,6 +158,7 @@ std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
 std::mutex g_last_mutex;
 HireTargetCapture g_last_hire;
+CatchCapture g_last_catch;
 
 void dump_payload(void* packet, const char* tag) {
     if (packet == nullptr) return;
@@ -120,6 +175,25 @@ void dump_payload(void* packet, const char* tag) {
     decode_message_header(pl, len, &id, &body);
     log::infof("동반자 캡처 [{}] ID {} 본문 {}바이트 (전체 {}): {}", tag, id,
                body, len, hex_bytes(pl, len, kHexCap));
+    if (id == kHireFromInvId) {
+        std::uint16_t fa = 0, fb = 0;
+        if (decode_hire_inv(pl, len, &fa, &fb)) {
+            log::infof("부적 등록 본문: A {} B {}", fa, fb);
+        }
+    }
+    if (id == kCatchBySummonId) {
+        std::uint32_t self = 0, target = 0;
+        if (decode_catch(pl, len, &self, &target)) {
+            std::lock_guard<std::mutex> lock(g_last_mutex);
+            g_last_catch.valid = true;
+            g_last_catch.self = self;
+            g_last_catch.target = target;
+            log::infof("붙잡기: 잡는쪽 0x{:08X} 대상 0x{:08X}", self, target);
+        } else {
+            log::warnf("붙잡기: 본문이 8바이트가 아니다 ({}). 정적 분석과 다름",
+                       body);
+        }
+    }
     if (id == kHireToTargetId) {
         std::uint32_t handle = 0;
         std::uint8_t flag = 0;
@@ -384,6 +458,260 @@ bool companion_spawn_trace_install(const mem::Reader& reader) {
     return true;
 }
 
+// ------------------------------------------- 캐릭터 소환 치트 관문 측정
+
+namespace {
+
+// 처리기는 인자를 여섯 받는다(grant.cpp 의 CharSpawnFn 과 같아야 한다).
+//   (서술자, 패킷, const u32* 키, const u32* B, const float* 좌표,
+//    const u8* 플래그)
+// 넷으로 선언하면 원본을 되부를 때 다섯째·여섯째 스택 자리가 쓰레기가
+// 된다 - 좌표와 플래그가 그 자리다.
+using CharCheatWorkFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
+                                          const std::uint32_t*, const float*,
+                                          const std::uint8_t*);
+using SpawnContextFn = void*(__fastcall*)(void*, void*);
+
+CharCheatWorkFn g_orig_char_cheat_work = nullptr;
+SpawnContextFn g_orig_spawn_context = nullptr;
+std::atomic<bool> g_char_cheat_trace{false};
+std::atomic<bool> g_char_cheat_force{false};
+std::mutex g_gate_mutex;
+CharCheatGate g_last_gate;
+
+// 작업 함수 안에 있는 동안만 켜진다. 관문 함수는 157 곳에서 불리는데
+// 그 호출은 작업 함수와 같은 스레드의 직통 호출이라 이것으로 정확히
+// 우리 것만 고른다.
+thread_local bool t_in_char_cheat = false;
+thread_local std::uint32_t t_char_cheat_key = 0;
+
+// 표시가 새더라도 로그가 무한히 쌓이지는 않게 한다. 두 번째 방어선이다.
+std::atomic<int> g_gate_logs{0};
+constexpr int kGateLogMax = 200;
+
+// 죽지 않고 읽는다. 관문 함수는 게임의 어느 스레드에서든 불린다.
+bool read_ptr_guarded(std::uint64_t at, std::uint64_t* out) {
+    __try {
+        *out = *reinterpret_cast<volatile std::uint64_t*>(at);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void* __fastcall det_spawn_context(void* spawner, void* out) {
+    void* r = g_orig_spawn_context(spawner, out);
+    if (!t_in_char_cheat) return r;
+
+    std::uint64_t context = 0;
+    const bool ctx_ok =
+        spawner != nullptr &&
+        read_ptr_guarded(reinterpret_cast<std::uint64_t>(spawner) + 0xD8,
+                         &context);
+
+    std::uint8_t allowed = 0;
+    std::uint8_t* gate = nullptr;
+    if (out != nullptr) {
+        gate = reinterpret_cast<std::uint8_t*>(out) + 0x10;
+        allowed = *gate;
+    }
+
+    bool forced = false;
+    if (allowed == 0 && ctx_ok && context != 0 && gate != nullptr &&
+        g_char_cheat_force.load(std::memory_order_acquire)) {
+        // 컨텍스트가 살아 있을 때만 민다. 널이면 관문 뒤에서 죽는다.
+        *gate = 1;
+        allowed = 1;
+        forced = true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_gate_mutex);
+        g_last_gate.valid = true;
+        g_last_gate.key = t_char_cheat_key;
+        g_last_gate.spawner = reinterpret_cast<std::uint64_t>(spawner);
+        g_last_gate.context = ctx_ok ? context : 0;
+        g_last_gate.allowed = allowed;
+        g_last_gate.forced = forced;
+    }
+
+    if (g_gate_logs.fetch_add(1, std::memory_order_relaxed) >= kGateLogMax) {
+        return r;
+    }
+    log::infof("소환 치트 관문: 스포너 0x{:X} 컨텍스트 0x{:X} -> {}{}",
+               reinterpret_cast<std::uint64_t>(spawner),
+               ctx_ok ? context : 0,
+               allowed != 0 ? "열림" : "닫힘",
+               forced ? " (우리가 밀었다)" : "");
+    if (allowed == 0) {
+        log::infof("소환 치트 관문: {} - {}",
+                   (ctx_ok && context != 0) ? "컨텍스트는 있는데 거절당했다"
+                                            : "컨텍스트가 비었다",
+                   (ctx_ok && context != 0)
+                       ? "vtable[0xC0](4, 0x10) 이 false 다"
+                       : "스포너+0xD8 이 0 이다 - 밀면 죽으니 밀지 않는다");
+    }
+    return r;
+}
+
+using SpawnContextSetFn = void*(__fastcall*)(void*, void*);
+SpawnContextSetFn g_orig_spawn_context_set = nullptr;
+std::atomic<int> g_ctx_set_logs{0};
+constexpr int kCtxSetLogMax = 12;
+
+// 정상 경로가 컨텍스트에 무엇을 넣는지 본다. vtable 을 찍어 두면
+// 나중에 probe 로 클래스 이름을 뽑을 수 있다.
+void* __fastcall det_spawn_context_set(void* spawner, void* value) {
+    if (g_ctx_set_logs.load(std::memory_order_relaxed) < kCtxSetLogMax) {
+        g_ctx_set_logs.fetch_add(1, std::memory_order_relaxed);
+        std::uint64_t vtbl = 0;
+        if (value != nullptr) {
+            read_ptr_guarded(reinterpret_cast<std::uint64_t>(value), &vtbl);
+        }
+        log::infof("소환 컨텍스트 설정: 스포너 0x{:X} <- 0x{:X} (vtable 0x{:X})",
+                   reinterpret_cast<std::uint64_t>(spawner),
+                   reinterpret_cast<std::uint64_t>(value), vtbl);
+    }
+    return g_orig_spawn_context_set(spawner, value);
+}
+
+using SpawnMakeFn = void*(__fastcall*)(void*, void*);
+SpawnMakeFn g_orig_spawn_make = nullptr;
+
+// 만들기가 왜 빈손으로 돌아오는지 본다. 실제 판단은 vtable[0x140] 안에
+// 있으므로 그 함수의 RVA 도 같이 남긴다 - 그것을 읽어야 조건을 안다.
+void* __fastcall det_spawn_make(void* ctx, void* out) {
+    void* r = g_orig_spawn_make(ctx, out);
+    if (!t_in_char_cheat) return r;
+    if (g_gate_logs.fetch_add(1, std::memory_order_relaxed) >= kGateLogMax) {
+        return r;
+    }
+
+    std::uint64_t comp = 0, sub = 0, vtbl = 0, fn = 0;
+    const std::uint64_t c = reinterpret_cast<std::uint64_t>(ctx);
+    if (c != 0 && read_ptr_guarded(c + 0x68, &comp) && comp != 0 &&
+        read_ptr_guarded(comp + 0x1A0, &sub) && sub != 0 &&
+        read_ptr_guarded(sub, &vtbl) && vtbl != 0) {
+        read_ptr_guarded(vtbl + 0x140, &fn);
+    }
+    const std::uint8_t has =
+        (out != nullptr) ? *(reinterpret_cast<std::uint8_t*>(out) + 0x10) : 0xFF;
+
+    log::infof("소환 만들기: 컴포넌트 0x{:X} 하위 0x{:X} vtable 0x{:X} "
+               "vt[0x140] 0x{:X} -> {}",
+               comp, sub, vtbl, fn, has == 0 ? "빈손" : "값 있음");
+    return r;
+}
+
+void __fastcall det_char_cheat_work(void* self, void* packet,
+                                    const std::uint32_t* key,
+                                    const std::uint32_t* b, const float* pos,
+                                    const std::uint8_t* flag) {
+    const bool outer = t_in_char_cheat;
+    t_in_char_cheat = true;
+    t_char_cheat_key = (key != nullptr) ? *key : 0;
+    log::infof("소환 치트 작업: 키 {} 진입", t_char_cheat_key);
+    g_orig_char_cheat_work(self, packet, key, b, pos, flag);
+    t_in_char_cheat = outer;
+}
+
+}  // namespace
+
+void companion_char_cheat_mark(bool inside) {
+    t_in_char_cheat = inside;
+    if (inside) g_gate_logs.store(0, std::memory_order_relaxed);
+}
+
+CharCheatGate last_char_cheat_gate() {
+    std::lock_guard<std::mutex> lock(g_gate_mutex);
+    return g_last_gate;
+}
+
+void companion_char_cheat_set_force(bool on) {
+    g_char_cheat_force.store(on, std::memory_order_release);
+    log::infof("소환 치트 관문 밀기: {}", on ? "켬" : "끔");
+}
+
+bool companion_char_cheat_force() {
+    return g_char_cheat_force.load(std::memory_order_acquire);
+}
+
+bool companion_char_cheat_trace_installed() {
+    return g_char_cheat_trace.load(std::memory_order_acquire);
+}
+
+bool companion_char_cheat_trace_install(const mem::Reader& reader) {
+    if (g_char_cheat_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+
+    // 프롤로그가 기대와 다르면 걸지 않는다. 패치마다 밀릴 수 있다.
+    // 0x2B6E530: mov [rsp+8],rbx / mov [rsp+0x20],r9
+    const std::uintptr_t work = reader.module_base() + kCharCheatWorkRva;
+    std::uint8_t wh[10]{};
+    if (!reader.read(work, wh, sizeof(wh))) return false;
+    if (!(wh[0] == 0x48 && wh[1] == 0x89 && wh[2] == 0x5C && wh[3] == 0x24 &&
+          wh[4] == 0x08 && wh[5] == 0x4C && wh[6] == 0x89 && wh[7] == 0x4C)) {
+        log::warnf("소환 치트 관문: 작업 RVA 0x{:X} 프롤로그가 다르다 "
+                   "({:02X} {:02X} {:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kCharCheatWorkRva, wh[0], wh[1], wh[2], wh[3], wh[4]);
+        return false;
+    }
+
+    // 0x1FB5B60: mov [rsp+8],rbx / mov [rsp+0x10],rdx / push rdi
+    const std::uintptr_t ctx = reader.module_base() + kSpawnContextRva;
+    std::uint8_t ch[11]{};
+    if (!reader.read(ctx, ch, sizeof(ch))) return false;
+    if (!(ch[0] == 0x48 && ch[1] == 0x89 && ch[2] == 0x5C && ch[3] == 0x24 &&
+          ch[4] == 0x08 && ch[5] == 0x48 && ch[6] == 0x89 && ch[7] == 0x54 &&
+          ch[8] == 0x24 && ch[9] == 0x10 && ch[10] == 0x57)) {
+        log::warnf("소환 치트 관문: 관문 RVA 0x{:X} 프롤로그가 다르다 "
+                   "({:02X} {:02X} {:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kSpawnContextRva, ch[0], ch[1], ch[2], ch[3], ch[4]);
+        return false;
+    }
+
+    if (!mem::hook_install(reinterpret_cast<void*>(work), &det_char_cheat_work,
+                           reinterpret_cast<void**>(&g_orig_char_cheat_work))) {
+        log::warnf("소환 치트 관문: 작업 후킹 실패");
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(ctx), &det_spawn_context,
+                           reinterpret_cast<void**>(&g_orig_spawn_context))) {
+        log::warnf("소환 치트 관문: 관문 후킹 실패");
+        return false;
+    }
+    // 만들기 훅. 실패해도 측정을 포기하지 않는다.
+    // 0x1763570: mov [rsp+0x10],rdx / push rbx / sub rsp,0x30
+    const std::uintptr_t make = reader.module_base() + kSpawnMakeRva;
+    std::uint8_t mh[6]{};
+    if (reader.read(make, mh, sizeof(mh)) && mh[0] == 0x48 && mh[1] == 0x89 &&
+        mh[2] == 0x54 && mh[3] == 0x24 && mh[4] == 0x10 && mh[5] == 0x53) {
+        mem::hook_install(reinterpret_cast<void*>(make), &det_spawn_make,
+                          reinterpret_cast<void**>(&g_orig_spawn_make));
+    } else {
+        log::warnf("소환 만들기 0x{:X} 프롤로그가 다르다 - 건너뛴다",
+                   kSpawnMakeRva);
+    }
+
+    // 설정자는 실패해도 측정을 포기하지 않는다 - 곁가지다.
+    const std::uintptr_t set = reader.module_base() + kSpawnContextSetRva;
+    std::uint8_t sh[5]{};
+    if (reader.read(set, sh, sizeof(sh)) && sh[0] == 0x48 && sh[1] == 0x89 &&
+        sh[2] == 0x5C && sh[3] == 0x24 && sh[4] == 0x10) {
+        mem::hook_install(reinterpret_cast<void*>(set), &det_spawn_context_set,
+                          reinterpret_cast<void**>(&g_orig_spawn_context_set));
+    } else {
+        log::warnf("소환 컨텍스트 설정자 0x{:X} 프롤로그가 다르다 - 건너뛴다",
+                   kSpawnContextSetRva);
+    }
+
+    g_char_cheat_trace.store(true, std::memory_order_release);
+    log::infof("소환 치트 관문 추적 설치 (작업 0x{:X}, 관문 0x{:X}) - "
+               "전체 목록 소환이 어디서 막히는지 찍는다",
+               kCharCheatWorkRva, kSpawnContextRva);
+    return true;
+}
+
 // --------------------------------------------------- 2976 구동
 
 namespace {
@@ -557,6 +885,104 @@ bool request_complete_summon(std::uintptr_t session, std::uint64_t merc_no,
     return request_message(session, *m, wire, len);
 }
 
+CatchCapture last_catch() {
+    std::lock_guard<std::mutex> lock(g_last_mutex);
+    return g_last_catch;
+}
+
+bool catch_ready() { return find_message(kCatchBySummonId) != nullptr; }
+
+bool hire_from_inventory_ready() {
+    return find_message(kHireFromInvId) != nullptr;
+}
+
+bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
+                                 std::uint16_t b) {
+    const MessageDesc* m = find_message(kHireFromInvId);
+    if (m == nullptr || session == 0) return false;
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    if (!build_hire_inv_wire(a, b, wire, sizeof(wire), &len)) return false;
+    log::infof("부적 등록 요청: A {} B {}", a, b);
+    return request_message(session, *m, wire, len);
+}
+
+namespace {
+
+using HireInvWorkFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint16_t,
+                                         std::uint16_t);
+HireInvWorkFn g_orig_hire_inv = nullptr;
+std::atomic<bool> g_hire_inv_trace{false};
+std::atomic<int> g_hire_inv_logs{0};
+constexpr int kHireInvLogMax = 60;
+std::mutex g_hire_inv_mutex;
+HireInvResult g_last_hire_inv;
+
+void* __fastcall det_hire_inv_work(void* clan, std::uint32_t* result,
+                                   std::uint16_t a, std::uint16_t b) {
+    void* r = g_orig_hire_inv(clan, result, a, b);
+    if (g_hire_inv_logs.load(std::memory_order_relaxed) < kHireInvLogMax) {
+        g_hire_inv_logs.fetch_add(1, std::memory_order_relaxed);
+        const std::uint32_t code = (result != nullptr) ? *result : 0xFFFFFFFFu;
+        {
+            std::lock_guard<std::mutex> lock(g_hire_inv_mutex);
+            g_last_hire_inv.valid = true;
+            g_last_hire_inv.a = a;
+            g_last_hire_inv.b = b;
+            g_last_hire_inv.code = code;
+        }
+        log::infof("부적 등록 작업: A {} B {} -> 코드 0x{:08X} ({})", a, b, code,
+                   code == 0 ? "성공" : "거부");
+    }
+    return r;
+}
+
+}  // namespace
+
+HireInvResult last_hire_inv() {
+    std::lock_guard<std::mutex> lock(g_hire_inv_mutex);
+    return g_last_hire_inv;
+}
+
+bool companion_hire_inv_trace_install(const mem::Reader& reader) {
+    if (g_hire_inv_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+    const std::uintptr_t fn = reader.module_base() + kHireInvWorkRva;
+    // 0x2AD1FC0: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi
+    std::uint8_t h[10]{};
+    if (!reader.read(fn, h, sizeof(h))) return false;
+    if (!(h[0] == 0x48 && h[1] == 0x89 && h[2] == 0x5C && h[3] == 0x24 &&
+          h[4] == 0x10 && h[5] == 0x48 && h[6] == 0x89 && h[7] == 0x74)) {
+        log::warnf("부적 등록 추적: RVA 0x{:X} 프롤로그가 다르다 - 걸지 않는다",
+                   kHireInvWorkRva);
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(fn), &det_hire_inv_work,
+                           reinterpret_cast<void**>(&g_orig_hire_inv))) {
+        log::warnf("부적 등록 추적: 후킹 실패");
+        return false;
+    }
+    g_hire_inv_trace.store(true, std::memory_order_release);
+    log::infof("부적 등록 추적 설치 (RVA 0x{:X}) - 거부 코드를 찍는다",
+               kHireInvWorkRva);
+    return true;
+}
+
+bool request_catch(std::uintptr_t session, std::uint32_t target,
+                   std::uint32_t self) {
+    const MessageDesc* m = find_message(kCatchBySummonId);
+    if (m == nullptr || session == 0 || target == 0) return false;
+    if (self == 0) {
+        const CatchCapture seen = last_catch();
+        self = seen.valid ? seen.self : kCatchSelfDefault;
+    }
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    if (!build_catch_wire(self, target, wire, sizeof(wire), &len)) return false;
+    log::infof("붙잡기 요청: 잡는쪽 0x{:08X} 대상 0x{:08X}", self, target);
+    return request_message(session, *m, wire, len);
+}
+
 bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
                          std::uint8_t flag) {
     const MessageDesc* m = find_message(kHireToTargetId);
@@ -575,6 +1001,7 @@ namespace {
 std::atomic<bool> g_cmd_stop{false};
 std::thread g_cmd_thread;
 const mem::Reader* g_cmd_reader = nullptr;
+std::vector<std::uintptr_t> g_actor_snapshot;  // actordiff 기준
 
 // 그란트 패널과 같은 규칙: 서버 세션 중 가장 유력한 것.
 std::uintptr_t pick_server_session_impl() {
@@ -724,7 +1151,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
     }
     if (cmd == "spawnchar") {
         // 캐릭터 키로 개체를 내 앞에 스폰한다(SpawnCharacterCheatReq,
-        // ID 2510). 근처에 없는 종을 획득하려면 먼저 불러와야 한다.
+        // 실측 ID 2988). 근처에 없는 종을 획득하려면 먼저 불러와야 한다.
         //
         // 이 치트는 몸통이 살아 있다 - 역직렬화(RVA 0x28F1530)가
         // 본문을 읽은 뒤 0x2B6E530 을 부른다. 용병 치트 3종이
@@ -732,9 +1159,32 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         if (args.size() < 2) { say("spawnchar <캐릭터키> [B] [플래그]"); return false; }
         const std::uint32_t key = parse_u32(args[1], 0);
         if (key == 0) { say("키가 0이다"); return false; }
+        // 표에 없는 키를 넣으면 처리기가 관문을 지난 뒤 이름 해시를
+        // 널 버퍼로 돌려 그 자리에서 죽는다 - 실측 2026-09-07: 키 1 로
+        // RVA 0x3A84F0(xxHash 루프)에서 0xC0000005. 카탈로그가 읽혀
+        // 있으면 미리 막는다.
+        if (roster_ready()) {
+            const std::vector<RosterEntry>& cat = character_catalog();
+            const RosterEntry* found = nullptr;
+            for (const RosterEntry& e : cat) {
+                if (e.key == key) { found = &e; break; }
+            }
+            if (found == nullptr) {
+                say("캐릭터 표에 없는 키다 - chardump 로 찾아보라");
+                return false;
+            }
+            log::infof("캐릭터 소환 대상: 키 {} {} ({})", key, found->display(),
+                       found->name);
+        }
         const std::uint32_t b = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        // 플래그는 종류 코드다. 처리기가 이 바이트를 파라미터 객체의
+        // +0xA 에 그대로 넣는다(0x26CB420). 이미지 안에서 그 자리에
+        // 실제로 쓰이는 값은 0x0A·0x0D·0x10·0x16·0x1E·0x1F·0x20·0x25·
+        // 0x27·0x28 이고 **0 은 한 곳도 없다** - 우리가 넣던 값이다.
+        // 우리 자리의 코드는 0x28 을 따로 알아본다(0x21 로 바꿔 쓴다).
+        // 그래서 기본값을 0x28 로 둔다.
         const std::uint8_t flag = static_cast<std::uint8_t>(
-            args.size() > 3 ? parse_u32(args[3], 0) : 0);
+            args.size() > 3 ? parse_u32(args[3], kSpawnCharKind) : kSpawnCharKind);
         float pos[3]{};
         if (g_position_fn == nullptr || !g_position_fn(pos)) {
             say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
@@ -742,12 +1192,164 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         }
         const std::uintptr_t session = companion_pick_session();
         if (session == 0) { say("서버 세션 없음"); return false; }
-        if (!char_spawn_ready()) { say("2510 미해석"); return false; }
+        if (!char_spawn_ready()) { say("소환 치트 미해석"); return false; }
         log::infof("캐릭터 소환: 키 {} B {} 플래그 {} 좌표 ({:.1f}, {:.1f}, {:.1f})",
                    key, b, flag, pos[0], pos[1], pos[2]);
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
+    }
+    if (cmd == "hireitem") {
+        // 부적이 쓰는 등록 경로를 직접 구동한다. A 가 캐릭터 키로 보인다.
+        if (args.size() < 2) { say("hireitem <A> [B]"); return false; }
+        const std::uint16_t fa = static_cast<std::uint16_t>(parse_u32(args[1], 0));
+        const std::uint16_t fb = static_cast<std::uint16_t>(
+            args.size() > 2 ? parse_u32(args[2], 0) : 0);
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!hire_from_inventory_ready()) { say("2454 미해석"); return false; }
+        const bool ok = request_hire_from_inventory(session, fa, fb);
+        say(ok ? "부적 등록 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
+    if (cmd == "catch") {
+        // 게임이 야생 개체를 잡을 때 쓰는 경로를 그대로 흉내낸다.
+        // 대상은 근처 목록의 액터 핸들이다.
+        if (args.size() < 2) { say("catch <대상핸들> [잡는쪽핸들]"); return false; }
+        const std::uint32_t target = parse_u32(args[1], 0);
+        if (target == 0) { say("대상 핸들이 0이다"); return false; }
+        const std::uint32_t self = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!catch_ready()) { say("2386 미해석"); return false; }
+        const bool ok = request_catch(session, target, self);
+        say(ok ? "붙잡기 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
+    if (cmd == "actordiff") {
+        // 두 번 불러 그 사이에 생기고 사라진 액터를 낸다.
+        // 살아 있는 월드는 액터가 늘 드나들어 총수만으로는 판정이 안 된다
+        // (실측 2026-09-07: 1703 -> 1704 -> 1703, 잡음과 구별 불가).
+        if (!actor_manager_ready()) { say("액터 매니저 미확보"); return false; }
+        if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
+        refresh_live_actors(*g_cmd_reader);
+        const std::vector<LiveActor>& live = live_actors();
+
+        std::vector<std::uintptr_t> now;
+        now.reserve(live.size());
+        for (const LiveActor& a : live) now.push_back(a.actor);
+        std::sort(now.begin(), now.end());
+
+        if (g_actor_snapshot.empty()) {
+            g_actor_snapshot = now;
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "기준 잡음 (액터 %zu)", now.size());
+            say(buf);
+            return true;
+        }
+
+        std::size_t added = 0, gone = 0;
+        for (const LiveActor& a : live) {
+            if (std::binary_search(g_actor_snapshot.begin(),
+                                   g_actor_snapshot.end(), a.actor)) {
+                continue;
+            }
+            ++added;
+            log::infof("생김: 액터 0x{:X} 핸들 {} 키 {} 행 {} '{}' ({})", a.actor,
+                       a.handle, a.key, a.row, a.display(), a.name);
+        }
+        for (std::uintptr_t old : g_actor_snapshot) {
+            if (!std::binary_search(now.begin(), now.end(), old)) ++gone;
+        }
+        g_actor_snapshot = now;
+        char buf[112];
+        std::snprintf(buf, sizeof(buf), "생김 %zu · 사라짐 %zu (액터 %zu)", added,
+                      gone, now.size());
+        say(buf);
+        return true;
+    }
+    if (cmd == "unlock") {
+        // 구동이 게임 안에서 죽으면 그 세션을 잠근다(안전장치). 인자를
+        // 실험하는 동안에는 그때마다 게임을 재시작해야 해서 비싸다.
+        // 죽은 원인이 인자라는 것을 아는 경우에만 손으로 푼다.
+        const std::uintptr_t locked = drive_fault_session();
+        if (locked == 0) { say("잠긴 세션 없음"); return false; }
+        clear_drive_fault();
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "세션 0x%llX 잠금 해제",
+                      static_cast<unsigned long long>(locked));
+        say(buf);
+        return true;
+    }
+    if (cmd == "actordump") {
+        // 지금 월드에 살아 있는 액터를 이름 조각으로 찾아 로그에 낸다.
+        // 소환한 개체가 실제로 생겼는지 화면을 보지 않고 확인한다.
+        if (!actor_manager_ready()) { say("액터 매니저 미확보"); return false; }
+        if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
+        refresh_live_actors(*g_cmd_reader);
+        const std::vector<LiveActor>& live = live_actors();
+        const std::string frag = args.size() > 1 ? args[1] : std::string();
+        const std::size_t limit =
+            args.size() > 2 ? static_cast<std::size_t>(parse_u32(args[2], 30)) : 30;
+        std::size_t hits = 0;
+        for (const LiveActor& a : live) {
+            if (hits >= limit) break;
+            if (!frag.empty() && a.name.find(frag) == std::string::npos &&
+                a.label.find(frag) == std::string::npos) {
+                continue;
+            }
+            ++hits;
+            log::infof("액터: 0x{:X} 핸들 {} 키 {} {} ({}) 동반자 {}", a.actor,
+                       a.handle, a.key, a.display(), a.name,
+                       a.is_companion() ? "예" : "아니오");
+        }
+        char buf[112];
+        std::snprintf(buf, sizeof(buf), "%zu개 찾음 (살아있는 액터 %zu) - 로그를 보라",
+                      hits, live.size());
+        say(buf);
+        return true;
+    }
+    if (cmd == "chardump") {
+        // 캐릭터 표에서 이름 조각으로 찾아 키를 로그에 낸다.
+        // spawnchar 에 넣을 유효한 키를 여기서 얻는다.
+        if (args.size() < 2) { say("chardump <이름조각> [개수]"); return false; }
+        if (!roster_ready()) { say("카탈로그가 아직 안 읽혔다"); return false; }
+        const std::size_t limit =
+            args.size() > 2 ? static_cast<std::size_t>(parse_u32(args[2], 20)) : 20;
+        const std::string& frag = args[1];
+        const std::vector<RosterEntry>& cat = character_catalog();
+        std::size_t hits = 0;
+        for (const RosterEntry& e : cat) {
+            if (hits >= limit) break;
+            if (e.name.find(frag) == std::string::npos &&
+                e.label.find(frag) == std::string::npos) {
+                continue;
+            }
+            ++hits;
+            log::infof("캐릭터: 키 {} 행 {} {} ({}) 동반자 {} 고용 {}", e.key,
+                       e.row, e.display(), e.name,
+                       e.is_companion() ? "예" : "아니오",
+                       e.hirable ? "예" : "아니오");
+        }
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%zu개 찾음 (총 %zu행) - 로그를 보라",
+                      hits, cat.size());
+        say(buf);
+        return true;
+    }
+    if (cmd == "charforce") {
+        // 소환 치트 관문을 강제로 연다. 컨텍스트가 살아 있을 때만
+        // 실제로 밀린다 - 널이면 관문 뒤에서 죽기 때문이다.
+        if (args.size() < 2) {
+            say(companion_char_cheat_force() ? "charforce on (켜져 있음)"
+                                             : "charforce on|off (꺼져 있음)");
+            return false;
+        }
+        const bool on = args[1] == "on" || args[1] == "1";
+        companion_char_cheat_set_force(on);
+        say(on ? "관문 밀기 켬 - spawnchar 를 다시 해보라"
+               : "관문 밀기 끔");
+        return true;
     }
     if (cmd == "summon") {
         if (args.size() < 2) { say("summon <용병번호> [x y z]"); return false; }

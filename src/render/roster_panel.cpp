@@ -17,6 +17,52 @@ namespace cdtb::render {
 namespace {
 
 char g_query[128] = "";
+
+// ----------------------------------------------------------------------
+// 동반자와 관계있어 보이는 아이템
+//
+// 아이템 표 6813개를 이름으로 훑어 모았다(실측 2026-09-07). 지급은
+// 이미 검증된 경로라 키만 있으면 버튼 하나로 끝난다.
+//
+// **어디까지 확인됐는지를 줄마다 적는다.** 이름이 비슷하다고 절차가
+// 같으리라 넘겨짚지 않는다.
+//
+// - 부적 6종: 지급 -> 인벤토리에서 사용 -> 등록. 이전 세션 실측.
+// - 와이번의 알: 둥지에 올리고 5분 뒤 부화. 사용자가 직접 밟은 절차다
+//   (2026-09-07). 그때 게임이 아이템 사용(2676) -> 거두기(2386) 를
+//   보냈다.
+// - 나머지 알·둥지·새끼 고슴도치: **아무것도 확인되지 않았다.** 동반자
+//   아이템인지조차 모른다. 쿠쿠새는 알 껍질(1004431)이 따로 있어
+//   요리·재료일 수도 있다. 지급해서 직접 확인할 것.
+struct CompanionItem {
+    std::uint32_t key;
+    const char* name;
+    const char* kind;
+    const char* how;
+    bool verified;  // 실제로 되는 것을 본 적이 있나
+};
+
+const CompanionItem kCompanionItems[] = {
+    {1003843, "서릿발 백곰 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1003844, "은빛 송곳니 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1003845, "순백의 사슴 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1003846, "서릿발 알파인 아이벡스 동행의 부적", "부적",
+     "인벤토리에서 사용", true},
+    {1003847, "바위엄니 혹멧돼지 동행의 부적", "부적", "인벤토리에서 사용",
+     true},
+    {1003921, "피닉스 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1004389, "와이번의 알", "알", "둥지에 올리고 5분 뒤 부화", true},
+    {1004388, "쿠쿠새의 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1000146, "오래된 쿠쿠새의 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1001252, "황금 거위 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1004574, "돌 둥지 솟대", "설치물", "와이번 알을 올린 그 둥지인지 미확인",
+     false},
+    {1004660, "제작법 : 돌 둥지 솟대", "제작법", "위 설치물의 제작법", false},
+    {1001784, "새끼 고슴도치", "미상", "동반자인지조차 확인 안 됨", false},
+};
+
+double g_item_busy_until = 0.0;
+const char* g_item_busy_why = "";
 int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
 double g_near_last_refresh = 0.0;
@@ -214,6 +260,69 @@ void draw_companion_tab() {
 //
 // 살아 있는 액터를 걷어 캐릭터 이름을 붙인다(game/actors.h). 게임
 // 메모리를 읽는 것은 여기서 2초에 한 번 또는 버튼을 눌렀을 때뿐이다.
+// 동반자를 주는 아이템을 지급한다. 지급은 이미 검증된 경로다.
+void draw_companion_item_tab() {
+    const double now = ImGui::GetTime();
+    ImGui::TextDisabled(
+        "\"실측\"은 실제로 되는 것을 본 줄입니다. \"미확인\"은 이름만 보고 "
+        "모은 것이라 동반자 아이템인지도 모릅니다 - 지급해서 확인해 "
+        "보세요.");
+    if (now < g_item_busy_until) {
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s",
+                           g_item_busy_why);
+    }
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_BordersInnerV |
+                                  ImGuiTableFlags_ScrollY;
+    if (!ImGui::BeginTable("companion_items", 6, flags)) return;
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("종류", ImGuiTableColumnFlags_WidthFixed, 60);
+    ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 72);
+    ImGui::TableSetupColumn("쓰는 법", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("확인", ImGuiTableColumnFlags_WidthFixed, 56);
+    ImGui::TableSetupColumn("지급", ImGuiTableColumnFlags_WidthFixed, 52);
+    ImGui::TableHeadersRow();
+    const int n = static_cast<int>(sizeof(kCompanionItems) /
+                                   sizeof(kCompanionItems[0]));
+    for (int i = 0; i < n; ++i) {
+        const CompanionItem& it = kCompanionItems[i];
+        if (g_query[0] != 0 && !contains_ci(it.name, g_query)) continue;
+        ImGui::TableNextRow();
+        ImGui::PushID(i);
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(it.name);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextUnformatted(it.kind);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("%u", it.key);
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextDisabled("%s", it.how);
+        ImGui::TableSetColumnIndex(4);
+        if (it.verified) {
+            ImGui::TextUnformatted("실측");
+        } else {
+            ImGui::TextDisabled("미확인");
+        }
+        ImGui::TableSetColumnIndex(5);
+        char btn[24];
+        std::snprintf(btn, sizeof(btn), "지급##give%d", i);
+        if (ImGui::SmallButton(btn)) {
+            const std::uintptr_t sess = game::companion_pick_session();
+            const bool queued =
+                sess != 0 &&
+                game::request_give(sess, it.key, 1, game::GiveExtras{});
+            g_item_busy_until = now + 3.0;
+            g_item_busy_why =
+                queued ? "지급 요청을 걸었습니다 - 인벤토리를 확인하세요"
+                       : (sess == 0 ? "살아 있는 서버 세션이 없습니다"
+                                    : "요청이 밀렸습니다 - 잠시 뒤 다시");
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+
 void draw_nearby_tab() {
     if (!game::actor_manager_ready()) {
         ImGui::TextDisabled("액터 매니저를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
@@ -293,7 +402,7 @@ void draw_nearby_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("nearby", 8, flags)) {
+    if (ImGui::BeginTable("nearby", 9, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 104);
         ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed, 82);
@@ -303,6 +412,7 @@ void draw_nearby_tab() {
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed, 52);
+        ImGui::TableSetupColumn("거두기", ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(view.size()));
@@ -389,6 +499,33 @@ void draw_nearby_tab() {
                         "소환이 안 되면 게임의 소환 쿨타임입니다.\n"
                         "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
                 }
+                ImGui::TableSetColumnIndex(8);
+                // 거두기(2386): 알에서 깬 개체를 거두는 경로다. 야생 개체를
+                // 잡는 길이 아니다(실측 2026-09-07: 임의의 야생 동물에게
+                // 쏘면 아무 일도 일어나지 않는다). 표본이 있어 남겨 두지만
+                // 일반 획득은 왼쪽 칸을 쓴다.
+                const bool can_catch = a->handle != 0 && game::catch_ready();
+                char cbtn[32];
+                std::snprintf(cbtn, sizeof(cbtn), "거두기##catch%d", i);
+                ImGui::BeginDisabled(!can_catch);
+                if (ImGui::SmallButton(cbtn)) {
+                    const std::uintptr_t sess = game::companion_pick_session();
+                    const bool queued =
+                        sess != 0 && game::request_catch(sess, a->handle, 0);
+                    if (!queued) {
+                        g_near_busy_until = now + 3.0;
+                        g_near_busy_why =
+                            sess == 0 ? "살아 있는 서버 세션이 없습니다"
+                                      : "요청이 밀렸습니다 - 잠시 뒤 다시";
+                    }
+                }
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered() && can_catch) {
+                    ImGui::SetTooltip(
+                        "알에서 깬 개체를 거두는 경로입니다(2386).\n"
+                        "야생 개체에게는 아무 일도 일어나지 않습니다 - "
+                        "획득은 왼쪽 칸을 쓰세요.");
+                }
                 ImGui::PopID();
             }
         }
@@ -471,6 +608,7 @@ void draw_roster_panel(bool* open) {
         if (ImGui::BeginTabItem("탈것")) { g_tab = 2; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("용병 타입")) { g_tab = 3; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("캐릭터")) { g_tab = 4; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("동반자 아이템")) { g_tab = 5; ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 
@@ -484,6 +622,7 @@ void draw_roster_panel(bool* open) {
     switch (g_tab) {
         case 0: draw_companion_tab(); break;
         case 1: draw_nearby_tab(); break;
+        case 5: draw_companion_item_tab(); break;
         case 2: draw_list_tab(game::vehicle_catalog(), false); break;
         case 3:
             if (game::mercenary_catalog().empty()) {

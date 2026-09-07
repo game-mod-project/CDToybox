@@ -109,6 +109,100 @@ struct HireWorkResult {
 HireWorkResult last_hire_work();
 
 // ----------------------------------------------------------------------
+// 캐릭터 소환 치트(SpawnCharacterCheatReq, 실측 ID 2988)의 관문 측정
+//
+// 작업 함수 0x2B6E530 은 본문을 읽은 뒤 스포너를 얻어 관문을 묻는다.
+//
+//   mov  rsi, [rdx]              ; 컴포넌트
+//   call [rsi vtable + 0x160]    ; -> 스포너
+//   lea  rdx, [rsp+0x58]         ; 출력 버퍼
+//   call 0x1FB5B60               ; 관문 조회
+//   cmp  byte ptr [rsp+0x68], 0  ; = 버퍼+0x10
+//   jne  진짜 작업               ; 0 이면 0x3F5 오류를 만들고 끝
+//
+// 관문 함수(0x1FB5B60)를 읽으면 그 바이트가 무엇인지 정확히 나온다.
+//
+//   rdi = [스포너 + 0xD8]
+//   바이트 = (rdi != 0) && rdi->vtable[0xC0](rdi, 4, 0x10)
+//   버퍼+0x00 = vtable, +0x08 = rdi, +0x10 = 바이트
+//
+// 그러니 막히는 이유는 둘 중 하나다. 컨텍스트(+0xD8)가 비었거나,
+// 컨텍스트는 있는데 vtable[0xC0] 이 거절하거나. 어느 쪽인지는 실행
+// 중에만 알 수 있어서 두 자리에 읽기 전용 훅을 건다.
+//
+// 0x1FB5B60 은 이미지 안에서 157 곳이 부른다 - 아주 뜨겁다. 그래서
+// 작업 함수 안에 있을 때(thread_local 표시)만 찍는다.
+inline constexpr std::uint64_t kCharCheatWorkRva = 0x2B6E530;
+inline constexpr std::uint64_t kSpawnContextRva = 0x1FB5B60;
+// 같은 필드를 세우는 설정자. f(스포너, 새 컨텍스트) 이고 이미지 안에서
+// 일곱 곳만 부른다 - 아주 좁은 구간에서만 열리는 문이라는 뜻이다.
+// 우리 경로에서 컨텍스트가 비어 있다면, 정상 경로가 무엇을 넣는지
+// 알아야 그것을 흉내낼 수 있다. 넣는 값의 vtable 을 찍어 둔다.
+inline constexpr std::uint64_t kSpawnContextSetRva = 0x1FB5BF0;
+
+// 관문을 지난 뒤 실제로 개체를 만드는 자리. 인자 둘이다.
+//
+//   f(컨텍스트, 결과버퍼)
+//     rax = [컨텍스트 + 0x68]
+//     rcx = [rax + 0x1A0]
+//     call [rcx vtable + 0x140](rcx, 결과버퍼)
+//
+// 결과버퍼는 관문과 같은 배치다 - +0x10 이 "값이 있나" 바이트다.
+// 작업 함수는 이 바이트가 0 이면 오류 메시지도 만들지 않고 조용히
+// 정리하고 끝낸다(0x2B6E8D5 -> 0x2B6EB29). 실측 2026-09-07: 유효한
+// 키(20961)로 크래시 없이 끝까지 돌았는데 개체가 나오지 않았다.
+// 남은 조용한 이탈은 여기뿐이다.
+inline constexpr std::uint64_t kSpawnMakeRva = 0x1763570;
+
+// 캐릭터 소환 치트의 플래그 인자. 종류 코드다.
+//
+// 처리기는 이 바이트를 파라미터 객체 +0xA 에 그대로 넣는다
+// (생성자 0x26CB420, 우리 자리는 0x2B6E8FB).
+//
+//   movzx r8d, byte ptr [플래그]
+//   mov   eax, 0x21
+//   cmp   r8b, 0x28
+//   cmove r8d, eax          ; 0x28 이면 0x21 로 바꾼다
+//
+// 이미지 전체에서 그 생성자를 부르는 43곳을 훑으니 쓰이는 값은
+// 0x0A·0x0D·0x10·0x16·0x1E·0x1F·0x20·0x25·0x27·0x28 이고 **0 은
+// 한 곳도 없다**. 우리는 0 을 넣고 있었고, 그때 만들기까지는
+// 성공한 뒤 더 깊은 곳에서 널 문자열을 해시하다 죽었다
+// (실측 2026-09-07: 키 31153, RVA 0x3A84F0).
+inline constexpr std::uint8_t kSpawnCharKind = 0x28;
+
+struct CharCheatGate {
+    bool valid = false;
+    std::uint32_t key = 0;         // 요청한 캐릭터 키
+    std::uint64_t spawner = 0;     // 관문을 쥔 객체
+    std::uint64_t context = 0;     // [스포너 + 0xD8]
+    std::uint8_t allowed = 0;      // 관문 바이트. 0 이면 포기한다
+    bool forced = false;           // 우리가 1 로 밀었나
+};
+CharCheatGate last_char_cheat_gate();
+
+// 작업 함수에 들어가고 나오는 것을 바깥에서 표시한다.
+//
+// 훅 안에서 표시를 걷는 것만으로는 부족하다. 처리기가 게임 안에서
+// 죽으면 SEH 가 우리 훅 프레임을 건너뛰어 되감기 때문에, 훅의 복원
+// 줄이 실행되지 않는다 - 실측 2026-09-07: 그 한 번으로 표시가 켜진
+// 채 남아 관문 로그가 8만 줄 쌓였다. 구동을 감싸는 쪽(run_char_spawn)
+// 에서 확실히 걷는다.
+void companion_char_cheat_mark(bool inside);
+
+bool companion_char_cheat_trace_install(const mem::Reader& reader);
+bool companion_char_cheat_trace_installed();
+
+// 관문 바이트를 1 로 밀지 여부. 기본은 끔이다.
+//
+// 컨텍스트가 0 이면 절대 밀지 않는다. 관문 뒤의 코드가 그 포인터를
+// this 로 써서(0x2B6E88E: mov rcx,[rsp+0x60]) 널이면 그 자리에서
+// 죽는다. 컨텍스트가 살아 있고 vtable[0xC0] 만 거절하는 경우에만
+// 밀어 본다.
+void companion_char_cheat_set_force(bool on);
+bool companion_char_cheat_force();
+
+// ----------------------------------------------------------------------
 // 아이템 사용 구동 (`TrocTrUseItemByItemInfoReq`, ID 2976)
 //
 // 역직렬화(RVA 0x29373D0)가 읽는 본문 13바이트: u32 A, u32 B, u8 C, u32 D.
@@ -193,6 +287,112 @@ bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
 bool hire_target_ready();
 // 그란트 패널과 같은 규칙으로 서버 세션을 고른다. 없으면 0.
 std::uintptr_t companion_pick_session();
+
+// ----------------------------------------------------------------------
+// 알에서 깬 개체 거두기 (`TrocTrCatchBySummonReq`, ID 2386)
+//
+// **이름과 달리 야생 개체를 잡는 경로가 아니다.** 처음에 그렇게 읽고
+// 임의의 야생 동물에게 쏴 봤지만 아무 일도 일어나지 않았다. 사용자가
+// 알려 준 실제 절차는 이렇다(2026-09-07):
+//
+//   와이번 알 -> 둥지에 올리기 -> 5분 대기 -> 부화 -> 획득
+//
+// 그래서 캡처된 두 메시지의 뜻은 이렇다.
+//
+//   2676 아이템 사용  = 알을 둥지에 올린다 (본문의 매번 다른 u64 가 알)
+//   2386 이 메시지    = 부화한 개체를 거둔다
+//
+// 와이어는 머리 5 + 본문 8 바이트다.
+//
+//   52 09 00 08 00 | 01 00 10 A0 | 0D 37 10 B0
+//
+//   첫째 u32 = 0xA0100001 - 네 표본이 전부 같다. 둥지로 보인다.
+//              액터 매니저가 아닌 별도 매니저에서 조회된다(0x2B7CE20).
+//   둘째 u32 = 부화체 액터 핸들 (0xB010 = 일반 액터)
+//
+// 처리기(역직렬화 0x28A7860 -> 작업 0x2B7CDF0)는 첫째 핸들이 그 매니저에
+// 없으면 오류 코드만 쓰고 끝낸다. 우리가 쏜 것이 조용히 아무 일도 못 한
+// 이유다 - 둥지도 부화체도 없었다.
+//
+// 그러니 이 메시지만으로는 새 동반자를 얻을 수 없다. 알을 지급해
+// (render/roster_panel 의 동반자 아이템 탭) 게임의 절차를 그대로
+// 밟는 것이 실제로 되는 길이다. 조립·해석은 표본이 있으니 남겨 둔다.
+// ----------------------------------------------------------------------
+// 소지품으로 고용 (`TrocTrHireMercenaryFromInventoryReq`, ID 2454)
+//
+// **종을 골라 등록하는 데는 쓸 수 없다.** 실측으로 끝까지 확인했다
+// (2026-09-07). 인자가 종을 가리키지 않는다.
+//
+//   [ID 2454][00][본문길이 4][u16 A][u16 B]
+//
+//   A = 컨테이너 종류 (1..21). 등록 작업이 표(0x8752A40)로 A -> A-1 로
+//       옮긴다. 그 표는 21행이고 키 1..21, 값 0..20 이 전부다 -
+//       실제로 열어서 읽었다. 범위 밖이면 코드 0x73353994.
+//   B = **그 컨테이너 안의 슬롯 번호.** 조회(0x2078A70)가
+//       [컨테이너] + B * 0xC8 로 슬롯을 집는다. 슬롯 수를 넘거나 빈
+//       슬롯이면 코드 0x06306EB0.
+//
+// 즉 **종은 그 슬롯에 든 아이템이 정한다.** 동행의 부적이 6종뿐이니
+// 이 길의 한계도 6종이다. 원하는 종을 임의로 올릴 수는 없다.
+//
+// 남겨 두는 이유: 부적을 인벤토리에서 손으로 쓰지 않고 구동으로
+// 쓸 수 있고, 거부 코드를 읽는 훅이 붙어 있어 다른 조사에 쓸모가 있다.
+//
+// 처리기 사슬:
+//   역직렬화 0x2965510 -> 작업 0x2AD1FC0
+//   rcx = [[세션액터+0x68]+0x110]  MercenaryClanActorComponent
+//   rdx = &결과 u32 (0 이면 성공)   r8w = A   r9w = B
+inline constexpr std::uint16_t kHireFromInvId = 2454;
+inline constexpr std::size_t kHireInvWireLen = 5 + 4;
+
+// 머리 5바이트 + 본문 4바이트(u16 A, u16 B)를 조립한다.
+bool build_hire_inv_wire(std::uint16_t a, std::uint16_t b, std::uint8_t* out,
+                         std::size_t cap, std::size_t* len_out);
+// 본문 4바이트를 읽는다. 길이나 ID 가 다르면 false.
+bool decode_hire_inv(const std::uint8_t* payload, std::size_t len,
+                     std::uint16_t* a_out, std::uint16_t* b_out);
+// 2454 를 게임 스레드에서 구동한다.
+bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
+                                 std::uint16_t b);
+bool hire_from_inventory_ready();
+
+// 등록 작업 함수. 거부 코드를 찍는다. 읽기만 한다.
+inline constexpr std::uint64_t kHireInvWorkRva = 0x2AD1FC0;
+struct HireInvResult {
+    bool valid = false;
+    std::uint16_t a = 0;
+    std::uint16_t b = 0;
+    std::uint32_t code = 0;  // 0 이면 성공
+};
+HireInvResult last_hire_inv();
+bool companion_hire_inv_trace_install(const mem::Reader& reader);
+
+inline constexpr std::uint16_t kCatchBySummonId = 2386;
+inline constexpr std::size_t kCatchWireLen = 5 + 8;
+// 표본 네 개가 전부 이 값이었다. 세션마다 달라질 수 있으니 캡처에서
+// 본 값이 있으면 그것을 먼저 쓴다.
+inline constexpr std::uint32_t kCatchSelfDefault = 0xA0100001;
+
+// 게임이 보낸 붙잡기에서 읽어 둔 것. 아직 없으면 valid=false.
+struct CatchCapture {
+    bool valid = false;
+    std::uint32_t self = 0;
+    std::uint32_t target = 0;
+};
+CatchCapture last_catch();
+
+// 본문 8바이트(u32 잡는쪽, u32 대상)를 읽는다. 길이가 다르면 false.
+bool decode_catch(const std::uint8_t* payload, std::size_t len,
+                  std::uint32_t* self_out, std::uint32_t* target_out);
+// 머리 5바이트 + 본문 8바이트를 조립한다.
+bool build_catch_wire(std::uint32_t self, std::uint32_t target,
+                      std::uint8_t* out, std::size_t cap, std::size_t* len_out);
+// 2386 을 게임 스레드에서 구동한다. self 가 0 이면 캡처에서 본 값,
+// 그것도 없으면 kCatchSelfDefault 를 쓴다.
+bool request_catch(std::uintptr_t session, std::uint32_t target,
+                   std::uint32_t self = 0);
+// 2386 이 해석돼 있는가.
+bool catch_ready();
 
 // ----------------------------------------------------------------------
 // 명령 파일 (DLL 옆 cdtoybox_cmd.txt)

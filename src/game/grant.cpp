@@ -9,6 +9,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "game/companion.h"
 #include "mem/hook.h"
 #include "mem/scanner.h"
 
@@ -111,7 +112,7 @@ CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
-CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2510)
+CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2988)
 
 // 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
 using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
@@ -1666,10 +1667,14 @@ void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
     packet[0] = static_cast<std::uint64_t>(session);
 
     o.called = true;
+    // 관문 추적의 표시를 여기서 켜고 끈다. 처리기가 죽으면 SEH 가
+    // 훅 프레임을 건너뛰어 되감아, 훅 안에서 끄는 것은 실행되지 않는다.
+    companion_char_cheat_mark(true);
     o.crashed = !call_charspawn_guarded(
         reinterpret_cast<CharSpawnFn>(g_char_msg.handler),
         reinterpret_cast<void*>(g_char_msg.descriptor), packet, &key, &b, where,
         &flag, &o.seh, &o.fault);
+    companion_char_cheat_mark(false);
     if (o.crashed) {
         const std::uintptr_t base = g_reader->module_base();
         const std::size_t size = g_reader->module_size();

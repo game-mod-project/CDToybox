@@ -54,16 +54,32 @@ bool looks_like_actor_manager(const mem::Reader& reader, std::uintptr_t manager)
     return false;
 }
 
+// 아래에 정의돼 있다. 매니저 고르기에서 먼저 쓴다.
+bool walk_actor_pointers(const mem::Reader& reader, std::uintptr_t manager,
+                         std::vector<std::uintptr_t>* out);
+
 bool find_actor_manager(const mem::Reader& reader, const mem::Rtti& rtti,
                         std::uintptr_t* out) {
     if (out == nullptr) return false;
+    // 첫 번째로 그럴듯한 것을 집으면 안 된다. 매니저는 여러 개 살아
+    // 있고(메인 화면 것이 남아 있기도 한다) 그중 빈 것을 집으면 근처
+    // 목록이 계속 비어 보인다 - 실측 2026-09-07: 월드 진입 전에 잡은
+    // 매니저를 그대로 물고 있어 액터가 1개로 나왔다(직전 세션 1703).
+    // 액터를 가장 많이 들고 있는 것을 고른다.
+    std::uintptr_t best = 0;
+    std::size_t best_n = 0;
     for (const auto addr : rtti.instances_of_class(kActorManagerClass, 8)) {
-        if (looks_like_actor_manager(reader, addr)) {
-            *out = addr;
-            return true;
+        if (!looks_like_actor_manager(reader, addr)) continue;
+        std::vector<std::uintptr_t> ptrs;
+        if (!walk_actor_pointers(reader, addr, &ptrs)) continue;
+        if (best == 0 || ptrs.size() > best_n) {
+            best = addr;
+            best_n = ptrs.size();
         }
     }
-    return false;
+    if (best == 0) return false;
+    *out = best;
+    return true;
 }
 
 bool walk_actor_pointers(const mem::Reader& reader, std::uintptr_t manager,
@@ -204,6 +220,10 @@ bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
 namespace {
 
 std::atomic<std::uintptr_t> g_manager{0};
+// 다시 찾기에 쓴다. 처음 발견에 쓴 것을 그대로 들고 있는다.
+const mem::Rtti* g_rtti = nullptr;
+// 살아 있는 월드에서 이보다 적으면 매니저를 잘못 잡은 것으로 본다.
+constexpr std::size_t kMinPlausibleActors = 8;
 // 목록은 그리는 스레드만 만들고 읽는다(패널이 버튼/주기로 refresh 를
 // 부르고 같은 프레임에서 그린다). 다른 스레드가 읽지 않으므로 판을
 // 겹쳐 둘 필요가 없다.
@@ -216,6 +236,7 @@ bool discover_actor_manager(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::uintptr_t m = 0;
     if (!find_actor_manager(reader, rtti, &m)) return false;
     g_manager.store(m, std::memory_order_release);
+    g_rtti = &rtti;
     log::infof("액터 매니저 0x{:X} - 근처 목록 준비됨", m);
     return true;
 }
@@ -223,10 +244,30 @@ bool discover_actor_manager(const mem::Rtti& rtti, const mem::Reader& reader) {
 bool actor_manager_ready() { return g_manager.load(std::memory_order_acquire) != 0; }
 
 bool refresh_live_actors(const mem::Reader& reader) {
-    const std::uintptr_t m = g_manager.load(std::memory_order_acquire);
+    std::uintptr_t m = g_manager.load(std::memory_order_acquire);
     if (m == 0) return false;
     std::vector<LiveActor> list;
     if (!snapshot_live_actors(reader, m, &list)) return false;
+
+    // 잡아 둔 매니저가 말라붙었으면 다시 찾는다. 월드 진입 전에 잡으면
+    // 그 뒤로 영영 비어 보인다. 살아 있는 월드에서 액터가 한 자릿수인
+    // 경우는 없다.
+    if (list.size() < kMinPlausibleActors && g_rtti != nullptr) {
+        std::uintptr_t again = 0;
+        if (find_actor_manager(reader, *g_rtti, &again) && again != 0 &&
+            again != m) {
+            std::vector<LiveActor> better;
+            if (snapshot_live_actors(reader, again, &better) &&
+                better.size() > list.size()) {
+                g_manager.store(again, std::memory_order_release);
+                log::infof("액터 매니저를 0x{:X} 로 바꿨다 - 잡아 둔 것이 "
+                           "비어 있었다({}개 -> {}개)",
+                           again, list.size(), better.size());
+                list.swap(better);
+            }
+        }
+    }
+
     g_live.swap(list);
     return true;
 }
