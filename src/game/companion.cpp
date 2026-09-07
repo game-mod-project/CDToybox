@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <algorithm>
 #include <vector>
 
 #include "core/log.h"
@@ -831,6 +832,7 @@ namespace {
 std::atomic<bool> g_cmd_stop{false};
 std::thread g_cmd_thread;
 const mem::Reader* g_cmd_reader = nullptr;
+std::vector<std::uintptr_t> g_actor_snapshot;  // actordiff 기준
 
 // 그란트 패널과 같은 규칙: 서버 세션 중 가장 유력한 것.
 std::uintptr_t pick_server_session_impl() {
@@ -1027,6 +1029,48 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
+    }
+    if (cmd == "actordiff") {
+        // 두 번 불러 그 사이에 생기고 사라진 액터를 낸다.
+        // 살아 있는 월드는 액터가 늘 드나들어 총수만으로는 판정이 안 된다
+        // (실측 2026-09-07: 1703 -> 1704 -> 1703, 잡음과 구별 불가).
+        if (!actor_manager_ready()) { say("액터 매니저 미확보"); return false; }
+        if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
+        refresh_live_actors(*g_cmd_reader);
+        const std::vector<LiveActor>& live = live_actors();
+
+        std::vector<std::uintptr_t> now;
+        now.reserve(live.size());
+        for (const LiveActor& a : live) now.push_back(a.actor);
+        std::sort(now.begin(), now.end());
+
+        if (g_actor_snapshot.empty()) {
+            g_actor_snapshot = now;
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "기준 잡음 (액터 %zu)", now.size());
+            say(buf);
+            return true;
+        }
+
+        std::size_t added = 0, gone = 0;
+        for (const LiveActor& a : live) {
+            if (std::binary_search(g_actor_snapshot.begin(),
+                                   g_actor_snapshot.end(), a.actor)) {
+                continue;
+            }
+            ++added;
+            log::infof("생김: 액터 0x{:X} 핸들 {} 키 {} 행 {} '{}' ({})", a.actor,
+                       a.handle, a.key, a.row, a.display(), a.name);
+        }
+        for (std::uintptr_t old : g_actor_snapshot) {
+            if (!std::binary_search(now.begin(), now.end(), old)) ++gone;
+        }
+        g_actor_snapshot = now;
+        char buf[112];
+        std::snprintf(buf, sizeof(buf), "생김 %zu · 사라짐 %zu (액터 %zu)", added,
+                      gone, now.size());
+        say(buf);
+        return true;
     }
     if (cmd == "unlock") {
         // 구동이 게임 안에서 죽으면 그 세션을 잠근다(안전장치). 인자를
