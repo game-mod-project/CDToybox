@@ -384,6 +384,204 @@ bool companion_spawn_trace_install(const mem::Reader& reader) {
     return true;
 }
 
+// ------------------------------------------- 캐릭터 소환 치트 관문 측정
+
+namespace {
+
+using CharCheatWorkFn = void*(__fastcall*)(void*, void*, void*, void*);
+using SpawnContextFn = void*(__fastcall*)(void*, void*);
+
+CharCheatWorkFn g_orig_char_cheat_work = nullptr;
+SpawnContextFn g_orig_spawn_context = nullptr;
+std::atomic<bool> g_char_cheat_trace{false};
+std::atomic<bool> g_char_cheat_force{false};
+std::mutex g_gate_mutex;
+CharCheatGate g_last_gate;
+
+// 작업 함수 안에 있는 동안만 켜진다. 관문 함수는 157 곳에서 불리는데
+// 그 호출은 작업 함수와 같은 스레드의 직통 호출이라 이것으로 정확히
+// 우리 것만 고른다.
+thread_local bool t_in_char_cheat = false;
+thread_local std::uint32_t t_char_cheat_key = 0;
+
+// 죽지 않고 읽는다. 관문 함수는 게임의 어느 스레드에서든 불린다.
+bool read_ptr_guarded(std::uint64_t at, std::uint64_t* out) {
+    __try {
+        *out = *reinterpret_cast<volatile std::uint64_t*>(at);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void* __fastcall det_spawn_context(void* spawner, void* out) {
+    void* r = g_orig_spawn_context(spawner, out);
+    if (!t_in_char_cheat) return r;
+
+    std::uint64_t context = 0;
+    const bool ctx_ok =
+        spawner != nullptr &&
+        read_ptr_guarded(reinterpret_cast<std::uint64_t>(spawner) + 0xD8,
+                         &context);
+
+    std::uint8_t allowed = 0;
+    std::uint8_t* gate = nullptr;
+    if (out != nullptr) {
+        gate = reinterpret_cast<std::uint8_t*>(out) + 0x10;
+        allowed = *gate;
+    }
+
+    bool forced = false;
+    if (allowed == 0 && ctx_ok && context != 0 && gate != nullptr &&
+        g_char_cheat_force.load(std::memory_order_acquire)) {
+        // 컨텍스트가 살아 있을 때만 민다. 널이면 관문 뒤에서 죽는다.
+        *gate = 1;
+        allowed = 1;
+        forced = true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_gate_mutex);
+        g_last_gate.valid = true;
+        g_last_gate.key = t_char_cheat_key;
+        g_last_gate.spawner = reinterpret_cast<std::uint64_t>(spawner);
+        g_last_gate.context = ctx_ok ? context : 0;
+        g_last_gate.allowed = allowed;
+        g_last_gate.forced = forced;
+    }
+
+    log::infof("소환 치트 관문: 스포너 0x{:X} 컨텍스트 0x{:X} -> {}{}",
+               reinterpret_cast<std::uint64_t>(spawner),
+               ctx_ok ? context : 0,
+               allowed != 0 ? "열림" : "닫힘",
+               forced ? " (우리가 밀었다)" : "");
+    if (allowed == 0) {
+        log::infof("소환 치트 관문: {} - {}",
+                   (ctx_ok && context != 0) ? "컨텍스트는 있는데 거절당했다"
+                                            : "컨텍스트가 비었다",
+                   (ctx_ok && context != 0)
+                       ? "vtable[0xC0](4, 0x10) 이 false 다"
+                       : "스포너+0xD8 이 0 이다 - 밀면 죽으니 밀지 않는다");
+    }
+    return r;
+}
+
+using SpawnContextSetFn = void*(__fastcall*)(void*, void*);
+SpawnContextSetFn g_orig_spawn_context_set = nullptr;
+std::atomic<int> g_ctx_set_logs{0};
+constexpr int kCtxSetLogMax = 12;
+
+// 정상 경로가 컨텍스트에 무엇을 넣는지 본다. vtable 을 찍어 두면
+// 나중에 probe 로 클래스 이름을 뽑을 수 있다.
+void* __fastcall det_spawn_context_set(void* spawner, void* value) {
+    if (g_ctx_set_logs.load(std::memory_order_relaxed) < kCtxSetLogMax) {
+        g_ctx_set_logs.fetch_add(1, std::memory_order_relaxed);
+        std::uint64_t vtbl = 0;
+        if (value != nullptr) {
+            read_ptr_guarded(reinterpret_cast<std::uint64_t>(value), &vtbl);
+        }
+        log::infof("소환 컨텍스트 설정: 스포너 0x{:X} <- 0x{:X} (vtable 0x{:X})",
+                   reinterpret_cast<std::uint64_t>(spawner),
+                   reinterpret_cast<std::uint64_t>(value), vtbl);
+    }
+    return g_orig_spawn_context_set(spawner, value);
+}
+
+void* __fastcall det_char_cheat_work(void* a, void* b, void* key_ptr, void* d) {
+    const bool outer = t_in_char_cheat;
+    t_in_char_cheat = true;
+    t_char_cheat_key = 0;
+    if (key_ptr != nullptr) {
+        std::uint64_t k = 0;
+        if (read_ptr_guarded(reinterpret_cast<std::uint64_t>(key_ptr), &k)) {
+            t_char_cheat_key = static_cast<std::uint32_t>(k & 0xFFFFFFFFu);
+        }
+    }
+    log::infof("소환 치트 작업: 키 {} 진입", t_char_cheat_key);
+    void* r = g_orig_char_cheat_work(a, b, key_ptr, d);
+    t_in_char_cheat = outer;
+    return r;
+}
+
+}  // namespace
+
+CharCheatGate last_char_cheat_gate() {
+    std::lock_guard<std::mutex> lock(g_gate_mutex);
+    return g_last_gate;
+}
+
+void companion_char_cheat_set_force(bool on) {
+    g_char_cheat_force.store(on, std::memory_order_release);
+    log::infof("소환 치트 관문 밀기: {}", on ? "켬" : "끔");
+}
+
+bool companion_char_cheat_force() {
+    return g_char_cheat_force.load(std::memory_order_acquire);
+}
+
+bool companion_char_cheat_trace_installed() {
+    return g_char_cheat_trace.load(std::memory_order_acquire);
+}
+
+bool companion_char_cheat_trace_install(const mem::Reader& reader) {
+    if (g_char_cheat_trace.load(std::memory_order_acquire)) return true;
+    if (!mem::hook_init()) return false;
+
+    // 프롤로그가 기대와 다르면 걸지 않는다. 패치마다 밀릴 수 있다.
+    // 0x2B6E530: mov [rsp+8],rbx / mov [rsp+0x20],r9
+    const std::uintptr_t work = reader.module_base() + kCharCheatWorkRva;
+    std::uint8_t wh[10]{};
+    if (!reader.read(work, wh, sizeof(wh))) return false;
+    if (!(wh[0] == 0x48 && wh[1] == 0x89 && wh[2] == 0x5C && wh[3] == 0x24 &&
+          wh[4] == 0x08 && wh[5] == 0x4C && wh[6] == 0x89 && wh[7] == 0x4C)) {
+        log::warnf("소환 치트 관문: 작업 RVA 0x{:X} 프롤로그가 다르다 "
+                   "({:02X} {:02X} {:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kCharCheatWorkRva, wh[0], wh[1], wh[2], wh[3], wh[4]);
+        return false;
+    }
+
+    // 0x1FB5B60: mov [rsp+8],rbx / mov [rsp+0x10],rdx / push rdi
+    const std::uintptr_t ctx = reader.module_base() + kSpawnContextRva;
+    std::uint8_t ch[11]{};
+    if (!reader.read(ctx, ch, sizeof(ch))) return false;
+    if (!(ch[0] == 0x48 && ch[1] == 0x89 && ch[2] == 0x5C && ch[3] == 0x24 &&
+          ch[4] == 0x08 && ch[5] == 0x48 && ch[6] == 0x89 && ch[7] == 0x54 &&
+          ch[8] == 0x24 && ch[9] == 0x10 && ch[10] == 0x57)) {
+        log::warnf("소환 치트 관문: 관문 RVA 0x{:X} 프롤로그가 다르다 "
+                   "({:02X} {:02X} {:02X} {:02X} {:02X}) - 걸지 않는다",
+                   kSpawnContextRva, ch[0], ch[1], ch[2], ch[3], ch[4]);
+        return false;
+    }
+
+    if (!mem::hook_install(reinterpret_cast<void*>(work), &det_char_cheat_work,
+                           reinterpret_cast<void**>(&g_orig_char_cheat_work))) {
+        log::warnf("소환 치트 관문: 작업 후킹 실패");
+        return false;
+    }
+    if (!mem::hook_install(reinterpret_cast<void*>(ctx), &det_spawn_context,
+                           reinterpret_cast<void**>(&g_orig_spawn_context))) {
+        log::warnf("소환 치트 관문: 관문 후킹 실패");
+        return false;
+    }
+    // 설정자는 실패해도 측정을 포기하지 않는다 - 곁가지다.
+    const std::uintptr_t set = reader.module_base() + kSpawnContextSetRva;
+    std::uint8_t sh[5]{};
+    if (reader.read(set, sh, sizeof(sh)) && sh[0] == 0x48 && sh[1] == 0x89 &&
+        sh[2] == 0x5C && sh[3] == 0x24 && sh[4] == 0x10) {
+        mem::hook_install(reinterpret_cast<void*>(set), &det_spawn_context_set,
+                          reinterpret_cast<void**>(&g_orig_spawn_context_set));
+    } else {
+        log::warnf("소환 컨텍스트 설정자 0x{:X} 프롤로그가 다르다 - 건너뛴다",
+                   kSpawnContextSetRva);
+    }
+
+    g_char_cheat_trace.store(true, std::memory_order_release);
+    log::infof("소환 치트 관문 추적 설치 (작업 0x{:X}, 관문 0x{:X}) - "
+               "전체 목록 소환이 어디서 막히는지 찍는다",
+               kCharCheatWorkRva, kSpawnContextRva);
+    return true;
+}
+
 // --------------------------------------------------- 2976 구동
 
 namespace {
@@ -748,6 +946,20 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
+    }
+    if (cmd == "charforce") {
+        // 소환 치트 관문을 강제로 연다. 컨텍스트가 살아 있을 때만
+        // 실제로 밀린다 - 널이면 관문 뒤에서 죽기 때문이다.
+        if (args.size() < 2) {
+            say(companion_char_cheat_force() ? "charforce on (켜져 있음)"
+                                             : "charforce on|off (꺼져 있음)");
+            return false;
+        }
+        const bool on = args[1] == "on" || args[1] == "1";
+        companion_char_cheat_set_force(on);
+        say(on ? "관문 밀기 켬 - spawnchar 를 다시 해보라"
+               : "관문 밀기 끔");
+        return true;
     }
     if (cmd == "summon") {
         if (args.size() < 2) { say("summon <용병번호> [x y z]"); return false; }

@@ -109,6 +109,60 @@ struct HireWorkResult {
 HireWorkResult last_hire_work();
 
 // ----------------------------------------------------------------------
+// 캐릭터 소환 치트(2510)의 관문 측정
+//
+// 작업 함수 0x2B6E530 은 본문을 읽은 뒤 스포너를 얻어 관문을 묻는다.
+//
+//   mov  rsi, [rdx]              ; 컴포넌트
+//   call [rsi vtable + 0x160]    ; -> 스포너
+//   lea  rdx, [rsp+0x58]         ; 출력 버퍼
+//   call 0x1FB5B60               ; 관문 조회
+//   cmp  byte ptr [rsp+0x68], 0  ; = 버퍼+0x10
+//   jne  진짜 작업               ; 0 이면 0x3F5 오류를 만들고 끝
+//
+// 관문 함수(0x1FB5B60)를 읽으면 그 바이트가 무엇인지 정확히 나온다.
+//
+//   rdi = [스포너 + 0xD8]
+//   바이트 = (rdi != 0) && rdi->vtable[0xC0](rdi, 4, 0x10)
+//   버퍼+0x00 = vtable, +0x08 = rdi, +0x10 = 바이트
+//
+// 그러니 막히는 이유는 둘 중 하나다. 컨텍스트(+0xD8)가 비었거나,
+// 컨텍스트는 있는데 vtable[0xC0] 이 거절하거나. 어느 쪽인지는 실행
+// 중에만 알 수 있어서 두 자리에 읽기 전용 훅을 건다.
+//
+// 0x1FB5B60 은 이미지 안에서 157 곳이 부른다 - 아주 뜨겁다. 그래서
+// 작업 함수 안에 있을 때(thread_local 표시)만 찍는다.
+inline constexpr std::uint64_t kCharCheatWorkRva = 0x2B6E530;
+inline constexpr std::uint64_t kSpawnContextRva = 0x1FB5B60;
+// 같은 필드를 세우는 설정자. f(스포너, 새 컨텍스트) 이고 이미지 안에서
+// 일곱 곳만 부른다 - 아주 좁은 구간에서만 열리는 문이라는 뜻이다.
+// 우리 경로에서 컨텍스트가 비어 있다면, 정상 경로가 무엇을 넣는지
+// 알아야 그것을 흉내낼 수 있다. 넣는 값의 vtable 을 찍어 둔다.
+inline constexpr std::uint64_t kSpawnContextSetRva = 0x1FB5BF0;
+
+struct CharCheatGate {
+    bool valid = false;
+    std::uint32_t key = 0;         // 요청한 캐릭터 키
+    std::uint64_t spawner = 0;     // 관문을 쥔 객체
+    std::uint64_t context = 0;     // [스포너 + 0xD8]
+    std::uint8_t allowed = 0;      // 관문 바이트. 0 이면 포기한다
+    bool forced = false;           // 우리가 1 로 밀었나
+};
+CharCheatGate last_char_cheat_gate();
+
+bool companion_char_cheat_trace_install(const mem::Reader& reader);
+bool companion_char_cheat_trace_installed();
+
+// 관문 바이트를 1 로 밀지 여부. 기본은 끔이다.
+//
+// 컨텍스트가 0 이면 절대 밀지 않는다. 관문 뒤의 코드가 그 포인터를
+// this 로 써서(0x2B6E88E: mov rcx,[rsp+0x60]) 널이면 그 자리에서
+// 죽는다. 컨텍스트가 살아 있고 vtable[0xC0] 만 거절하는 경우에만
+// 밀어 본다.
+void companion_char_cheat_set_force(bool on);
+bool companion_char_cheat_force();
+
+// ----------------------------------------------------------------------
 // 아이템 사용 구동 (`TrocTrUseItemByItemInfoReq`, ID 2976)
 //
 // 역직렬화(RVA 0x29373D0)가 읽는 본문 13바이트: u32 A, u32 B, u8 C, u32 D.
