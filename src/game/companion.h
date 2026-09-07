@@ -191,6 +191,16 @@ CharCheatGate last_char_cheat_gate();
 void companion_char_cheat_mark(bool inside);
 
 bool companion_char_cheat_trace_install(const mem::Reader& reader);
+
+// 임의 함수에 걸어 반환값의 첫 u32 를 찍는다. 한 자리만 건다.
+//
+// 소환 치트가 만든 객체를 등록하는 자리(0x2B6EA68)는 가상 호출이라
+// 그 자리에 훅을 못 건다. 만들기 훅이 대상 함수의 RVA 를 로그에 내니
+// 그것을 이 명령에 넣는다.
+//
+// **인자 넷짜리 __fastcall 로 가정한다.** 더 받는 함수에 걸면 다섯째
+// 인자부터 쓰레기가 넘어간다.
+bool companion_hook_return_install(std::uint64_t rva);
 bool companion_char_cheat_trace_installed();
 
 // 관문 바이트를 1 로 밀지 여부. 기본은 끔이다.

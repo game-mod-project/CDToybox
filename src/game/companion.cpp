@@ -475,6 +475,7 @@ using SpawnContextFn = void*(__fastcall*)(void*, void*);
 CharCheatWorkFn g_orig_char_cheat_work = nullptr;
 SpawnContextFn g_orig_spawn_context = nullptr;
 std::atomic<bool> g_char_cheat_trace{false};
+std::uintptr_t g_module_base = 0;  // 훅 안에서 RVA 를 계산하려고 둔다
 std::atomic<bool> g_char_cheat_force{false};
 std::mutex g_gate_mutex;
 CharCheatGate g_last_gate;
@@ -600,6 +601,28 @@ void* __fastcall det_spawn_make(void* ctx, void* out) {
     log::infof("소환 만들기: 컴포넌트 0x{:X} 하위 0x{:X} vtable 0x{:X} "
                "vt[0x140] 0x{:X} -> {}",
                comp, sub, vtbl, fn, has == 0 ? "빈손" : "값 있음");
+
+    // 값이 있으면 만들어진 객체가 out+8 에 들어 있다. 작업 함수는 곧
+    // 그 객체의 vtable[0x88] 을 불러 등록하고, 돌려받은 자리의 첫 u32 를
+    // 결과 코드로 읽는다(0x2B6EA68 -> 0x2B6EA6E).
+    //
+    //   mov  rax, [r12]        ; r12 = 만들어진 객체
+    //   call [rax + 0x88]
+    //   mov  ebx, [rax]        ; 0 이면 성공
+    //
+    // 가상 호출이라 그 자리에는 훅을 못 건다. 여기서 대상 함수의 RVA 를
+    // 뽑아 두면 `hookret <RVA>` 로 걸 수 있다.
+    if (has != 0 && out != nullptr) {
+        std::uint64_t obj = 0, ovt = 0, reg = 0;
+        if (read_ptr_guarded(reinterpret_cast<std::uint64_t>(out) + 8, &obj) &&
+            obj != 0 && read_ptr_guarded(obj, &ovt) && ovt != 0) {
+            read_ptr_guarded(ovt + 0x88, &reg);
+        }
+        log::infof("소환 등록 대상: 객체 0x{:X} vtable 0x{:X} vt[0x88] 0x{:X} "
+                   "(RVA 0x{:X}) - hookret 으로 걸 수 있다",
+                   obj, ovt, reg,
+                   reg > g_module_base ? reg - g_module_base : 0);
+    }
     return r;
 }
 
@@ -636,6 +659,67 @@ bool companion_char_cheat_force() {
     return g_char_cheat_force.load(std::memory_order_acquire);
 }
 
+namespace {
+
+// 임의의 함수에 걸어 반환을 찍는 훅. 한 자리만 건다.
+//
+// **인자 넷짜리 __fastcall 로 가정한다.** 그보다 많은 인자를 받는 함수에
+// 걸면 다섯째부터 쓰레기가 넘어간다 - 실측 2026-09-07 에 같은 실수로
+// 좌표·플래그가 깨졌다. 걸기 전에 호출 자리를 보고 인자 수를 확인할 것.
+using RetProbeFn = void*(__fastcall*)(void*, void*, void*, void*);
+RetProbeFn g_orig_retprobe = nullptr;
+std::atomic<bool> g_retprobe{false};
+std::atomic<int> g_retprobe_logs{0};
+constexpr int kRetProbeLogMax = 40;
+std::uint64_t g_retprobe_rva = 0;
+
+void* __fastcall det_retprobe(void* a, void* b, void* c, void* d) {
+    void* r = g_orig_retprobe(a, b, c, d);
+    if (g_retprobe_logs.load(std::memory_order_relaxed) < kRetProbeLogMax) {
+        g_retprobe_logs.fetch_add(1, std::memory_order_relaxed);
+        std::uint64_t first = 0;
+        const bool ok =
+            r != nullptr &&
+            read_ptr_guarded(reinterpret_cast<std::uint64_t>(r), &first);
+        log::infof("반환 추적 0x{:X}: 반환 0x{:X} 첫 u32 {} (인자 0x{:X} "
+                   "0x{:X} 0x{:X} 0x{:X})",
+                   g_retprobe_rva, reinterpret_cast<std::uint64_t>(r),
+                   ok ? std::to_string(static_cast<std::uint32_t>(first))
+                      : std::string("못 읽음"),
+                   reinterpret_cast<std::uint64_t>(a),
+                   reinterpret_cast<std::uint64_t>(b),
+                   reinterpret_cast<std::uint64_t>(c),
+                   reinterpret_cast<std::uint64_t>(d));
+    }
+    return r;
+}
+
+}  // namespace
+
+bool companion_hook_return_install(std::uint64_t rva) {
+    if (g_retprobe.load(std::memory_order_acquire)) {
+        log::warnf("반환 추적: 이미 0x{:X} 에 걸려 있다 - 한 자리만 건다",
+                   g_retprobe_rva);
+        return false;
+    }
+    if (g_module_base == 0) {
+        log::warnf("반환 추적: 모듈 베이스를 아직 모른다");
+        return false;
+    }
+    if (!mem::hook_init()) return false;
+    void* fn = reinterpret_cast<void*>(g_module_base + rva);
+    if (!mem::hook_install(fn, &det_retprobe,
+                           reinterpret_cast<void**>(&g_orig_retprobe))) {
+        log::warnf("반환 추적: RVA 0x{:X} 후킹 실패", rva);
+        return false;
+    }
+    g_retprobe_rva = rva;
+    g_retprobe_logs.store(0, std::memory_order_relaxed);
+    g_retprobe.store(true, std::memory_order_release);
+    log::infof("반환 추적 설치 (RVA 0x{:X}) - 반환값의 첫 u32 를 찍는다", rva);
+    return true;
+}
+
 bool companion_char_cheat_trace_installed() {
     return g_char_cheat_trace.load(std::memory_order_acquire);
 }
@@ -643,6 +727,7 @@ bool companion_char_cheat_trace_installed() {
 bool companion_char_cheat_trace_install(const mem::Reader& reader) {
     if (g_char_cheat_trace.load(std::memory_order_acquire)) return true;
     if (!mem::hook_init()) return false;
+    g_module_base = reader.module_base();
 
     // 프롤로그가 기대와 다르면 걸지 않는다. 패치마다 밀릴 수 있다.
     // 0x2B6E530: mov [rsp+8],rbx / mov [rsp+0x20],r9
@@ -1197,6 +1282,16 @@ bool companion_run_command(const std::string& line, std::string* reply) {
                    key, b, flag, pos[0], pos[1], pos[2]);
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
+    if (cmd == "hookret") {
+        // 임의 함수의 반환을 찍는다. 인자 넷짜리로 가정하니 걸기 전에
+        // 호출 자리를 보고 인자 수를 확인할 것.
+        if (args.size() < 2) { say("hookret <RVA 16진>"); return false; }
+        const std::uint64_t rva = std::strtoull(args[1].c_str(), nullptr, 16);
+        if (rva == 0) { say("RVA 가 0이다"); return false; }
+        const bool ok = companion_hook_return_install(rva);
+        say(ok ? "반환 추적 설치" : "설치 실패 - 로그를 보라");
         return ok;
     }
     if (cmd == "hireitem") {
