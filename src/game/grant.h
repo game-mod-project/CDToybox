@@ -407,7 +407,12 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]);
 
 // 캐릭터(탈것·NPC 포함)를 월드에 소환한다. SpawnCharacterCheatReq
-// (ID 2510) 를 게임 스레드에서 부른다. 미시도 치트라 화면 확인 전이다.
+// 를 게임 스레드에서 부른다. 아직 화면으로 확인된 적이 없다.
+//
+// ID 는 실측 **2988** 이다(2026-09-07 로그: "치트 메시지
+// SpawnCharacterCheatReq: ID 2988 처리기 0x142B6E530"). 앞선 세션이
+// 2510 이라 적어 두었는데 그 값으로는 이 처리기가 나오지 않는다.
+// 어차피 해석은 클래스 이름으로 하니 동작에는 영향이 없었다.
 bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
                         std::uint32_t b, std::uint8_t flag, const float pos[3]);
 bool char_spawn_ready();

@@ -925,7 +925,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
     }
     if (cmd == "spawnchar") {
         // 캐릭터 키로 개체를 내 앞에 스폰한다(SpawnCharacterCheatReq,
-        // ID 2510). 근처에 없는 종을 획득하려면 먼저 불러와야 한다.
+        // 실측 ID 2988). 근처에 없는 종을 획득하려면 먼저 불러와야 한다.
         //
         // 이 치트는 몸통이 살아 있다 - 역직렬화(RVA 0x28F1530)가
         // 본문을 읽은 뒤 0x2B6E530 을 부른다. 용병 치트 3종이
@@ -943,7 +943,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         }
         const std::uintptr_t session = companion_pick_session();
         if (session == 0) { say("서버 세션 없음"); return false; }
-        if (!char_spawn_ready()) { say("2510 미해석"); return false; }
+        if (!char_spawn_ready()) { say("소환 치트 미해석"); return false; }
         log::infof("캐릭터 소환: 키 {} B {} 플래그 {} 좌표 ({:.1f}, {:.1f}, {:.1f})",
                    key, b, flag, pos[0], pos[1], pos[2]);
         const bool ok = request_char_spawn(session, key, b, flag, pos);

@@ -111,7 +111,7 @@ CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
-CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2510)
+CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2988)
 
 // 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
 using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
