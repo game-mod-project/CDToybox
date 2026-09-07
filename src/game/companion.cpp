@@ -14,6 +14,7 @@
 #include "core/log.h"
 #include "game/grant.h"
 #include "game/roster.h"
+#include "game/actors.h"
 #include "mem/hook.h"
 
 namespace {
@@ -979,6 +980,34 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
+    }
+    if (cmd == "actordump") {
+        // 지금 월드에 살아 있는 액터를 이름 조각으로 찾아 로그에 낸다.
+        // 소환한 개체가 실제로 생겼는지 화면을 보지 않고 확인한다.
+        if (!actor_manager_ready()) { say("액터 매니저 미확보"); return false; }
+        if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
+        refresh_live_actors(*g_cmd_reader);
+        const std::vector<LiveActor>& live = live_actors();
+        const std::string frag = args.size() > 1 ? args[1] : std::string();
+        const std::size_t limit =
+            args.size() > 2 ? static_cast<std::size_t>(parse_u32(args[2], 30)) : 30;
+        std::size_t hits = 0;
+        for (const LiveActor& a : live) {
+            if (hits >= limit) break;
+            if (!frag.empty() && a.name.find(frag) == std::string::npos &&
+                a.label.find(frag) == std::string::npos) {
+                continue;
+            }
+            ++hits;
+            log::infof("액터: 0x{:X} 핸들 {} 키 {} {} ({}) 동반자 {}", a.actor,
+                       a.handle, a.key, a.display(), a.name,
+                       a.is_companion() ? "예" : "아니오");
+        }
+        char buf[112];
+        std::snprintf(buf, sizeof(buf), "%zu개 찾음 (살아있는 액터 %zu) - 로그를 보라",
+                      hits, live.size());
+        say(buf);
+        return true;
     }
     if (cmd == "chardump") {
         // 캐릭터 표에서 이름 조각으로 찾아 키를 로그에 낸다.
