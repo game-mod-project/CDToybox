@@ -20,11 +20,17 @@ namespace {
 // rtti.loaded()==false 라 설치가 조용히 건너뛰어졌다(실측 2026-09-07). 모듈
 // 베이스 + 이 빌드의 확정 RVA 로 바로 가서 예상 opcode 를 확인한 뒤 패치한다.
 //
-// 빌드 2.00.01(2658) 실측:
-//  - 계열 A: `div qword ptr [mem] ; lea ecx,[rax+1]` (디스크 전체 3곳).
-//  - 계열 B: `div r8 ; cmp eax,[rdi+4]` (1곳).
-// 게임 패치로 코드가 옮겨가면 바이트 불일치로 안전하게 스킵된다.
-constexpr std::uint64_t kFamA[] = {0xEB1BF4, 0xEA874F, 0x21DA368};
+// 빌드 2.00.01(2658) 실측 div-by-special-state 지점들. {RVA, 패치길이}.
+// 패치길이 = div 바이트 + (div<5 일 때) 5바이트를 채우려고 함께 옮기는 꼬리
+// 명령. 꼬리는 위치 독립 명령이어야 한다(rel jmp/call 금지).
+//  - 0xEB1BF4  div [rbp+0xf0] (7)                 가방 렌더
+//  - 0xEA874F  div [rsp+0x38] (5)                 가방 렌더
+//  - 0x21DA368 div [rbp-0x38] (4) + lea(3)=7      가방 렌더
+//  - 0x234EC7D div [rdi+8]   (4) + mov edx,[rdi](2)=6   착용
+// + 계열 B: 0xF064E5B  div r8 ; cmp eax,[rdi+4] (6)     가방 렌더
+struct DivSite { std::uint64_t rva; int patch_len; };
+constexpr DivSite kDivMem[] = {
+    {0xEB1BF4, 7}, {0xEA874F, 5}, {0x21DA368, 7}, {0x234EC7D, 6}};
 constexpr std::uint64_t kFamB = 0xF064E5B;
 
 std::atomic<bool> g_installed{false};
@@ -90,29 +96,24 @@ int div_mem_len(const std::uint8_t* b) {
     return len;
 }
 
-// 계열 A: div qword ptr [mem] ; lea ecx,[rax+1]. div 의 mem 피연산자를 그대로
-// 써서 cmp [mem],0 가드를 만든다. div 가 5바이트 미만이면 뒤의 lea 까지 옮긴다.
-bool install_famA(const mem::Reader& reader, std::uintptr_t site) {
-    std::uint8_t o[16]{};
+// div qword ptr [mem] 가드. div 의 mem 피연산자를 그대로 써서 cmp [mem],0
+// 를 만들고, 분모 0이면 나눗셈을 건너뛴다. div 가 5바이트 미만이면 patch_len
+// 만큼 뒤 명령(위치 독립)을 함께 케이브로 옮긴다.
+bool install_divguard(const mem::Reader& reader, std::uintptr_t site,
+                      int patch_len) {
+    std::uint8_t o[24]{};
+    if (patch_len < 5 || patch_len > 20) return false;
     if (!reader.read(site, o, sizeof(o))) return false;
     const int dl = div_mem_len(o);
     if (dl == 0) {
-        log::warnf("특수아이템 가드[A]: div 아님 @0x{:X} (0x{:02X}{:02X}{:02X})",
+        log::warnf("특수아이템 가드: div 아님 @0x{:X} (0x{:02X}{:02X}{:02X})",
                    site, o[0], o[1], o[2]);
         return false;
     }
-    // patch 길이는 최소 5(E9 rel32). div 가 짧으면 뒤 lea(8D 48 01)까지 옮긴다.
-    int patch_len, tail_len;
-    if (dl >= 5) {
-        patch_len = dl;
-        tail_len = 0;
-    } else {
-        if (!(o[dl] == 0x8D && o[dl + 1] == 0x48 && o[dl + 2] == 0x01)) {
-            log::warnf("특수아이템 가드[A]: 짧은 div 뒤 lea 불일치 @0x{:X}", site);
-            return false;
-        }
-        patch_len = dl + 3;
-        tail_len = 3;
+    const int tail_len = patch_len - dl;
+    if (tail_len < 0) {
+        log::warnf("특수아이템 가드: patch_len<divlen @0x{:X}", site);
+        return false;
     }
     void* cave = alloc_near(site, 96);
     if (cave == nullptr) return false;
@@ -150,7 +151,7 @@ bool install_famA(const mem::Reader& reader, std::uintptr_t site) {
         VirtualFree(cave, 0, MEM_RELEASE);
         return false;
     }
-    log::infof("특수아이템 가드[A] 설치: site=0x{:X} divlen={} patch={} cave=0x{:X}",
+    log::infof("특수아이템 가드[div] 설치: site=0x{:X} divlen={} patch={} cave=0x{:X}",
                site, dl, patch_len, ca);
     return true;
 }
@@ -198,8 +199,8 @@ bool specguard_install(const mem::Rtti& /*rtti*/, const mem::Reader& reader) {
     if (base == 0) return false;
 
     int n = 0;
-    for (const auto rva : kFamA) {
-        if (install_famA(reader, base + rva)) ++n;
+    for (const auto& s : kDivMem) {
+        if (install_divguard(reader, base + s.rva, s.patch_len)) ++n;
     }
     if (install_famB(reader, base + kFamB)) ++n;
     g_count.store(n, std::memory_order_release);
