@@ -29,9 +29,15 @@ namespace {
 //  - 0x234EC7D div [rdi+8]   (4) + mov edx,[rdi](2)=6   착용
 // + 계열 B: 0xF064E5B  div r8 ; cmp eax,[rdi+4] (6)     가방 렌더
 struct DivSite { std::uint64_t rva; int patch_len; };
+// div qword ptr [mem] 지점(가방 렌더 3 + 착용 1).
 constexpr DivSite kDivMem[] = {
     {0xEB1BF4, 7}, {0xEA874F, 5}, {0x21DA368, 7}, {0x234EC7D, 6}};
-constexpr std::uint64_t kFamB = 0xF064E5B;
+// div <reg> 지점. 분모가 레지스터. patch_len = div(3) + 위치독립 꼬리.
+//  - 0xF064E5B  div r8  + cmp eax,[rdi+4](3) = 6      가방 렌더
+//  - 0x234EA9B  div r14 + mov ecx,edi(2)     = 5      착용/특수능력 영역
+//  - 0x234EEB4  div r9  + mov ecx,r8d(3)      = 6      특수능력 사용
+constexpr DivSite kDivReg[] = {
+    {0xF064E5B, 6}, {0x234EA9B, 5}, {0x234EEB4, 6}};
 
 std::atomic<bool> g_installed{false};
 std::atomic<int> g_count{0};
@@ -156,38 +162,59 @@ bool install_divguard(const mem::Reader& reader, std::uintptr_t site,
     return true;
 }
 
-// 계열 B: div r8 ; cmp eax,[rdi+4].
-bool install_famB(const mem::Reader& reader, std::uintptr_t site) {
-    std::uint8_t o[6]{};
-    if (!reader.read(site, o, 6)) return false;
-    if (o[0] != 0x49 || o[1] != 0xF7 || o[2] != 0xF0 || o[3] != 0x3B ||
-        o[4] != 0x47 || o[5] != 0x04) {
-        log::warnf("특수아이템 가드[B]: opcode 불일치 @0x{:X}", site);
+// div <reg64> 가드. 분모 레지스터가 0이면 나눗셈을 건너뛴다. div 는 3바이트라
+// (48/49) F7 (F0|N) 형태. patch_len 만큼 뒤 위치독립 명령을 함께 옮긴다.
+bool install_regdiv(const mem::Reader& reader, std::uintptr_t site,
+                    int patch_len) {
+    std::uint8_t o[24]{};
+    if (patch_len < 5 || patch_len > 20) return false;
+    if (!reader.read(site, o, sizeof(o))) return false;
+    // (48|49) F7, modrm mod==11 reg==6(/6=div)
+    if ((o[0] != 0x48 && o[0] != 0x49) || o[1] != 0xF7 ||
+        (o[2] & 0xC0) != 0xC0 || ((o[2] >> 3) & 7) != 6) {
+        log::warnf("특수아이템 가드[reg]: div 아님 @0x{:X} (0x{:02X}{:02X}{:02X})",
+                   site, o[0], o[1], o[2]);
         return false;
     }
-    void* cave = alloc_near(site, 64);
+    const int N = o[2] & 7;                       // 레지스터 하위 3비트
+    const std::uint8_t rex_test = (o[0] == 0x49) ? 0x4D : 0x48;
+    const std::uint8_t modrm_test =
+        static_cast<std::uint8_t>(0xC0 | (N << 3) | N);
+    const int tail_len = patch_len - 3;
+    if (tail_len < 0) return false;
+
+    void* cave = alloc_near(site, 96);
     if (cave == nullptr) return false;
     const std::uintptr_t ca = reinterpret_cast<std::uintptr_t>(cave);
-    const std::uintptr_t back = site + 6;
+    const std::uintptr_t back = site + patch_len;
 
     std::vector<std::uint8_t> b;
-    b.insert(b.end(), {0x4D, 0x85, 0xC0});   // test r8,r8
-    b.insert(b.end(), {0x74, 0x05});         // je zero(+0x0A)
-    b.insert(b.end(), {0x49, 0xF7, 0xF0});   // div r8
-    b.insert(b.end(), {0xEB, 0x04});         // jmp docmp(+0x0E)
-    b.insert(b.end(), {0x33, 0xC0, 0x33, 0xD2});   // zero
-    b.insert(b.end(), {0x3B, 0x47, 0x04});   // docmp: cmp eax,[rdi+4]
-    const std::size_t jmp = b.size();
+    b.insert(b.end(), {rex_test, 0x85, modrm_test});   // test rN,rN
+    const std::size_t je_pos = b.size();
+    b.insert(b.end(), {0x74, 0x00});                   // je zero (rel 나중에)
+    b.insert(b.end(), {o[0], o[1], o[2]});             // div rN
+    for (int k = 0; k < tail_len; ++k) b.push_back(o[3 + k]);   // 꼬리
+    const std::size_t jmp1 = b.size();
     b.insert(b.end(), {0xE9, 0, 0, 0, 0});
-    std::int32_t r = static_cast<std::int32_t>(back - (ca + jmp + 5));
-    std::memcpy(b.data() + jmp + 1, &r, 4);
+    const std::size_t zero_pos = b.size();
+    b.insert(b.end(), {0x33, 0xC0, 0x33, 0xD2});       // xor eax;xor edx
+    for (int k = 0; k < tail_len; ++k) b.push_back(o[3 + k]);   // 꼬리 재실행
+    const std::size_t jmp2 = b.size();
+    b.insert(b.end(), {0xE9, 0, 0, 0, 0});
+
+    b[je_pos + 1] = static_cast<std::uint8_t>(zero_pos - (je_pos + 2));
+    std::int32_t r1 = static_cast<std::int32_t>(back - (ca + jmp1 + 5));
+    std::memcpy(b.data() + jmp1 + 1, &r1, 4);
+    std::int32_t r2 = static_cast<std::int32_t>(back - (ca + jmp2 + 5));
+    std::memcpy(b.data() + jmp2 + 1, &r2, 4);
 
     put_cave(cave, b);
-    if (!patch_jmp(site, 6, ca)) {
+    if (!patch_jmp(site, patch_len, ca)) {
         VirtualFree(cave, 0, MEM_RELEASE);
         return false;
     }
-    log::infof("특수아이템 가드[B] 설치: site=0x{:X} cave=0x{:X}", site, ca);
+    log::infof("특수아이템 가드[reg] 설치: site=0x{:X} N={} patch={} cave=0x{:X}",
+               site, N, patch_len, ca);
     return true;
 }
 
@@ -202,7 +229,9 @@ bool specguard_install(const mem::Rtti& /*rtti*/, const mem::Reader& reader) {
     for (const auto& s : kDivMem) {
         if (install_divguard(reader, base + s.rva, s.patch_len)) ++n;
     }
-    if (install_famB(reader, base + kFamB)) ++n;
+    for (const auto& s : kDivReg) {
+        if (install_regdiv(reader, base + s.rva, s.patch_len)) ++n;
+    }
     g_count.store(n, std::memory_order_release);
     g_installed.store(true, std::memory_order_release);
     log::infof("특수아이템 가드: {}개 사이트 설치 (base=0x{:X})", n, base);
