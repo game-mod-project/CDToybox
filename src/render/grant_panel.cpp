@@ -206,13 +206,31 @@ void draw_grant_panel(bool* open) {
         server[i] = game::session_is_server(i);
         last[i] = game::session_last_seen(i);
     }
-    // 누적 호출 1위가 아니라 살아 있는 세션을 고른다. 다른 세이브를
-    // 로드하면 옛 세션 주소가 풀리는데 표에 남아 계속 뽑혀 "사슬이
-    // 끊겼다" 로 지급이 조용히 실패한다(실측 2026-09-06).
+    // 살아 있고 게이트가 실제로 풀리는(지급이 통하는) 서버 세션을 고른다.
+    // best_live 만으로는 부족했다 - 다른 세이브를 로드하면 옛 세션이 표에
+    // 남아 게이트가 끊긴 채 뽑혀 "액터가 안 나왔습니다" 로 먹통이 됐다(실측
+    // 2026-09-07). 게이트 통과가 곧 지급 성공 조건이다. 못 찾으면 -1(막힘
+    // 표시)로 두고 stale 세션으로 폴백하지 않는다.
     if (!g_picked_by_hand) {
-        g_pick = game::best_live_session_index(
-            hits, server, last, n, ::GetTickCount64(), game::kSessionFreshMs);
-        if (g_pick < 0) g_pick = 0;   // 손 선택 UI 를 위해 유효 인덱스 유지
+        const mem::LocalReader rd;
+        std::uint64_t newest = 0;
+        for (int i = 0; i < n; ++i) if (last[i] > newest) newest = last[i];
+        int best = -1;
+        std::uint32_t best_hits = 0;
+        std::uintptr_t gate = 0;
+        for (int i = 0; i < n; ++i) {
+            if (!server[i]) continue;
+            if (last[i] == 0 || (newest > last[i] &&
+                                 newest - last[i] > game::kSessionFreshMs)) {
+                continue;
+            }
+            if (!game::gate_object(rd, seen[i], &gate)) continue;
+            if (best < 0 || hits[i] >= best_hits) {
+                best = i;
+                best_hits = hits[i];
+            }
+        }
+        g_pick = best;
     }
 
     // --- 무엇을 줄 것인가 -------------------------------------------
