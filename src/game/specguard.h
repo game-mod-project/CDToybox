@@ -1,7 +1,6 @@
 #pragma once
 
 #include "mem/reader.h"
-#include "mem/rtti.h"
 
 namespace cdtb::game {
 
@@ -16,7 +15,10 @@ namespace cdtb::game {
 // 이 훅은 그 div 앞에서 **분모가 0이면 나눗셈을 건너뛰고 몫=0**으로
 // 두고 이어간다. 정상 아이템은 분모가 0이 아니라 원래대로 나눈다 -
 // 즉 정상 동작은 그대로, 크래시만 없앤다. AOB 가 유일할 때만 패치한다.
-bool specguard_install(const mem::Rtti& rtti, const mem::Reader& reader);
+// rtti 불필요(모듈 베이스+확정 RVA). 렌더 루프(overlay on_frame)에서 매
+// 프레임 불러 첫 프레임에 즉시 설치한다 - 분석 루프의 늦은 지점에서 설치하면
+// 그 전에 지급/가방을 열어 크래시가 났다(실측 2026-09-07).
+bool specguard_install(const mem::Reader& reader);
 bool specguard_installed();
 bool specguard_unsupported();   // AOB 미매칭 등으로 이 빌드에서 못 걺
 

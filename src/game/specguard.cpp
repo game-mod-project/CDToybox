@@ -220,7 +220,7 @@ bool install_regdiv(const mem::Reader& reader, std::uintptr_t site,
 
 }  // namespace
 
-bool specguard_install(const mem::Rtti& /*rtti*/, const mem::Reader& reader) {
+bool specguard_install(const mem::Reader& reader) {
     if (g_installed.load(std::memory_order_acquire)) return true;
     const std::uintptr_t base = reader.module_base();
     if (base == 0) return false;

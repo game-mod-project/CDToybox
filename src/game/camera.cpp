@@ -317,7 +317,7 @@ void auto_analysis_loop() {
         // faller 학습을 시도한다(플레이어가 한 번 떨어져야 학습됨).
         nofall_install(rtti, reader);
         nofall_identify(reader);
-        specguard_install(rtti, reader);
+        specguard_install(reader);   // 백업(렌더 루프가 먼저 설치)
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};
