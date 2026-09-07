@@ -17,6 +17,42 @@ namespace cdtb::render {
 namespace {
 
 char g_query[128] = "";
+
+// ----------------------------------------------------------------------
+// 동반자를 주는 아이템
+//
+// 아이템 표 6813개를 이름으로 훑어 모았다(실측 2026-09-07). 지급은
+// 이미 검증된 경로라 키만 있으면 버튼 하나로 끝난다.
+//
+// 부적 6종은 이전 세션에서 지급 -> 사용으로 등록이 실측 확인됐다.
+// 알은 부화 절차가 따로 있다: 둥지에 올리고 5분 기다린 뒤 부화시킨다.
+// 사용자가 와이번을 그렇게 얻었고(2026-09-07), 그때 게임이 보낸
+// 메시지가 아이템 사용(2676) -> 거두기(2386) 였다.
+struct CompanionItem {
+    std::uint32_t key;
+    const char* name;
+    const char* kind;
+    const char* how;
+};
+
+const CompanionItem kCompanionItems[] = {
+    {1003843, "서릿발 백곰 동행의 부적", "부적", "인벤토리에서 사용"},
+    {1003844, "은빛 송곳니 동행의 부적", "부적", "인벤토리에서 사용"},
+    {1003845, "순백의 사슴 동행의 부적", "부적", "인벤토리에서 사용"},
+    {1003846, "서릿발 알파인 아이벡스 동행의 부적", "부적", "인벤토리에서 사용"},
+    {1003847, "바위엄니 혹멧돼지 동행의 부적", "부적", "인벤토리에서 사용"},
+    {1003921, "피닉스 동행의 부적", "부적", "인벤토리에서 사용"},
+    {1004389, "와이번의 알", "알", "둥지에 올리고 5분 뒤 부화"},
+    {1004388, "쿠쿠새의 알", "알", "둥지에 올리고 5분 뒤 부화"},
+    {1000146, "오래된 쿠쿠새의 알", "알", "둥지에 올리고 5분 뒤 부화"},
+    {1001252, "황금 거위 알", "알", "둥지에 올리고 5분 뒤 부화"},
+    {1004574, "돌 둥지 솟대", "둥지", "알을 올릴 자리 - 설치물"},
+    {1004660, "제작법 : 돌 둥지 솟대", "제작법", "둥지를 만들 수 있게 한다"},
+    {1001784, "새끼 고슴도치", "미확인", "동반자인지 확인 안 됨"},
+};
+
+double g_item_busy_until = 0.0;
+const char* g_item_busy_why = "";
 int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
 double g_near_last_refresh = 0.0;
@@ -214,6 +250,61 @@ void draw_companion_tab() {
 //
 // 살아 있는 액터를 걷어 캐릭터 이름을 붙인다(game/actors.h). 게임
 // 메모리를 읽는 것은 여기서 2초에 한 번 또는 버튼을 눌렀을 때뿐이다.
+// 동반자를 주는 아이템을 지급한다. 지급은 이미 검증된 경로다.
+void draw_companion_item_tab() {
+    const double now = ImGui::GetTime();
+    ImGui::TextDisabled(
+        "부적은 인벤토리에서 쓰면 바로 등록됩니다. 알은 둥지에 올리고 "
+        "5분 뒤 부화시킵니다.");
+    if (now < g_item_busy_until) {
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s",
+                           g_item_busy_why);
+    }
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_BordersInnerV |
+                                  ImGuiTableFlags_ScrollY;
+    if (!ImGui::BeginTable("companion_items", 5, flags)) return;
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("종류", ImGuiTableColumnFlags_WidthFixed, 60);
+    ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 72);
+    ImGui::TableSetupColumn("쓰는 법", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("지급", ImGuiTableColumnFlags_WidthFixed, 52);
+    ImGui::TableHeadersRow();
+    const int n = static_cast<int>(sizeof(kCompanionItems) /
+                                   sizeof(kCompanionItems[0]));
+    for (int i = 0; i < n; ++i) {
+        const CompanionItem& it = kCompanionItems[i];
+        if (g_query[0] != 0 && !contains_ci(it.name, g_query)) continue;
+        ImGui::TableNextRow();
+        ImGui::PushID(i);
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(it.name);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextUnformatted(it.kind);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("%u", it.key);
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextDisabled("%s", it.how);
+        ImGui::TableSetColumnIndex(4);
+        char btn[24];
+        std::snprintf(btn, sizeof(btn), "지급##give%d", i);
+        if (ImGui::SmallButton(btn)) {
+            const std::uintptr_t sess = game::companion_pick_session();
+            const bool queued =
+                sess != 0 &&
+                game::request_give(sess, it.key, 1, game::GiveExtras{});
+            g_item_busy_until = now + 3.0;
+            g_item_busy_why =
+                queued ? "지급 요청을 걸었습니다 - 인벤토리를 확인하세요"
+                       : (sess == 0 ? "살아 있는 서버 세션이 없습니다"
+                                    : "요청이 밀렸습니다 - 잠시 뒤 다시");
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+
 void draw_nearby_tab() {
     if (!game::actor_manager_ready()) {
         ImGui::TextDisabled("액터 매니저를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
@@ -303,7 +394,7 @@ void draw_nearby_tab() {
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed, 52);
-        ImGui::TableSetupColumn("붙잡기", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("거두기", ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(view.size()));
@@ -391,13 +482,13 @@ void draw_nearby_tab() {
                         "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
                 }
                 ImGui::TableSetColumnIndex(8);
-                // 붙잡기: 게임이 야생 개체를 잡을 때 쓰는 그 경로(2386).
-                // 획득(2338)과 다른 길이라 2338 이 거부하는 대상도 이쪽으로는
-                // 들어올 수 있다. 동반자 여부를 따지지 않는다 - 게임이
-                // 판단하게 둔다.
+                // 거두기(2386): 알에서 깬 개체를 거두는 경로다. 야생 개체를
+                // 잡는 길이 아니다(실측 2026-09-07: 임의의 야생 동물에게
+                // 쏘면 아무 일도 일어나지 않는다). 표본이 있어 남겨 두지만
+                // 일반 획득은 왼쪽 칸을 쓴다.
                 const bool can_catch = a->handle != 0 && game::catch_ready();
                 char cbtn[32];
-                std::snprintf(cbtn, sizeof(cbtn), "붙잡기##catch%d", i);
+                std::snprintf(cbtn, sizeof(cbtn), "거두기##catch%d", i);
                 ImGui::BeginDisabled(!can_catch);
                 if (ImGui::SmallButton(cbtn)) {
                     const std::uintptr_t sess = game::companion_pick_session();
@@ -413,9 +504,9 @@ void draw_nearby_tab() {
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered() && can_catch) {
                     ImGui::SetTooltip(
-                        "게임이 야생 개체를 잡을 때 쓰는 경로입니다(2386).\n"
-                        "포획 도구가 필요할 수 있습니다 - 그러면 조용히 "
-                        "거부됩니다.");
+                        "알에서 깬 개체를 거두는 경로입니다(2386).\n"
+                        "야생 개체에게는 아무 일도 일어나지 않습니다 - "
+                        "획득은 왼쪽 칸을 쓰세요.");
                 }
                 ImGui::PopID();
             }
@@ -499,6 +590,7 @@ void draw_roster_panel(bool* open) {
         if (ImGui::BeginTabItem("탈것")) { g_tab = 2; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("용병 타입")) { g_tab = 3; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("캐릭터")) { g_tab = 4; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("동반자 아이템")) { g_tab = 5; ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 
@@ -512,6 +604,7 @@ void draw_roster_panel(bool* open) {
     switch (g_tab) {
         case 0: draw_companion_tab(); break;
         case 1: draw_nearby_tab(); break;
+        case 5: draw_companion_item_tab(); break;
         case 2: draw_list_tab(game::vehicle_catalog(), false); break;
         case 3:
             if (game::mercenary_catalog().empty()) {
