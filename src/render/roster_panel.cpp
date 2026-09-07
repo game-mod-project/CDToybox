@@ -19,36 +19,46 @@ namespace {
 char g_query[128] = "";
 
 // ----------------------------------------------------------------------
-// 동반자를 주는 아이템
+// 동반자와 관계있어 보이는 아이템
 //
 // 아이템 표 6813개를 이름으로 훑어 모았다(실측 2026-09-07). 지급은
 // 이미 검증된 경로라 키만 있으면 버튼 하나로 끝난다.
 //
-// 부적 6종은 이전 세션에서 지급 -> 사용으로 등록이 실측 확인됐다.
-// 알은 부화 절차가 따로 있다: 둥지에 올리고 5분 기다린 뒤 부화시킨다.
-// 사용자가 와이번을 그렇게 얻었고(2026-09-07), 그때 게임이 보낸
-// 메시지가 아이템 사용(2676) -> 거두기(2386) 였다.
+// **어디까지 확인됐는지를 줄마다 적는다.** 이름이 비슷하다고 절차가
+// 같으리라 넘겨짚지 않는다.
+//
+// - 부적 6종: 지급 -> 인벤토리에서 사용 -> 등록. 이전 세션 실측.
+// - 와이번의 알: 둥지에 올리고 5분 뒤 부화. 사용자가 직접 밟은 절차다
+//   (2026-09-07). 그때 게임이 아이템 사용(2676) -> 거두기(2386) 를
+//   보냈다.
+// - 나머지 알·둥지·새끼 고슴도치: **아무것도 확인되지 않았다.** 동반자
+//   아이템인지조차 모른다. 쿠쿠새는 알 껍질(1004431)이 따로 있어
+//   요리·재료일 수도 있다. 지급해서 직접 확인할 것.
 struct CompanionItem {
     std::uint32_t key;
     const char* name;
     const char* kind;
     const char* how;
+    bool verified;  // 실제로 되는 것을 본 적이 있나
 };
 
 const CompanionItem kCompanionItems[] = {
-    {1003843, "서릿발 백곰 동행의 부적", "부적", "인벤토리에서 사용"},
-    {1003844, "은빛 송곳니 동행의 부적", "부적", "인벤토리에서 사용"},
-    {1003845, "순백의 사슴 동행의 부적", "부적", "인벤토리에서 사용"},
-    {1003846, "서릿발 알파인 아이벡스 동행의 부적", "부적", "인벤토리에서 사용"},
-    {1003847, "바위엄니 혹멧돼지 동행의 부적", "부적", "인벤토리에서 사용"},
-    {1003921, "피닉스 동행의 부적", "부적", "인벤토리에서 사용"},
-    {1004389, "와이번의 알", "알", "둥지에 올리고 5분 뒤 부화"},
-    {1004388, "쿠쿠새의 알", "알", "둥지에 올리고 5분 뒤 부화"},
-    {1000146, "오래된 쿠쿠새의 알", "알", "둥지에 올리고 5분 뒤 부화"},
-    {1001252, "황금 거위 알", "알", "둥지에 올리고 5분 뒤 부화"},
-    {1004574, "돌 둥지 솟대", "둥지", "알을 올릴 자리 - 설치물"},
-    {1004660, "제작법 : 돌 둥지 솟대", "제작법", "둥지를 만들 수 있게 한다"},
-    {1001784, "새끼 고슴도치", "미확인", "동반자인지 확인 안 됨"},
+    {1003843, "서릿발 백곰 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1003844, "은빛 송곳니 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1003845, "순백의 사슴 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1003846, "서릿발 알파인 아이벡스 동행의 부적", "부적",
+     "인벤토리에서 사용", true},
+    {1003847, "바위엄니 혹멧돼지 동행의 부적", "부적", "인벤토리에서 사용",
+     true},
+    {1003921, "피닉스 동행의 부적", "부적", "인벤토리에서 사용", true},
+    {1004389, "와이번의 알", "알", "둥지에 올리고 5분 뒤 부화", true},
+    {1004388, "쿠쿠새의 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1000146, "오래된 쿠쿠새의 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1001252, "황금 거위 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1004574, "돌 둥지 솟대", "설치물", "와이번 알을 올린 그 둥지인지 미확인",
+     false},
+    {1004660, "제작법 : 돌 둥지 솟대", "제작법", "위 설치물의 제작법", false},
+    {1001784, "새끼 고슴도치", "미상", "동반자인지조차 확인 안 됨", false},
 };
 
 double g_item_busy_until = 0.0;
@@ -254,8 +264,9 @@ void draw_companion_tab() {
 void draw_companion_item_tab() {
     const double now = ImGui::GetTime();
     ImGui::TextDisabled(
-        "부적은 인벤토리에서 쓰면 바로 등록됩니다. 알은 둥지에 올리고 "
-        "5분 뒤 부화시킵니다.");
+        "\"실측\"은 실제로 되는 것을 본 줄입니다. \"미확인\"은 이름만 보고 "
+        "모은 것이라 동반자 아이템인지도 모릅니다 - 지급해서 확인해 "
+        "보세요.");
     if (now < g_item_busy_until) {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s",
                            g_item_busy_why);
@@ -263,12 +274,13 @@ void draw_companion_item_tab() {
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY;
-    if (!ImGui::BeginTable("companion_items", 5, flags)) return;
+    if (!ImGui::BeginTable("companion_items", 6, flags)) return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("종류", ImGuiTableColumnFlags_WidthFixed, 60);
     ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 72);
     ImGui::TableSetupColumn("쓰는 법", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("확인", ImGuiTableColumnFlags_WidthFixed, 56);
     ImGui::TableSetupColumn("지급", ImGuiTableColumnFlags_WidthFixed, 52);
     ImGui::TableHeadersRow();
     const int n = static_cast<int>(sizeof(kCompanionItems) /
@@ -287,6 +299,12 @@ void draw_companion_item_tab() {
         ImGui::TableSetColumnIndex(3);
         ImGui::TextDisabled("%s", it.how);
         ImGui::TableSetColumnIndex(4);
+        if (it.verified) {
+            ImGui::TextUnformatted("실측");
+        } else {
+            ImGui::TextDisabled("미확인");
+        }
+        ImGui::TableSetColumnIndex(5);
         char btn[24];
         std::snprintf(btn, sizeof(btn), "지급##give%d", i);
         if (ImGui::SmallButton(btn)) {
