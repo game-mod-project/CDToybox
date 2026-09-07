@@ -545,11 +545,6 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::player_apply(reader);
     }
 
-    // 인벤토리 "가져오기" 전용 지급 큐를 가시성과 무관하게 배수한다.
-    // 넣은 아이템이 다른 세이브에서 창을 열지 않아도 계속 지급되도록
-    // 한다(2초 간격). 보관함(stash) 지급과는 분리된 별도 큐다.
-    cdtb::render::inventory_import_pump();
-
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
 
     const UINT idx = sc->GetCurrentBackBufferIndex();

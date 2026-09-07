@@ -1,7 +1,5 @@
 #include "render/inventory_panel.h"
 
-#include <windows.h>
-
 #include <imgui.h>
 
 #include <algorithm>
@@ -13,8 +11,6 @@
 #include <vector>
 
 #include "game/inventory.h"
-#include "game/equip.h"
-#include "game/grant.h"
 #include "mem/reader.h"
 #include "game/items.h"
 #include "game/stash.h"
@@ -70,65 +66,6 @@ int g_containers = 0;
 // 뒤에는 g_rows 를 건드리지 않는다.
 int g_sort_col = -1;
 bool g_sort_asc = true;
-
-// Export/Import 결과 한 줄. 버튼을 누른 뒤 무슨 일이 났는지 남긴다.
-std::string g_io_status;
-
-// 가져오기 전용 지급 큐. 보관함(stash)의 큐와 완전히 분리한다 - 보관함
-// 지급 기능을 손대지 않기 위해서다. overlay 가 inventory_import_pump 를
-// 매 프레임 부른다(창을 열지 않아도 진행).
-std::vector<game::StashEntry> g_import_queue;
-std::size_t g_import_at = 0;
-
-// 파일은 DLL 옆에 둔다(보관함·아이콘 아틀라스와 같은 자리).
-std::wstring inv_file_path() {
-    HMODULE self = nullptr;
-    if (!::GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&inv_file_path), &self)) {
-        return {};
-    }
-    wchar_t path[MAX_PATH]{};
-    const DWORD n = ::GetModuleFileNameW(self, path, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return {};
-    std::wstring s(path, n);
-    const auto slash = s.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) return {};
-    return s.substr(0, slash + 1) + L"cdtoybox_inventory.txt";
-}
-
-bool write_text_file(const std::wstring& p, const std::string& text) {
-    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr,
-                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    DWORD wrote = 0;
-    const bool ok = ::WriteFile(h, text.data(),
-                                static_cast<DWORD>(text.size()), &wrote,
-                                nullptr) != 0;
-    ::CloseHandle(h);
-    return ok && wrote == text.size();
-}
-
-bool read_text_file(const std::wstring& p, std::string* out) {
-    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER size{};
-    bool ok = false;
-    if (::GetFileSizeEx(h, &size) && size.QuadPart > 0 &&
-        size.QuadPart < (16 << 20)) {
-        out->resize(static_cast<std::size_t>(size.QuadPart));
-        DWORD got = 0;
-        if (::ReadFile(h, out->data(), static_cast<DWORD>(out->size()), &got,
-                       nullptr)) {
-            out->resize(got);
-            ok = true;
-        }
-    }
-    ::CloseHandle(h);
-    return ok;
-}
 
 void refresh(const mem::Reader& reader) {
     g_rows.clear();
@@ -344,192 +281,7 @@ void draw_filter_bar() {
     }
 }
 
-// 아이템 표 순번 -> 지급 키 대응표를 만든다(카탈로그 1회 순회).
-// 착용 장비는 순번만 들고 있어 지급 키로 바꿔야 지급 큐에 태운다.
-std::unordered_map<std::uint32_t, std::uint32_t> build_id2key() {
-    std::unordered_map<std::uint32_t, std::uint32_t> id2key;
-    if (!game::items_ready()) return id2key;
-    const auto& cat = game::item_catalog();
-    id2key.reserve(cat.size());
-    for (const auto& e : cat) {
-        const std::uint32_t id = game::item_id_for_key(e.key);
-        if (id != game::kNoItemId) id2key.emplace(id, e.key);
-    }
-    return id2key;
-}
-
-// 현재 인벤토리(+착용 장비)를 지급 형식 파일로 남긴다. 다른 세이브
-// 에서 "가져오기" 로 다시 만들어 넣기 위한 것이다. 소켓·보석은 지급
-// 경로로 이월되지 않는다(게임 제한) - 담금질·연마·개수만 실린다.
-void do_export(const mem::Reader& reader) {
-    refresh(reader);   // 최신 상태로
-
-    game::Stash out;
-    const int inv_set = out.add_set("인벤토리");
-    int inv_n = 0;
-    for (const auto& r : g_rows) {
-        if (r.key == 0) continue;   // 대응표에 없는 순번은 지급 못 함
-        game::StashEntry e;
-        e.key = r.key;
-        e.count = r.count;
-        e.temper = r.temper;
-        e.sharpness = r.sharpness;
-        if (r.max_endurance != 0xFFFF) e.endurance = r.endurance;
-        for (std::size_t g = 0; g < r.gem_keys.size(); ++g) {
-            game::StashSocket ss;
-            ss.slot = static_cast<std::uint32_t>(g);
-            ss.key = r.gem_keys[g];
-            game::socket_bytes_for_key(ss.key, ss.raw);
-            e.sockets.push_back(ss);
-        }
-        out.set_at(inv_set)->items.push_back(std::move(e));
-        ++inv_n;
-    }
-
-    // 착용 장비: 순번을 지급 키로 바꿔 아이템만 담는다(연마·소켓·염색은
-    // 지급으로 이월 불가 - 새 세이브에서 장착 후 장비 에디터로).
-    int worn_n = 0;
-    const bool equip_ok = game::equip_ready();
-    std::vector<game::WornPiece> worn;
-    if (equip_ok && game::equip_snapshot(&worn) && !worn.empty()) {
-        const auto id2key = build_id2key();
-        const int worn_set = out.add_set("착용");
-        for (const auto& w : worn) {
-            const auto it = id2key.find(w.key);
-            if (it == id2key.end()) continue;
-            game::StashEntry e;
-            e.key = it->second;
-            e.count = 1;
-            out.set_at(worn_set)->items.push_back(std::move(e));
-            ++worn_n;
-        }
-    } else if (!equip_ok) {
-        // 아직 착용 장비를 못 찾았다 - 다음 분석 주기에 찾도록 요청만
-        // 남긴다. 인벤토리 export 자체는 그대로 진행한다.
-        game::equip_request_refresh();
-    }
-
-    const std::wstring p = inv_file_path();
-    if (p.empty() || !write_text_file(p, out.serialize())) {
-        g_io_status = "파일을 쓰지 못했습니다";
-        return;
-    }
-    char buf[192];
-    if (worn_n == 0 && !equip_ok) {
-        std::snprintf(buf, sizeof(buf),
-                      "내보냈습니다: 인벤 %d개 (착용 미발견 - 잠시 후 다시 "
-                      "내보내면 착용도 포함) -> cdtoybox_inventory.txt",
-                      inv_n);
-    } else {
-        std::snprintf(
-            buf, sizeof(buf),
-            "내보냈습니다: 인벤 %d개 + 착용 %d개 -> cdtoybox_inventory.txt",
-            inv_n, worn_n);
-    }
-    g_io_status = buf;
-}
-
-// 지급이 실제로 성공할 세션을 고른다. 게이트 사슬이 풀리는 살아있는
-// 서버 세션만 후보로 삼는다(stale 세션은 "사슬이 끊겼다"로 조용히 실패).
-std::uintptr_t import_pick_session() {
-    std::uintptr_t seen[16]{};
-    std::uint32_t hits[16]{};
-    const int n = game::seen_sessions(seen, hits, 16);
-    if (n == 0) return 0;
-    std::uint64_t last[16]{};
-    std::uint64_t newest = 0;
-    for (int i = 0; i < n; ++i) {
-        last[i] = game::session_last_seen(i);
-        if (last[i] > newest) newest = last[i];
-    }
-    const mem::LocalReader rd;
-    std::uintptr_t best = 0;
-    std::uint32_t best_hits = 0;
-    std::uintptr_t gate = 0;
-    for (int i = 0; i < n; ++i) {
-        if (!game::session_is_server(i)) continue;
-        if (last[i] == 0 || (newest > last[i] &&
-                             newest - last[i] > game::kSessionFreshMs)) {
-            continue;
-        }
-        if (!game::gate_object(rd, seen[i], &gate)) continue;
-        if (best == 0 || hits[i] >= best_hits) {
-            best = seen[i];
-            best_hits = hits[i];
-        }
-    }
-    return best;
-}
-
-// 파일을 읽어 지급 큐에 태운다. 빈 인벤토리·다른 세이브에서도 아이템을
-// 다시 만들어 넣는다(2초 간격). 소켓·보석·염색은 이월되지 않는다.
-void do_import() {
-    const std::wstring p = inv_file_path();
-    std::string text;
-    if (p.empty() || !read_text_file(p, &text)) {
-        g_io_status = "cdtoybox_inventory.txt 를 찾지 못했습니다";
-        return;
-    }
-    game::Stash in;
-    if (!in.parse(text)) {
-        g_io_status = "파일을 해석하지 못했습니다";
-        return;
-    }
-    std::vector<game::StashEntry> all;
-    for (int s = 0; s < in.set_count(); ++s) {
-        if (const game::StashSet* set = in.set_at(s)) {
-            all.insert(all.end(), set->items.begin(), set->items.end());
-        }
-    }
-    if (all.empty()) {
-        g_io_status = "파일에 지급할 아이템이 없습니다";
-        return;
-    }
-    // 앞선 가져오기가 다 끝났으면 큐를 비우고 새로 시작한다.
-    if (g_import_at >= g_import_queue.size()) {
-        g_import_queue.clear();
-        g_import_at = 0;
-    }
-    g_import_queue.insert(g_import_queue.end(), all.begin(), all.end());
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  "%zu개 지급 대기 (2초 간격). 소켓·보석·염색은 이월 안 됨",
-                  all.size());
-    g_io_status = buf;
-}
-
 }  // namespace
-
-// 가져오기 큐를 한 개씩 지급한다. overlay 가 매 프레임 부른다(보관함과
-// 무관, 가시성 무관). 소켓은 request_give 가 어차피 0 으로 밀므로 넣지
-// 않는다. 담금질·연마·내구도는 아이템 표 상한으로 자른다.
-void inventory_import_pump() {
-    if (g_import_at >= g_import_queue.size()) return;
-    if (game::spawn_pending()) return;
-    const std::uintptr_t session = import_pick_session();
-    if (session == 0) return;   // 살아있는 세션 없음 - 다음 프레임에 다시
-
-    const game::StashEntry& e = g_import_queue[g_import_at];
-    std::uint32_t cap_t = 0;
-    for (const auto& c : game::item_catalog()) {
-        if (c.key == e.key) { cap_t = c.max_temper; break; }
-    }
-    game::GiveExtras extras;
-    extras.temper =
-        static_cast<std::uint16_t>(e.temper > cap_t ? cap_t : e.temper);
-    const std::int16_t sc = game::max_sharpness_for(e.key);
-    extras.sharpness = static_cast<std::uint16_t>(
-        (sc > 0 && e.sharpness > static_cast<std::uint32_t>(sc))
-            ? sc
-            : e.sharpness);
-    const std::uint16_t full = game::full_endurance_for(e.key);
-    extras.endurance =
-        (e.endurance == game::kStashNoEndurance)
-            ? full
-            : static_cast<std::uint16_t>(e.endurance > full ? full
-                                                            : e.endurance);
-    if (game::request_give(session, e.key, e.count, extras)) ++g_import_at;
-}
 
 void draw_inventory_panel(bool* open) {
     ImGui::SetNextWindowPos(ImVec2(400, 600), ImGuiCond_FirstUseEver);
@@ -567,31 +319,6 @@ void draw_inventory_panel(bool* open) {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
-
-    // Export / Import. 세이브 간 이월용이다. 내보내기는 현재 인벤토리
-    // (+착용)를 지급 형식 파일로 남기고, 가져오기는 그 아이템을 지급
-    // 큐에 태워 어느 세이브에서든 다시 만들어 넣는다(빈 인벤토리 OK).
-    // 소켓·보석·염색은 지급 경로로 이월되지 않는다(게임 제한).
-    ImGui::BeginDisabled(!game::inventory_ready());
-    if (ImGui::Button("내보내기")) {
-        const mem::LocalReader reader;
-        do_export(reader);
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("가져오기")) do_import();
-    // 지급 진행 표시(가져오기 전용 큐).
-    const std::size_t total = g_import_queue.size();
-    const std::size_t remain = g_import_at < total ? total - g_import_at : 0;
-    if (remain > 0) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
-                           "지급 중 %zu / %zu", total - remain, total);
-    } else if (!g_io_status.empty()) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s",
-                           g_io_status.c_str());
-    }
 
     // 컴포넌트·대응표·이름이 다 준비될 때까지 로딩을 보여 준다. 이름은
     // 현지화 후에야 채워지므로 그 전에는 '(순번 N)' 만 나온다. 진행
@@ -742,10 +469,8 @@ void draw_inventory_panel(bool* open) {
         ImGui::TextDisabled("보관함에 담으려면 보관함 창에서 세트를 먼저"
                             " 펼치세요");
     }
-    ImGui::TextDisabled("내보내기/가져오기 = 세이브 간 이월(지급). 담금질·연마·"
-                        "개수는 이월, 소켓·보석·염색은 이월 불가(게임 제한)."
-                        " 착용 장비는 아이템만 이월 - 새 세이브에서 장착 후"
-                        " 장비 에디터로");
+    ImGui::TextDisabled("제자리 수정은 게임이 되쓴다 - 값을 지급 칸으로"
+                        " 옮겨 고친 뒤 새로 지급하고 원본은 버린다");
     ImGui::End();
 }
 
