@@ -211,19 +211,19 @@ void draw_grant_panel(bool* open) {
     // 남아 게이트가 끊긴 채 뽑혀 "액터가 안 나왔습니다" 로 먹통이 됐다(실측
     // 2026-09-07). 게이트 통과가 곧 지급 성공 조건이다. 못 찾으면 -1(막힘
     // 표시)로 두고 stale 세션으로 폴백하지 않는다.
+    // 게이트가 실제로 풀리는(지급이 통하는) 서버 세션 중 호출 최다를 고른다.
+    // freshness(last_seen) 로 거르지 않는다 - 실측 2026-09-07: 로드 후에도
+    // 실제로 지급이 되는 세션(세션 1)이 last_seen 이 오래됐다는 이유로 걸러져
+    // "세션 못 찾음"이 됐다. gate_object 는 안전 읽기라 풀린 세션은 자연히
+    // 실패하므로, 게이트 통과 자체가 곧 "지급 가능" 판정이다.
+    (void)last;
     if (!g_picked_by_hand) {
         const mem::LocalReader rd;
-        std::uint64_t newest = 0;
-        for (int i = 0; i < n; ++i) if (last[i] > newest) newest = last[i];
         int best = -1;
         std::uint32_t best_hits = 0;
         std::uintptr_t gate = 0;
         for (int i = 0; i < n; ++i) {
             if (!server[i]) continue;
-            if (last[i] == 0 || (newest > last[i] &&
-                                 newest - last[i] > game::kSessionFreshMs)) {
-                continue;
-            }
             if (!game::gate_object(rd, seen[i], &gate)) continue;
             if (best < 0 || hits[i] >= best_hits) {
                 best = i;
