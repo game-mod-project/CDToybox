@@ -293,7 +293,7 @@ void draw_nearby_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("nearby", 8, flags)) {
+    if (ImGui::BeginTable("nearby", 9, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 104);
         ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed, 82);
@@ -303,6 +303,7 @@ void draw_nearby_tab() {
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed, 52);
+        ImGui::TableSetupColumn("붙잡기", ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(view.size()));
@@ -388,6 +389,33 @@ void draw_nearby_tab() {
                         "이 개체를 동반자로 등록합니다.\n"
                         "소환이 안 되면 게임의 소환 쿨타임입니다.\n"
                         "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
+                }
+                ImGui::TableSetColumnIndex(8);
+                // 붙잡기: 게임이 야생 개체를 잡을 때 쓰는 그 경로(2386).
+                // 획득(2338)과 다른 길이라 2338 이 거부하는 대상도 이쪽으로는
+                // 들어올 수 있다. 동반자 여부를 따지지 않는다 - 게임이
+                // 판단하게 둔다.
+                const bool can_catch = a->handle != 0 && game::catch_ready();
+                char cbtn[32];
+                std::snprintf(cbtn, sizeof(cbtn), "붙잡기##catch%d", i);
+                ImGui::BeginDisabled(!can_catch);
+                if (ImGui::SmallButton(cbtn)) {
+                    const std::uintptr_t sess = game::companion_pick_session();
+                    const bool queued =
+                        sess != 0 && game::request_catch(sess, a->handle, 0);
+                    if (!queued) {
+                        g_near_busy_until = now + 3.0;
+                        g_near_busy_why =
+                            sess == 0 ? "살아 있는 서버 세션이 없습니다"
+                                      : "요청이 밀렸습니다 - 잠시 뒤 다시";
+                    }
+                }
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered() && can_catch) {
+                    ImGui::SetTooltip(
+                        "게임이 야생 개체를 잡을 때 쓰는 경로입니다(2386).\n"
+                        "포획 도구가 필요할 수 있습니다 - 그러면 조용히 "
+                        "거부됩니다.");
                 }
                 ImGui::PopID();
             }

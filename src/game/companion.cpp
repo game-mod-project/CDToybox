@@ -92,6 +92,32 @@ bool build_use_item_wire(std::uint32_t item_key, std::uint32_t b, std::uint8_t c
     return true;
 }
 
+bool decode_catch(const std::uint8_t* payload, std::size_t len,
+                  std::uint32_t* self_out, std::uint32_t* target_out) {
+    if (payload == nullptr || len != kCatchWireLen) return false;
+    std::uint16_t id = 0, body = 0;
+    decode_message_header(payload, len, &id, &body);
+    if (id != kCatchBySummonId || body != 8) return false;
+    if (self_out != nullptr) std::memcpy(self_out, payload + 5, 4);
+    if (target_out != nullptr) std::memcpy(target_out, payload + 9, 4);
+    return true;
+}
+
+bool build_catch_wire(std::uint32_t self, std::uint32_t target,
+                      std::uint8_t* out, std::size_t cap,
+                      std::size_t* len_out) {
+    if (out == nullptr || cap < kCatchWireLen) return false;
+    const std::uint16_t id = kCatchBySummonId;
+    const std::uint16_t body = 8;
+    std::memcpy(out + 0, &id, 2);
+    out[2] = 0;
+    std::memcpy(out + 3, &body, 2);
+    std::memcpy(out + 5, &self, 4);
+    std::memcpy(out + 9, &target, 4);
+    if (len_out != nullptr) *len_out = kCatchWireLen;
+    return true;
+}
+
 // --------------------------------------------------- 캡처 훅
 
 namespace {
@@ -107,6 +133,7 @@ std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
 std::mutex g_last_mutex;
 HireTargetCapture g_last_hire;
+CatchCapture g_last_catch;
 
 void dump_payload(void* packet, const char* tag) {
     if (packet == nullptr) return;
@@ -123,6 +150,19 @@ void dump_payload(void* packet, const char* tag) {
     decode_message_header(pl, len, &id, &body);
     log::infof("동반자 캡처 [{}] ID {} 본문 {}바이트 (전체 {}): {}", tag, id,
                body, len, hex_bytes(pl, len, kHexCap));
+    if (id == kCatchBySummonId) {
+        std::uint32_t self = 0, target = 0;
+        if (decode_catch(pl, len, &self, &target)) {
+            std::lock_guard<std::mutex> lock(g_last_mutex);
+            g_last_catch.valid = true;
+            g_last_catch.self = self;
+            g_last_catch.target = target;
+            log::infof("붙잡기: 잡는쪽 0x{:08X} 대상 0x{:08X}", self, target);
+        } else {
+            log::warnf("붙잡기: 본문이 8바이트가 아니다 ({}). 정적 분석과 다름",
+                       body);
+        }
+    }
     if (id == kHireToTargetId) {
         std::uint32_t handle = 0;
         std::uint8_t flag = 0;
@@ -814,6 +854,28 @@ bool request_complete_summon(std::uintptr_t session, std::uint64_t merc_no,
     return request_message(session, *m, wire, len);
 }
 
+CatchCapture last_catch() {
+    std::lock_guard<std::mutex> lock(g_last_mutex);
+    return g_last_catch;
+}
+
+bool catch_ready() { return find_message(kCatchBySummonId) != nullptr; }
+
+bool request_catch(std::uintptr_t session, std::uint32_t target,
+                   std::uint32_t self) {
+    const MessageDesc* m = find_message(kCatchBySummonId);
+    if (m == nullptr || session == 0 || target == 0) return false;
+    if (self == 0) {
+        const CatchCapture seen = last_catch();
+        self = seen.valid ? seen.self : kCatchSelfDefault;
+    }
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    if (!build_catch_wire(self, target, wire, sizeof(wire), &len)) return false;
+    log::infof("붙잡기 요청: 잡는쪽 0x{:08X} 대상 0x{:08X}", self, target);
+    return request_message(session, *m, wire, len);
+}
+
 bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
                          std::uint8_t flag) {
     const MessageDesc* m = find_message(kHireToTargetId);
@@ -1028,6 +1090,20 @@ bool companion_run_command(const std::string& line, std::string* reply) {
                    key, b, flag, pos[0], pos[1], pos[2]);
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
+    if (cmd == "catch") {
+        // 게임이 야생 개체를 잡을 때 쓰는 경로를 그대로 흉내낸다.
+        // 대상은 근처 목록의 액터 핸들이다.
+        if (args.size() < 2) { say("catch <대상핸들> [잡는쪽핸들]"); return false; }
+        const std::uint32_t target = parse_u32(args[1], 0);
+        if (target == 0) { say("대상 핸들이 0이다"); return false; }
+        const std::uint32_t self = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!catch_ready()) { say("2386 미해석"); return false; }
+        const bool ok = request_catch(session, target, self);
+        say(ok ? "붙잡기 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
     }
     if (cmd == "actordiff") {

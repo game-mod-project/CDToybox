@@ -289,6 +289,53 @@ bool hire_target_ready();
 std::uintptr_t companion_pick_session();
 
 // ----------------------------------------------------------------------
+// 붙잡기 (`TrocTrCatchBySummonReq`, ID 2386)
+//
+// **게임이 야생 개체를 잡을 때 실제로 쓰는 경로다.** 사용자가 정상
+// 플레이로 네 마리를 잡는 동안 캡처됐다(실측 2026-09-07). 와이어는
+// 머리 5 + 본문 8 바이트다.
+//
+//   52 09 00 08 00 | 01 00 10 A0 | A0 2D 10 B0
+//
+//   첫째 u32 = 0xA0100001 - 네 표본이 전부 같다. 잡는 쪽이다.
+//              0xA010 은 액터 핸들의 또 다른 네임스페이스다.
+//   둘째 u32 = 대상 액터 핸들 (0xB010 = 일반 액터)
+//
+// 붙잡기 200ms 앞에는 항상 아이템 사용(2676, 본문 38바이트)이 붙는다 -
+// 포획 도구를 쓰는 것이다. 먼저 붙잡기만 보내 본다. 도구가 있어야
+// 한다면 거부될 것이고, 그때 2676 도 흉내낸다.
+//
+// 고용 작업 추적(RVA 0x2ADE280)에는 한 줄도 안 찍혔다. 붙잡기는 근처
+// 탭이 쓰는 2338 과 완전히 다른 경로다 - 2338 이 거부하는 대상도
+// 이쪽으로는 들어올 수 있다.
+inline constexpr std::uint16_t kCatchBySummonId = 2386;
+inline constexpr std::size_t kCatchWireLen = 5 + 8;
+// 표본 네 개가 전부 이 값이었다. 세션마다 달라질 수 있으니 캡처에서
+// 본 값이 있으면 그것을 먼저 쓴다.
+inline constexpr std::uint32_t kCatchSelfDefault = 0xA0100001;
+
+// 게임이 보낸 붙잡기에서 읽어 둔 것. 아직 없으면 valid=false.
+struct CatchCapture {
+    bool valid = false;
+    std::uint32_t self = 0;
+    std::uint32_t target = 0;
+};
+CatchCapture last_catch();
+
+// 본문 8바이트(u32 잡는쪽, u32 대상)를 읽는다. 길이가 다르면 false.
+bool decode_catch(const std::uint8_t* payload, std::size_t len,
+                  std::uint32_t* self_out, std::uint32_t* target_out);
+// 머리 5바이트 + 본문 8바이트를 조립한다.
+bool build_catch_wire(std::uint32_t self, std::uint32_t target,
+                      std::uint8_t* out, std::size_t cap, std::size_t* len_out);
+// 2386 을 게임 스레드에서 구동한다. self 가 0 이면 캡처에서 본 값,
+// 그것도 없으면 kCatchSelfDefault 를 쓴다.
+bool request_catch(std::uintptr_t session, std::uint32_t target,
+                   std::uint32_t self = 0);
+// 2386 이 해석돼 있는가.
+bool catch_ready();
+
+// ----------------------------------------------------------------------
 // 명령 파일 (DLL 옆 cdtoybox_cmd.txt)
 //
 // 오버레이를 누르지 않고도 밖에서 실험을 걸 수 있게 한다. 한 줄에
