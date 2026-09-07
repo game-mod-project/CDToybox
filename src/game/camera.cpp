@@ -18,6 +18,8 @@
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/nofall.h"
+#include "game/specguard.h"
+#include "game/spec_heal.h"
 #include "game/player.h"
 #include "game/roster.h"
 #include "mem/reader.h"
@@ -316,6 +318,8 @@ void auto_analysis_loop() {
         // faller 학습을 시도한다(플레이어가 한 번 떨어져야 학습됨).
         nofall_install(rtti, reader);
         nofall_identify(reader);
+        specguard_install(reader);   // 백업(렌더 루프가 먼저 설치)
+        heal_special_items(reader);   // 특수아이템 표시 보정
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

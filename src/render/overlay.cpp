@@ -28,6 +28,7 @@
 #include "render/scan_panel.h"
 #include "game/freecam.h"
 #include "game/player.h"
+#include "game/specguard.h"
 #include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
@@ -543,6 +544,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     {
         const mem::LocalReader reader;
         cdtb::game::player_apply(reader);
+        // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
+        // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
+        cdtb::game::specguard_install(reader);
     }
 
     if (!g_visible) { g_frame_stage = kStageIdle; return; }

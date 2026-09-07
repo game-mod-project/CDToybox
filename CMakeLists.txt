@@ -84,6 +84,8 @@ add_library(cdtoybox SHARED
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/specguard.cpp
+    src/game/spec_heal.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/proxy/exports.def
@@ -165,6 +167,8 @@ add_executable(cdtb_probe
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/specguard.cpp
+    src/game/spec_heal.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)
