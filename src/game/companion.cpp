@@ -388,7 +388,14 @@ bool companion_spawn_trace_install(const mem::Reader& reader) {
 
 namespace {
 
-using CharCheatWorkFn = void*(__fastcall*)(void*, void*, void*, void*);
+// 처리기는 인자를 여섯 받는다(grant.cpp 의 CharSpawnFn 과 같아야 한다).
+//   (서술자, 패킷, const u32* 키, const u32* B, const float* 좌표,
+//    const u8* 플래그)
+// 넷으로 선언하면 원본을 되부를 때 다섯째·여섯째 스택 자리가 쓰레기가
+// 된다 - 좌표와 플래그가 그 자리다.
+using CharCheatWorkFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
+                                          const std::uint32_t*, const float*,
+                                          const std::uint8_t*);
 using SpawnContextFn = void*(__fastcall*)(void*, void*);
 
 CharCheatWorkFn g_orig_char_cheat_work = nullptr;
@@ -487,20 +494,16 @@ void* __fastcall det_spawn_context_set(void* spawner, void* value) {
     return g_orig_spawn_context_set(spawner, value);
 }
 
-void* __fastcall det_char_cheat_work(void* a, void* b, void* key_ptr, void* d) {
+void __fastcall det_char_cheat_work(void* self, void* packet,
+                                    const std::uint32_t* key,
+                                    const std::uint32_t* b, const float* pos,
+                                    const std::uint8_t* flag) {
     const bool outer = t_in_char_cheat;
     t_in_char_cheat = true;
-    t_char_cheat_key = 0;
-    if (key_ptr != nullptr) {
-        std::uint64_t k = 0;
-        if (read_ptr_guarded(reinterpret_cast<std::uint64_t>(key_ptr), &k)) {
-            t_char_cheat_key = static_cast<std::uint32_t>(k & 0xFFFFFFFFu);
-        }
-    }
+    t_char_cheat_key = (key != nullptr) ? *key : 0;
     log::infof("소환 치트 작업: 키 {} 진입", t_char_cheat_key);
-    void* r = g_orig_char_cheat_work(a, b, key_ptr, d);
+    g_orig_char_cheat_work(self, packet, key, b, pos, flag);
     t_in_char_cheat = outer;
-    return r;
 }
 
 }  // namespace
