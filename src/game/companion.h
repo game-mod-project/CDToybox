@@ -154,6 +154,23 @@ inline constexpr std::uint64_t kSpawnContextSetRva = 0x1FB5BF0;
 // 남은 조용한 이탈은 여기뿐이다.
 inline constexpr std::uint64_t kSpawnMakeRva = 0x1763570;
 
+// 캐릭터 소환 치트의 플래그 인자. 종류 코드다.
+//
+// 처리기는 이 바이트를 파라미터 객체 +0xA 에 그대로 넣는다
+// (생성자 0x26CB420, 우리 자리는 0x2B6E8FB).
+//
+//   movzx r8d, byte ptr [플래그]
+//   mov   eax, 0x21
+//   cmp   r8b, 0x28
+//   cmove r8d, eax          ; 0x28 이면 0x21 로 바꾼다
+//
+// 이미지 전체에서 그 생성자를 부르는 43곳을 훑으니 쓰이는 값은
+// 0x0A·0x0D·0x10·0x16·0x1E·0x1F·0x20·0x25·0x27·0x28 이고 **0 은
+// 한 곳도 없다**. 우리는 0 을 넣고 있었고, 그때 만들기까지는
+// 성공한 뒤 더 깊은 곳에서 널 문자열을 해시하다 죽었다
+// (실측 2026-09-07: 키 31153, RVA 0x3A84F0).
+inline constexpr std::uint8_t kSpawnCharKind = 0x28;
+
 struct CharCheatGate {
     bool valid = false;
     std::uint32_t key = 0;         // 요청한 캐릭터 키

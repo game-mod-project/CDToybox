@@ -1006,8 +1006,14 @@ bool companion_run_command(const std::string& line, std::string* reply) {
                        found->name);
         }
         const std::uint32_t b = args.size() > 2 ? parse_u32(args[2], 0) : 0;
+        // 플래그는 종류 코드다. 처리기가 이 바이트를 파라미터 객체의
+        // +0xA 에 그대로 넣는다(0x26CB420). 이미지 안에서 그 자리에
+        // 실제로 쓰이는 값은 0x0A·0x0D·0x10·0x16·0x1E·0x1F·0x20·0x25·
+        // 0x27·0x28 이고 **0 은 한 곳도 없다** - 우리가 넣던 값이다.
+        // 우리 자리의 코드는 0x28 을 따로 알아본다(0x21 로 바꿔 쓴다).
+        // 그래서 기본값을 0x28 로 둔다.
         const std::uint8_t flag = static_cast<std::uint8_t>(
-            args.size() > 3 ? parse_u32(args[3], 0) : 0);
+            args.size() > 3 ? parse_u32(args[3], kSpawnCharKind) : kSpawnCharKind);
         float pos[3]{};
         if (g_position_fn == nullptr || !g_position_fn(pos)) {
             say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
@@ -1021,6 +1027,19 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         const bool ok = request_char_spawn(session, key, b, flag, pos);
         say(ok ? "소환 요청" : "거부(대기열/쿨다운/세션잠김)");
         return ok;
+    }
+    if (cmd == "unlock") {
+        // 구동이 게임 안에서 죽으면 그 세션을 잠근다(안전장치). 인자를
+        // 실험하는 동안에는 그때마다 게임을 재시작해야 해서 비싸다.
+        // 죽은 원인이 인자라는 것을 아는 경우에만 손으로 푼다.
+        const std::uintptr_t locked = drive_fault_session();
+        if (locked == 0) { say("잠긴 세션 없음"); return false; }
+        clear_drive_fault();
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "세션 0x%llX 잠금 해제",
+                      static_cast<unsigned long long>(locked));
+        say(buf);
+        return true;
     }
     if (cmd == "actordump") {
         // 지금 월드에 살아 있는 액터를 이름 조각으로 찾아 로그에 낸다.
