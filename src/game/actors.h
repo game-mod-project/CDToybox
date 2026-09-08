@@ -38,7 +38,13 @@ struct LiveActor {
     std::string label;               // 인게임 표시명 (없으면 빈 문자열)
     std::uint16_t merc_row = 0xFFFF; // 동반자 타입 행 번호. 0xFFFF 없음
     bool hirable = false;
+    // 이미 이 개체를 고용한 쪽의 핸들. 0 이면 임자가 없다.
+    // 0 이 아니면 획득(2338)이 코드 0x97AE29C9 로 거부한다.
+    std::uint32_t owner = 0;
     bool is_companion() const { return merc_row != 0xFFFF; }
+    // 이미 누군가의 동반자다. 스토리 동료(Damian)와 이미 길들인
+    // 전설마가 여기 걸린다.
+    bool owned() const { return owner != 0; }
     const std::string& display() const { return label.empty() ? name : label; }
 };
 
@@ -83,6 +89,28 @@ bool walk_actor_pointers(const mem::Reader& reader, std::uintptr_t manager,
 // 액터의 캐릭터 행 번호. 사슬 어느 단계든 못 읽으면 false.
 bool actor_character_row(const mem::Reader& reader, std::uintptr_t actor,
                          std::uint16_t* row_out);
+
+// 액터의 고용주 핸들. 임자가 없으면 0 을 넣고 true.
+// 사슬 어느 단계든 못 읽으면 false.
+//
+//   [[액터 + 0x68] + 0x118] + 0x18 = u32 고용주 핸들
+//
+// 가운데 객체는 `ClientMercenaryActorComponent` 다(RTTI 확인
+// 2026-09-09). 배치는 이렇다.
+//
+//   +0x10 u32 상태. 0x7F010001 고용됨 / 0x00010001 미고용
+//   +0x18 u32 고용주 핸들 (플레이어 쪽은 0xA0100001)
+//   +0x20 u32 번호. 미고용은 0xFFFFFFFF
+//
+// 획득 작업 함수(RVA 0x2ADE280)가 0x2ADE601 에서 이 값을 읽어
+// **0 이 아니면 거부**한다 (코드 = 전역 0x6BB8A18 = 0x97AE29C9).
+//
+// 실측 2026-09-09: 까마귀는 0 으로 통과, 이미 길들인 전설마
+// 흑마와 스토리 동료 Damian 은 0xA0100001 로 거부됐다. 앞서
+// "고용 불가 유형"으로 적어 둔 것은 틀렸다 - **이미 소유한
+// 개체**였다. 사용자가 흑마를 이미 가지고 있다고 확인해 줬다.
+bool actor_owner_handle(const mem::Reader& reader, std::uintptr_t actor,
+                        std::uint32_t* owner_out);
 
 // 매니저를 걷고 행 번호를 roster 로 풀어 목록을 만든다. roster 가
 // 준비되지 않았으면 이름 없이 행 번호만 채운다.

@@ -1407,12 +1407,15 @@ void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 comp);
     for (const auto& a : list) {
         if (!all && !a.is_companion()) continue;
-        std::printf("  0x%llX  핸들 %08X  행 %5u  키 %6u  타입행 %2d  %s%s%s\n",
+        char own[32] = "";
+        // 임자가 있으면 획득(2338)이 0x97AE29C9 로 거부한다.
+        if (a.owned()) std::snprintf(own, sizeof(own), "  [소유 %08X]", a.owner);
+        std::printf("  0x%llX  핸들 %08X  행 %5u  키 %6u  타입행 %2d  %s%s%s%s\n",
                     static_cast<unsigned long long>(a.actor), a.handle, a.row, a.key,
                     a.is_companion() ? static_cast<int>(a.merc_row) : -1,
                     a.name.empty() ? "(이름 없음)" : a.name.c_str(),
                     game::roster_is_wild(a.name) ? "  [야생]" : "",
-                    a.hirable ? "  [고용가능]" : "");
+                    a.hirable ? "  [고용가능]" : "", own);
     }
 }
 
