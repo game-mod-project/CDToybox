@@ -25,6 +25,7 @@ constexpr std::size_t kRecordsPtr = 0x58;   // 레코드 포인터 배열
 constexpr std::size_t kRecKey = 0x00;       // u32 키
 constexpr std::size_t kRecMaxStack = 0x18;  // u32 _maxStackCount
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
+constexpr std::size_t kRecEquipType = 0x42;  // u16 _equipTypeInfo (FFFF=장비 아님)
 constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
 constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없음)
@@ -145,6 +146,12 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         // 담금질과 달리 상한 그대로다 - 게임이 `>=` 로 검사한다.
         reader.read_value(e.record + kRecSockets, &e.max_sockets);
 
+        // 소켓 갈래를 가르는 값. 못 읽으면 0xFFFF(=장비 아님)로 두어
+        // 소켓을 안 싣는 쪽으로 기운다.
+        if (!reader.read_value(e.record + kRecEquipType, &e.equip_type)) {
+            e.equip_type = 0xFFFF;
+        }
+
         // 0xFFFF 면 내구도가 없는 아이템이다 - 담금질의 _equipTypeInfo
         // (+0x42) 와 같은 표기법이다.
         reader.read_value(e.record + kRecMaxEndurance, &e.max_endurance);
@@ -180,6 +187,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.max_endurance = e.max_endurance;
         entry.repair_entries = e.repair_entries;
         entry.max_sharpness = e.max_sharpness;
+        entry.equip_type = e.equip_type;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
@@ -695,11 +703,12 @@ std::uint32_t item_id_for_key(std::uint32_t key) {
 
 void make_socket_bytes(std::uint16_t gem_id, std::uint8_t out[6]) {
     if (out == nullptr) return;
+    // 채움 표시: 보석이 있으면 0xFFFF, 빈 칸이면 0x0000.
+    const std::uint16_t marker = (gem_id == 0xFFFF) ? 0x0000u : 0xFFFFu;
     std::memcpy(out, &gem_id, sizeof(gem_id));
-    out[2] = 0xFF;
-    out[3] = 0xFF;
-    out[4] = 0x00;   // 게임이 슬롯 번호로 덮어쓴다
-    out[5] = 0xFF;
+    std::memcpy(out + 2, &marker, sizeof(marker));
+    out[4] = 0x00;               // 게임이 칸 번호로 덮어쓴다
+    out[5] = kSocketOpenTail;    // 열린 칸은 전부 0x04 (실측)
 }
 
 bool socket_bytes_for_key(std::uint32_t gem_key, std::uint8_t out[6]) {
@@ -714,6 +723,24 @@ std::int16_t max_sharpness_for(std::uint32_t item_key) {
     if (!items_ready()) return 0;
     for (const auto& e : item_catalog()) {
         if (e.key == item_key) return e.max_sharpness;
+    }
+    return 0;
+}
+
+std::uint32_t socket_room(std::uint32_t max_sockets, std::uint32_t max_stack,
+                          std::uint16_t equip_type) {
+    // 장비가 아니면 소켓수>0 이 오류 갈래다(0x2A7022C).
+    if (equip_type == 0xFFFF) return 0;
+    // 겹치는 아이템도 같은 갈래로 간다(판별자가 max_stack>1 을 본다).
+    if (max_stack > 1) return 0;
+    return max_sockets;
+}
+
+std::uint32_t socket_room_for(std::uint32_t item_key) {
+    if (!items_ready()) return 0;
+    for (const auto& e : item_catalog()) {
+        if (e.key != item_key) continue;
+        return socket_room(e.max_sockets, e.max_stack, e.equip_type);
     }
     return 0;
 }

@@ -340,29 +340,40 @@ TEST(find_item_id_treats_zero_as_a_real_id) {
 
 // --- 소켓 6바이트 조립 -------------------------------------------------
 //
-// 게임의 복사 루프(RVA 0x2094324)가 `TrItemValue +0x40 + i*6` 을 그대로
-// 옮기고 **다섯 번째 바이트만 슬롯 번호로 덮어쓴다**. 그래서 우리는
-// 순번과 꼬리 상수만 채우면 된다.
+// 게임의 복사 루프(0x234FC31~)가 `TrItemValue +0x40 + k*6` 을 그대로
+// 옮기고 **다섯 번째 바이트만 칸 번호(k)로 덮어쓴다**. 그래서 우리는
+// 순번·채움 표시·꼬리만 채우면 된다.
 //
-// 실측한 박힌 소켓이 전부 이 꼴이었다.
+// 2026-09-07 에 라이브 인벤토리의 소켓 벡터를 전수로 떠서 고쳤다.
+// 열린 칸은 예외 없이 이 꼴이다(꼬리 0x04, 예전에 쓰던 0xFF 는 라이브
+// 어디에도 없었다). specs/2026-09-07-socket-grant-unlock-research.md 2.2 절.
 //
-//   24 0D FF FF 00 FF   바람 가르기 (순번 3364, 슬롯 0)
-//   8E 0C FF FF 01 FF   파괴 I      (순번 3214, 슬롯 1)
-//   90 0C FF FF 02 FF   질풍 I      (순번 3216, 슬롯 2)
+//   F6 0C FF FF 00 04   보석 3318 이 박힌 칸 0
+//   FF FF 00 00 01 04   열려 있는 빈 칸 1
+//   FF FF 00 00 FF ??   아직 안 열린 칸 (게임이 [5] 를 안 건드린다)
 
 TEST(make_socket_bytes_matches_a_measured_entry) {
     std::uint8_t raw[6]{};
     cdtb::game::make_socket_bytes(3364, raw);
-    const std::uint8_t want[6] = {0x24, 0x0D, 0xFF, 0xFF, 0x00, 0xFF};
+    const std::uint8_t want[6] = {0x24, 0x0D, 0xFF, 0xFF, 0x00, 0x04};
     CHECK(std::memcmp(raw, want, sizeof(want)) == 0);
 }
 
 TEST(make_socket_bytes_leaves_the_slot_byte_zero) {
-    // 실측본은 슬롯 1 이라 다섯 번째가 0x01 이었다. 게임이 덮어쓰므로
+    // 실측본은 칸 1 이라 다섯 번째가 0x01 이었다. 게임이 덮어쓰므로
     // 우리는 0 으로 둔다 - 나머지 다섯 칸이 맞으면 된다.
     std::uint8_t raw[6]{};
     cdtb::game::make_socket_bytes(3214, raw);
-    const std::uint8_t want[6] = {0x8E, 0x0C, 0xFF, 0xFF, 0x00, 0xFF};
+    const std::uint8_t want[6] = {0x8E, 0x0C, 0xFF, 0xFF, 0x00, 0x04};
+    CHECK(std::memcmp(raw, want, sizeof(want)) == 0);
+}
+
+TEST(make_socket_bytes_marks_an_empty_open_slot) {
+    // 보석 없이 칸만 여는 꼴(= 어비스 슬롯 락 우회). 채움 표시가
+    // 0xFFFF 가 아니라 0x0000 이어야 게임이 빈 칸으로 본다.
+    std::uint8_t raw[6]{};
+    cdtb::game::make_socket_bytes(0xFFFF, raw);
+    const std::uint8_t want[6] = {0xFF, 0xFF, 0x00, 0x00, 0x00, 0x04};
     CHECK(std::memcmp(raw, want, sizeof(want)) == 0);
 }
 

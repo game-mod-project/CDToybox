@@ -361,3 +361,55 @@ TEST(build_item_catalog_carries_the_temper_cap) {
     if (cat.empty()) return;
     CHECK_EQ(cat[0].max_temper, std::uint32_t{10});
 }
+
+// --- 소켓 -------------------------------------------------------------
+
+TEST(read_item_table_reads_the_equip_type_at_0x42) {
+    Fixture f;
+    f.mem.put_u16(Fixture::kRecords + 0x42, 7);
+
+    std::vector<ItemEntry> items;
+    CHECK(cdtb::game::read_item_table(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                      &items, 0));
+    CHECK(!items.empty());
+    if (items.empty()) return;
+    CHECK_EQ(items[0].equip_type, std::uint16_t{7});
+}
+
+TEST(build_item_catalog_carries_the_socket_cap_and_equip_type) {
+    Fixture f;
+    f.mem.put_u32(Fixture::kRecords + 0x238, 3);
+    f.mem.put_u16(Fixture::kRecords + 0x42, 7);
+    f.mem.put_u32(Fixture::kRecords + 0x18, 1);   // 안 겹치는 아이템
+
+    std::vector<cdtb::game::ItemCatalogEntry> cat;
+    LocSystem sys;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                         sys, &cat));
+    CHECK(!cat.empty());
+    if (cat.empty()) return;
+    CHECK_EQ(cat[0].max_sockets, std::uint32_t{3});
+    CHECK_EQ(cat[0].equip_type, std::uint16_t{7});
+}
+
+// 게임의 규칙(0x2A70000 · 0xF090BC0)을 그대로 옮긴 것이다.
+// specs/2026-09-07-socket-grant-unlock-research.md 3.1 절.
+
+TEST(socket_room_gives_the_table_cap_for_equipment) {
+    CHECK_EQ(cdtb::game::socket_room(3, 1, 7), std::uint32_t{3});
+    // 겹치지 않는 아이템은 max_stack 0 으로도 온다.
+    CHECK_EQ(cdtb::game::socket_room(5, 0, 7), std::uint32_t{5});
+}
+
+TEST(socket_room_refuses_when_the_item_is_not_equipment) {
+    // _equipTypeInfo == 0xFFFF. 판별자의 마지막 줄이 이것이다.
+    CHECK_EQ(cdtb::game::socket_room(3, 1, 0xFFFF), std::uint32_t{0});
+}
+
+TEST(socket_room_refuses_a_stacking_item) {
+    CHECK_EQ(cdtb::game::socket_room(3, 99, 7), std::uint32_t{0});
+}
+
+TEST(socket_room_refuses_when_the_table_gives_no_sockets) {
+    CHECK_EQ(cdtb::game::socket_room(0, 1, 7), std::uint32_t{0});
+}

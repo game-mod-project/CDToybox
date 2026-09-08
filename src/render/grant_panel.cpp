@@ -32,14 +32,16 @@ bool g_last_to_inventory = true;
 const char* g_last_what = "";
 
 // 담금질과 장비 연마. 아이템을 바꾸면 상한에 맞춰 잘린다.
-//
-// 소켓은 여기서 다루지 않는다. 2026-09-04 게임 업데이트로 생성/지급
-// 경로에 소켓을 실으면(+0x5E>0) 새 처리기가 오류 분기로 빠져 게임이
-// 죽는다(grant.cpp request_give 가 강제로 0 으로 민다). 그래서 지급
-// 으로는 소켓을 못 넣는다 - 이미 박힌 소켓 표시는 인벤토리에서, 착용
-// 장비의 열린 소켓 편집은 "장비 소켓" 패널(both-realms)에서 한다.
 int g_temper = 0;
 int g_sharpness = 0;
+
+// 열어서 줄 소켓 칸 수. 게임이 이 값만큼 칸을 열어 준다 - 보석을
+// 안 고르면 **빈 칸이 열린 채로** 나온다(= 어비스 슬롯 락 우회).
+// 상한은 `items::socket_room_for` 와 배열 다섯 칸이다.
+int g_socket_open = 0;
+// 각 칸에 박을 보석의 아이템 키. 0 이면 그 칸은 빈 채로 연다.
+std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};
+
 game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
@@ -61,14 +63,94 @@ const char* short_class(const char* mangled) {
     return (p != nullptr) ? p + 4 : mangled;
 }
 
-// 지금 고른 키의 아이템. 없으면 nullptr.
-const game::ItemCatalogEntry* selected_item() {
-    if (!game::items_ready() || g_item_key <= 0) return nullptr;
-    const auto key = static_cast<std::uint32_t>(g_item_key);
+// 키로 아이템을 찾는다. 없으면 nullptr.
+const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
+    if (!game::items_ready() || key == 0) return nullptr;
     for (const auto& e : game::item_catalog()) {
         if (e.key == key) return &e;
     }
     return nullptr;
+}
+
+// 지금 고른 키의 아이템. 없으면 nullptr.
+const game::ItemCatalogEntry* selected_item() {
+    if (g_item_key <= 0) return nullptr;
+    return entry_of(static_cast<std::uint32_t>(g_item_key));
+}
+
+// 이 아이템에 지급으로 열 수 있는 칸 수. 배열 다섯 칸까지다.
+int socket_cap_of(const game::ItemCatalogEntry* item) {
+    if (item == nullptr) return 0;
+    const auto room = game::socket_room(item->max_sockets, item->max_stack,
+                                        item->equip_type);
+    const int cap = static_cast<int>(room);
+    return (cap > game::kGiveMaxSockets) ? game::kGiveMaxSockets : cap;
+}
+
+// 소켓을 **열어서** 준다.
+//
+// 게임의 필드 복사 함수(0x234F930)가 `TrItemValue +0x5E` 만큼 칸을 열고
+// (`칸[k][4] = k`) 그 칸에 우리가 준 6바이트를 넣는다. 보석 키를 안
+// 넣으면 **빈 칸이 열린 채로** 나온다 - 그것이 어비스 슬롯 락 우회다.
+//
+// 상한은 아이템 표의 `max_sockets` 이고, 넘겨 보내면 게임이 거절한다.
+// `request_give` 가 한 번 더 자르지만 화면에서도 같은 값으로 자른다.
+void draw_sockets(const game::ItemCatalogEntry* item) {
+    const int cap = socket_cap_of(item);
+    if (cap <= 0) {
+        g_socket_open = 0;
+        return;
+    }
+    if (g_socket_open > cap) g_socket_open = cap;
+    for (int i = cap; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
+
+    if (!ImGui::CollapsingHeader("소켓 (잠금 없이 열어서 준다)")) return;
+    ImGui::Indent();
+
+    ImGui::TextUnformatted("열 칸 수");
+    ImGui::SameLine(80.0f);
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputInt("##sockets", &g_socket_open, 1, 1);
+    if (g_socket_open < 0) g_socket_open = 0;
+    if (g_socket_open > cap) g_socket_open = cap;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("없음##k")) g_socket_open = 0;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("전부##k")) g_socket_open = cap;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(0 ~ %d)", cap);
+
+    for (int k = 0; k < g_socket_open; ++k) {
+        ImGui::PushID(k);
+        ImGui::Text("칸 %d", k);
+        ImGui::SameLine(80.0f);
+        ImGui::SetNextItemWidth(110.0f);
+        int key = static_cast<int>(g_socket_keys[k]);
+        ImGui::InputInt("##gem", &key, 0, 0);
+        if (key < 0) key = 0;
+        g_socket_keys[k] = static_cast<std::uint32_t>(key);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("비우기")) g_socket_keys[k] = 0;
+        ImGui::SameLine();
+        if (g_socket_keys[k] == 0) {
+            ImGui::TextDisabled("(빈 칸으로 열기)");
+        } else {
+            const auto* gem = entry_of(g_socket_keys[k]);
+            if (gem == nullptr) {
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                                   "표에 없는 키");
+            } else if (gem->category != game::kSocketGemCategory) {
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                                   "%s (소켓 보석이 아님)", gem->name.c_str());
+            } else {
+                ImGui::TextUnformatted(gem->name.c_str());
+            }
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::TextDisabled("보석 키를 비워 두면 빈 칸이 열린 채로 나옵니다.");
+    ImGui::Unindent();
 }
 
 // 담금질과 장비 연마를 정해 준다. 아이템이 그 값을 가질 때만 낸다.
@@ -152,9 +234,16 @@ void draw_selected(const game::ItemCatalogEntry* item) {
 
 }  // namespace
 
+// 아이템이 바뀌면 소켓 선택은 뜻을 잃는다. 상한도 보석 자리도 다르다.
+void reset_sockets() {
+    g_socket_open = 0;
+    for (int i = 0; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
+}
+
 void set_grant_item_key(unsigned int key) {
     g_item_key = static_cast<int>(key);
     g_called = false;      // 새 아이템을 고르면 이전 결과는 지운다
+    reset_sockets();
 }
 
 unsigned int grant_item_key() {
@@ -175,6 +264,7 @@ void set_grant_item(unsigned int key, long long count, unsigned int temper,
                                     : static_cast<int>(count);
     g_temper = static_cast<int>(temper);
     g_sharpness = static_cast<int>(sharpness);
+    reset_sockets();
 }
 
 unsigned int grant_sharpness() {
@@ -258,6 +348,7 @@ void draw_grant_panel(bool* open) {
     ImGui::TextDisabled("아이템 목록에서 줄을 누르면 여기로 들어옵니다");
 
     draw_extras(item);
+    draw_sockets(item);
 
     // --- 막힌 이유는 항상 적는다 ------------------------------------
     const char* blocked = nullptr;
@@ -296,6 +387,22 @@ void draw_grant_panel(bool* open) {
             const int cap_s = static_cast<int>(item->max_sharpness);
             const int sh = (g_sharpness > cap_s) ? cap_s : g_sharpness;
             extras.sharpness = static_cast<std::uint16_t>(sh < 0 ? 0 : sh);
+
+            // 소켓. 칸 수가 곧 "열림" 이고, 보석 키가 0 인 칸은
+            // 빈 칸(0xFFFF)으로 연다. 순번을 못 풀면 그 칸도 빈 칸이다 -
+            // 틀린 순번을 박느니 안 박는 것이 낫다.
+            int open = g_socket_open;
+            const int cap_k = socket_cap_of(item);
+            if (open > cap_k) open = cap_k;
+            if (open < 0) open = 0;
+            for (int k = 0; k < open; ++k) {
+                auto& dst = extras.sockets[k];
+                if (g_socket_keys[k] == 0 ||
+                    !game::socket_bytes_for_key(g_socket_keys[k], dst.raw)) {
+                    game::make_socket_bytes(0xFFFF, dst.raw);
+                }
+            }
+            extras.socket_count = static_cast<std::uint8_t>(open);
         }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;

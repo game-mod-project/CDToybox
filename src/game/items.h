@@ -67,6 +67,16 @@ struct ItemEntry {
     // 변환 함수가 `min(TrItemValue +0x1AE, 이 값)` 을 레코드 +0x58 에
     // 넣는다. 담금질과 달리 상한 그대로다("-1" 이 아니다).
     std::int16_t max_sharpness = 0;
+
+    // `_equipTypeInfo` (레코드 +0x42). **0xFFFF 면 장비가 아니다** -
+    // `_maxEndurance` 와 같은 표기법이다.
+    //
+    // 지급의 소켓 갈래를 가르는 값이라 읽는다. 생성 함수 0x2A70000 이
+    // 판별자(0x2358A70 -> 0xF090BC0)로 갈래를 정하는데, 그 판별자의
+    // 마지막 줄이 `return _equipTypeInfo == 0xFFFF` 다. 장비가 아니면
+    // 소켓수>0 이 오류 갈래로 빠진다.
+    // specs/2026-09-07-socket-grant-unlock-research.md 3.1 절.
+    std::uint16_t equip_type = 0xFFFF;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -211,6 +221,7 @@ struct ItemCatalogEntry {
     std::uint16_t max_endurance = 0xFFFF;  // ItemEntry 의 같은 칸
     std::uint32_t repair_entries = 0;      // ItemEntry 의 같은 칸
     std::int16_t max_sharpness = 0;        // ItemEntry 의 같은 칸
+    std::uint16_t equip_type = 0xFFFF;     // ItemEntry 의 같은 칸
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름
@@ -268,18 +279,39 @@ std::int16_t max_sharpness_for(std::uint32_t item_key);
 // `category_name` 이 "심연 장비" 로 부른다.
 inline constexpr std::uint8_t kSocketGemCategory = 74;
 
+// 이 아이템에 **지급으로** 실을 수 있는 소켓 칸 수. 0 이면 소켓 금지다.
+//
+// 게임의 규칙 그대로다(0x2A70000 · 0xF090BC0, 실측 디스어셈블):
+//   - 장비가 아니면(`equip_type == 0xFFFF`) 소켓수>0 은 오류 갈래다.
+//   - 겹치는 아이템(`max_stack > 1`)도 마찬가지다.
+//   - 장비면 `표 +0x238(max_sockets) >= 소켓수` 여야 통과한다.
+// 배열 다섯 칸 상한은 여기서 안 자른다 - 부르는 쪽(grant)이 자른다.
+//
+// 순수 함수라 표 없이 시험할 수 있다.
+std::uint32_t socket_room(std::uint32_t max_sockets, std::uint32_t max_stack,
+                          std::uint16_t equip_type);
+
+// 위를 아이템 키로 조회한다. 표가 아직 없거나 키가 없으면 0(=금지).
+std::uint32_t socket_room_for(std::uint32_t item_key);
+
 // 소켓 한 칸의 6바이트를 조립한다.
 //
-// 게임의 복사 루프(RVA 0x2094324)가 `TrItemValue +0x40 + i*6` 을
-// 그대로 옮기고 **다섯 번째 바이트만 슬롯 번호로 덮어쓴다.** 그래서
-// 순번과 꼬리 상수만 채우면 된다. 실측한 박힌 소켓이 전부 이 꼴이다.
+// 게임의 복사 루프(0x234FC31~)가 `TrItemValue +0x40 + k*6` 을 그대로
+// 옮긴 뒤 **다섯 번째 바이트만 칸 번호(k)로 덮어쓴다.** 그래서 순번과
+// 꼬리 상수만 채우면 된다.
 //
-//   24 0D FF FF 00 FF   바람 가르기 (순번 3364, 슬롯 0)
-//   8E 0C FF FF 01 FF   파괴 I      (순번 3214, 슬롯 1)
-//   [u16 순번][FF FF][슬롯][FF]
+//   24 0D FF FF 00 04   보석이 박힌 칸  [순번][FF FF][k][04]
+//   FF FF 00 00 00 04   열려 있는 빈 칸 [FFFF][00 00][k][04]
 //
-// 가운데 두 칸과 마지막 칸의 뜻은 모른다 - 표본 다섯 개가 전부
-// 같았으므로 그대로 쓴다.
+// `[2..3]` 은 채움 표시다 - 보석이 있으면 0xFFFF, 비면 0x0000
+// (equip.cpp `socket_fill_entry` 와 같은 규칙).
+//
+// `[5]` 는 뜻을 모르지만 **열린 칸은 전부 0x04** 다(이 세이브의 열린
+// 칸 34개 전수 확인). 잠긴 칸은 게임이 안 건드려 풀 쓰레기값이 남는다.
+// 예전에는 0xFF 를 넣었는데 라이브 어디에도 없는 값이었다.
+// specs/2026-09-07-socket-grant-unlock-research.md 2.2 절.
+inline constexpr std::uint8_t kSocketOpenTail = 0x04;
+
 void make_socket_bytes(std::uint16_t gem_id, std::uint8_t out[6]);
 
 // 보석의 **아이템 키**로 위를 조립한다. 대응표를 아직 못 읽었거나
