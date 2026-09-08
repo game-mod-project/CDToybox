@@ -1,5 +1,7 @@
 #include "game/roster.h"
 
+#include <algorithm>
+
 #include <atomic>
 #include <memory>
 #include <utility>
@@ -318,6 +320,52 @@ std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
     return named;
 }
 
+bool read_spawn_table(const mem::Reader& reader,
+                      std::vector<std::uint32_t>* out) {
+    if (out == nullptr) return false;
+    out->clear();
+    std::uint64_t table = 0;
+    if (!reader.read_value(reader.module_base() + kSpawnTableGlobalRva,
+                           &table) ||
+        table == 0) {
+        return false;
+    }
+    std::uint32_t nonzero = 0, buckets = 0;
+    std::uint64_t arr = 0;
+    if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x6C,
+                           &nonzero) ||
+        nonzero == 0) {
+        return false;
+    }
+    if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x68,
+                           &buckets) ||
+        buckets == 0 || buckets > kSpawnMaxBuckets) {
+        return false;
+    }
+    if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x78, &arr) ||
+        arr == 0) {
+        return false;
+    }
+    for (std::uint32_t b = 0; b < buckets; ++b) {
+        const std::uintptr_t base =
+            static_cast<std::uintptr_t>(arr) + b * kSpawnBucketStride;
+        std::uint32_t n = 0;
+        if (!reader.read_value(base, &n)) continue;
+        if (n > kSpawnBucketMaxEntries) continue;  // 쓰레기 버킷은 건너뛴다
+        for (std::uint32_t i = 0; i < n; ++i) {
+            std::uint32_t key = 0;
+            if (!reader.read_value(base + 8 + static_cast<std::uintptr_t>(i) * 8,
+                                   &key)) {
+                break;
+            }
+            out->push_back(key);
+        }
+    }
+    std::sort(out->begin(), out->end());
+    out->erase(std::unique(out->begin(), out->end()), out->end());
+    return !out->empty();
+}
+
 bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_ready.load(std::memory_order_acquire)) return true;
 
@@ -339,6 +387,23 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (find_loc_system(rtti, reader, &sys)) {
         labeled += apply_roster_labels(reader, sys, &v);
         labeled += apply_roster_labels(reader, sys, &c);
+    }
+
+    // 소환 표를 읽어 캐릭터마다 표시한다. 못 읽어도 목록은 그대로 산다.
+    std::vector<std::uint32_t> spawnable;
+    std::size_t spawn_marked = 0;
+    if (read_spawn_table(reader, &spawnable)) {
+        for (auto& e : c) {
+            if (std::binary_search(spawnable.begin(), spawnable.end(), e.key)) {
+                e.spawnable = true;
+                ++spawn_marked;
+            }
+        }
+        log::infof("소환 표 {}개 - 캐릭터 {}행이 소환 가능", spawnable.size(),
+                   spawn_marked);
+    } else {
+        log::warnf("소환 표를 못 읽었다 (RVA 0x{:X}) - 소환 가능 표시가 빈다",
+                   kSpawnTableGlobalRva);
     }
 
     const std::size_t vn = v.size(), cn = c.size(), mn = m.size();

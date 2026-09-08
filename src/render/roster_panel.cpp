@@ -553,12 +553,31 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
     if (can_register) {
         // 고른 종을 동반자로 올린다. 소환해서 그 개체를 획득하는
         // 두 걸음이고, 모드가 이어서 처리한다.
+        //
+        // 되는 종인지는 게임 데이터가 이미 안다 - 하나씩 눌러 볼 필요가
+        // 없다. 소환 표에 있고(spawnable) 캐릭터 표에 고용 예(hirable)면
+        // 된다. 둘 중 하나라도 아니면 버튼을 잠그고 이유를 적는다.
+        const game::RosterEntry* sel = nullptr;
+        for (const auto& e : all) {
+            if (e.key == g_selected_key) { sel = &e; break; }
+        }
         const bool busy = game::companion_register_busy();
-        ImGui::BeginDisabled(busy || g_selected_key == 0);
+        const bool ok = sel != nullptr && sel->spawnable && sel->hirable;
+        ImGui::BeginDisabled(busy || !ok);
         if (ImGui::Button("선택한 종을 동반자로 등록")) {
             game::companion_register_start(g_selected_key);
         }
         ImGui::EndDisabled();
+        if (sel != nullptr && !ok) {
+            ImGui::SameLine();
+            if (!sel->spawnable && !sel->hirable) {
+                ImGui::TextDisabled("소환도 고용도 안 되는 종입니다");
+            } else if (!sel->spawnable) {
+                ImGui::TextDisabled("게임의 소환 표에 없는 종입니다");
+            } else {
+                ImGui::TextDisabled("고용할 수 없는 종입니다");
+            }
+        }
         if (ImGui::IsItemHovered() && g_selected_key != 0) {
             ImGui::SetTooltip(
                 "이 종을 눈앞에 소환하고 곧바로 획득합니다.\n"
@@ -584,6 +603,14 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
                 if (show_merc_type) {
                     std::snprintf(line, sizeof(line), "%-4u  type %u  %s##r%d",
                                   e->key, e->merc_type,
+                                  e->display().empty() ? "(이름 없음)"
+                                                       : e->display().c_str(),
+                                  i);
+                } else if (can_register) {
+                    // 되는 종인지 한눈에 보이게 한다.
+                    std::snprintf(line, sizeof(line), "%-6u %s %s  %s##r%d",
+                                  e->key, e->spawnable ? "소환o" : "소환x",
+                                  e->hirable ? "고용o" : "고용x",
                                   e->display().empty() ? "(이름 없음)"
                                                        : e->display().c_str(),
                                   i);

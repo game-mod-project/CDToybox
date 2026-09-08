@@ -64,11 +64,37 @@ struct RosterEntry {
     bool catchable = false;
     bool unique = false;
 
+    // 게임의 소환 표에 이 키가 있는가. 캐릭터 표 전용.
+    // 소환 치트(2988)가 키를 이 표에서 찾고, 없으면 오류를 낸다.
+    bool spawnable = false;
     // 용병 표 전용.
     std::uint8_t merc_type = 0;  // _mercenaryType
 
     bool is_companion() const { return merc_row != 0xFFFF; }
 };
+
+// ----------------------------------------------------------------------
+// 소환 표
+//
+// 소환 치트 처리기(RVA 0x2B6E530)가 캐릭터 키를 찾는 해시 표다. 여기
+// 없는 키는 소환되지 않는다 - 어느 종이 되는지 하나씩 눌러 볼 필요가
+// 없다. 표를 통째로 읽어 카탈로그에 표시한다.
+//
+//   전역 RVA 0x6C29FF8 -> 표 포인터
+//     +0x68 u32 버킷 수      +0x6C u32 (0 이면 비어 있음)
+//     +0x78 버킷 배열        버킷 하나가 0x100 바이트
+//     버킷: [0] u32 항목 수, +8 부터 {u32 키, u32 색인} 쌍
+//
+// 하드코딩된 주소라 패치마다 어긋날 수 있다. 버킷 수·항목 수가
+// 말이 되는지 보고, 아니면 조용히 포기한다(표시만 비고 기능은 산다).
+inline constexpr std::uint64_t kSpawnTableGlobalRva = 0x6C29FF8;
+inline constexpr std::size_t kSpawnBucketStride = 0x100;
+inline constexpr std::uint32_t kSpawnBucketMaxEntries = 31;  // (0x100-8)/8
+inline constexpr std::uint32_t kSpawnMaxBuckets = 4096;
+
+// 소환 표의 키를 전부 읽는다. 정렬된 채로 돌려준다. 못 읽으면 false.
+bool read_spawn_table(const mem::Reader& reader,
+                      std::vector<std::uint32_t>* out);
 
 // 캐릭터의 인게임 표시명이 든 현지화 필드.
 //
