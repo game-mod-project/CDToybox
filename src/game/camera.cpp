@@ -13,6 +13,7 @@
 
 #include "game/equip.h"
 #include "game/actors.h"
+#include "game/clan.h"
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/inventory.h"
@@ -269,6 +270,9 @@ void auto_analysis_loop() {
         t = step("로스터", t);
         discover_actor_manager(rtti, reader);
         t = step("액터 매니저", t);
+        // 내 동반자 명부(용병단 컴포넌트). 월드 안에서만 잡힌다.
+        discover_clan(rtti, reader);
+        t = step("동반자 명부", t);
         log_new_actors(rtti, reader);
         t = step("액터 목록", t);
         const bool got_cam = discover_with(rtti, reader, nullptr);
@@ -299,6 +303,7 @@ void auto_analysis_loop() {
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
         discover_actor_manager(rtti, reader);
+        discover_clan(rtti, reader);
         if (discover_items(rtti, reader) && inventory_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응

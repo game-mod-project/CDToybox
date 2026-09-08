@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "game/actors.h"
+#include "game/clan.h"
 #include "game/camera.h"
 #include "game/companion.h"
 #include "game/grant.h"
@@ -71,6 +72,7 @@ double g_near_last_refresh = 0.0;
 double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
 mem::LocalReader g_near_reader;
+double g_clan_last_refresh = 0.0;
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
 char g_selected_name[128] = "";
 
@@ -321,6 +323,97 @@ void draw_companion_item_tab() {
                                     : "요청이 밀렸습니다 - 잠시 뒤 다시");
         }
         ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+
+// --- 내 동반자 탭 -----------------------------------------------------
+//
+// 용병단 컴포넌트의 명부를 그대로 보인다(game/clan.h). 지금까지는
+// "뭐를 가졌는지" 를 게임 UI 에서만 볼 수 있었고, 획득이 실제로 들어
+// 갔는지 확인할 수단이 없었다. 전부 읽기다.
+void draw_my_companions_tab() {
+    if (!game::clan_ready()) {
+        ImGui::TextDisabled("용병단 컴포넌트를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
+        return;
+    }
+    const double now = ImGui::GetTime();
+    bool refresh = false;
+    if (ImGui::SmallButton("새로고침")) refresh = true;
+    if (now - g_clan_last_refresh > 2.0) refresh = true;
+    if (refresh) {
+        game::refresh_clan_roster(g_near_reader);
+        g_clan_last_refresh = now;
+    }
+    const auto& all = game::clan_roster();
+    static std::vector<const game::ClanEntry*> view;
+    view.clear();
+    std::size_t spawned = 0;
+    for (const auto& e : all) {
+        if (e.spawned()) ++spawned;
+        if (g_query[0] != 0) {
+            char keybuf[16];
+            std::snprintf(keybuf, sizeof(keybuf), "%u", e.key);
+            if (!(contains_ci(e.name, g_query) || contains_ci(e.label, g_query) ||
+                  std::strstr(keybuf, g_query))) {
+                continue;
+            }
+        }
+        view.push_back(&e);
+    }
+    ImGui::Text("%zu / %zu 명, 그중 월드에 %zu명", view.size(), all.size(), spawned);
+    ImGui::SameLine();
+    ImGui::TextDisabled("줄을 누르면 레코드 주소가 복사됩니다");
+
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+    if (!ImGui::BeginTable("my_companions", 7, flags)) return;
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 74);
+    ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
+    ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
+    ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 56);
+    ImGui::TableSetupColumn("월드", ImGuiTableColumnFlags_WidthFixed, 44);
+    ImGui::TableHeadersRow();
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(view.size()));
+    while (clipper.Step()) {
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const game::ClanEntry* e = view[static_cast<std::size_t>(i)];
+            ImGui::TableNextRow();
+            ImGui::PushID(i);
+            ImGui::TableSetColumnIndex(0);
+            char label[64];
+            std::snprintf(label, sizeof(label), "%llu##clan%d",
+                          static_cast<unsigned long long>(e->merc_no), i);
+            if (ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAllColumns)) {
+                char addr[32];
+                std::snprintf(addr, sizeof(addr), "0x%llX",
+                              static_cast<unsigned long long>(e->record));
+                ImGui::SetClipboardText(addr);
+            }
+            ImGui::TableSetColumnIndex(1);
+            if (e->label.empty()) ImGui::TextDisabled("-");
+            else ImGui::TextUnformatted(e->label.c_str());
+            ImGui::TableSetColumnIndex(2);
+            if (e->name.empty()) ImGui::TextDisabled("(행 %u)", e->row);
+            else ImGui::TextUnformatted(e->name.c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextUnformatted(
+                e->merc_row == 0xFFFF
+                    ? ""
+                    : type_label(e->merc_row, game::mercenary_type_name(e->merc_row)));
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%u", e->row);
+            ImGui::TableSetColumnIndex(5);
+            ImGui::Text("%u", e->key);
+            ImGui::TableSetColumnIndex(6);
+            if (e->spawned()) ImGui::TextUnformatted("예");
+            else ImGui::TextDisabled("-");
+            ImGui::PopID();
+        }
     }
     ImGui::EndTable();
 }
@@ -631,6 +724,7 @@ void draw_roster_panel(bool* open) {
         if (ImGui::BeginTabItem("탈것")) { g_tab = 2; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("용병 타입")) { g_tab = 3; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("캐릭터")) { g_tab = 4; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("내 동반자")) { g_tab = 6; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("동반자 아이템")) { g_tab = 5; ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
@@ -646,6 +740,7 @@ void draw_roster_panel(bool* open) {
         case 0: draw_companion_tab(); break;
         case 1: draw_nearby_tab(); break;
         case 5: draw_companion_item_tab(); break;
+        case 6: draw_my_companions_tab(); break;
         case 2: draw_list_tab(game::vehicle_catalog(), false); break;
         case 3:
             if (game::mercenary_catalog().empty()) {
