@@ -195,6 +195,23 @@ bool session_looks_live(const mem::Reader& reader, std::uintptr_t session);
 // 때까지 요청을 받지 않는다.
 std::uintptr_t drive_fault_session();
 
+// 구동 게이트 상태. 지급·소환이 전부 "대기열/쿨다운"으로 거부될 때
+// 무엇이 물고 있는지 밖에서 보려고 둔다.
+//
+// 실측 2026-09-08: 한 번 물리면 재시작 전까지 지급도 소환도 안 됐는데
+// 밖에서 원인을 볼 방법이 없었다. 게임 결함으로 오인하기 쉬웠다.
+struct DriveGate {
+    bool pending = false;
+    bool running = false;
+    unsigned long long pending_age_ms = 0;
+    unsigned long long running_age_ms = 0;
+    unsigned long long cooldown_left_ms = 0;
+    std::uintptr_t fault_session = 0;
+};
+DriveGate drive_gate_state();
+// 30초 넘게 물려 있을 때만 푼다. 진짜로 도는 중에는 풀지 않는다.
+bool drive_gate_reset();
+
 // 죽은 세션 잠금을 푼다. 새 세션을 잡았을 때만 쓴다.
 void clear_drive_fault();
 

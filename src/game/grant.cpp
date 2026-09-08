@@ -212,6 +212,8 @@ thread_local int g_detour_depth = 0;
 // 안 된다.
 thread_local int g_pump_depth = 0;
 std::atomic<bool> g_running{false};
+// 구동이 시작된 시각. 물렸을 때 얼마나 오래됐는지 보려고 둔다.
+std::atomic<unsigned long long> g_running_at{0};
 std::atomic<unsigned long long> g_last_done{0};
 // 지급이 실제로 실행되는 스레드 = 게임 로직 스레드. 액터 조회가
 // depth==1·TLS 준비 상태로 도는 그 스레드다. 작업 실행 래퍼가 이
@@ -384,6 +386,7 @@ bool run_pending_if_any() {
     if (!g_has_pending.load(std::memory_order_acquire)) return false;
     if (!thread_ready_for_spawn()) return false;
     if (g_running.exchange(true, std::memory_order_acq_rel)) return false;
+    g_running_at.store(GetTickCount64(), std::memory_order_release);
     bool ran = false;
     if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
         ran = true;
@@ -1162,6 +1165,36 @@ bool session_looks_live(const mem::Reader& reader, std::uintptr_t session) {
     // 죽는다 - 우리가 먼저 읽어 본다.
     std::uint8_t flag = 0;
     if (!reader.read_value(gate + 1, &flag)) return false;
+    return true;
+}
+
+DriveGate drive_gate_state() {
+    DriveGate g;
+    g.pending = g_has_pending.load(std::memory_order_acquire);
+    g.running = g_running.load(std::memory_order_acquire);
+    const unsigned long long now = GetTickCount64();
+    const unsigned long long pat = g_pending_at.load(std::memory_order_acquire);
+    const unsigned long long rat = g_running_at.load(std::memory_order_acquire);
+    g.pending_age_ms = (g.pending && pat != 0) ? now - pat : 0;
+    g.running_age_ms = (g.running && rat != 0) ? now - rat : 0;
+    const unsigned long long done = g_last_done.load(std::memory_order_acquire);
+    g.cooldown_left_ms =
+        (done != 0 && now - done < kCooldownMs) ? kCooldownMs - (now - done) : 0;
+    g.fault_session = drive_fault_session();
+    return g;
+}
+
+bool drive_gate_reset() {
+    // 오래 물려 있을 때만 푼다. 진짜로 도는 중에 풀면 게임 스레드가
+    // 쓰는 자리를 다른 요청이 덮어쓴다.
+    const DriveGate g = drive_gate_state();
+    const bool stuck_pending = g.pending && g.pending_age_ms > 30000;
+    const bool stuck_running = g.running && g.running_age_ms > 30000;
+    if (!stuck_pending && !stuck_running) return false;
+    if (stuck_pending) g_has_pending.store(false, std::memory_order_release);
+    if (stuck_running) g_running.store(false, std::memory_order_release);
+    log::warnf("구동 게이트를 손으로 풀었다 (대기 {}ms, 실행 {}ms)",
+               g.pending_age_ms, g.running_age_ms);
     return true;
 }
 

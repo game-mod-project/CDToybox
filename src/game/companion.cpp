@@ -1497,6 +1497,22 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         say(buf);
         return true;
     }
+    if (cmd == "drive") {
+        // 구동 게이트 상태를 본다. `drive reset` 이면 오래 물린 것을 푼다.
+        const DriveGate g = drive_gate_state();
+        log::infof("구동 게이트: 대기 {}({}ms) 실행 {}({}ms) 쿨다운 {}ms "
+                   "잠긴세션 0x{:X}",
+                   g.pending ? "예" : "아니오", g.pending_age_ms,
+                   g.running ? "예" : "아니오", g.running_age_ms,
+                   g.cooldown_left_ms, g.fault_session);
+        if (args.size() > 1 && args[1] == "reset") {
+            const bool did = drive_gate_reset();
+            say(did ? "게이트를 풀었다" : "풀 만큼 오래 물리지 않았다");
+            return did;
+        }
+        say("게이트 상태를 로그에 냈다");
+        return true;
+    }
     if (cmd == "unlock") {
         // 구동이 게임 안에서 죽으면 그 세션을 잠근다(안전장치). 인자를
         // 실험하는 동안에는 그때마다 게임을 재시작해야 해서 비싸다.
