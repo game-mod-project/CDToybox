@@ -290,55 +290,176 @@ namespace {
 // 아닌지가 안 보이면 사람이 두 번 누른다.
 std::string g_cap_note;
 
+// 부위 목록과 사람이 정한 칸 수. 목록은 카탈로그 판이 갈리면 다시 만든다.
+std::vector<game::SocketPartInfo> g_parts;
+std::vector<int> g_part_want;          // g_parts 와 같은 길이
+const void* g_parts_cat_ptr = nullptr;
+bool g_parts_only_socketed = true;     // 소켓이 원래 있는 부위만 보기
+
+// 부위 이름. 분류 이름으로 대부분 갈리는데, 한 분류에 장비타입이 여럿이면
+// (갑옷 3:5 · 망토 3:75 처럼) 이름만으로는 구분이 안 된다. 그때는 보기
+// 아이템 이름을 함께 낸다 - 사람이 보고 무엇인지 알아야 한다.
+std::string part_label(const game::SocketPartInfo& info, bool ambiguous) {
+    const char* cat = category_name(info.part.category);
+    std::string s = (cat != nullptr && cat[0] != 0) ? cat : "(분류 없음)";
+    if (ambiguous) {
+        s += " · ";
+        s += info.sample.empty() ? "(이름 없음)" : info.sample;
+    }
+    return s;
+}
+
+void rebuild_parts() {
+    g_parts = game::socket_parts();
+    g_parts_cat_ptr = game::item_catalog().data();
+
+    // 설정에 있던 값을 그대로 채운다. 없으면 0(=안 건드림).
+    const auto saved = overlay::socket_cap_setting();
+    g_part_want.assign(g_parts.size(), 0);
+    for (std::size_t i = 0; i < g_parts.size(); ++i) {
+        for (const auto& s : saved) {
+            if (s.category == g_parts[i].part.category &&
+                s.equip_type == g_parts[i].part.equip_type) {
+                g_part_want[i] = s.want;
+                break;
+            }
+        }
+    }
+    // 지금 걸려 있으면 그쪽이 사실이다.
+    for (const auto& rule : game::socket_cap_rules()) {
+        for (std::size_t i = 0; i < g_parts.size(); ++i) {
+            if (g_parts[i].part == rule.part) {
+                g_part_want[i] = static_cast<int>(rule.want);
+                break;
+            }
+        }
+    }
+}
+
+std::vector<game::SocketCapRule> rules_from_ui() {
+    std::vector<game::SocketCapRule> out;
+    for (std::size_t i = 0; i < g_parts.size(); ++i) {
+        if (g_part_want[i] <= 0) continue;
+        out.push_back(game::SocketCapRule{
+            g_parts[i].part, static_cast<std::uint32_t>(g_part_want[i])});
+    }
+    return out;
+}
+
 // 소켓 상한 올리기.
 //
 // 아이템표(`ItemInfo+0x238`)가 **화면·사용 칸 수**를 정한다. 레코드의
 // 열린 칸은 세이브에 남지만 표는 매 실행 exe 에서 다시 읽히므로, 표 상한을
-// 넘긴 칸을 계속 쓰려면 세션마다 다시 걸어야 한다. 그래서 설정에 남기고
+// 넘긴 칸을 계속 보려면 세션마다 다시 걸어야 한다. 그래서 설정에 남기고
 // 오버레이가 표가 올라온 뒤 자동으로 건다.
-// 근거: specs/2026-09-07-socket-grant-unlock-research.md 9절.
+//
+// 부위는 (분류 +0xA3, 장비타입 +0x42) 쌍이다 - 분류만으로는 갑옷과 망토가
+// 안 갈린다. 근거: specs/2026-09-07-socket-grant-unlock-research.md 9·10절.
 void draw_socket_cap() {
     if (!ImGui::CollapsingHeader("소켓 상한 (실험)")) return;
     ImGui::Indent();
 
-    const bool on = game::socket_cap_active();
-    const std::uint32_t now = game::socket_cap_value();
-    if (on) {
+    if (g_parts.empty() || g_parts_cat_ptr != game::item_catalog().data()) {
+        rebuild_parts();
+    }
+
+    if (game::socket_cap_active()) {
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
-                           "걸려 있습니다 - 소켓 있는 장비의 상한 %u칸", now);
+                           "걸려 있습니다 - 부위 %zu개",
+                           game::socket_cap_rules().size());
     } else {
         ImGui::TextDisabled("안 걸려 있습니다 (아이템표 원래 값)");
     }
 
-    static int want = 0;
-    if (want == 0) {
-        want = on ? static_cast<int>(now) : overlay::socket_cap_setting();
-        if (want <= 0) want = static_cast<int>(game::kSocketSlotMax);
-    }
-    ImGui::TextUnformatted("칸 수");
-    ImGui::SameLine(70.0f);
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputInt("##cap", &want, 1, 1);
-    if (want < 1) want = 1;
-    if (want > static_cast<int>(game::kSocketSlotMax)) {
-        want = static_cast<int>(game::kSocketSlotMax);
+    ImGui::Checkbox("소켓이 원래 있는 부위만", &g_parts_only_socketed);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("보이는 것 전부 5")) {
+        for (std::size_t i = 0; i < g_parts.size(); ++i) {
+            if (g_parts_only_socketed && g_parts[i].with_socket == 0) continue;
+            g_part_want[i] = static_cast<int>(game::kSocketSlotMax);
+        }
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(1 ~ %u)", game::kSocketSlotMax);
+    if (ImGui::SmallButton("전부 0")) {
+        g_part_want.assign(g_parts.size(), 0);
+    }
+
+    // 분류가 겹치는 자리는 이름만으로 못 가린다. 미리 세어 둔다.
+    auto ambiguous = [](std::uint8_t cat) {
+        int n = 0;
+        for (const auto& p : g_parts) {
+            if (p.part.category == cat) ++n;
+        }
+        return n > 1;
+    };
+
+    const ImVec2 outer(0.0f, 220.0f);
+    if (ImGui::BeginTable("socketcap", 5,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_ScrollY,
+                          outer)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("종수", ImGuiTableColumnFlags_WidthFixed, 46.0f);
+        ImGui::TableSetupColumn("소켓있음", ImGuiTableColumnFlags_WidthFixed,
+                                62.0f);
+        ImGui::TableSetupColumn("원래", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGui::TableSetupColumn("설정", ImGuiTableColumnFlags_WidthFixed, 92.0f);
+        ImGui::TableHeadersRow();
+
+        for (std::size_t i = 0; i < g_parts.size(); ++i) {
+            const auto& info = g_parts[i];
+            if (g_parts_only_socketed && info.with_socket == 0) continue;
+            ImGui::TableNextRow();
+            ImGui::PushID(static_cast<int>(i));
+
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(
+                part_label(info, ambiguous(info.part.category)).c_str());
+
+            ImGui::TableSetColumnIndex(1);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%zu", info.count);
+
+            ImGui::TableSetColumnIndex(2);
+            ImGui::AlignTextToFramePadding();
+            if (info.with_socket == 0) {
+                ImGui::TextDisabled("0");
+            } else {
+                ImGui::Text("%zu", info.with_socket);
+            }
+
+            ImGui::TableSetColumnIndex(3);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%u", info.table_cap);
+
+            ImGui::TableSetColumnIndex(4);
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##want", &g_part_want[i], 1, 1);
+            if (g_part_want[i] < 0) g_part_want[i] = 0;
+            if (g_part_want[i] > static_cast<int>(game::kSocketSlotMax)) {
+                g_part_want[i] = static_cast<int>(game::kSocketSlotMax);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("설정 0 = 그 부위는 안 건드립니다. 낮추지는 못합니다.");
 
     if (ImGui::Button("걸기", ImVec2(90.0f, 0.0f))) {
         const mem::LocalReader reader;
-        const auto res = game::socket_cap_raise(
-            reader, static_cast<std::uint32_t>(want));
+        const auto rules = rules_from_ui();
+        const auto res = game::socket_cap_apply(reader, rules);
         char buf[128];
         std::snprintf(buf, sizeof(buf),
-                      res.ok ? "%d개 올렸습니다 (대상 아님 %d)"
-                             : "걸지 못했습니다 (%d / %d)",
-                      res.changed, res.skipped);
+                      res.ok ? "부위 %zu개 / 아이템 %d개를 올렸습니다"
+                             : "걸지 못했습니다 (부위 %zu개, %d)",
+                      rules.size(), res.changed);
         g_cap_note = buf;
     }
     ImGui::SameLine();
-    ImGui::BeginDisabled(!on);
+    ImGui::BeginDisabled(!game::socket_cap_active());
     if (ImGui::Button("되돌리기", ImVec2(90.0f, 0.0f))) {
         const mem::LocalReader reader;
         const auto res = game::socket_cap_restore(reader);
@@ -348,23 +469,30 @@ void draw_socket_cap() {
         g_cap_note = buf;
     }
     ImGui::EndDisabled();
-
-    // 설정에 남겨야 다음 실행부터 저절로 걸린다. 표는 세이브에 안 남는다.
-    bool keep = overlay::socket_cap_setting() > 0;
-    if (ImGui::Checkbox("다음 실행부터 자동으로 걸기", &keep)) {
-        overlay::set_socket_cap_setting(keep ? want : 0);
+    ImGui::SameLine();
+    if (ImGui::Button("설정에 저장", ImVec2(110.0f, 0.0f))) {
+        std::vector<Config::SocketCapPart> save;
+        for (std::size_t i = 0; i < g_parts.size(); ++i) {
+            if (g_part_want[i] <= 0) continue;
+            save.push_back(Config::SocketCapPart{
+                static_cast<int>(g_parts[i].part.category),
+                static_cast<int>(g_parts[i].part.equip_type), g_part_want[i]});
+        }
+        const bool ok = overlay::set_socket_cap_setting(save);
+        g_cap_note = ok ? "설정에 저장했습니다 - 다음 실행부터 저절로 걸립니다"
+                        : "설정을 저장하지 못했습니다";
     }
 
     if (!g_cap_note.empty()) ImGui::TextDisabled("%s", g_cap_note.c_str());
 
     ImGui::TextWrapped(
-        "소켓이 **있는** 장비만 올립니다(원래 0칸인 것은 그대로). 늘어난 칸은 "
-        "지급이나 장비 소켓 편집으로 채웁니다.");
+        "원래 소켓이 없는 부위(망토·귀걸이·목걸이·반지)에도 달 수 있습니다 "
+        "- 레코드에 5칸 벡터가 이미 있어서, 표 상한만 올리면 생깁니다.");
     ImGui::TextWrapped(
-        "상한은 세이브에 안 남아 세션마다 다시 걸립니다. 다만 이것이 정하는 "
-        "것은 **툴팁 목록**뿐입니다 - 스탯 계산은 아이템 자신의 소켓을 그대로 "
-        "더하므로, 모드를 빼도 효과는 그대로입니다(실측: 3칸짜리 검에 3·3·3·"
-        "1·1 을 박으니 목록은 3줄, 스탯은 11).");
+        "늘어난 칸은 지급이나 장비 소켓 편집으로 채웁니다. 상한은 세이브에 안 "
+        "남아 세션마다 다시 걸리지만, 이것이 정하는 것은 툴팁 목록뿐입니다 - "
+        "스탯 계산은 아이템 자신의 소켓을 그대로 더하므로 모드를 빼도 효과는 "
+        "그대로입니다.");
 
     ImGui::Unindent();
 }

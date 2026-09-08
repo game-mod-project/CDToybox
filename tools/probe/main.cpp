@@ -1761,6 +1761,53 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         return;
     }
 
+    // items cats : 부위(분류·장비타입)별로 소켓 상한이 어떻게 깔려 있는지.
+    //
+    // 부위별 소켓 수를 따로 잡으려면 무엇으로 묶어야 하는지 알아야 한다.
+    // 분류(+0xA3)로 대부분 갈리는데 갑옷·망토처럼 한 분류에 여러 장비
+    // 타입(+0x42)이 섞이는 자리가 있어 둘 다 낸다.
+    if (argc > 2 && std::strcmp(argv[2], "cats") == 0) {
+        struct Row {
+            std::uint8_t cat = 0;
+            std::uint16_t etype = 0;
+            std::size_t count = 0;
+            std::size_t with_socket = 0;
+            std::uint32_t max_cap = 0;
+            std::string sample;
+        };
+        std::vector<Row> rows;
+        for (const auto& it : items) {
+            if (it.equip_type == 0xFFFF) continue;   // 장비만
+            Row* r = nullptr;
+            for (auto& x : rows) {
+                if (x.cat == it.category && x.etype == it.equip_type) {
+                    r = &x;
+                    break;
+                }
+            }
+            if (r == nullptr) {
+                rows.push_back(Row{it.category, it.equip_type, 0, 0, 0, {}});
+                r = &rows.back();
+            }
+            ++r->count;
+            if (it.max_sockets > 0) ++r->with_socket;
+            if (it.max_sockets > r->max_cap) r->max_cap = it.max_sockets;
+            if (r->sample.empty() && !it.name.empty()) r->sample = it.name;
+        }
+        std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+            if (a.cat != b.cat) return a.cat < b.cat;
+            return a.etype < b.etype;
+        });
+        std::printf("\n%-5s %-7s %-6s %-8s %-6s %s\n", "분류", "장비타입",
+                    "개수", "소켓있음", "상한", "보기");
+        for (const auto& r : rows) {
+            std::printf("%-5u %-7u %-6zu %-8zu %-6u %s\n", r.cat, r.etype,
+                        r.count, r.with_socket, r.max_cap, r.sample.c_str());
+        }
+        std::printf("\n장비 묶음 %zu개\n", rows.size());
+        return;
+    }
+
     // items [최대]  |  items find <문자열>
     std::string needle;
     bool filtering = false;

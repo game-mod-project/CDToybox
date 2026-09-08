@@ -3,6 +3,7 @@
 #include <dxgi1_4.h>
 
 #include <string>
+#include <vector>
 
 #include "core/config.h"
 
@@ -12,12 +13,12 @@ namespace cdtb::overlay {
 // 어디에 쓸지 알아야 한다(소켓 상한처럼 세션마다 다시 걸어야 하는 것).
 void set_config(const Config& cfg, const std::wstring& ini_path);
 
-// 지금 설정의 소켓 상한(0=끔). 화면이 읽는다.
-int socket_cap_setting();
+// 지금 설정의 부위별 소켓 상한. 비어 있으면 자동으로 걸지 않는다.
+std::vector<Config::SocketCapPart> socket_cap_setting();
 
-// 소켓 상한 설정을 바꾸고 ini 에 저장한다. 저장에 성공하면 true.
+// 부위별 소켓 상한 설정을 바꾸고 ini 에 저장한다. 저장에 성공하면 true.
 // **거는 것은 부르는 쪽 일이다** - 여기서는 설정만 만진다.
-bool set_socket_cap_setting(int value);
+bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts);
 
 bool is_visible();
 void toggle();

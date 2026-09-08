@@ -765,16 +765,17 @@ std::uint32_t socket_room_for(std::uint32_t item_key) {
 
 namespace {
 
-// 되돌리려고 기억해 두는 원본. 화면 스레드에서만 만지지만, 언로드
-// 경로가 다른 스레드일 수 있어 잠근다.
+// 되돌리려고 기억해 두는 원본.
 struct CapSaved {
     std::uintptr_t record = 0;
     std::uint32_t key = 0;
     std::uint32_t original = 0;
+    std::uint32_t applied = 0;
 };
 std::mutex g_cap_mutex;
 std::vector<CapSaved> g_cap_saved;
-std::atomic<std::uint32_t> g_cap_value{0};
+std::vector<SocketCapRule> g_cap_rules;
+std::atomic<bool> g_cap_on{false};
 
 // 인프로세스 직접 쓰기. **주입 DLL 전용**이다(equip.cpp 와 같은 규약).
 bool cap_wr32(std::uintptr_t at, std::uint32_t v) {
@@ -786,25 +787,30 @@ bool cap_wr32(std::uintptr_t at, std::uint32_t v) {
     }
 }
 
+// 규칙에서 이 아이템이 받을 값. 없으면 0(=안 건드림).
+std::uint32_t want_for(const std::vector<SocketCapRule>& rules,
+                       std::uint8_t cat, std::uint16_t etype) {
+    for (const auto& r : rules) {
+        if (r.part.category == cat && r.part.equip_type == etype) {
+            return r.want;
+        }
+    }
+    return 0;
+}
+
 // 지금 목록을 베껴 소켓 상한만 갈아 끼운 새 판을 낸다. 이름을 다시
 // 풀지 않으므로 값싸다(표를 다시 걷는 재생성이 필요 없다).
-//
-// `caps` 가 비어 있지 않으면 그 키의 값으로, 비어 있으면 want 로.
-void republish_with_caps(const std::vector<CapSaved>& restore_to,
-                         std::uint32_t want) {
+// `caps` 는 키 -> 새 상한.
+void republish_caps(const std::vector<std::pair<std::uint32_t, std::uint32_t>>&
+                        caps) {
     const auto& cur = item_catalog();
-    if (cur.empty()) return;
+    if (cur.empty() || caps.empty()) return;
     auto built = std::make_unique<std::vector<ItemCatalogEntry>>(cur);
     for (auto& e : *built) {
-        if (!restore_to.empty()) {
-            for (const auto& s : restore_to) {
-                if (s.key == e.key) {
-                    e.max_sockets = s.original;
-                    break;
-                }
-            }
-        } else if (socket_cap_target(e.max_sockets, e.equip_type, want)) {
-            e.max_sockets = want;
+        for (const auto& [key, cap] : caps) {
+            if (key != e.key) continue;
+            e.max_sockets = cap;
+            break;
         }
     }
     publish_catalog(std::move(built));
@@ -814,33 +820,70 @@ void republish_with_caps(const std::vector<CapSaved>& restore_to,
 
 bool socket_cap_target(std::uint32_t max_sockets, std::uint16_t equip_type,
                        std::uint32_t want) {
+    if (want == 0) return false;
     if (equip_type == 0xFFFF) return false;   // 장비가 아니다
-    if (max_sockets == 0) return false;       // 설계상 소켓이 없는 장비
     return max_sockets < want;
 }
 
-bool socket_cap_active() {
-    return g_cap_value.load(std::memory_order_acquire) != 0;
-}
-
-std::uint32_t socket_cap_value() {
-    return g_cap_value.load(std::memory_order_acquire);
-}
-
-SocketCapResult socket_cap_raise(const mem::Reader& reader,
-                                 std::uint32_t want) {
-    SocketCapResult r;
-    if (!items_ready() || want == 0 || want > kSocketSlotMax) return r;
-    if (socket_cap_active()) {
-        // 이미 걸려 있으면 먼저 되돌린다. 그래야 원본이 겹치지 않는다.
-        socket_cap_restore(reader);
+std::vector<SocketPartInfo> socket_parts() {
+    std::vector<SocketPartInfo> out;
+    if (!items_ready()) return out;
+    for (const auto& e : item_catalog()) {
+        if (e.equip_type == 0xFFFF) continue;   // 장비만
+        SocketPartInfo* p = nullptr;
+        for (auto& x : out) {
+            if (x.part.category == e.category &&
+                x.part.equip_type == e.equip_type) {
+                p = &x;
+                break;
+            }
+        }
+        if (p == nullptr) {
+            out.push_back(SocketPartInfo{SocketPart{e.category, e.equip_type},
+                                         0, 0, 0, {}});
+            p = &out.back();
+        }
+        ++p->count;
+        if (e.max_sockets > 0) ++p->with_socket;
+        if (e.max_sockets > p->table_cap) p->table_cap = e.max_sockets;
+        if (p->sample.empty() && !e.name.empty()) p->sample = e.name;
     }
+    std::sort(out.begin(), out.end(),
+              [](const SocketPartInfo& a, const SocketPartInfo& b) {
+                  if (a.part.category != b.part.category) {
+                      return a.part.category < b.part.category;
+                  }
+                  return a.part.equip_type < b.part.equip_type;
+              });
+    return out;
+}
+
+bool socket_cap_active() { return g_cap_on.load(std::memory_order_acquire); }
+
+std::vector<SocketCapRule> socket_cap_rules() {
+    std::lock_guard<std::mutex> lk(g_cap_mutex);
+    return g_cap_rules;
+}
+
+SocketCapResult socket_cap_apply(const mem::Reader& reader,
+                                 const std::vector<SocketCapRule>& rules) {
+    SocketCapResult r;
+    if (!items_ready()) return r;
+
+    // 값이 성한지 먼저 본다. 이상한 값을 게임 표에 쓰느니 아무것도 안 한다.
+    for (const auto& rule : rules) {
+        if (rule.want > kSocketSlotMax) return r;
+    }
+    if (socket_cap_active()) socket_cap_restore(reader);
 
     std::vector<CapSaved> saved;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> caps;
     const auto& cat = item_catalog();
-    saved.reserve(256);
+    saved.reserve(512);
+    caps.reserve(512);
     for (const auto& e : cat) {
         if (e.record == 0) continue;
+        const std::uint32_t want = want_for(rules, e.category, e.equip_type);
         if (!socket_cap_target(e.max_sockets, e.equip_type, want)) {
             ++r.skipped;
             continue;
@@ -854,7 +897,8 @@ SocketCapResult socket_cap_raise(const mem::Reader& reader,
         if (!reader.read_value(e.record + kRecSockets, &back) || back != want) {
             continue;                           // 안 써졌다
         }
-        saved.push_back(CapSaved{e.record, e.key, live});
+        saved.push_back(CapSaved{e.record, e.key, live, want});
+        caps.emplace_back(e.key, want);
         ++r.changed;
     }
 
@@ -862,12 +906,13 @@ SocketCapResult socket_cap_raise(const mem::Reader& reader,
     {
         std::lock_guard<std::mutex> lk(g_cap_mutex);
         g_cap_saved = saved;
+        g_cap_rules = rules;
     }
-    g_cap_value.store(want, std::memory_order_release);
-    republish_with_caps({}, want);
+    g_cap_on.store(true, std::memory_order_release);
+    republish_caps(caps);
     r.ok = true;
-    log::infof("소켓 상한: {}개 아이템을 {}칸으로 올렸다 (대상 아님 {})",
-               r.changed, want, r.skipped);
+    log::infof("소켓 상한: 부위 규칙 {}개로 아이템 {}개를 올렸다 (대상 아님 {})",
+               rules.size(), r.changed, r.skipped);
     return r;
 }
 
@@ -877,18 +922,22 @@ SocketCapResult socket_cap_restore(const mem::Reader& reader) {
     {
         std::lock_guard<std::mutex> lk(g_cap_mutex);
         saved.swap(g_cap_saved);
+        g_cap_rules.clear();
     }
     if (saved.empty()) return r;
 
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> caps;
+    caps.reserve(saved.size());
     for (const auto& s : saved) {
         if (cap_wr32(s.record + kRecSockets, s.original)) {
             ++r.changed;
         } else {
             ++r.skipped;
         }
+        caps.emplace_back(s.key, s.original);
     }
-    g_cap_value.store(0, std::memory_order_release);
-    republish_with_caps(saved, 0);
+    g_cap_on.store(false, std::memory_order_release);
+    republish_caps(caps);
     r.ok = true;
     log::infof("소켓 상한: {}개를 원래 값으로 되돌렸다 (실패 {})", r.changed,
                r.skipped);

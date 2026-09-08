@@ -1,6 +1,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/config.h"
 #include "fake_memory.h"
 #include "game/items.h"
 #include "game/localization.h"
@@ -428,9 +429,12 @@ TEST(socket_cap_target_skips_items_that_are_not_equipment) {
     CHECK(!cdtb::game::socket_cap_target(3, 0xFFFF, 5));
 }
 
-TEST(socket_cap_target_skips_gear_designed_without_sockets) {
-    // 원래 0칸인 장비에 없던 소켓을 만들지 않는다 - 다른 이야기다.
-    CHECK(!cdtb::game::socket_cap_target(0, 7, 5));
+TEST(socket_cap_target_takes_gear_designed_without_sockets) {
+    // 원래 0칸인 장비도 대상이다. 망토·귀걸이·목걸이·반지도 레코드에
+    // 5칸 벡터가 이미 있어서 표 상한만 올리면 소켓이 생긴다
+    // (실측 2026-09-08: 마녀의 반지 0 -> 2칸). 어느 부위를 건드릴지는
+    // 규칙이 정하지 여기서 막을 일이 아니다.
+    CHECK(cdtb::game::socket_cap_target(0, 7, 5));
 }
 
 TEST(socket_cap_target_never_lowers_a_cap) {
@@ -438,19 +442,29 @@ TEST(socket_cap_target_never_lowers_a_cap) {
     CHECK(!cdtb::game::socket_cap_target(5, 7, 3));
 }
 
-TEST(socket_cap_raise_does_nothing_without_a_catalog) {
+TEST(socket_cap_target_does_nothing_when_no_value_is_wanted) {
+    // 규칙에 없는 부위는 want 0 으로 온다.
+    CHECK(!cdtb::game::socket_cap_target(0, 7, 0));
+    CHECK(!cdtb::game::socket_cap_target(3, 7, 0));
+}
+
+TEST(socket_cap_apply_does_nothing_without_a_catalog) {
     // 표가 없으면 쓸 곳도 모른다. 게임 메모리를 안 건드리고 빠진다.
     const Fixture f;
-    const auto r = cdtb::game::socket_cap_raise(f.mem, 5);
+    const std::vector<cdtb::game::SocketCapRule> rules{
+        {cdtb::game::SocketPart{24, 4}, 5}};
+    const auto r = cdtb::game::socket_cap_apply(f.mem, rules);
     CHECK(!r.ok);
     CHECK_EQ(r.changed, 0);
 }
 
-TEST(socket_cap_raise_refuses_a_value_past_the_vector) {
-    // 소켓 벡터는 다섯 칸이다. 그 위는 뜻이 없다.
+TEST(socket_cap_apply_refuses_a_value_past_the_vector) {
+    // 소켓 벡터는 다섯 칸이다. 한 부위라도 그 위면 통째로 거절한다 -
+    // 절반만 걸린 상태가 제일 나쁘다.
     const Fixture f;
-    CHECK(!cdtb::game::socket_cap_raise(f.mem, 6).ok);
-    CHECK(!cdtb::game::socket_cap_raise(f.mem, 0).ok);
+    const std::vector<cdtb::game::SocketCapRule> bad{
+        {cdtb::game::SocketPart{24, 4}, 6}};
+    CHECK(!cdtb::game::socket_cap_apply(f.mem, bad).ok);
 }
 
 TEST(socket_cap_restore_reports_nothing_when_it_was_never_raised) {
@@ -459,4 +473,39 @@ TEST(socket_cap_restore_reports_nothing_when_it_was_never_raised) {
     CHECK(!r.ok);
     CHECK_EQ(r.changed, 0);
     CHECK(!cdtb::game::socket_cap_active());
+    CHECK(cdtb::game::socket_cap_rules().empty());
+}
+
+TEST(socket_parts_is_empty_without_a_catalog) {
+    CHECK(cdtb::game::socket_parts().empty());
+}
+
+// --- 설정 파일의 부위 표기 ---------------------------------------------
+//
+// `분류:장비타입=칸수` 를 쉼표로 잇는다. 한 항목이 어긋나도 나머지는
+// 살린다 - 파일 한 줄 때문에 설정을 통째로 잃을 이유가 없다.
+
+TEST(config_reads_socket_cap_parts) {
+    const auto p = cdtb::config::parse_socket_cap_parts("3:5=5,24:4=2");
+    CHECK_EQ(p.size(), std::size_t{2});
+    if (p.size() < 2) return;
+    CHECK_EQ(p[0].category, 3);
+    CHECK_EQ(p[0].equip_type, 5);
+    CHECK_EQ(p[0].want, 5);
+    CHECK_EQ(p[1].category, 24);
+    CHECK_EQ(p[1].equip_type, 4);
+    CHECK_EQ(p[1].want, 2);
+}
+
+TEST(config_drops_a_broken_socket_cap_part_but_keeps_the_rest) {
+    const auto p = cdtb::config::parse_socket_cap_parts("3:5=5,쓰레기,24:4=2");
+    CHECK_EQ(p.size(), std::size_t{2});
+}
+
+TEST(config_drops_socket_cap_parts_past_the_vector) {
+    // 게임 표에 이상한 값을 쓰느니 버린다.
+    CHECK(cdtb::config::parse_socket_cap_parts("3:5=6").empty());
+    CHECK(cdtb::config::parse_socket_cap_parts("3:5=-1").empty());
+    // 0 은 "안 건드림" 이라 적을 이유가 없다.
+    CHECK(cdtb::config::parse_socket_cap_parts("3:5=0").empty());
 }

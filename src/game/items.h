@@ -321,30 +321,65 @@ struct SocketCapResult {
 // 이 아이템이 상한 올리기의 대상인가. 순수 함수라 표 없이 시험한다.
 //
 //   - 장비여야 한다(`equip_type != 0xFFFF`). 아니면 소켓 자체가 없다.
-//   - **원래 소켓이 있어야 한다**(`max_sockets > 0`). 소켓이 설계상 없는
-//     장비에 없던 소켓을 만들지 않는다 - 그건 다른 이야기다.
 //   - 이미 want 이상이면 건드리지 않는다(낮추지 않는다).
+//
+// **원래 0칸인 장비도 대상이다.** 소켓이 설계상 없는 부위(망토·귀걸이·
+// 목걸이·반지)도 레코드에 5칸 벡터가 이미 할당돼 있고, 표 상한만 올리면
+// 실제로 소켓이 생긴다(실측 2026-09-08: 마녀의 반지 0 -> 2칸). 어느
+// 부위를 건드릴지는 규칙이 정하지 화면 밖에서 막을 일이 아니다.
 bool socket_cap_target(std::uint32_t max_sockets, std::uint16_t equip_type,
                        std::uint32_t want);
+
+// 소켓 벡터가 다섯 칸 고정이라 이보다 크게 올릴 이유가 없다.
+// (0x234F930 이 `mov edx,5` 로 확보하고 `cmp r8b,5` 로 끊는다.)
+inline constexpr std::uint32_t kSocketSlotMax = 5;
+
+// ---------------------------------------------------------- 부위(묶음)
+//
+// 부위는 **(분류 `+0xA3`, 장비타입 `+0x42`)** 쌍이다. 분류만으로는
+// 갑옷(3/5)과 망토(3/75)가 안 갈린다 - 실측에서 한 분류에 여러 장비타입이
+// 섞이는 자리가 여럿이었다. 이 빌드에서 장비 묶음은 92개다.
+struct SocketPart {
+    std::uint8_t category = 0;
+    std::uint16_t equip_type = 0xFFFF;
+
+    bool operator==(const SocketPart& o) const {
+        return category == o.category && equip_type == o.equip_type;
+    }
+};
+
+struct SocketPartInfo {
+    SocketPart part;
+    std::size_t count = 0;         // 그 부위의 아이템 종 수
+    std::size_t with_socket = 0;   // 그중 원래 소켓이 있는 종 수
+    std::uint32_t table_cap = 0;   // 그 부위의 원래 상한 최대값
+    std::string sample;            // 보기 아이템 이름(같은 분류 구분용)
+};
+
+// 지금 표에 있는 장비를 부위로 묶어 낸다. 분류·장비타입 순으로 정렬된다.
+// 표가 아직 없으면 빈 목록.
+std::vector<SocketPartInfo> socket_parts();
+
+// 부위별로 원하는 칸 수. `want == 0` 이면 그 부위는 안 건드린다.
+struct SocketCapRule {
+    SocketPart part;
+    std::uint32_t want = 0;
+};
 
 // **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 표에 직접
 // 쓴다(equip.cpp 의 제자리 쓰기와 같은 규약). 별도 프로세스인 probe 가
 // 부르면 자기 메모리를 쓰게 된다.
 //
-// want 는 1..kSocketSlotMax. 되돌릴 수 있게 원본을 기억한다.
-SocketCapResult socket_cap_raise(const mem::Reader& reader,
-                                 std::uint32_t want);
+// 이미 걸려 있으면 먼저 되돌리고 새로 건다. 되돌릴 수 있게 원본을 기억한다.
+SocketCapResult socket_cap_apply(const mem::Reader& reader,
+                                 const std::vector<SocketCapRule>& rules);
 
 // 올려 둔 것을 전부 원래 값으로 되돌린다. 건 적이 없으면 ok=false.
 SocketCapResult socket_cap_restore(const mem::Reader& reader);
 
-// 지금 걸려 있는가 / 무슨 값으로.
+// 지금 걸려 있는가. 걸려 있으면 그 규칙.
 bool socket_cap_active();
-std::uint32_t socket_cap_value();
-
-// 소켓 벡터가 다섯 칸 고정이라 이보다 크게 올릴 이유가 없다.
-// (0x234F930 이 `mov edx,5` 로 확보하고 `cmp r8b,5` 로 끊는다.)
-inline constexpr std::uint32_t kSocketSlotMax = 5;
+std::vector<SocketCapRule> socket_cap_rules();
 
 // 소켓 한 칸의 6바이트를 조립한다.
 //

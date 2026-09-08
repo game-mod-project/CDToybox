@@ -466,13 +466,20 @@ void set_config(const Config& cfg, const std::wstring& ini_path) {
     g_ini_path = ini_path;
 }
 
-int socket_cap_setting() { return g_cfg.socket_cap; }
+std::vector<Config::SocketCapPart> socket_cap_setting() {
+    return g_cfg.socket_cap_parts;
+}
 
-bool set_socket_cap_setting(int value) {
-    if (value < 0 || value > static_cast<int>(cdtb::game::kSocketSlotMax)) {
-        return false;
+bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts) {
+    for (const auto& p : parts) {
+        if (p.want < 0 || p.want > static_cast<int>(cdtb::game::kSocketSlotMax)) {
+            return false;
+        }
     }
-    g_cfg.socket_cap = value;
+    g_cfg.socket_cap_parts = parts;
+    // 부위 목록을 한 번이라도 저장하면 (구) 일괄 설정은 뜻을 잃는다.
+    // 둘이 남아 있으면 다음 실행에 어느 쪽이 걸릴지 헷갈린다.
+    g_cfg.socket_cap = 0;
     if (g_ini_path.empty()) return false;
     return cdtb::config::save(g_ini_path, g_cfg);
 }
@@ -574,9 +581,26 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         static bool s_cap_done = false;
         if (!s_cap_done && cdtb::game::items_ready()) {
             s_cap_done = true;
-            if (g_cfg.socket_cap > 0) {
-                cdtb::game::socket_cap_raise(
-                    reader, static_cast<std::uint32_t>(g_cfg.socket_cap));
+            std::vector<cdtb::game::SocketCapRule> rules;
+            for (const auto& p : g_cfg.socket_cap_parts) {
+                rules.push_back(cdtb::game::SocketCapRule{
+                    cdtb::game::SocketPart{
+                        static_cast<std::uint8_t>(p.category),
+                        static_cast<std::uint16_t>(p.equip_type)},
+                    static_cast<std::uint32_t>(p.want)});
+            }
+            // (구) 일괄 설정: 부위 목록이 없을 때만, 원래 소켓이 있는
+            // 부위에만 건다. 예전 ini 를 그대로 읽어 주기 위한 것이다.
+            if (rules.empty() && g_cfg.socket_cap > 0) {
+                for (const auto& info : cdtb::game::socket_parts()) {
+                    if (info.with_socket == 0) continue;
+                    rules.push_back(cdtb::game::SocketCapRule{
+                        info.part,
+                        static_cast<std::uint32_t>(g_cfg.socket_cap)});
+                }
+            }
+            if (!rules.empty()) {
+                cdtb::game::socket_cap_apply(reader, rules);
             }
         }
     }
