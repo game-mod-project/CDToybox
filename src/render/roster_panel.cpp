@@ -67,7 +67,6 @@ int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
 // 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
 // 대부분 NPC·몬스터·시체라 고를 이유가 없다.
-bool g_comp_spawnable_only = true;  // 동반자 탭: 소환되는 종만
 double g_near_last_refresh = 0.0;
 double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
@@ -176,8 +175,6 @@ void draw_companion_tab() {
     ImGui::Checkbox("야생만", &g_comp_wild_only);
     ImGui::SameLine();
     ImGui::Checkbox("고용 가능만", &g_comp_hirable_only);
-    ImGui::SameLine();
-    ImGui::Checkbox("소환 가능만", &g_comp_spawnable_only);
     if (types.empty()) {
         ImGui::TextDisabled("용병 타입 표를 못 찾아 타입 이름 대신 행 번호를 씁니다.");
     }
@@ -198,7 +195,6 @@ void draw_companion_tab() {
         if (g_comp_type >= 0 && e.merc_row != g_comp_type) continue;
         if (g_comp_wild_only && !game::roster_is_wild(e.name)) continue;
         if (g_comp_hirable_only && !e.hirable) continue;
-        if (g_comp_spawnable_only && !e.spawnable) continue;
         if (!matches_query(e)) continue;
         view.push_back(&e);
     }
@@ -210,46 +206,11 @@ void draw_companion_tab() {
         ImGui::Text("| 선택: %u %s", g_selected_key, g_selected_name);
     }
 
-    // 고른 종을 동반자로 올린다. 소환해서 그 개체를 획득하는 두 걸음이고
-    // 모드가 이어서 처리한다. 되는 종인지는 게임 데이터가 정한다 -
-    // 소환 표에 있고(spawnable) 캐릭터 표에 고용 예(hirable)여야 한다.
-    const game::RosterEntry* sel = nullptr;
-    for (const auto& e : chars) {
-        if (e.key == g_selected_key) { sel = &e; break; }
-    }
-    const bool can = sel != nullptr && sel->spawnable && sel->hirable;
-    ImGui::BeginDisabled(game::companion_register_busy() || !can);
-    if (ImGui::Button("선택한 종을 동반자로 등록")) {
-        game::companion_register_start(g_selected_key);
-    }
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered() && can) {
-        ImGui::SetTooltip(
-            "이 종을 눈앞에 소환하고 곧바로 획득합니다.\n"
-            "등록되면 타입에 맞는 게임 목록(탈것·반려동물)에 들어갑니다.\n"
-            "적대적으로 나오는 종은 획득이 거부됩니다.");
-    }
-    if (sel != nullptr && !can) {
-        ImGui::SameLine();
-        if (!sel->spawnable) {
-            ImGui::TextDisabled("게임의 소환 표에 없는 종입니다");
-        } else {
-            ImGui::TextDisabled("고용할 수 없는 종입니다");
-        }
-    }
-    {
-        const char* note = game::companion_register_note();
-        if (note != nullptr && note[0] != 0) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", note);
-        }
-    }
-
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY |
                                   ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("companions", 7, flags)) {
+    if (ImGui::BeginTable("companions", 6, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -257,7 +218,6 @@ void draw_companion_tab() {
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
-        ImGui::TableSetupColumn("소환", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(view.size()));
@@ -290,8 +250,6 @@ void draw_companion_tab() {
                                                                      : "");
                 ImGui::TableSetColumnIndex(5);
                 ImGui::TextUnformatted(e->hirable ? "가능" : "");
-                ImGui::TableSetColumnIndex(6);
-                ImGui::TextUnformatted(e->spawnable ? "가능" : "");
             }
         }
         clipper.End();
@@ -645,8 +603,6 @@ void draw_roster_panel(bool* open) {
     }
     ImGui::TextDisabled(
         "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
-
-    game::companion_register_tick(g_near_reader);
 
     if (ImGui::BeginTabBar("roster_tabs")) {
         if (ImGui::BeginTabItem("동반자")) { g_tab = 0; ImGui::EndTabItem(); }

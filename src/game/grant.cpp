@@ -105,14 +105,10 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
 //   rcx 서술자  rdx 패킷  r8 &캐릭터키u32  r9 &Bu32  [+0x20] &위치float3
 //   [+0x28] &플래그u8
 // 처리기는 캐릭터키가 0이면 거부한다(아이템 스폰의 키 검사와 같다).
-using CharSpawnFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
-                                      const std::uint32_t*, const float*,
-                                      const std::uint8_t*);
 CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
-CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2988)
 
 // 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
 using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
@@ -145,7 +141,7 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance, CharSpawn, Message };
+enum class Kind { Ground, Inventory, Endurance, Message };
 
 struct Pending {
     Kind kind = Kind::Inventory;
@@ -169,9 +165,6 @@ void run_give(std::uintptr_t session, std::uint32_t item_key,
               std::int64_t count, const GiveExtras& extras, SpawnOutcome* out);
 void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
                    SpawnOutcome* out);
-void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                    std::uint32_t b, std::uint8_t flag, const float pos[3],
-                    SpawnOutcome* out);
 void run_message(std::uintptr_t session, const MessageDesc& msg,
                  const std::uint8_t* wire, std::size_t len, SpawnOutcome* out);
 
@@ -401,11 +394,6 @@ bool run_pending_if_any() {
                 break;
             case Kind::Ground:
                 run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
-                break;
-            case Kind::CharSpawn:
-                run_char_spawn(req.session, req.key,
-                               static_cast<std::uint32_t>(req.count), req.a,
-                               req.pos, &g_outcome);
                 break;
             case Kind::Message:
                 run_message(req.session, req.msg, req.wire, req.wire_len,
@@ -739,30 +727,8 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
 
 // 캐릭터 소환 크래시 시점의 호출 스택. 널 해시가 어디서 불렸는지
 // 찾으려 예외 필터에서 뜬다(그 시점엔 스택이 살아 있다).
-void* g_char_crash_frames[24]{};
-USHORT g_char_crash_n = 0;
 
-int charspawn_seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
-                         std::uintptr_t* addr) {
-    *code = static_cast<std::uint32_t>(ep->ExceptionRecord->ExceptionCode);
-    *addr = reinterpret_cast<std::uintptr_t>(
-        ep->ExceptionRecord->ExceptionAddress);
-    g_char_crash_n = RtlCaptureStackBackTrace(0, 24, g_char_crash_frames, nullptr);
-    return EXCEPTION_EXECUTE_HANDLER;
-}
 
-bool call_charspawn_guarded(CharSpawnFn fn, void* self, void* packet,
-                            const std::uint32_t* key, const std::uint32_t* b,
-                            const float* pos, const std::uint8_t* flag,
-                            std::uint32_t* seh_out, std::uintptr_t* addr_out) {
-    __try {
-        fn(self, packet, key, b, pos, flag);
-        return true;
-    } __except (charspawn_seh_filter(GetExceptionInformation(), seh_out,
-                                     addr_out)) {
-        return false;
-    }
-}
 
 // 실제 작업 함수가 불릴 때마다 인자를 남긴다. 원본을 그대로 부른다.
 void* __fastcall det_spawn(void* actor, std::uint32_t* result,
@@ -1450,10 +1416,6 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
         }
     }
 
-    if (g_char_msg.handler == 0) {
-        resolve_cheat_message(rtti, reader, "SpawnCharacterCheatReq",
-                              &g_char_msg);
-    }
 
     if (g_endur_msg.handler == 0) {
         resolve_cheat_message(rtti, reader, "VaryEnduranceItemByCheatReq",
@@ -1514,9 +1476,6 @@ bool thread_ready_for_spawn() {
     return true;
 }
 
-bool char_spawn_ready() {
-    return g_char_msg.handler != 0 && g_orig_actor_getter != nullptr;
-}
 
 bool spawn_ready() {
     return g_spawn_msg.handler != 0 && g_orig_actor_getter != nullptr;
@@ -1595,137 +1554,7 @@ struct CharTrace {
     int ordinal = -1;             // record 의 u16 순번 (0xFFFF 면 없음)
 };
 
-bool trace_char_path(std::uintptr_t session, std::uint32_t key,
-                     std::uintptr_t base, CharTrace* t) {
-    using GetSpawnerFn = std::uintptr_t(__fastcall*)(void*);
-    using CtxFn = void(__fastcall*)(void*, void*);
-    using GateFn = bool(__fastcall*)(void*, void*);
-    using LookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
-    __try {
-        t->step = 1;
-        void* sess = reinterpret_cast<void*>(session);
-        const std::uintptr_t svt = *reinterpret_cast<std::uintptr_t*>(sess);
-        auto get_spawner =
-            *reinterpret_cast<GetSpawnerFn*>(svt + 0x160);
-        t->spawner = get_spawner(sess);
-        if (t->spawner == 0) return true;
 
-        t->step = 2;
-        alignas(16) std::uint8_t buf[0x80]{};
-        // 2026-09-06: 0x1D48380 -> 0x1FB5B60 으로 고쳤다. 옛 주소를
-        // 부르다 매번 예외로 죽어 추적이 아무것도 못 보고 있었다.
-        // 작업 함수(0x2B6E530)가 스포너를 얻은 뒤 실제로 부르는 것이
-        // 이쪽이고, 그 결과 버퍼의 +0x10 이 0 이면 소환을 포기한다.
-        auto ctx = reinterpret_cast<CtxFn>(base + 0x1FB5B60);
-        ctx(reinterpret_cast<void*>(t->spawner), buf);
-        t->ctx_byte = buf[0x10];
-
-        t->step = 3;
-        const std::uintptr_t g68 =
-            *reinterpret_cast<std::uintptr_t*>(t->spawner + 0x68);
-        t->gate = (g68 != 0)
-                      ? *reinterpret_cast<std::uintptr_t*>(g68 + 0x130)
-                      : 0;
-        if (t->gate != 0) {
-            const std::uintptr_t gvt =
-                *reinterpret_cast<std::uintptr_t*>(t->gate);
-            auto gatefn = *reinterpret_cast<GateFn*>(gvt + 0x140);
-            t->gate_ok = gatefn(reinterpret_cast<void*>(t->gate), nullptr) ? 1
-                                                                           : 0;
-        }
-
-        t->step = 4;
-        const std::uintptr_t gobj =
-            *reinterpret_cast<std::uintptr_t*>(base + 0x6331360);
-        auto lookup = reinterpret_cast<LookupFn>(base + 0x31BBF0);
-        void* rec = lookup(reinterpret_cast<void*>(gobj + 0x68), &key);
-        t->record = reinterpret_cast<std::uintptr_t>(rec);
-        t->ordinal = (rec != nullptr) ? *reinterpret_cast<std::uint16_t*>(rec)
-                                      : -1;
-        t->step = 5;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-// 캐릭터(탈것·NPC 포함)를 월드에 소환한다. TLS 가 준비된 스레드에서만.
-// 아이템 바닥 스폰과 같은 꼴이다 - 처리기가 세션에서 스포너를 얻어
-// 처리하므로 우리는 세션과 키·위치만 넘긴다. 미시도 치트라 처음엔
-// 죽을 수 있으므로 SEH 로 감싼다.
-void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                    std::uint32_t b_in, std::uint8_t flag_in, const float pos[3],
-                    SpawnOutcome* out) {
-    SpawnOutcome o;
-    if (out != nullptr) *out = o;
-    if (g_char_msg.handler == 0 || g_reader == nullptr) {
-        log::warnf("캐릭터 소환: 메시지 미해석");
-        return;
-    }
-
-    std::uint32_t key = char_key;
-    std::uint32_t b = b_in;        // 뜻 미상 - UI 에서 바꿔 실험한다
-    std::uint8_t flag = flag_in;   // 뜻 미상 - UI 에서 바꿔 실험한다
-    float where[3] = {pos[0], pos[1], pos[2]};
-
-    log::infof("캐릭터 소환: 세션 0x{:X} 키 {} B {} 플래그 {} "
-               "위치 {:.1f},{:.1f},{:.1f}",
-               session, char_key, b, static_cast<int>(flag), where[0], where[1],
-               where[2]);
-
-    // 서버 세션이어야 한다 - 처리기가 세션 vtable +0x160 으로 스포너를
-    // 얻는다. 클라이언트 세션은 사슬이 끊겨 조용히 되돌아간다.
-    std::uintptr_t gate = 0;
-    if (!gate_object(*g_reader, session, &gate)) {
-        o.no_actor = true;
-        log::warnf("캐릭터 소환: 세션 0x{:X} 사슬이 끊겼다 (클라이언트 세션)",
-                   session);
-        if (out != nullptr) *out = o;
-        return;
-    }
-
-    // 처리기가 조용히 실패하므로, 그 판정 경로를 그대로 재현해 어디서
-    // 빠지는지 먼저 로그로 남긴다.
-    // 추적 재현은 부르지 않는다. 게임 함수를 우리가 직접 호출하는
-    // 방식이라, 주소나 인자가 어긋나면 그 안에서 상태가 깨진다 -
-    // 실측 2026-09-06: 하드코딩된 주소가 밀린 것을 고쳐 다시 돌렸다가
-    // 게임이 통째로 죽었다. 예외 가드는 우리 스레드의 접근 위반만
-    // 잡을 뿐, 게임 함수 안에서 벌어진 일은 못 되돌린다.
-    //
-    // 이 관문 값을 보려면 재현하지 말고 그 함수에 **수동 훅**을 걸어
-    // 원본이 돌려준 것을 읽어야 한다(소환 작업 추적과 같은 방식).
-    // trace_char_path 는 코드로만 남겨 둔다.
-
-    std::uint64_t packet[8]{};
-    packet[0] = static_cast<std::uint64_t>(session);
-
-    o.called = true;
-    // 관문 추적의 표시를 여기서 켜고 끈다. 처리기가 죽으면 SEH 가
-    // 훅 프레임을 건너뛰어 되감아, 훅 안에서 끄는 것은 실행되지 않는다.
-    companion_char_cheat_mark(true);
-    o.crashed = !call_charspawn_guarded(
-        reinterpret_cast<CharSpawnFn>(g_char_msg.handler),
-        reinterpret_cast<void*>(g_char_msg.descriptor), packet, &key, &b, where,
-        &flag, &o.seh, &o.fault);
-    companion_char_cheat_mark(false);
-    if (o.crashed) {
-        const std::uintptr_t base = g_reader->module_base();
-        const std::size_t size = g_reader->module_size();
-        log::errorf("캐릭터 소환이 게임 안에서 죽었다: 0x{:X} at 0x{:X} "
-                    "(RVA 0x{:X}) - 호출 스택 {}단",
-                    o.seh, o.fault, o.fault - base, g_char_crash_n);
-        for (USHORT i = 0; i < g_char_crash_n; ++i) {
-            const auto a =
-                reinterpret_cast<std::uintptr_t>(g_char_crash_frames[i]);
-            if (a >= base && a < base + size) {
-                log::infof("  [{}] 모듈+0x{:X}", i, a - base);
-            }
-        }
-    } else {
-        log::infof("캐릭터 소환 끝 (처리기 경로)");
-    }
-    if (out != nullptr) *out = o;
-}
 
 // 인벤토리로 바로 넣는다. TLS 가 준비된 스레드에서만 부른다.
 void run_give(std::uintptr_t session, std::uint32_t item_key,
@@ -2059,37 +1888,6 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     return true;
 }
 
-bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                        std::uint32_t b, std::uint8_t flag, const float pos[3]) {
-    if (!char_spawn_ready() || pos == nullptr || g_reader == nullptr) {
-        return false;
-    }
-    if (char_key == 0 || session == 0) return false;
-    drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
-    if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
-        return false;
-    }
-
-    g_pending = Pending{};
-    g_pending.kind = Kind::CharSpawn;
-    g_pending.session = session;
-    g_pending.key = char_key;
-    g_pending.count = b;      // CharSpawn 은 count 칸에 B 를 싣는다
-    g_pending.a = flag;       // a 칸에 플래그를 싣는다
-    g_pending.pos[0] = pos[0];
-    g_pending.pos[1] = pos[1];
-    g_pending.pos[2] = pos[2];
-    g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
-    log::infof("캐릭터 소환 요청을 걸었다 (키 {} B {} 플래그 {}) -"
-               " 게임 스레드를 기다린다",
-               char_key, b, static_cast<int>(flag));
-    return true;
-}
 
 bool spawn_pending() {
     return g_has_pending.load(std::memory_order_acquire);

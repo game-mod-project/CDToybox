@@ -423,16 +423,21 @@ bool endurance_ready();
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]);
 
-// 캐릭터(탈것·NPC 포함)를 월드에 소환한다. SpawnCharacterCheatReq
-// 를 게임 스레드에서 부른다. 아직 화면으로 확인된 적이 없다.
+// 캐릭터 소환 치트(SpawnCharacterCheatReq)는 **쓰지 않는다.**
 //
-// ID 는 실측 **2988** 이다(2026-09-07 로그: "치트 메시지
-// SpawnCharacterCheatReq: ID 2988 처리기 0x142B6E530"). 앞선 세션이
-// 2510 이라 적어 두었는데 그 값으로는 이 처리기가 나오지 않는다.
-// 어차피 해석은 클래스 이름으로 하니 동작에는 영향이 없었다.
-bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                        std::uint32_t b, std::uint8_t flag, const float pos[3]);
-bool char_spawn_ready();
+// 반복 구동하면 게임 스레드가 처리기 안에서 빠져나오지 못한다 - 실측
+// 2026-09-08: 고양이를 열 번 부르던 중 다섯 번째에서 반환이 없었고,
+// 게임이 멈춘 채 141초가 지나도 그대로였다. 같은 증상을 그날 세 번
+// 겪었고 두 번은 게임이 팅겼다. 2026-09-05 설계 문서가 "NPC 증발·
+// 무한로딩" 으로 금지해 둔 것과 같은 증상이다(처리기 주소가 바뀌어도
+// 결론은 같았다).
+//
+// 몇 번은 정상으로 돌기 때문에 "된다"고 오판하기 쉽다. 실제로 그날
+// 고양이·양·염소를 등록하는 데까지 성공했지만, 반복하면 멈춘다.
+// 구동·명령·UI 를 전부 걷어냈다. 되살리지 말 것.
+//
+// 종을 동반자로 올리는 안전한 길은 근처 탭 획득(2338)뿐이다. 대상이
+// 월드에 실제로 있어야 한다는 제약이 붙는다.
 
 // 걸어 둔 요청이 처리됐는가. 아직이면 false.
 bool spawn_pending();
