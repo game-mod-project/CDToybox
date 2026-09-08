@@ -65,6 +65,9 @@ double g_item_busy_until = 0.0;
 const char* g_item_busy_why = "";
 int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
+// 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
+// 대부분 NPC·몬스터·시체라 고를 이유가 없다.
+bool g_register_only = true;
 double g_near_last_refresh = 0.0;
 double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
@@ -541,10 +544,17 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
     view.clear();
     view.reserve(all.size());
     for (const auto& e : all) {
+        if (can_register && g_register_only && !(e.spawnable && e.hirable)) {
+            continue;
+        }
         if (matches_query(e)) view.push_back(&e);
     }
     ImGui::Text("%zu / %zu", view.size(), all.size());
     ImGui::SameLine();
+    if (can_register) {
+        ImGui::Checkbox("등록 가능만", &g_register_only);
+        ImGui::SameLine();
+    }
     ImGui::TextDisabled("줄을 누르면 키가 복사됩니다");
     if (g_selected_key != 0) {
         ImGui::SameLine();
@@ -674,7 +684,7 @@ void draw_roster_panel(bool* open) {
         case 0: draw_companion_tab(); break;
         case 1: draw_nearby_tab(); break;
         case 5: draw_companion_item_tab(); break;
-        case 2: draw_list_tab(game::vehicle_catalog(), false, true); break;
+        case 2: draw_list_tab(game::vehicle_catalog(), false); break;
         case 3:
             if (game::mercenary_catalog().empty()) {
                 ImGui::TextDisabled("용병 타입 표를 못 찾았습니다.");
