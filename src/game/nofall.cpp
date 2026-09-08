@@ -70,6 +70,11 @@ bool ref_in(const mem::Reader& r, std::uintptr_t base, std::size_t range,
 
 bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_installed.load(std::memory_order_acquire)) return true;
+    // 한 번 "이 빌드 미지원" 으로 갈렸으면 다시 보지 않는다. 이미지는
+    // 세션 중에 바뀌지 않으므로 결과가 달라질 수 없다. 이것이 없어
+    // 2.4초마다 같은 WARN 을 썯고, 로그 728줄 중 289줄(40%)이 그것만으로
+    // 채워져 조사 로그가 묻혔다(실측 2026-09-09).
+    if (g_unsupported.load(std::memory_order_acquire)) return false;
     if (!rtti.loaded()) return false;
 
     const auto parsed = mem::parse_pattern(kSite);
