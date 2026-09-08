@@ -192,6 +192,17 @@ void auto_analysis_loop() {
         log::errorf("자동 분석: 모듈 이미지를 읽지 못했다");
         return;
     }
+
+    // RTTI 색인도 여기서 한 번에 만든다. 이미지는 안 바뀌므로 색인은
+    // 이미지의 순수 함수다. 예전에는 조회마다 350MB 를 다시 훑어
+    // (find_types 는 1바이트씩) 탐색 통과 한 번에 2분 30초가 걸렸다.
+    {
+        const auto t0 = ::GetTickCount64();
+        rtti.build_index();
+        const auto st = rtti.index_stats();
+        log::infof("RTTI 색인: 타입 {}개, vtable {}개 ({}ms)", st.types,
+                   st.vtables, ::GetTickCount64() - t0);
+    }
     log::infof("자동 분석 시작 - 월드 진입을 기다린다");
 
     // 세션에서 플레이어 액터를 꺼내는 게임 함수를 후킹해 둔다. 게임
@@ -229,21 +240,42 @@ void auto_analysis_loop() {
     spawn_trace_install();
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
+        // 한 통과가 얼마나 걸리는지 남긴다. 어디가 느린지 로그만 보고
+        // 가릴 수 있어야 한다 - 실측 2026-09-08 에 통과 한 번이 2분
+        // 30초였는데 로그에 이정표가 없어 짐작으로만 봤다.
+        const auto pass_t0 = ::GetTickCount64();
+        auto step = [](const char* what, unsigned long long t0) {
+            const auto ms = ::GetTickCount64() - t0;
+            if (ms >= 500) log::infof("탐색 [{}] {}ms", what, ms);
+            return ::GetTickCount64();
+        };
+        auto t = pass_t0;
+
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
         discover_items(rtti, reader);
+        t = step("아이템표", t);
         // 소켓 지급이 키 -> 순번 대응표를 쓴다. 아이템 표가 선 뒤에
         // 한 번만 읽고 스스로 빠진다.
         discover_item_ids(rtti, reader);
+        t = step("아이템 대응표", t);
         // 인벤토리 창이 쓴다. 찾으면 스스로 빠진다.
         discover_inventory(rtti, reader);
+        t = step("인벤토리", t);
         // 탈것·용병·캐릭터 카탈로그. 아이템 표와 같은 인프라라 여기
         // 얹는다. 이름까지 풀리면 스스로 빠진다.
         discover_roster(rtti, reader);
+        t = step("로스터", t);
         discover_actor_manager(rtti, reader);
+        t = step("액터 매니저", t);
         log_new_actors(rtti, reader);
-        if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
+        t = step("액터 목록", t);
+        const bool got_cam = discover_with(rtti, reader, nullptr);
+        step("카메라", t);
+        log::infof("탐색 {}번째 통과: {}ms", attempt,
+                   ::GetTickCount64() - pass_t0);
+        if (got_cam && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
             break;
         }
