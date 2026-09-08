@@ -195,6 +195,23 @@ bool session_looks_live(const mem::Reader& reader, std::uintptr_t session);
 // 때까지 요청을 받지 않는다.
 std::uintptr_t drive_fault_session();
 
+// 구동 게이트 상태. 지급·소환이 전부 "대기열/쿨다운"으로 거부될 때
+// 무엇이 물고 있는지 밖에서 보려고 둔다.
+//
+// 실측 2026-09-08: 한 번 물리면 재시작 전까지 지급도 소환도 안 됐는데
+// 밖에서 원인을 볼 방법이 없었다. 게임 결함으로 오인하기 쉬웠다.
+struct DriveGate {
+    bool pending = false;
+    bool running = false;
+    unsigned long long pending_age_ms = 0;
+    unsigned long long running_age_ms = 0;
+    unsigned long long cooldown_left_ms = 0;
+    std::uintptr_t fault_session = 0;
+};
+DriveGate drive_gate_state();
+// 30초 넘게 물려 있을 때만 푼다. 진짜로 도는 중에는 풀지 않는다.
+bool drive_gate_reset();
+
 // 죽은 세션 잠금을 푼다. 새 세션을 잡았을 때만 쓴다.
 void clear_drive_fault();
 
@@ -406,16 +423,56 @@ bool endurance_ready();
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]);
 
-// 캐릭터(탈것·NPC 포함)를 월드에 소환한다. SpawnCharacterCheatReq
-// 를 게임 스레드에서 부른다. 아직 화면으로 확인된 적이 없다.
+// ----------------------------------------------------------------------
+// 동반자 등록 가능 여부 검사 (등록 자체가 아니다)
 //
-// ID 는 실측 **2988** 이다(2026-09-07 로그: "치트 메시지
-// SpawnCharacterCheatReq: ID 2988 처리기 0x142B6E530"). 앞선 세션이
-// 2510 이라 적어 두었는데 그 값으로는 이 처리기가 나오지 않는다.
-// 어차피 해석은 클래스 이름으로 하니 동작에는 영향이 없었다.
-bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                        std::uint32_t b, std::uint8_t flag, const float pos[3]);
-bool char_spawn_ready();
+// 획득 2338 의 작업(0x2ADE280)과 소지품 고용 2454 의 작업(0x2AD1FC0)이
+// 공통으로 부르는 함수다. 처음에 이것을 "등록의 실체"로 단정했는데
+// **틀렸다** - 검사일 뿐이고, 0 을 돌려주면 각 경로가 그 뒤에 자기
+// 방식으로 등록한다(2338 은 0x26B4FD0, 2454 는 다른 것 - 공통이 없다).
+//
+//   u32* f(용병단, u32* 결과, u16 **캐릭터표 행번호**, 1, 1)
+//     0 이면 통과. 그 외는 거부 코드.
+//
+// **인자는 캐릭터 키가 아니라 행 번호다.** 실측 2026-09-08:
+//   키 30024(고양이) -> 0x0D982DB0 거부
+//   행 6511(같은 고양이) -> 0x00000000 통과
+//   행 3551(양) -> 0x00000000 통과
+// 통과해도 명부에는 아무것도 안 들어간다 - 검사이기 때문이다.
+//
+// 본체 0xE13BA40 은 행으로 캐릭터 레코드를 찾아 +0xBE(_mercenaryInfo)를
+// 읽고, 용병단의 타입별 한도 목록(+0xF8 배열 · +0x100 개수)과 대조한다.
+//
+// 남겨 두는 이유: 어떤 종이 등록 자격이 있는지 게임에게 직접 물어볼 수
+// 있다. 목록 표시에 쓸 수 있다.
+inline constexpr std::uint64_t kHireCheckRva = 0x2097BC0;
+
+// 그 행이 등록 가능한지 게임에게 묻는다. 게임 스레드에서 실행한다.
+bool request_hire_species(std::uintptr_t session, std::uint16_t char_row);
+bool hire_species_ready();
+// 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
+struct HireSpeciesResult {
+    bool valid = false;
+    std::uint16_t key = 0;
+    std::uint32_t code = 0;
+};
+HireSpeciesResult last_hire_species();
+
+// 캐릭터 소환 치트(SpawnCharacterCheatReq)는 **쓰지 않는다.**
+//
+// 반복 구동하면 게임 스레드가 처리기 안에서 빠져나오지 못한다 - 실측
+// 2026-09-08: 고양이를 열 번 부르던 중 다섯 번째에서 반환이 없었고,
+// 게임이 멈춘 채 141초가 지나도 그대로였다. 같은 증상을 그날 세 번
+// 겪었고 두 번은 게임이 팅겼다. 2026-09-05 설계 문서가 "NPC 증발·
+// 무한로딩" 으로 금지해 둔 것과 같은 증상이다(처리기 주소가 바뀌어도
+// 결론은 같았다).
+//
+// 몇 번은 정상으로 돌기 때문에 "된다"고 오판하기 쉽다. 실제로 그날
+// 고양이·양·염소를 등록하는 데까지 성공했지만, 반복하면 멈춘다.
+// 구동·명령·UI 를 전부 걷어냈다. 되살리지 말 것.
+//
+// 종을 동반자로 올리는 안전한 길은 근처 탭 획득(2338)뿐이다. 대상이
+// 월드에 실제로 있어야 한다는 제약이 붙는다.
 
 // 걸어 둔 요청이 처리됐는가. 아직이면 false.
 bool spawn_pending();

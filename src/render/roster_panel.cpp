@@ -65,6 +65,8 @@ double g_item_busy_until = 0.0;
 const char* g_item_busy_why = "";
 int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
+// 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
+// 대부분 NPC·몬스터·시체라 고를 이유가 없다.
 double g_near_last_refresh = 0.0;
 double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
