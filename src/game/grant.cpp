@@ -1372,8 +1372,9 @@ bool gate_object(const mem::Reader& reader, std::uintptr_t session,
 
 // 용병단(MercenaryClanActorComponent). 문 객체와 같은 사슬인데 끝만
 // 다르다 - 문은 +0x130, 용병단은 +0x110.
-bool clan_object(const mem::Reader& reader, std::uintptr_t session,
-                 std::uintptr_t* out) {
+// 하나의 세션에서 사슬을 따라간다. 끊기면 false.
+bool clan_from_session(const mem::Reader& reader, std::uintptr_t session,
+                       std::uintptr_t* out) {
     if (out == nullptr || session == 0) return false;
     std::uintptr_t p = 0;
     if (!reader.read(session + 0xA0, &p, sizeof(p)) || p == 0) return false;
@@ -1381,6 +1382,28 @@ bool clan_object(const mem::Reader& reader, std::uintptr_t session,
     if (!reader.read(p + 0x110, &p, sizeof(p)) || p == 0) return false;
     *out = p;
     return true;
+}
+
+// 용병단(MercenaryClanActorComponent)을 찾는다.
+//
+// **세션마다 달려 있지 않다.** 실측 2026-09-08: 고른 세션에서는
+// [컴포넌트+0x110] 이 0 이었다(+0x130 의 문 객체는 살아 있었다).
+// 세션이 여섯 개인데 용병단은 그중 일부에만 붙는다. 그래서 준 세션을
+// 먼저 보고, 없으면 본 세션 전부를 훑는다.
+bool clan_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out) {
+    if (out == nullptr) return false;
+    if (clan_from_session(reader, session, out)) return true;
+    for (int i = 0; i < kSeenCap; ++i) {
+        const std::uintptr_t s = g_sess[i];
+        if (s == 0 || s == session) continue;
+        if (clan_from_session(reader, s, out)) {
+            log::infof("용병단은 세션 0x{:X} 에 있다 (고른 세션 0x{:X} 에는 없다)",
+                       s, session);
+            return true;
+        }
+    }
+    return false;
 }
 
 void log_gate(const mem::Rtti& rtti, const mem::Reader& reader,
