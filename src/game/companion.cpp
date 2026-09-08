@@ -964,6 +964,18 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         say(buf);
         return true;
     }
+    if (cmd == "hirespecies") {
+        // 종 키 하나로 동반자 명부에 올린다. 소환도 아이템도 없다.
+        if (args.size() < 2) { say("hirespecies <캐릭터키>"); return false; }
+        const std::uint16_t key = static_cast<std::uint16_t>(parse_u32(args[1], 0));
+        if (key == 0) { say("키가 0이다"); return false; }
+        const std::uintptr_t session = companion_pick_session();
+        if (session == 0) { say("서버 세션 없음"); return false; }
+        if (!hire_species_ready()) { say("준비 안 됨"); return false; }
+        const bool ok = request_hire_species(session, key);
+        say(ok ? "종 등록 요청" : "거부(대기열/쿨다운/세션잠김)");
+        return ok;
+    }
     if (cmd == "drive") {
         // 구동 게이트 상태를 본다. `drive reset` 이면 오래 물린 것을 푼다.
         const DriveGate g = drive_gate_state();

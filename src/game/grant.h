@@ -423,6 +423,42 @@ bool endurance_ready();
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]);
 
+// ----------------------------------------------------------------------
+// 종 키 하나로 동반자 등록
+//
+// **액터도 아이템도 소환도 필요 없다.** 등록의 실체는 이 함수 하나다.
+//
+//   u32* f(용병단컴포넌트, u32* 결과, u16 캐릭터키, u32 1, u8 1)
+//     결과 0 이면 성공. 반환은 결과 포인터를 그대로 돌려준다.
+//
+// 찾은 방법(2026-09-08): 획득 2338 의 작업(0x2ADE280)과 소지품 고용
+// 2454 의 작업(0x2AD1FC0)이 부르는 함수 목록을 교집합했다. 공통 호출
+// 넷 중 하나가 이것이고, 두 곳의 호출 모양이 완전히 같다.
+//
+//   mov byte ptr [rsp+0x20], 1
+//   mov r9d, 1
+//   movzx r8d, bx        ; 2338 은 액터에서 뽑은 키, 2454 는 아이템에서
+//   lea  rdx, <결과>       뽑은 키. 그 앞단만 다르고 등록은 같다.
+//   mov  rcx, <용병단>
+//   call 0x2097BC0
+//
+// 본체(0xE13BA40)는 그 키로 캐릭터 레코드를 찾아 +0xBE(_mercenaryInfo,
+// 동반자 타입 행)를 읽는다. 동반자가 아닌 종은 거기서 걸린다.
+//
+// 용병단 컴포넌트는 [[[세션+0xA0]+0x68]+0x110] 이다.
+inline constexpr std::uint64_t kHireSpeciesRva = 0x2097BC0;
+
+// 종 키로 동반자 명부에 올린다. 게임 스레드에서 실행한다.
+bool request_hire_species(std::uintptr_t session, std::uint16_t char_key);
+bool hire_species_ready();
+// 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
+struct HireSpeciesResult {
+    bool valid = false;
+    std::uint16_t key = 0;
+    std::uint32_t code = 0;
+};
+HireSpeciesResult last_hire_species();
+
 // 캐릭터 소환 치트(SpawnCharacterCheatReq)는 **쓰지 않는다.**
 //
 // 반복 구동하면 게임 스레드가 처리기 안에서 빠져나오지 못한다 - 실측

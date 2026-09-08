@@ -4,6 +4,7 @@
 #include <intrin.h>
 
 #include <atomic>
+#include <mutex>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -141,7 +142,7 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance, Message };
+enum class Kind { Ground, Inventory, Endurance, Message, HireSpecies };
 
 struct Pending {
     Kind kind = Kind::Inventory;
@@ -161,6 +162,8 @@ struct Pending {
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
                std::int64_t count, const float pos[3], SpawnOutcome* out);
+void run_hire_species(std::uintptr_t session, std::uint16_t key,
+                      SpawnOutcome* out);
 void run_give(std::uintptr_t session, std::uint32_t item_key,
               std::int64_t count, const GiveExtras& extras, SpawnOutcome* out);
 void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
@@ -204,6 +207,8 @@ thread_local int g_detour_depth = 0;
 // depth==1)을 깬 적이 있다(2026-09-04). 계측은 실행 게이트를 건드리면
 // 안 된다.
 thread_local int g_pump_depth = 0;
+std::mutex g_hs_mutex;
+HireSpeciesResult g_last_hs;
 std::atomic<bool> g_running{false};
 // 구동이 시작된 시각. 물렸을 때 얼마나 오래됐는지 보려고 둔다.
 std::atomic<unsigned long long> g_running_at{0};
@@ -394,6 +399,11 @@ bool run_pending_if_any() {
                 break;
             case Kind::Ground:
                 run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+                break;
+            case Kind::HireSpecies:
+                run_hire_species(req.session,
+                                 static_cast<std::uint16_t>(req.key),
+                                 &g_outcome);
                 break;
             case Kind::Message:
                 run_message(req.session, req.msg, req.wire, req.wire_len,
@@ -697,6 +707,22 @@ bool call_give_guarded(GiveFn fn, void* self, void* packet, void* value,
                        std::uint32_t* seh_out, std::uintptr_t* addr_out) {
     __try {
         fn(self, packet, value);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
+}
+
+using HireSpeciesFn = std::uint32_t*(__fastcall*)(void*, std::uint32_t*,
+                                                 std::uint16_t, std::uint32_t,
+                                                 std::uint8_t);
+
+bool call_hire_species_guarded(HireSpeciesFn fn, void* clan,
+                               std::uint32_t* result, std::uint16_t key,
+                               std::uint32_t* seh_out,
+                               std::uintptr_t* addr_out) {
+    __try {
+        fn(clan, result, key, 1, 1);
         return true;
     } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
         return false;
@@ -1164,6 +1190,42 @@ bool drive_gate_reset() {
     return true;
 }
 
+// 아래에 정의돼 있다.
+bool clan_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out);
+
+HireSpeciesResult last_hire_species() {
+    std::lock_guard<std::mutex> lock(g_hs_mutex);
+    return g_last_hs;
+}
+
+bool hire_species_ready() {
+    return g_reader != nullptr && g_orig_actor_getter != nullptr;
+}
+
+bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
+    if (!hire_species_ready() || session == 0 || char_key == 0) return false;
+    drop_stale_pending();
+    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
+        kCooldownMs) {
+        return false;
+    }
+    if (g_drive_fault.load(std::memory_order_acquire) == session) return false;
+
+    g_pending = Pending{};
+    g_pending.kind = Kind::HireSpecies;
+    g_pending.session = session;
+    g_pending.key = char_key;
+    g_outcome = SpawnOutcome{};
+    g_pending_at.store(GetTickCount64(), std::memory_order_release);
+    g_has_pending.store(true, std::memory_order_release);
+    log::infof("종 등록 요청을 걸었다 (키 {}) - 게임 스레드를 기다린다",
+               char_key);
+    return true;
+}
+
 std::uintptr_t drive_fault_session() {
     return g_drive_fault.load(std::memory_order_acquire);
 }
@@ -1304,6 +1366,19 @@ bool gate_object(const mem::Reader& reader, std::uintptr_t session,
     if (!reader.read(session + 0xA0, &p, sizeof(p)) || p == 0) return false;
     if (!reader.read(p + 0x68, &p, sizeof(p)) || p == 0) return false;
     if (!reader.read(p + 0x130, &p, sizeof(p)) || p == 0) return false;
+    *out = p;
+    return true;
+}
+
+// 용병단(MercenaryClanActorComponent). 문 객체와 같은 사슬인데 끝만
+// 다르다 - 문은 +0x130, 용병단은 +0x110.
+bool clan_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out) {
+    if (out == nullptr || session == 0) return false;
+    std::uintptr_t p = 0;
+    if (!reader.read(session + 0xA0, &p, sizeof(p)) || p == 0) return false;
+    if (!reader.read(p + 0x68, &p, sizeof(p)) || p == 0) return false;
+    if (!reader.read(p + 0x110, &p, sizeof(p)) || p == 0) return false;
     *out = p;
     return true;
 }
@@ -1555,6 +1630,40 @@ struct CharTrace {
 };
 
 
+
+void run_hire_species(std::uintptr_t session, std::uint16_t key,
+                      SpawnOutcome* out) {
+    SpawnOutcome o;
+    if (out != nullptr) *out = o;
+    if (g_reader == nullptr) return;
+
+    std::uintptr_t clan = 0;
+    if (!clan_object(*g_reader, session, &clan)) {
+        o.no_actor = true;
+        log::warnf("종 등록: 세션 0x{:X} 에서 용병단 사슬이 끊겼다", session);
+        if (out != nullptr) *out = o;
+        return;
+    }
+
+    auto fn = reinterpret_cast<HireSpeciesFn>(g_reader->module_base() +
+                                              kHireSpeciesRva);
+    std::uint32_t result = 0xFFFFFFFFu;
+    o.called = true;
+    o.crashed = !call_hire_species_guarded(fn, reinterpret_cast<void*>(clan),
+                                           &result, key, &o.seh, &o.fault);
+    if (o.crashed) {
+        log::errorf("종 등록이 게임 안에서 죽었다: 0x{:X} at 0x{:X} (RVA 0x{:X})",
+                    o.seh, o.fault, o.fault - g_reader->module_base());
+    } else {
+        std::lock_guard<std::mutex> lock(g_hs_mutex);
+        g_last_hs.valid = true;
+        g_last_hs.key = key;
+        g_last_hs.code = result;
+        log::infof("종 등록: 키 {} -> 코드 0x{:08X} ({})", key, result,
+                   result == 0 ? "성공" : "거부");
+    }
+    if (out != nullptr) *out = o;
+}
 
 // 인벤토리로 바로 넣는다. TLS 가 준비된 스레드에서만 부른다.
 void run_give(std::uintptr_t session, std::uint32_t item_key,
