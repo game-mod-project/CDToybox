@@ -695,6 +695,43 @@ TEST(fill_item_value_refuses_more_sockets_than_the_array_holds) {
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
 }
 
+// --- 소켓 칸 수 자르기 ------------------------------------------------
+//
+// 생성 함수 0x2A70000 이 갈래를 둘로 나눈다(2026-09-07 실측):
+//   - 겹치는 아이템/장비 아님 : 소켓수>0 이면 오류 갈래
+//   - 장비                    : `표 +0x238 >= 소켓수` 면 통과
+// `socket_room` 이 그 규칙을, `clamp_socket_count` 가 배열 다섯 칸을 본다.
+
+TEST(clamp_socket_count_keeps_a_value_inside_the_room) {
+    CHECK_EQ(cdtb::game::clamp_socket_count(2, 3), std::uint8_t{2});
+    CHECK_EQ(cdtb::game::clamp_socket_count(3, 3), std::uint8_t{3});
+}
+
+TEST(clamp_socket_count_cuts_to_the_room) {
+    CHECK_EQ(cdtb::game::clamp_socket_count(5, 2), std::uint8_t{2});
+}
+
+TEST(clamp_socket_count_gives_nothing_when_the_room_is_zero) {
+    // 겹치는 아이템·장비 아님. 넘기면 게임이 오류 갈래로 빠진다.
+    CHECK_EQ(cdtb::game::clamp_socket_count(3, 0), std::uint8_t{0});
+}
+
+TEST(clamp_socket_count_never_passes_more_than_the_array_holds) {
+    // 표가 여섯 칸을 허용해도 TrItemValue 배열은 다섯 칸이다.
+    CHECK_EQ(cdtb::game::clamp_socket_count(9, 9),
+             static_cast<std::uint8_t>(cdtb::game::kGiveMaxSockets));
+}
+
+TEST(clamped_socket_count_always_fits_fill_item_value) {
+    // 자른 값은 fill_item_value 가 거절하지 않아야 한다 - 거절하면
+    // 큐가 그 자리에서 멈춘다.
+    std::uint8_t buf[0x200]{};
+    cdtb::game::GiveExtras ex;
+    ex.socket_count = cdtb::game::clamp_socket_count(200, 200);
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    CHECK_EQ(buf[0x5E], static_cast<std::uint8_t>(cdtb::game::kGiveMaxSockets));
+}
+
 TEST(fill_item_value_writes_no_sockets_by_default) {
     std::uint8_t buf[0x200]{};
     std::memset(buf, 0xAB, sizeof(buf));

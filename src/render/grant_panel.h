@@ -15,8 +15,9 @@ void set_grant_item_key(unsigned int key);
 // 제자리 수정은 게임이 되쓴다. 대신 값을 여기로 옮겨 놓고 고친 뒤
 // 새로 지급하고, 원본은 게임에서 버리게 한다.
 //
-// 소켓은 옮기지 않는다 - 지급/생성 경로로는 소켓을 못 넣는다(게임이
-// 막음). 이미 박힌 소켓은 인벤토리 표시로만 본다.
+// 소켓 선택은 **비운다.** 지급으로 소켓을 열 수는 있지만(지급 패널의
+// "소켓" 절), 원본이 무엇을 박고 있었는지는 여기로 안 넘어온다 -
+// 옮기려면 지급 패널에서 보석 키를 직접 고른다.
 void set_grant_item(unsigned int key, long long count, unsigned int temper,
                     unsigned int sharpness);
 

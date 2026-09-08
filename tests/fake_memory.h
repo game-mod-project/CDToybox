@@ -41,6 +41,9 @@ public:
     // --- 힙 쓰기 도우미 (오프셋은 kHeapBase 기준) ---
     std::uintptr_t heap_addr(std::size_t off) const { return kHeapBase + off; }
     void put_u8(std::size_t off, std::uint8_t v) { heap.at(off) = v; }
+    void put_u16(std::size_t off, std::uint16_t v) {
+        std::memcpy(heap.data() + off, &v, 2);
+    }
     void put_u32(std::size_t off, std::uint32_t v) {
         std::memcpy(heap.data() + off, &v, 4);
     }

@@ -32,14 +32,16 @@ bool g_last_to_inventory = true;
 const char* g_last_what = "";
 
 // 담금질과 장비 연마. 아이템을 바꾸면 상한에 맞춰 잘린다.
-//
-// 소켓은 여기서 다루지 않는다. 2026-09-04 게임 업데이트로 생성/지급
-// 경로에 소켓을 실으면(+0x5E>0) 새 처리기가 오류 분기로 빠져 게임이
-// 죽는다(grant.cpp request_give 가 강제로 0 으로 민다). 그래서 지급
-// 으로는 소켓을 못 넣는다 - 이미 박힌 소켓 표시는 인벤토리에서, 착용
-// 장비의 열린 소켓 편집은 "장비 소켓" 패널(both-realms)에서 한다.
 int g_temper = 0;
 int g_sharpness = 0;
+
+// 열어서 줄 소켓 칸 수. 게임이 이 값만큼 칸을 열어 준다 - 보석을
+// 안 고르면 **빈 칸이 열린 채로** 나온다(= 어비스 슬롯 락 우회).
+// 상한은 `items::socket_room_for` 와 배열 다섯 칸이다.
+int g_socket_open = 0;
+// 각 칸에 박을 보석의 아이템 키. 0 이면 그 칸은 빈 채로 연다.
+std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};
+
 game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
@@ -61,14 +63,148 @@ const char* short_class(const char* mangled) {
     return (p != nullptr) ? p + 4 : mangled;
 }
 
-// 지금 고른 키의 아이템. 없으면 nullptr.
-const game::ItemCatalogEntry* selected_item() {
-    if (!game::items_ready() || g_item_key <= 0) return nullptr;
-    const auto key = static_cast<std::uint32_t>(g_item_key);
+// 키로 아이템을 찾는다. 없으면 nullptr.
+const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
+    if (!game::items_ready() || key == 0) return nullptr;
     for (const auto& e : game::item_catalog()) {
         if (e.key == key) return &e;
     }
     return nullptr;
+}
+
+// 지금 고른 키의 아이템. 없으면 nullptr.
+const game::ItemCatalogEntry* selected_item() {
+    if (g_item_key <= 0) return nullptr;
+    return entry_of(static_cast<std::uint32_t>(g_item_key));
+}
+
+// 이 아이템에 지급으로 열 수 있는 칸 수. 배열 다섯 칸까지다.
+int socket_cap_of(const game::ItemCatalogEntry* item) {
+    if (item == nullptr) return 0;
+    const auto room = game::socket_room(item->max_sockets, item->max_stack,
+                                        item->equip_type);
+    const int cap = static_cast<int>(room);
+    return (cap > game::kGiveMaxSockets) ? game::kGiveMaxSockets : cap;
+}
+
+// 소켓을 **열어서** 준다.
+//
+// 게임의 필드 복사 함수(0x234F930)가 `TrItemValue +0x5E` 만큼 칸을 열고
+// (`칸[k][4] = k`) 그 칸에 우리가 준 6바이트를 넣는다. 보석 키를 안
+// 넣으면 **빈 칸이 열린 채로** 나온다 - 그것이 어비스 슬롯 락 우회다.
+//
+// 상한은 아이템 표의 `max_sockets` 이고, 넘겨 보내면 게임이 거절한다.
+// `request_give` 가 한 번 더 자르지만 화면에서도 같은 값으로 자른다.
+void draw_sockets(const game::ItemCatalogEntry* item) {
+    const int cap = socket_cap_of(item);
+    if (cap <= 0) {
+        g_socket_open = 0;
+        return;
+    }
+    if (g_socket_open > cap) g_socket_open = cap;
+    for (int i = cap; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
+
+    if (!ImGui::CollapsingHeader("소켓 (잠금 없이 열어서 준다)")) return;
+    ImGui::Indent();
+
+    ImGui::TextUnformatted("열 칸 수");
+    ImGui::SameLine(80.0f);
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputInt("##sockets", &g_socket_open, 1, 1);
+    if (g_socket_open < 0) g_socket_open = 0;
+    if (g_socket_open > cap) g_socket_open = cap;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("없음##k")) g_socket_open = 0;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("전부##k")) g_socket_open = cap;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(0 ~ %d)", cap);
+
+    for (int k = 0; k < g_socket_open; ++k) {
+        ImGui::PushID(k);
+        ImGui::Text("칸 %d", k);
+        ImGui::SameLine(80.0f);
+        ImGui::SetNextItemWidth(110.0f);
+        int key = static_cast<int>(g_socket_keys[k]);
+        ImGui::InputInt("##gem", &key, 0, 0);
+        if (key < 0) key = 0;
+        g_socket_keys[k] = static_cast<std::uint32_t>(key);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("비우기")) g_socket_keys[k] = 0;
+        ImGui::SameLine();
+        if (g_socket_keys[k] == 0) {
+            ImGui::TextDisabled("(빈 칸으로 열기)");
+        } else {
+            const auto* gem = entry_of(g_socket_keys[k]);
+            if (gem == nullptr) {
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                                   "표에 없는 키");
+            } else if (gem->category != game::kSocketGemCategory) {
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                                   "%s (소켓 보석이 아님)", gem->name.c_str());
+            } else {
+                ImGui::TextUnformatted(gem->name.c_str());
+            }
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::TextDisabled("보석 키를 비워 두면 빈 칸이 열린 채로 나옵니다.");
+    ImGui::Unindent();
+}
+
+// `drive_gate_reset` 과 같은 기준. 이보다 오래 물린 것만 풀 수 있다.
+constexpr unsigned long long kGateStuckMs = 30000;
+
+// 구동 게이트가 무엇을 물고 있는지 숫자로 낸다. 물린 것이 있으면 true.
+//
+// 실측 2026-09-08: 게임의 지급 처리기가 안 돌아와 `running` 이 10분 넘게
+// 물렸는데 화면에는 "연달아 누르면 잠시 막힙니다 (2초)" 만 떠서, 2초
+// 쿨다운으로 오인하고 한참을 헤맸다. 로그와 `drive` 명령을 봐야만 알 수
+// 있었다. 그 숫자를 여기 그대로 낸다.
+bool draw_drive_gate() {
+    const game::DriveGate g = game::drive_gate_state();
+    const bool held = g.pending || g.running || g.cooldown_left_ms > 0 ||
+                      g.fault_session != 0;
+    if (!held) return false;
+
+    const bool stuck = (g.running && g.running_age_ms > kGateStuckMs) ||
+                       (g.pending && g.pending_age_ms > kGateStuckMs);
+    const ImVec4 warn(0.9f, 0.6f, 0.3f, 1.0f);
+    const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
+
+    if (g.running) {
+        // 실행 중은 원래 몇 초다. 분 단위면 게임 안에서 안 돌아온 것이다.
+        ImGui::TextColored(stuck ? bad : warn,
+                           "구동 중: 게임 스레드가 %.1f초째 안 돌아왔습니다",
+                           g.running_age_ms / 1000.0);
+    }
+    if (g.pending) {
+        ImGui::TextColored(stuck ? bad : warn,
+                           "대기 중: %.1f초째 실행되지 않았습니다"
+                           " (월드가 돌고 있어야 실행됩니다)",
+                           g.pending_age_ms / 1000.0);
+    }
+    if (g.cooldown_left_ms > 0) {
+        ImGui::TextDisabled("쿨다운 %.1f초", g.cooldown_left_ms / 1000.0);
+    }
+    if (g.fault_session != 0) {
+        ImGui::TextColored(bad, "세션 0x%llX 는 죽어서 잠겼습니다",
+                           static_cast<unsigned long long>(g.fault_session));
+    }
+
+    if (stuck) {
+        ImGui::TextDisabled(
+            "이 상태에서는 지급·소환이 전부 조용히 거부됩니다.");
+        if (ImGui::Button("구동 게이트 풀기", ImVec2(150.0f, 0.0f))) {
+            game::drive_gate_reset();
+        }
+        // 게임 스레드가 처리기 안에서 안 돌아온 것이면 게이트를 풀어도
+        // 그 스레드는 그대로다. 실행 지점이 같이 죽으므로 재시작해야 한다.
+        ImGui::SameLine();
+        ImGui::TextDisabled("(풀어도 안 되면 게임을 다시 켜야 합니다)");
+    }
+    return true;
 }
 
 // 담금질과 장비 연마를 정해 준다. 아이템이 그 값을 가질 때만 낸다.
@@ -152,9 +288,16 @@ void draw_selected(const game::ItemCatalogEntry* item) {
 
 }  // namespace
 
+// 아이템이 바뀌면 소켓 선택은 뜻을 잃는다. 상한도 보석 자리도 다르다.
+void reset_sockets() {
+    g_socket_open = 0;
+    for (int i = 0; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
+}
+
 void set_grant_item_key(unsigned int key) {
     g_item_key = static_cast<int>(key);
     g_called = false;      // 새 아이템을 고르면 이전 결과는 지운다
+    reset_sockets();
 }
 
 unsigned int grant_item_key() {
@@ -175,6 +318,7 @@ void set_grant_item(unsigned int key, long long count, unsigned int temper,
                                     : static_cast<int>(count);
     g_temper = static_cast<int>(temper);
     g_sharpness = static_cast<int>(sharpness);
+    reset_sockets();
 }
 
 unsigned int grant_sharpness() {
@@ -258,6 +402,7 @@ void draw_grant_panel(bool* open) {
     ImGui::TextDisabled("아이템 목록에서 줄을 누르면 여기로 들어옵니다");
 
     draw_extras(item);
+    draw_sockets(item);
 
     // --- 막힌 이유는 항상 적는다 ------------------------------------
     const char* blocked = nullptr;
@@ -296,6 +441,22 @@ void draw_grant_panel(bool* open) {
             const int cap_s = static_cast<int>(item->max_sharpness);
             const int sh = (g_sharpness > cap_s) ? cap_s : g_sharpness;
             extras.sharpness = static_cast<std::uint16_t>(sh < 0 ? 0 : sh);
+
+            // 소켓. 칸 수가 곧 "열림" 이고, 보석 키가 0 인 칸은
+            // 빈 칸(0xFFFF)으로 연다. 순번을 못 풀면 그 칸도 빈 칸이다 -
+            // 틀린 순번을 박느니 안 박는 것이 낫다.
+            int open = g_socket_open;
+            const int cap_k = socket_cap_of(item);
+            if (open > cap_k) open = cap_k;
+            if (open < 0) open = 0;
+            for (int k = 0; k < open; ++k) {
+                auto& dst = extras.sockets[k];
+                if (g_socket_keys[k] == 0 ||
+                    !game::socket_bytes_for_key(g_socket_keys[k], dst.raw)) {
+                    game::make_socket_bytes(0xFFFF, dst.raw);
+                }
+            }
+            extras.socket_count = static_cast<std::uint8_t>(open);
         }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;
@@ -334,12 +495,19 @@ void draw_grant_panel(bool* open) {
         ImGui::TextDisabled("화면 중앙(크로스헤어) 자리에 생깁니다");
     }
 
+    // 게이트는 눌렀든 안 눌렀든 낸다. 물려 있으면 다음에 눌러도 거부된다.
+    const bool gate_held = draw_drive_gate();
+
     if (g_called) {
         g_outcome = game::last_outcome();
         if (game::spawn_pending()) {
             ImGui::TextDisabled("게임 스레드를 기다리는 중...");
         } else if (!g_call_ok) {
-            ImGui::TextDisabled("연달아 누르면 잠시 막힙니다 (2초)");
+            // 2초 쿨다운이 아니라 게이트가 물린 것일 수 있다. 게이트를
+            // 이미 위에 냈으므로 여기서는 무엇 때문인지만 가른다.
+            ImGui::TextDisabled(gate_held
+                                    ? "구동 게이트가 물려 요청이 거부됐습니다"
+                                    : "연달아 누르면 잠시 막힙니다 (2초)");
         } else if (g_outcome.no_actor) {
             ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
                                "그 세션에서 액터가 안 나왔습니다");

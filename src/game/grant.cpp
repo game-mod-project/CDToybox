@@ -11,6 +11,7 @@
 
 #include "core/log.h"
 #include "game/companion.h"
+#include "game/items.h"
 #include "mem/hook.h"
 #include "mem/scanner.h"
 
@@ -1794,6 +1795,16 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
     return true;
 }
 
+std::uint8_t clamp_socket_count(std::uint8_t requested, std::uint32_t room) {
+    if (room > static_cast<std::uint32_t>(kGiveMaxSockets)) {
+        room = static_cast<std::uint32_t>(kGiveMaxSockets);
+    }
+    if (static_cast<std::uint32_t>(requested) > room) {
+        return static_cast<std::uint8_t>(room);
+    }
+    return requested;
+}
+
 int clamp_count_to_stack(int count, std::uint32_t max_stack) {
     if (count < 1) count = 1;
     if (max_stack == 0) return count;
@@ -1978,21 +1989,26 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     g_pending.session = session;
     g_pending.key = item_key;
     g_pending.count = count;
-    // 2026-09-04 업데이트: 소켓만 막는다. 새 처리기(생성 함수 0x2A70000)
-    // 는 소켓수(+0x5E)>0 이면 오류 분기로 빠져 상태를 오염시켜 게임이
-    // 죽는다. 내구도(+0x2A)·연마(+0x1AE)는 정적으로 재확인했다 - 소켓수
-    // 0 인 정상 경로의 필드 복사 함수 0x234F930 이 그 오프셋을 그대로
-    // 읽는다(연마는 아이템 표 +0x2E8 상한으로 자름). 담금질도 그대로.
-    // 자세한 것은 specs/2026-09-04-game-update-break.md.
+    // 소켓은 여기서 최종으로 자른다. 2026-09-04 에는 아예 0 으로 밀었는데,
+    // 그 판정("업데이트가 소켓 전달을 없앴다")은 생성 함수 0x2A70000 의
+    // **두 갈래 중 하나만 보고** 내린 오독이었다. 실제로는:
+    //   - 겹치는 아이템 갈래: 소켓수>0 이면 오류 (0x2A7022C)
+    //   - 장비 갈래:         `표 +0x238 >= 소켓수` 면 통과 (0x2A70341)
+    // 그리고 필드 복사 함수 0x234F930 은 지금도 `+0x40` 의 소켓 바이트를
+    // 옮긴다(레지스터 인덱스라 예전 오프셋 훑기에 안 잡혔다).
+    // 근거: specs/2026-09-07-socket-grant-unlock-research.md.
     GiveExtras safe = extras;
-    safe.socket_count = 0;
+    safe.socket_count =
+        clamp_socket_count(extras.socket_count, socket_room_for(item_key));
     g_pending.extras = safe;
     g_outcome = SpawnOutcome{};
     g_pending_at.store(GetTickCount64(), std::memory_order_release);
     g_has_pending.store(true, std::memory_order_release);
-    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}) -"
-               " 게임 스레드를 기다린다",
-               safe.temper, safe.endurance, safe.sharpness);
+    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}"
+               " 소켓 {}/{}) - 게임 스레드를 기다린다",
+               safe.temper, safe.endurance, safe.sharpness,
+               static_cast<int>(safe.socket_count),
+               static_cast<int>(extras.socket_count));
     return true;
 }
 

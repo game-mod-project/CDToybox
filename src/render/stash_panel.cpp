@@ -183,14 +183,15 @@ void draw_stash_panel(bool* open) {
             // 거절한다 - 그러면 큐가 그 자리에서 영영 멈춘다. 파일에
             // 큰 값이 있으면 깎아서 보낸다.
             std::uint32_t cap = 0;
-            std::uint32_t socket_cap = 0;
             for (const auto& c : game::item_catalog()) {
                 if (c.key == e.key) {
                     cap = c.max_temper;
-                    socket_cap = c.max_sockets;
                     break;
                 }
             }
+            // 소켓 상한은 한 곳에서만 판단한다(장비 여부·겹침·표 상한).
+            // request_give 가 같은 값으로 한 번 더 자른다.
+            const std::uint32_t socket_cap = game::socket_room_for(e.key);
 
             game::GiveExtras extras;
             extras.temper =
