@@ -24,6 +24,7 @@
 #include "findquat.h"
 #include "game/actors.h"
 #include "game/camera.h"
+#include "game/clan.h"
 #include "game/equip.h"
 #include "game/grant.h"
 #include "game/inventory.h"
@@ -74,6 +75,7 @@ void usage() {
         "  invlist [주소]              인벤토리를 이름·담금질까지\n"
         "  invlist raw [주소]          + 뜻을 모르는 칸까지\n"
         "  invexport [파일]            인벤토리를 보관함 파일로\n"
+        "  clan                        내가 가진 동반자 명부\n"
         "  dumpimage [파일] [--raw]    실행 중 프로세스의 모듈 이미지를\n"
         "                              디스어셈블러가 읽는 PE 로 뜬다\n"
         "\n"
@@ -1381,6 +1383,37 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // 탈것·용병·캐릭터 카탈로그를 낸다. 모드와 같은 함수를 돌려 배포 전
 // 검증한다. roster [탈것|용병|캐릭터] [최대개수]
 // 살아 있는 액터를 걷어 캐릭터 이름을 붙인다 (모드의 근처 탭과 같은 코드).
+// 내가 가진 동반자 명부. 전부 읽기다.
+//
+// 용병단 컴포넌트의 레코드 배열을 걷는다(game/clan.h).
+void cmd_clan(mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
+    }
+    std::uintptr_t clan = 0;
+    if (!game::find_clan_component(reader, rt, &clan)) {
+        std::printf("용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::vector<game::ClanEntry> list;
+    if (!game::read_clan_roster(reader, clan, &list)) {
+        std::printf("명부를 읽지 못했습니다.\n");
+        return;
+    }
+    std::size_t spawned = 0;
+    for (const auto& e : list) if (e.spawned()) ++spawned;
+    std::printf("용병단 0x%llX - 동반자 %zu명, 그중 월드에 %zu명\n",
+                static_cast<unsigned long long>(clan), list.size(), spawned);
+    for (const auto& e : list) {
+        std::printf("  번호 %8llu  행 %5u  키 %6u  타입행 %2d  %-42s %s%s\n",
+                    static_cast<unsigned long long>(e.merc_no), e.row, e.key,
+                    e.merc_row == 0xFFFF ? -1 : static_cast<int>(e.merc_row),
+                    e.name.empty() ? "(이름 없음)" : e.name.c_str(),
+                    e.label.empty() ? "" : e.label.c_str(),
+                    e.spawned() ? "  [월드]" : "");
+    }
+}
+
 void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 char** argv) {
     const bool all = (argc > 2) && std::strcmp(argv[2], "all") == 0;
@@ -3425,6 +3458,7 @@ int main(int argc, char** argv) {
         cmd_fields(rt, r, parse_addr(argv[2]), n);
         return 0;
     }
+    if (cmd == "clan") { cmd_clan(rt, reader); return 0; }
     if (cmd == "instcount") {
         cmd_instcount(rt, argc, argv);
         return 0;

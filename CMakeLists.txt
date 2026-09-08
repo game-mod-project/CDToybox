@@ -76,6 +76,7 @@ add_library(cdtoybox SHARED
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/actors.cpp
+    src/game/clan.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -132,6 +133,7 @@ add_executable(cdtb_tests
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/actors.cpp
+    src/game/clan.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -159,6 +161,7 @@ add_executable(cdtb_probe
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/actors.cpp
+    src/game/clan.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
