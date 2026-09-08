@@ -1376,9 +1376,13 @@ bool gate_object(const mem::Reader& reader, std::uintptr_t session,
 bool clan_from_session(const mem::Reader& reader, std::uintptr_t session,
                        std::uintptr_t* out) {
     if (out == nullptr || session == 0) return false;
+    // 2454 역직렬화(0x2965662)가 쓰는 사슬 그대로다.
+    //   mov rcx, [세션+0x68] / mov rcx, [rcx+0x110]
+    // 문 객체(gate_object)가 쓰는 +0xA0 한 단계는 여기 없다 - 그것은
+    // 세션 vtable[0x160] 이 돌려주는 스포너를 흉내낸 것이고 용병단은
+    // 세션에서 바로 간다. 실측 2026-09-08으로 확인했다.
     std::uintptr_t p = 0;
-    if (!reader.read(session + 0xA0, &p, sizeof(p)) || p == 0) return false;
-    if (!reader.read(p + 0x68, &p, sizeof(p)) || p == 0) return false;
+    if (!reader.read(session + 0x68, &p, sizeof(p)) || p == 0) return false;
     if (!reader.read(p + 0x110, &p, sizeof(p)) || p == 0) return false;
     *out = p;
     return true;
