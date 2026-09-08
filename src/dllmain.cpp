@@ -36,11 +36,14 @@ DWORD WINAPI init_thread(LPVOID) {
     cdtb::log::init(dir + L"CDToybox.log");
     cdtb::log::infof("CDToybox 0단계 시작");
 
-    const cdtb::Config cfg = cdtb::config::load(dir + L"CDToybox.ini");
-    cdtb::log::infof("설정: toggle=0x{:X} unload=0x{:X} diagnostics={}",
-                     cfg.toggle_key, cfg.unload_key, cfg.show_diagnostics);
+    const std::wstring ini = dir + L"CDToybox.ini";
+    const cdtb::Config cfg = cdtb::config::load(ini);
+    cdtb::log::infof("설정: toggle=0x{:X} unload=0x{:X} diagnostics={}"
+                     " socket_cap={}",
+                     cfg.toggle_key, cfg.unload_key, cfg.show_diagnostics,
+                     cfg.socket_cap);
 
-    cdtb::overlay::set_config(cfg);
+    cdtb::overlay::set_config(cfg, ini);
 
     if (!cdtb::render::install_hooks()) {
         cdtb::log::errorf("렌더 훅 설치 실패 - 오버레이 없이 계속한다");

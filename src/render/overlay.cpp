@@ -27,6 +27,7 @@
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
 #include "game/freecam.h"
+#include "game/items.h"
 #include "game/player.h"
 #include "game/specguard.h"
 #include "mem/reader.h"
@@ -72,6 +73,7 @@ std::string self_dir_utf8() {
 }
 
 Config g_cfg;
+std::wstring g_ini_path;
 bool g_visible = false;
 bool g_ready = false;
 
@@ -459,7 +461,21 @@ namespace cdtb::overlay {
 
 using namespace detail;
 
-void set_config(const Config& cfg) { g_cfg = cfg; }
+void set_config(const Config& cfg, const std::wstring& ini_path) {
+    g_cfg = cfg;
+    g_ini_path = ini_path;
+}
+
+int socket_cap_setting() { return g_cfg.socket_cap; }
+
+bool set_socket_cap_setting(int value) {
+    if (value < 0 || value > static_cast<int>(cdtb::game::kSocketSlotMax)) {
+        return false;
+    }
+    g_cfg.socket_cap = value;
+    if (g_ini_path.empty()) return false;
+    return cdtb::config::save(g_ini_path, g_cfg);
+}
 
 bool is_visible() {
     // 그리기가 꺼졌으면 열려 있다고 하지 않는다. 그래야 wndproc 이
@@ -547,6 +563,22 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
+
+        // 소켓 상한은 아이템표에 거는 것이라 **매 실행 다시 걸어야 한다**
+        // (표는 exe 에서 새로 읽힌다). 설정이 켜져 있으면 표가 올라온
+        // 뒤 한 번만 건다. 여기서 하는 이유는 specguard 와 같다 - 분석
+        // 루프는 목적을 이루면 빠져나가므로 걸 자리가 없다.
+        // 표가 올라온 그 순간 한 번만 본다. 설정이 꺼져 있어도 그때
+        // 끝낸다 - 안 그러면 나중에 화면에서 체크박스를 켜는 순간
+        // 여기서도 걸려, "다음 실행부터" 라는 문구와 어긋난다.
+        static bool s_cap_done = false;
+        if (!s_cap_done && cdtb::game::items_ready()) {
+            s_cap_done = true;
+            if (g_cfg.socket_cap > 0) {
+                cdtb::game::socket_cap_raise(
+                    reader, static_cast<std::uint32_t>(g_cfg.socket_cap));
+            }
+        }
     }
 
     if (!g_visible) { g_frame_stage = kStageIdle; return; }

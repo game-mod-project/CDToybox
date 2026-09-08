@@ -60,6 +60,11 @@ Config load(const std::wstring& path) {
             c.unload_key = to_int(val, c.unload_key);
         } else if (key == "show_diagnostics") {
             c.show_diagnostics = (to_int(val, 1) != 0);
+        } else if (key == "socket_cap") {
+            // 소켓 벡터가 다섯 칸이라 그 밖의 값은 뜻이 없다. 파일이
+            // 이상하면 끈 것으로 본다 - 게임 표를 이상한 값으로 쓰느니.
+            const int v = to_int(val, 0);
+            c.socket_cap = (v < 0 || v > 5) ? 0 : v;
         }
     }
     return c;
@@ -74,6 +79,8 @@ bool save(const std::wstring& path, const Config& c) {
     out << "unload_key = 0x" << std::hex << c.unload_key << "\n";
     out << std::dec;
     out << "show_diagnostics = " << (c.show_diagnostics ? 1 : 0) << "\n";
+    out << "; 0=끔, 1..5=장비 소켓 상한을 그 값으로 올린다 (세션마다 다시 걸린다)\n";
+    out << "socket_cap = " << c.socket_cap << "\n";
     return out.good();
 }
 

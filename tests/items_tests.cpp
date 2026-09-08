@@ -413,3 +413,50 @@ TEST(socket_room_refuses_a_stacking_item) {
 TEST(socket_room_refuses_when_the_table_gives_no_sockets) {
     CHECK_EQ(cdtb::game::socket_room(0, 1, 7), std::uint32_t{0});
 }
+
+// --- 소켓 상한 올리기 대상 고르기 ---------------------------------------
+//
+// 아이템표(`ItemInfo+0x238`)가 화면·사용 칸 수를 정한다(실측 2026-09-08).
+// 올릴 것만 고른다.
+
+TEST(socket_cap_target_takes_equipment_below_the_wanted_cap) {
+    CHECK(cdtb::game::socket_cap_target(3, 7, 5));
+    CHECK(cdtb::game::socket_cap_target(1, 7, 2));
+}
+
+TEST(socket_cap_target_skips_items_that_are_not_equipment) {
+    CHECK(!cdtb::game::socket_cap_target(3, 0xFFFF, 5));
+}
+
+TEST(socket_cap_target_skips_gear_designed_without_sockets) {
+    // 원래 0칸인 장비에 없던 소켓을 만들지 않는다 - 다른 이야기다.
+    CHECK(!cdtb::game::socket_cap_target(0, 7, 5));
+}
+
+TEST(socket_cap_target_never_lowers_a_cap) {
+    CHECK(!cdtb::game::socket_cap_target(5, 7, 5));
+    CHECK(!cdtb::game::socket_cap_target(5, 7, 3));
+}
+
+TEST(socket_cap_raise_does_nothing_without_a_catalog) {
+    // 표가 없으면 쓸 곳도 모른다. 게임 메모리를 안 건드리고 빠진다.
+    const Fixture f;
+    const auto r = cdtb::game::socket_cap_raise(f.mem, 5);
+    CHECK(!r.ok);
+    CHECK_EQ(r.changed, 0);
+}
+
+TEST(socket_cap_raise_refuses_a_value_past_the_vector) {
+    // 소켓 벡터는 다섯 칸이다. 그 위는 뜻이 없다.
+    const Fixture f;
+    CHECK(!cdtb::game::socket_cap_raise(f.mem, 6).ok);
+    CHECK(!cdtb::game::socket_cap_raise(f.mem, 0).ok);
+}
+
+TEST(socket_cap_restore_reports_nothing_when_it_was_never_raised) {
+    const Fixture f;
+    const auto r = cdtb::game::socket_cap_restore(f.mem);
+    CHECK(!r.ok);
+    CHECK_EQ(r.changed, 0);
+    CHECK(!cdtb::game::socket_cap_active());
+}

@@ -11,6 +11,12 @@ struct Config {
     // 일이 생겼다. 이동 키에서 멀리 떨어뜨린다.
     int unload_key = 0x79;   // VK_F10
     bool show_diagnostics = true;
+
+    // 소켓 상한 올리기. 0 이면 안 건다, 1..5 면 그 값으로 건다.
+    //
+    // 아이템표는 매 실행 exe 에서 다시 읽히므로 이 설정이 있어야 세션마다
+    // 다시 걸린다. 자세한 것은 `game::socket_cap_raise` 주석.
+    int socket_cap = 0;
 };
 
 namespace config {

@@ -15,6 +15,7 @@
 #include "game/items.h"
 #include "game/stash.h"
 #include "render/grant_panel.h"
+#include "render/overlay.h"
 #include "render/stash_panel.h"
 #include "render/item_style.h"
 
@@ -283,6 +284,91 @@ void draw_filter_bar() {
 
 }  // namespace
 
+namespace {
+
+// 마지막 결과를 화면에 남긴다. 표 6813개를 훑는 일이라 눌렀는지
+// 아닌지가 안 보이면 사람이 두 번 누른다.
+std::string g_cap_note;
+
+// 소켓 상한 올리기.
+//
+// 아이템표(`ItemInfo+0x238`)가 **화면·사용 칸 수**를 정한다. 레코드의
+// 열린 칸은 세이브에 남지만 표는 매 실행 exe 에서 다시 읽히므로, 표 상한을
+// 넘긴 칸을 계속 쓰려면 세션마다 다시 걸어야 한다. 그래서 설정에 남기고
+// 오버레이가 표가 올라온 뒤 자동으로 건다.
+// 근거: specs/2026-09-07-socket-grant-unlock-research.md 9절.
+void draw_socket_cap() {
+    if (!ImGui::CollapsingHeader("소켓 상한 (실험)")) return;
+    ImGui::Indent();
+
+    const bool on = game::socket_cap_active();
+    const std::uint32_t now = game::socket_cap_value();
+    if (on) {
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
+                           "걸려 있습니다 - 소켓 있는 장비의 상한 %u칸", now);
+    } else {
+        ImGui::TextDisabled("안 걸려 있습니다 (아이템표 원래 값)");
+    }
+
+    static int want = 0;
+    if (want == 0) {
+        want = on ? static_cast<int>(now) : overlay::socket_cap_setting();
+        if (want <= 0) want = static_cast<int>(game::kSocketSlotMax);
+    }
+    ImGui::TextUnformatted("칸 수");
+    ImGui::SameLine(70.0f);
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputInt("##cap", &want, 1, 1);
+    if (want < 1) want = 1;
+    if (want > static_cast<int>(game::kSocketSlotMax)) {
+        want = static_cast<int>(game::kSocketSlotMax);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(1 ~ %u)", game::kSocketSlotMax);
+
+    if (ImGui::Button("걸기", ImVec2(90.0f, 0.0f))) {
+        const mem::LocalReader reader;
+        const auto res = game::socket_cap_raise(
+            reader, static_cast<std::uint32_t>(want));
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+                      res.ok ? "%d개 올렸습니다 (대상 아님 %d)"
+                             : "걸지 못했습니다 (%d / %d)",
+                      res.changed, res.skipped);
+        g_cap_note = buf;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!on);
+    if (ImGui::Button("되돌리기", ImVec2(90.0f, 0.0f))) {
+        const mem::LocalReader reader;
+        const auto res = game::socket_cap_restore(reader);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%d개 되돌렸습니다 (실패 %d)",
+                      res.changed, res.skipped);
+        g_cap_note = buf;
+    }
+    ImGui::EndDisabled();
+
+    // 설정에 남겨야 다음 실행부터 저절로 걸린다. 표는 세이브에 안 남는다.
+    bool keep = overlay::socket_cap_setting() > 0;
+    if (ImGui::Checkbox("다음 실행부터 자동으로 걸기", &keep)) {
+        overlay::set_socket_cap_setting(keep ? want : 0);
+    }
+
+    if (!g_cap_note.empty()) ImGui::TextDisabled("%s", g_cap_note.c_str());
+
+    ImGui::TextWrapped(
+        "소켓이 **있는** 장비만 올립니다(원래 0칸인 것은 그대로). 늘어난 칸은 "
+        "지급이나 장비 소켓 편집으로 채웁니다.");
+    ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
+                       "주의: 상한은 세이브에 안 남습니다. 모드를 빼면 열어 둔 "
+                       "칸은 데이터에 남되 원래 상한까지만 보입니다.");
+
+    ImGui::Unindent();
+}
+
+}  // namespace
+
 void draw_inventory_panel(bool* open) {
     ImGui::SetNextWindowPos(ImVec2(400, 600), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(680.0f, 420.0f), ImGuiCond_FirstUseEver);
@@ -342,6 +428,8 @@ void draw_inventory_panel(bool* open) {
         ImGui::End();
         return;
     }
+
+    draw_socket_cap();
 
     // 가방 확장은 되돌렸다. 등록 컨테이너 18개 전부에 무차별로 쓰면
     // 그중 임시 버퍼(게임이 유지하는 4개 평행 사본 중 2개)를 건드려

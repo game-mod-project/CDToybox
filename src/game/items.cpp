@@ -1,9 +1,12 @@
 #include "game/items.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <mutex>
 
 #include "core/log.h"
 #include "mem/scanner.h"
@@ -188,6 +191,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.repair_entries = e.repair_entries;
         entry.max_sharpness = e.max_sharpness;
         entry.equip_type = e.equip_type;
+        entry.record = e.record;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
@@ -209,10 +213,24 @@ const std::vector<ItemCatalogEntry> kEmptyCatalog;
 // 살려 둔다 - 많아야 두 판이다.
 std::atomic<const std::vector<ItemCatalogEntry>*> g_catalog{&kEmptyCatalog};
 std::vector<std::unique_ptr<std::vector<ItemCatalogEntry>>> g_versions;
+// 소켓 상한 올리기는 화면 스레드에서 오고 목록 만들기는 분석
+// 스레드에서 온다. 옛 판을 담아 두는 이 vector 만 겹치므로 여기만 잠근다.
+std::mutex g_versions_mutex;
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_named{false};
 std::atomic<std::size_t> g_named_count{0};
 std::atomic<std::size_t> g_total_count{0};
+
+// 옛 판을 살려 둔 채 새 판으로 바꿔 끼운다. 그리는 쪽이 참조를 쥔 채로
+// 프레임을 돌기 때문에 갈아엎으면 안 된다.
+void publish_catalog(std::unique_ptr<std::vector<ItemCatalogEntry>> built) {
+    const auto* p = built.get();
+    {
+        std::lock_guard<std::mutex> lk(g_versions_mutex);
+        g_versions.push_back(std::move(built));
+    }
+    g_catalog.store(p, std::memory_order_release);
+}
 
 }  // namespace
 
@@ -253,9 +271,7 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     const std::size_t total = built->size();
     g_total_count.store(total, std::memory_order_release);
     g_named_count.store(named, std::memory_order_release);
-    const auto* p = built.get();
-    g_versions.push_back(std::move(built));
-    g_catalog.store(p, std::memory_order_release);
+    publish_catalog(std::move(built));
     g_ready.store(true, std::memory_order_release);
     if (named > 0) g_named.store(true, std::memory_order_release);
     log::infof("아이템 표: {}개, 이름 풀린 것 {}개{}", total, named,
@@ -743,6 +759,141 @@ std::uint32_t socket_room_for(std::uint32_t item_key) {
         return socket_room(e.max_sockets, e.max_stack, e.equip_type);
     }
     return 0;
+}
+
+// ------------------------------------------------- 소켓 상한 올리기
+
+namespace {
+
+// 되돌리려고 기억해 두는 원본. 화면 스레드에서만 만지지만, 언로드
+// 경로가 다른 스레드일 수 있어 잠근다.
+struct CapSaved {
+    std::uintptr_t record = 0;
+    std::uint32_t key = 0;
+    std::uint32_t original = 0;
+};
+std::mutex g_cap_mutex;
+std::vector<CapSaved> g_cap_saved;
+std::atomic<std::uint32_t> g_cap_value{0};
+
+// 인프로세스 직접 쓰기. **주입 DLL 전용**이다(equip.cpp 와 같은 규약).
+bool cap_wr32(std::uintptr_t at, std::uint32_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint32_t*>(at) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// 지금 목록을 베껴 소켓 상한만 갈아 끼운 새 판을 낸다. 이름을 다시
+// 풀지 않으므로 값싸다(표를 다시 걷는 재생성이 필요 없다).
+//
+// `caps` 가 비어 있지 않으면 그 키의 값으로, 비어 있으면 want 로.
+void republish_with_caps(const std::vector<CapSaved>& restore_to,
+                         std::uint32_t want) {
+    const auto& cur = item_catalog();
+    if (cur.empty()) return;
+    auto built = std::make_unique<std::vector<ItemCatalogEntry>>(cur);
+    for (auto& e : *built) {
+        if (!restore_to.empty()) {
+            for (const auto& s : restore_to) {
+                if (s.key == e.key) {
+                    e.max_sockets = s.original;
+                    break;
+                }
+            }
+        } else if (socket_cap_target(e.max_sockets, e.equip_type, want)) {
+            e.max_sockets = want;
+        }
+    }
+    publish_catalog(std::move(built));
+}
+
+}  // namespace
+
+bool socket_cap_target(std::uint32_t max_sockets, std::uint16_t equip_type,
+                       std::uint32_t want) {
+    if (equip_type == 0xFFFF) return false;   // 장비가 아니다
+    if (max_sockets == 0) return false;       // 설계상 소켓이 없는 장비
+    return max_sockets < want;
+}
+
+bool socket_cap_active() {
+    return g_cap_value.load(std::memory_order_acquire) != 0;
+}
+
+std::uint32_t socket_cap_value() {
+    return g_cap_value.load(std::memory_order_acquire);
+}
+
+SocketCapResult socket_cap_raise(const mem::Reader& reader,
+                                 std::uint32_t want) {
+    SocketCapResult r;
+    if (!items_ready() || want == 0 || want > kSocketSlotMax) return r;
+    if (socket_cap_active()) {
+        // 이미 걸려 있으면 먼저 되돌린다. 그래야 원본이 겹치지 않는다.
+        socket_cap_restore(reader);
+    }
+
+    std::vector<CapSaved> saved;
+    const auto& cat = item_catalog();
+    saved.reserve(256);
+    for (const auto& e : cat) {
+        if (e.record == 0) continue;
+        if (!socket_cap_target(e.max_sockets, e.equip_type, want)) {
+            ++r.skipped;
+            continue;
+        }
+        // 목록이 낡았을 수 있다. 표에서 다시 읽어 대조한 뒤에만 쓴다.
+        std::uint32_t live = 0;
+        if (!reader.read_value(e.record + kRecSockets, &live)) continue;
+        if (live != e.max_sockets) continue;   // 목록과 표가 어긋난다
+        if (!cap_wr32(e.record + kRecSockets, want)) continue;
+        std::uint32_t back = 0;
+        if (!reader.read_value(e.record + kRecSockets, &back) || back != want) {
+            continue;                           // 안 써졌다
+        }
+        saved.push_back(CapSaved{e.record, e.key, live});
+        ++r.changed;
+    }
+
+    if (r.changed == 0) return r;
+    {
+        std::lock_guard<std::mutex> lk(g_cap_mutex);
+        g_cap_saved = saved;
+    }
+    g_cap_value.store(want, std::memory_order_release);
+    republish_with_caps({}, want);
+    r.ok = true;
+    log::infof("소켓 상한: {}개 아이템을 {}칸으로 올렸다 (대상 아님 {})",
+               r.changed, want, r.skipped);
+    return r;
+}
+
+SocketCapResult socket_cap_restore(const mem::Reader& reader) {
+    SocketCapResult r;
+    std::vector<CapSaved> saved;
+    {
+        std::lock_guard<std::mutex> lk(g_cap_mutex);
+        saved.swap(g_cap_saved);
+    }
+    if (saved.empty()) return r;
+
+    for (const auto& s : saved) {
+        if (cap_wr32(s.record + kRecSockets, s.original)) {
+            ++r.changed;
+        } else {
+            ++r.skipped;
+        }
+    }
+    g_cap_value.store(0, std::memory_order_release);
+    republish_with_caps(saved, 0);
+    r.ok = true;
+    log::infof("소켓 상한: {}개를 원래 값으로 되돌렸다 (실패 {})", r.changed,
+               r.skipped);
+    (void)reader;
+    return r;
 }
 
 std::uint16_t full_endurance_for(std::uint32_t item_key) {

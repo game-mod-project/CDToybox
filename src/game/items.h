@@ -222,6 +222,10 @@ struct ItemCatalogEntry {
     std::uint32_t repair_entries = 0;      // ItemEntry 의 같은 칸
     std::int16_t max_sharpness = 0;        // ItemEntry 의 같은 칸
     std::uint16_t equip_type = 0xFFFF;     // ItemEntry 의 같은 칸
+
+    // 이 아이템의 `ItemInfo` 레코드 주소. 소켓 상한 올리기가 여기에
+    // 쓴다(`socket_cap_raise`). 표를 다시 걷지 않으려고 들고 있는다.
+    std::uintptr_t record = 0;
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름
@@ -293,6 +297,54 @@ std::uint32_t socket_room(std::uint32_t max_sockets, std::uint32_t max_stack,
 
 // 위를 아이템 키로 조회한다. 표가 아직 없거나 키가 없으면 0(=금지).
 std::uint32_t socket_room_for(std::uint32_t item_key);
+
+// ------------------------------------------------- 소켓 상한 올리기
+//
+// 아이템표의 소켓 상한(`ItemInfo+0x238`)을 want 로 올린다.
+//
+// **왜 필요한가 (실측 2026-09-08).** 레코드의 열린 칸 수(`+0x70`)는
+// 세이브에 남지만, **화면·사용 칸 수를 정하는 것은 아이템표**다. 표 상한
+// 3짜리 장비에 5칸을 열고 저장·재시작하면 레코드는 5칸 그대로인데 툴팁은
+// 3칸이고, 레코드를 그대로 둔 채 표만 5로 올리면 5칸이 된다.
+//
+// **한계.** 표는 매 실행 exe 에서 다시 읽히므로 이 변경은 **세이브에 안
+// 남는다.** 세션마다 다시 걸어야 하고, 모드를 빼면 데이터(열린 칸)는
+// 남되 표 상한까지만 보인다. 화면에 그대로 알린다.
+//
+// 근거: specs/2026-09-07-socket-grant-unlock-research.md 5·9 절.
+struct SocketCapResult {
+    bool ok = false;
+    int changed = 0;   // 실제로 올린(또는 되돌린) 아이템 수
+    int skipped = 0;   // 대상이 아니거나 이미 그 값
+};
+
+// 이 아이템이 상한 올리기의 대상인가. 순수 함수라 표 없이 시험한다.
+//
+//   - 장비여야 한다(`equip_type != 0xFFFF`). 아니면 소켓 자체가 없다.
+//   - **원래 소켓이 있어야 한다**(`max_sockets > 0`). 소켓이 설계상 없는
+//     장비에 없던 소켓을 만들지 않는다 - 그건 다른 이야기다.
+//   - 이미 want 이상이면 건드리지 않는다(낮추지 않는다).
+bool socket_cap_target(std::uint32_t max_sockets, std::uint16_t equip_type,
+                       std::uint32_t want);
+
+// **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 표에 직접
+// 쓴다(equip.cpp 의 제자리 쓰기와 같은 규약). 별도 프로세스인 probe 가
+// 부르면 자기 메모리를 쓰게 된다.
+//
+// want 는 1..kSocketSlotMax. 되돌릴 수 있게 원본을 기억한다.
+SocketCapResult socket_cap_raise(const mem::Reader& reader,
+                                 std::uint32_t want);
+
+// 올려 둔 것을 전부 원래 값으로 되돌린다. 건 적이 없으면 ok=false.
+SocketCapResult socket_cap_restore(const mem::Reader& reader);
+
+// 지금 걸려 있는가 / 무슨 값으로.
+bool socket_cap_active();
+std::uint32_t socket_cap_value();
+
+// 소켓 벡터가 다섯 칸 고정이라 이보다 크게 올릴 이유가 없다.
+// (0x234F930 이 `mov edx,5` 로 확보하고 `cmp r8b,5` 로 끊는다.)
+inline constexpr std::uint32_t kSocketSlotMax = 5;
 
 // 소켓 한 칸의 6바이트를 조립한다.
 //
