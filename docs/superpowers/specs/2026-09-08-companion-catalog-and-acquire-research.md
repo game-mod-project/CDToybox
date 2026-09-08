@@ -366,6 +366,47 @@ BlackWolf                       검은 늑대
 
 ---
 
+## 6.6 실측 결과 — N-1 과 N-3 은 원안 그대로는 죽었다 (2026-09-09)
+
+권고 순서 2번(`instcount`)을 실행했다. 다섯 분이면 갈린다고 적었고,
+실제로 그렇게 갈렸다.
+
+| 클래스 | 살아있는 인스턴스 |
+|---|---|
+| `MercenarySaveData` | **0** |
+| `MercenaryClanSaveData` | **0** |
+| `GameData_SummonCharacter` | **0** |
+| `ItemUseData_ConvertCharacter` | **0** |
+| `ReflectMetaObjectBind<MercenarySaveData>` | 1 (리플렉션 싱글턴만) |
+
+- **N-1 불가(원안).** `*SaveData` 는 저장·적재 순간에만 만들어지는
+  징검다. 플레이 중에는 메모리에 없으므로 제자리 쓰기를 걸 대상이
+  없다. 리플렉션으로 속성 이름을 얻은 것은 유효하나, 그것만으로는
+  쓸 자리가 없다.
+- **N-3 불가.** `GameData_SummonCharacter` 도 살아있지 않다 —
+  `SummonCharacterTrackNode` 와 같은 운명이다. 문서가 예상한 대로고,
+  한 줄로 버렸다.
+- `ItemUseData_ConvertCharacter` 도 0 이라 지금 볼 것이 없다.
+
+### 그래서 N-1 은 대상을 바꿔야 한다
+
+런타임 명부는 세이브 구조체가 아니라 **용병단 컴포넌트**에 산다.
+
+```
+[[세션 + 0x68] + 0x110]  = (Server|Client)MercenaryClanActorComponent
+```
+
+그리고 개체마다 `ClientMercenaryActorComponent` 가 붙어 있고, 거기에
+`+0x18 고용주` · `+0x20 번호` 가 있다(§6.5). **다음에 볼 곳은 용병단
+컴포넌트의 번호→레코드 배열**이고, 거기에 종(CharacterKey 또는 행
+번호)이 있는지를 본다. 이미 등록해 둔 개체의 키를 알고 있으므로
+역산은 그대로 쓸 수 있다.
+
+그 다음 순위는 여전히 **N-2(액터 종 위장 후 2338)** 다. §6.5 가 관문
+셀을 전부 열어 두었으므로, 지금은 무엇을 만족시켜야 하는지가 명확하다.
+
+---
+
 ## 7. 근거 파일
 
 - 정적 분석 이번 회차: `tools/rtti/disasm.py` · `find_class.py` 로 수행.
