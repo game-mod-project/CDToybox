@@ -67,7 +67,7 @@ int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
 bool g_near_companion_only = true;
 // 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
 // 대부분 NPC·몬스터·시체라 고를 이유가 없다.
-bool g_register_only = true;
+bool g_comp_spawnable_only = true;  // 동반자 탭: 소환되는 종만
 double g_near_last_refresh = 0.0;
 double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
@@ -176,6 +176,8 @@ void draw_companion_tab() {
     ImGui::Checkbox("야생만", &g_comp_wild_only);
     ImGui::SameLine();
     ImGui::Checkbox("고용 가능만", &g_comp_hirable_only);
+    ImGui::SameLine();
+    ImGui::Checkbox("소환 가능만", &g_comp_spawnable_only);
     if (types.empty()) {
         ImGui::TextDisabled("용병 타입 표를 못 찾아 타입 이름 대신 행 번호를 씁니다.");
     }
@@ -196,6 +198,7 @@ void draw_companion_tab() {
         if (g_comp_type >= 0 && e.merc_row != g_comp_type) continue;
         if (g_comp_wild_only && !game::roster_is_wild(e.name)) continue;
         if (g_comp_hirable_only && !e.hirable) continue;
+        if (g_comp_spawnable_only && !e.spawnable) continue;
         if (!matches_query(e)) continue;
         view.push_back(&e);
     }
@@ -207,11 +210,46 @@ void draw_companion_tab() {
         ImGui::Text("| 선택: %u %s", g_selected_key, g_selected_name);
     }
 
+    // 고른 종을 동반자로 올린다. 소환해서 그 개체를 획득하는 두 걸음이고
+    // 모드가 이어서 처리한다. 되는 종인지는 게임 데이터가 정한다 -
+    // 소환 표에 있고(spawnable) 캐릭터 표에 고용 예(hirable)여야 한다.
+    const game::RosterEntry* sel = nullptr;
+    for (const auto& e : chars) {
+        if (e.key == g_selected_key) { sel = &e; break; }
+    }
+    const bool can = sel != nullptr && sel->spawnable && sel->hirable;
+    ImGui::BeginDisabled(game::companion_register_busy() || !can);
+    if (ImGui::Button("선택한 종을 동반자로 등록")) {
+        game::companion_register_start(g_selected_key);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && can) {
+        ImGui::SetTooltip(
+            "이 종을 눈앞에 소환하고 곧바로 획득합니다.\n"
+            "등록되면 타입에 맞는 게임 목록(탈것·반려동물)에 들어갑니다.\n"
+            "적대적으로 나오는 종은 획득이 거부됩니다.");
+    }
+    if (sel != nullptr && !can) {
+        ImGui::SameLine();
+        if (!sel->spawnable) {
+            ImGui::TextDisabled("게임의 소환 표에 없는 종입니다");
+        } else {
+            ImGui::TextDisabled("고용할 수 없는 종입니다");
+        }
+    }
+    {
+        const char* note = game::companion_register_note();
+        if (note != nullptr && note[0] != 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", note);
+        }
+    }
+
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY |
                                   ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("companions", 6, flags)) {
+    if (ImGui::BeginTable("companions", 7, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -219,6 +257,7 @@ void draw_companion_tab() {
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("소환", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(view.size()));
@@ -251,6 +290,8 @@ void draw_companion_tab() {
                                                                      : "");
                 ImGui::TableSetColumnIndex(5);
                 ImGui::TextUnformatted(e->hirable ? "가능" : "");
+                ImGui::TableSetColumnIndex(6);
+                ImGui::TextUnformatted(e->spawnable ? "가능" : "");
             }
         }
         clipper.End();
@@ -539,67 +580,19 @@ void draw_nearby_tab() {
 
 // --- 단순 목록 탭 (탈것·용병 타입·캐릭터) ------------------------------
 void draw_list_tab(const std::vector<game::RosterEntry>& all,
-                   bool show_merc_type, bool can_register = false) {
+                   bool show_merc_type) {
     static std::vector<const game::RosterEntry*> view;
     view.clear();
     view.reserve(all.size());
     for (const auto& e : all) {
-        if (can_register && g_register_only && !(e.spawnable && e.hirable)) {
-            continue;
-        }
         if (matches_query(e)) view.push_back(&e);
     }
     ImGui::Text("%zu / %zu", view.size(), all.size());
     ImGui::SameLine();
-    if (can_register) {
-        ImGui::Checkbox("등록 가능만", &g_register_only);
-        ImGui::SameLine();
-    }
     ImGui::TextDisabled("줄을 누르면 키가 복사됩니다");
     if (g_selected_key != 0) {
         ImGui::SameLine();
         ImGui::Text("| 선택: %u %s", g_selected_key, g_selected_name);
-    }
-    if (can_register) {
-        // 고른 종을 동반자로 올린다. 소환해서 그 개체를 획득하는
-        // 두 걸음이고, 모드가 이어서 처리한다.
-        //
-        // 되는 종인지는 게임 데이터가 이미 안다 - 하나씩 눌러 볼 필요가
-        // 없다. 소환 표에 있고(spawnable) 캐릭터 표에 고용 예(hirable)면
-        // 된다. 둘 중 하나라도 아니면 버튼을 잠그고 이유를 적는다.
-        const game::RosterEntry* sel = nullptr;
-        for (const auto& e : all) {
-            if (e.key == g_selected_key) { sel = &e; break; }
-        }
-        const bool busy = game::companion_register_busy();
-        const bool ok = sel != nullptr && sel->spawnable && sel->hirable;
-        ImGui::BeginDisabled(busy || !ok);
-        if (ImGui::Button("선택한 종을 동반자로 등록")) {
-            game::companion_register_start(g_selected_key);
-        }
-        ImGui::EndDisabled();
-        if (sel != nullptr && !ok) {
-            ImGui::SameLine();
-            if (!sel->spawnable && !sel->hirable) {
-                ImGui::TextDisabled("소환도 고용도 안 되는 종입니다");
-            } else if (!sel->spawnable) {
-                ImGui::TextDisabled("게임의 소환 표에 없는 종입니다");
-            } else {
-                ImGui::TextDisabled("고용할 수 없는 종입니다");
-            }
-        }
-        if (ImGui::IsItemHovered() && g_selected_key != 0) {
-            ImGui::SetTooltip(
-                "이 종을 눈앞에 소환하고 곧바로 획득합니다.\n"
-                "되는 종과 안 되는 종이 있습니다 - 표에 고용 예여야 하고\n"
-                "게임의 소환 표에도 있어야 합니다.\n"
-                "적대적으로 나오는 종(곰 등)은 획득이 거부됩니다.");
-        }
-        const char* note = game::companion_register_note();
-        if (note != nullptr && note[0] != 0) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", note);
-        }
     }
     ImGui::Separator();
 
@@ -613,14 +606,6 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
                 if (show_merc_type) {
                     std::snprintf(line, sizeof(line), "%-4u  type %u  %s##r%d",
                                   e->key, e->merc_type,
-                                  e->display().empty() ? "(이름 없음)"
-                                                       : e->display().c_str(),
-                                  i);
-                } else if (can_register) {
-                    // 되는 종인지 한눈에 보이게 한다.
-                    std::snprintf(line, sizeof(line), "%-6u %s %s  %s##r%d",
-                                  e->key, e->spawnable ? "소환o" : "소환x",
-                                  e->hirable ? "고용o" : "고용x",
                                   e->display().empty() ? "(이름 없음)"
                                                        : e->display().c_str(),
                                   i);
@@ -692,7 +677,7 @@ void draw_roster_panel(bool* open) {
                 draw_list_tab(game::mercenary_catalog(), true);
             }
             break;
-        default: draw_list_tab(game::character_catalog(), false, true); break;
+        default: draw_list_tab(game::character_catalog(), false); break;
     }
 
     ImGui::End();
