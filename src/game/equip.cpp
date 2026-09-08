@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 
+#include "game/items.h"
 #include "game/player.h"
 #include "mem/scanner.h"
 
@@ -120,6 +121,54 @@ bool socket_fill_entry(const mem::Reader& r, std::uintptr_t entry, int k,
     if (!wr16(rec, gem)) return false;
     if (!wr16(rec + 2, mk)) return false;
     return rd16(r, rec) == gem;
+}
+
+// 잠긴 칸을 연다. **이미 열린 칸과 박힌 보석은 안 건드린다.**
+//
+// 게임의 지급 코드(0x234F930)가 하는 것과 똑같이 쓴다:
+//   레코드 +0x70 = 열 칸 수,  칸[k][4] = k
+// 그 둘이 락의 전부다 - 검증도 체크섬도 서버 토큰도 없다(실측 2026-09-08,
+// specs/2026-09-07-socket-grant-unlock-research.md 3.2·9절).
+//
+// 꼬리 바이트 `[5]` 는 판마다 달라지는 값이라 **같은 벡터의 살아 있는 칸에서
+// 가져온다.** 열린 칸이 하나도 없으면 기댈 데가 없어 상수를 쓰는데, 게임이
+// 로드할 때 다시 매기므로 문제되지 않는다(실측: 어긋난 값도 그대로 동작).
+//
+// 연 칸 수를 돌려준다. 아무것도 안 열었으면 0.
+int socket_unlock_entry(const mem::Reader& r, std::uintptr_t entry, int want) {
+    if (want < 1 || want > 5) return 0;
+    const std::uintptr_t sp = rd64(r, entry + 0x60);
+    if (!ptr_reads(r, sp)) return 0;
+
+    const int cur = static_cast<int>(rd8(r, entry + 0x70));
+    if (cur >= want || cur > 5) return 0;
+
+    // 살아 있는 꼬리 값을 찾는다. 없으면 상수.
+    std::uint8_t tail = kSocketOpenTail;
+    for (int k = 0; k < cur; ++k) {
+        const std::uintptr_t rec = sp + static_cast<std::uintptr_t>(k) * 6;
+        if (rd8(r, rec + 4) == static_cast<std::uint8_t>(k)) {
+            tail = rd8(r, rec + 5);
+            break;
+        }
+    }
+
+    int opened = 0;
+    for (int k = cur; k < want; ++k) {
+        const std::uintptr_t rec = sp + static_cast<std::uintptr_t>(k) * 6;
+        if (!wr16(rec + 0, 0xFFFF)) break;      // 보석 없음
+        if (!wr16(rec + 2, 0x0000)) break;      // 빈 칸 표시
+        if (!wr8(rec + 4, static_cast<std::uint8_t>(k))) break;   // 열림
+        if (!wr8(rec + 5, tail)) break;
+        if (rd8(r, rec + 4) != static_cast<std::uint8_t>(k)) break;
+        ++opened;
+    }
+    if (opened == 0) return 0;
+
+    const std::uint8_t n = static_cast<std::uint8_t>(cur + opened);
+    if (!wr8(entry + 0x70, n)) return 0;
+    if (rd8(r, entry + 0x70) != n) return 0;
+    return opened;
 }
 
 bool refine_set_entry(const mem::Reader& r, std::uintptr_t entry,
@@ -530,6 +579,7 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         else if (op == 1) ok = refine_set_entry(reader, e, b);
         else if (op == 2) ok = dye_set_entry(reader, e, a,
                                               static_cast<std::uint8_t>(b), g, bl);
+        else if (op == 3) ok = socket_unlock_entry(reader, e, a) > 0;
         if (ok) ++wrote;
     }
     return wrote;
@@ -548,6 +598,17 @@ int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
                  std::uint8_t r, std::uint8_t g, std::uint8_t b) {
     return eq_write_all(reader, instance, 2, rec, r, g, b);
+}
+
+int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
+                      int want) {
+    return eq_write_all(reader, instance, 3, want, 0, 0, 0);
+}
+
+int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,
+                         int want) {
+    if (record == 0) return 0;
+    return socket_unlock_entry(reader, record, want);
 }
 
 }  // namespace cdtb::game

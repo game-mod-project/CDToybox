@@ -153,8 +153,8 @@ void draw_equip_panel(bool* open) {
         game::equip_request_refresh();
     }
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.0f),
-                       "이미 열린 소켓만 채웁니다. 잠긴 소켓은 못 엽니다.");
+    ImGui::TextDisabled("잠긴 칸은 '열기' 로 엽니다. 툴팁에 다 보이려면"
+                        " 인벤토리 창의 '소켓 상한' 도 올려야 합니다.");
 
     std::vector<game::WornPiece> pieces;
     if (!game::equip_snapshot(&pieces)) {
@@ -185,6 +185,27 @@ void draw_equip_panel(bool* open) {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(착용 장비 전체를 +10 으로)");
+
+    // 착용 장비 전부 5칸 개방. 이미 열린 칸과 박힌 보석은 안 건드린다.
+    ImGui::SameLine();
+    if (ImGui::Button("전부 소켓 5칸")) {
+        int done = 0, part = 0;
+        for (const auto& w : pieces) {
+            const int wc = game::eq_unlock_sockets(reader, w.instance, 5);
+            if (wc >= 2) {
+                ++done;
+            } else if (wc == 1) {
+                ++part;
+            }
+        }
+        game::equip_refresh_pieces(reader);
+        std::snprintf(g_msg, sizeof(g_msg),
+                      "%d개 both-realms, %d개 한쪽만 소켓 5칸. RE-EQUIP 하면"
+                      " 보입니다.",
+                      done, part);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(잠긴 칸까지 연다)");
 
     if (g_msg[0]) {
         ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "%s", g_msg);
@@ -240,7 +261,21 @@ void draw_equip_panel(bool* open) {
                 const auto& s = w.sockets[k];
                 ImGui::PushID(k);
                 if (s.index == 0xFF) {
-                    ImGui::TextDisabled("%d: [잠김]", k);
+                    // 잠긴 칸도 열 수 있다(실측 2026-09-08). 게임의 지급
+                    // 코드가 하는 것과 같은 두 줄 - 레코드 +0x70 과 칸[4].
+                    // 앞칸이 잠겨 있으면 그 칸부터 순서대로 열린다.
+                    ImGui::TextDisabled("%d:", k);
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("열기")) {
+                        const int n = game::eq_unlock_sockets(reader,
+                                                              w.instance, k + 1);
+                        std::snprintf(g_msg, sizeof(g_msg),
+                                      n > 0 ? "소켓 %d칸까지 열었다 (%d realm)."
+                                              " RE-EQUIP 하면 보입니다."
+                                            : "열기 실패 (대상 없음).",
+                                      k + 1, n);
+                        game::equip_refresh_pieces(reader);
+                    }
                 } else if (s.marker == 0xFFFF && s.gem != 0xFFFF) {
                     const char* gn = name_of_sunbeon(s.gem);
                     ImGui::Text("%d: %s", k, gn ? gn : "(보석)");

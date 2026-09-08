@@ -41,6 +41,7 @@ int g_sharpness = 0;
 int g_socket_open = 0;
 // 각 칸에 박을 보석의 아이템 키. 0 이면 그 칸은 빈 채로 연다.
 std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};
+char g_gem_search[64]{};   // 보석 고르기 안의 이름 찾기
 
 game::SpawnOutcome g_outcome;
 
@@ -123,33 +124,60 @@ void draw_sockets(const game::ItemCatalogEntry* item) {
     for (int k = 0; k < g_socket_open; ++k) {
         ImGui::PushID(k);
         ImGui::Text("칸 %d", k);
-        ImGui::SameLine(80.0f);
-        ImGui::SetNextItemWidth(110.0f);
-        int key = static_cast<int>(g_socket_keys[k]);
-        ImGui::InputInt("##gem", &key, 0, 0);
-        if (key < 0) key = 0;
-        g_socket_keys[k] = static_cast<std::uint32_t>(key);
-        ImGui::SameLine();
-        if (ImGui::SmallButton("비우기")) g_socket_keys[k] = 0;
-        ImGui::SameLine();
-        if (g_socket_keys[k] == 0) {
-            ImGui::TextDisabled("(빈 칸으로 열기)");
-        } else {
-            const auto* gem = entry_of(g_socket_keys[k]);
-            if (gem == nullptr) {
-                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
-                                   "표에 없는 키");
-            } else if (gem->category != game::kSocketGemCategory) {
-                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
-                                   "%s (소켓 보석이 아님)", gem->name.c_str());
-            } else {
-                ImGui::TextUnformatted(gem->name.c_str());
+        ImGui::SameLine(60.0f);
+
+        // 키를 손으로 넣게 두면 190종 중에서 숫자를 찾아야 한다. 목록에서
+        // 고르게 한다(장비 소켓 창의 보석 고르기와 같은 방식).
+        const auto* gem = entry_of(g_socket_keys[k]);
+        const char* label =
+            (g_socket_keys[k] == 0)
+                ? "(빈 칸으로 열기)"
+                : ((gem != nullptr && !gem->name.empty()) ? gem->name.c_str()
+                                                          : "(표에 없는 키)");
+        ImGui::SetNextItemWidth(230.0f);
+        if (ImGui::BeginCombo("##gem", label)) {
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint("##find", "이름으로 찾기", g_gem_search,
+                                     sizeof(g_gem_search));
+            if (ImGui::Selectable("(빈 칸으로 열기)", g_socket_keys[k] == 0)) {
+                g_socket_keys[k] = 0;
+                ImGui::CloseCurrentPopup();
             }
+            ImGui::Separator();
+            int shown = 0;
+            if (!game::items_ready()) {
+                ImGui::TextDisabled("아이템 표를 아직 못 읽었습니다");
+            } else {
+                for (const auto& e : game::item_catalog()) {
+                    if (e.category != game::kSocketGemCategory) continue;
+                    if (e.name.empty()) continue;
+                    if (g_gem_search[0] != 0 &&
+                        e.name.find(g_gem_search) == std::string::npos) {
+                        continue;
+                    }
+                    ImGui::PushID(static_cast<int>(e.key));
+                    if (ImGui::Selectable(e.name.c_str(),
+                                          e.key == g_socket_keys[k])) {
+                        g_socket_keys[k] = e.key;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::PopID();
+                    // 190종이라 다 그려도 되지만, 표가 커지면 무거워진다.
+                    if (++shown >= 400) break;
+                }
+                if (shown == 0) ImGui::TextDisabled("맞는 보석이 없습니다");
+            }
+            ImGui::EndCombo();
         }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(g_socket_keys[k] == 0);
+        if (ImGui::SmallButton("비우기")) g_socket_keys[k] = 0;
+        ImGui::EndDisabled();
         ImGui::PopID();
     }
 
-    ImGui::TextDisabled("보석 키를 비워 두면 빈 칸이 열린 채로 나옵니다.");
+    ImGui::TextDisabled("보석을 안 고르면 빈 칸이 열린 채로 나옵니다.");
     ImGui::Unindent();
 }
 

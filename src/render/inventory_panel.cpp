@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "game/equip.h"
 #include "game/inventory.h"
 #include "mem/reader.h"
 #include "game/items.h"
@@ -39,6 +40,12 @@ struct Row {
     std::uint32_t max_endurance = 0xFFFF;   // 표의 값. 담기에 쓴다
     std::vector<std::uint32_t> gem_keys;
     game::InventoryRowText text;
+
+    // 제자리 언락에 쓴다. 레코드에 직접 쓰므로 주소가 필요하고,
+    // 지금 몇 칸이 열려 있는지(레코드 +0x70) 알아야 버튼을 가린다.
+    std::uintptr_t record = 0;
+    std::uint32_t open_sockets = 0;
+    std::uint32_t table_cap = 0;     // 아이템표의 상한(참고 표시용)
 };
 
 std::vector<Row> g_rows;
@@ -130,12 +137,15 @@ void refresh(const mem::Reader& reader) {
             r.temper = rec.temper;
             r.sharpness = rec.sharpness;
             r.socket_count = rec.socket_count;
+            r.record = rec.address;
+            r.open_sockets = rec.open_sockets;
 
             if (const auto* e = ent_for(r.key)) {
                 r.name = e->name;
                 r.grade = e->grade;
                 r.category = e->category;
                 r.max_endurance = e->max_endurance;
+                r.table_cap = e->max_sockets;
             }
             if (r.name.empty()) {
                 char buf[48];
@@ -678,6 +688,34 @@ void draw_inventory_panel(bool* open) {
                 stash_add_entry(set, e);
             }
             ImGui::EndDisabled();
+
+            // 제자리 소켓 열기. 인벤토리 레코드는 그 자체가 authoritative
+            // 라 단일 쓰기로 저장까지 살아남는다(both-realms 불필요) -
+            // 실측 2026-09-08: 열린 칸 0개짜리 검을 5칸으로 열어 저장·
+            // 재시작을 넘겼다. 5칸이 엔진 천장이다. 장비가 아닌 것에는
+            // 안 낸다 - 소켓 벡터가 뜻이 없다.
+            if (r.record != 0 && r.open_sockets < game::kSocketSlotMax &&
+                (r.table_cap > 0 || r.open_sockets > 0)) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("소켓 5칸")) {
+                    const mem::LocalReader rd;
+                    const int n = game::socket_unlock_record(
+                        rd, r.record, static_cast<int>(game::kSocketSlotMax));
+                    if (n > 0) {
+                        refresh(rd);
+                    } else {
+                        g_status = "소켓을 열지 못했습니다";
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "잠긴 칸을 엽니다 (지금 %u칸).\n"
+                        "박힌 보석은 그대로 둡니다.\n"
+                        "표 상한이 %u 라 툴팁에는 그만큼만 보입니다"
+                        " - '소켓 상한' 도 올리세요.",
+                        r.open_sockets, r.table_cap);
+                }
+            }
             ImGui::PopID();
         }
         ImGui::EndTable();

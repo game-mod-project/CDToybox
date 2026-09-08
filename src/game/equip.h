@@ -145,4 +145,28 @@ int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
                  std::uint8_t r, std::uint8_t g, std::uint8_t b);
 
+// **잠긴 소켓 칸을 연다.** 이미 열린 칸과 박힌 보석은 안 건드린다.
+//
+// 게임의 지급 코드가 하는 것과 같은 두 줄이다 - 레코드 `+0x70 = 칸 수` 와
+// 칸 `[4] = k`. 락은 그 둘이 전부이고 검증이 없다(실측 2026-09-08: 열린 칸
+// 0개짜리 장비를 5칸으로 열어 저장·재시작을 넘겼다).
+// 근거: specs/2026-09-07-socket-grant-unlock-research.md 9절.
+//
+// 아이템표의 상한(`max_sockets`)과는 별개다. 표는 **툴팁 목록**만 정하고
+// 스탯 계산은 여기서 연 칸을 그대로 더한다. 표보다 많이 열어도 동작하지만
+// 툴팁에 다 안 보인다 - `items::socket_cap_apply` 로 표도 같이 올린다.
+//
+// 착용 장비는 both-realms 로 쓴다. 쓴 realm 수를 돌려준다(0 이면 실패).
+int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
+                      int want);
+
+// 위와 같은 일을 **레코드 주소로** 한다. 인벤토리 레코드와 착용 장비
+// entry 는 같은 구조라(둘 다 `+0x60` 벡터, `+0x68` 크기, `+0x70` 열린 수)
+// 한 함수로 된다. 인벤토리 레코드는 그 자체가 authoritative 라 단일 쓰기로
+// 저장까지 살아남는다(both-realms 불필요).
+//
+// 연 칸 수를 돌려준다. 0 이면 아무것도 안 열었다.
+int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,
+                         int want);
+
 }  // namespace cdtb::game
