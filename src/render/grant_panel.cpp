@@ -153,6 +153,60 @@ void draw_sockets(const game::ItemCatalogEntry* item) {
     ImGui::Unindent();
 }
 
+// `drive_gate_reset` 과 같은 기준. 이보다 오래 물린 것만 풀 수 있다.
+constexpr unsigned long long kGateStuckMs = 30000;
+
+// 구동 게이트가 무엇을 물고 있는지 숫자로 낸다. 물린 것이 있으면 true.
+//
+// 실측 2026-09-08: 게임의 지급 처리기가 안 돌아와 `running` 이 10분 넘게
+// 물렸는데 화면에는 "연달아 누르면 잠시 막힙니다 (2초)" 만 떠서, 2초
+// 쿨다운으로 오인하고 한참을 헤맸다. 로그와 `drive` 명령을 봐야만 알 수
+// 있었다. 그 숫자를 여기 그대로 낸다.
+bool draw_drive_gate() {
+    const game::DriveGate g = game::drive_gate_state();
+    const bool held = g.pending || g.running || g.cooldown_left_ms > 0 ||
+                      g.fault_session != 0;
+    if (!held) return false;
+
+    const bool stuck = (g.running && g.running_age_ms > kGateStuckMs) ||
+                       (g.pending && g.pending_age_ms > kGateStuckMs);
+    const ImVec4 warn(0.9f, 0.6f, 0.3f, 1.0f);
+    const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
+
+    if (g.running) {
+        // 실행 중은 원래 몇 초다. 분 단위면 게임 안에서 안 돌아온 것이다.
+        ImGui::TextColored(stuck ? bad : warn,
+                           "구동 중: 게임 스레드가 %.1f초째 안 돌아왔습니다",
+                           g.running_age_ms / 1000.0);
+    }
+    if (g.pending) {
+        ImGui::TextColored(stuck ? bad : warn,
+                           "대기 중: %.1f초째 실행되지 않았습니다"
+                           " (월드가 돌고 있어야 실행됩니다)",
+                           g.pending_age_ms / 1000.0);
+    }
+    if (g.cooldown_left_ms > 0) {
+        ImGui::TextDisabled("쿨다운 %.1f초", g.cooldown_left_ms / 1000.0);
+    }
+    if (g.fault_session != 0) {
+        ImGui::TextColored(bad, "세션 0x%llX 는 죽어서 잠겼습니다",
+                           static_cast<unsigned long long>(g.fault_session));
+    }
+
+    if (stuck) {
+        ImGui::TextDisabled(
+            "이 상태에서는 지급·소환이 전부 조용히 거부됩니다.");
+        if (ImGui::Button("구동 게이트 풀기", ImVec2(150.0f, 0.0f))) {
+            game::drive_gate_reset();
+        }
+        // 게임 스레드가 처리기 안에서 안 돌아온 것이면 게이트를 풀어도
+        // 그 스레드는 그대로다. 실행 지점이 같이 죽으므로 재시작해야 한다.
+        ImGui::SameLine();
+        ImGui::TextDisabled("(풀어도 안 되면 게임을 다시 켜야 합니다)");
+    }
+    return true;
+}
+
 // 담금질과 장비 연마를 정해 준다. 아이템이 그 값을 가질 때만 낸다.
 //
 // 상한은 아이템 표에서 온다 - 담금질은 `max_temper`, 연마는
@@ -441,12 +495,19 @@ void draw_grant_panel(bool* open) {
         ImGui::TextDisabled("화면 중앙(크로스헤어) 자리에 생깁니다");
     }
 
+    // 게이트는 눌렀든 안 눌렀든 낸다. 물려 있으면 다음에 눌러도 거부된다.
+    const bool gate_held = draw_drive_gate();
+
     if (g_called) {
         g_outcome = game::last_outcome();
         if (game::spawn_pending()) {
             ImGui::TextDisabled("게임 스레드를 기다리는 중...");
         } else if (!g_call_ok) {
-            ImGui::TextDisabled("연달아 누르면 잠시 막힙니다 (2초)");
+            // 2초 쿨다운이 아니라 게이트가 물린 것일 수 있다. 게이트를
+            // 이미 위에 냈으므로 여기서는 무엇 때문인지만 가른다.
+            ImGui::TextDisabled(gate_held
+                                    ? "구동 게이트가 물려 요청이 거부됐습니다"
+                                    : "연달아 누르면 잠시 막힙니다 (2초)");
         } else if (g_outcome.no_actor) {
             ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
                                "그 세션에서 액터가 안 나왔습니다");
