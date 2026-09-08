@@ -1202,6 +1202,140 @@ void command_loop() {
 
 std::uintptr_t companion_pick_session() { return pick_server_session_impl(); }
 
+// ------------------------------------------- 종을 골라 동반자로 등록
+
+namespace {
+
+struct RegisterJob {
+    bool active = false;
+    std::uint32_t key = 0;
+    std::uint64_t started_ms = 0;
+    std::uint64_t last_look_ms = 0;
+    std::vector<std::uintptr_t> before;  // 소환 전에 이미 있던 액터
+    std::string note;
+};
+
+std::mutex g_reg_mutex;
+RegisterJob g_reg;
+
+// 소환이 대기열을 거쳐 실행되고 액터가 목록에 잡히기까지 걸리는 시간.
+// 실측으로 3~5초였다. 넉넉히 준다.
+constexpr std::uint64_t kRegisterTimeoutMs = 20000;
+constexpr std::uint64_t kRegisterLookMs = 700;
+
+}  // namespace
+
+bool companion_register_busy() {
+    std::lock_guard<std::mutex> lock(g_reg_mutex);
+    return g_reg.active;
+}
+
+const char* companion_register_note() {
+    std::lock_guard<std::mutex> lock(g_reg_mutex);
+    return g_reg.note.c_str();
+}
+
+bool companion_register_start(std::uint32_t char_key) {
+    {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        if (g_reg.active) return false;
+    }
+    if (char_key == 0) return false;
+    if (!actor_manager_ready()) {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.note = "액터 매니저를 아직 못 찾았습니다";
+        return false;
+    }
+    const std::uintptr_t session = companion_pick_session();
+    if (session == 0) {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.note = "살아 있는 서버 세션이 없습니다";
+        return false;
+    }
+    if (!char_spawn_ready() || !hire_target_ready()) {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.note = "소환/획득 메시지가 해석되지 않았습니다";
+        return false;
+    }
+    float pos[3]{};
+    if (g_position_fn == nullptr || !g_position_fn(pos)) {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.note = "좌표를 못 읽었습니다 - 월드에 들어가세요";
+        return false;
+    }
+
+    // 소환 전 목록을 찍어 둔다. 이 종은 주변에 이미 있을 수 있고,
+    // 월드는 늘 액터가 드나든다 - 새로 생긴 것만 골라야 한다.
+    std::vector<std::uintptr_t> before;
+    for (const LiveActor& a : live_actors()) before.push_back(a.actor);
+    std::sort(before.begin(), before.end());
+
+    if (!request_char_spawn(session, char_key, 0, kSpawnCharKind, pos)) {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.note = "소환 요청이 밀렸습니다 - 잠시 뒤 다시";
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.active = true;
+        g_reg.key = char_key;
+        g_reg.started_ms = GetTickCount64();
+        g_reg.last_look_ms = 0;
+        g_reg.before.swap(before);
+        g_reg.note = "소환 요청 - 개체가 나오면 획득합니다";
+    }
+    log::infof("종 등록 시작: 키 {}", char_key);
+    return true;
+}
+
+void companion_register_tick(const mem::Reader& reader) {
+    std::uint32_t key = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        if (!g_reg.active) return;
+        const std::uint64_t now = GetTickCount64();
+        if (now - g_reg.started_ms > kRegisterTimeoutMs) {
+            g_reg.active = false;
+            g_reg.note = "개체가 나오지 않았습니다 - 이 종은 소환되지 않는 것 같습니다";
+            log::warnf("종 등록: 키 {} 개체가 안 나왔다", g_reg.key);
+            return;
+        }
+        if (now - g_reg.last_look_ms < kRegisterLookMs) return;
+        g_reg.last_look_ms = now;
+        key = g_reg.key;
+    }
+
+    refresh_live_actors(reader);
+
+    std::uintptr_t found = 0;
+    std::uint32_t handle = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        for (const LiveActor& a : live_actors()) {
+            if (a.key != key || a.handle == 0) continue;
+            if (std::binary_search(g_reg.before.begin(), g_reg.before.end(),
+                                   a.actor)) {
+                continue;
+            }
+            found = a.actor;
+            handle = a.handle;
+            break;
+        }
+        if (found == 0) return;
+        g_reg.active = false;
+    }
+
+    const std::uintptr_t session = companion_pick_session();
+    const bool ok = session != 0 && request_hire_target(session, handle, 0);
+    {
+        std::lock_guard<std::mutex> lock(g_reg_mutex);
+        g_reg.note = ok ? "획득 요청 - 동반자 탭을 확인하세요"
+                        : "개체는 나왔는데 획득 요청이 거부됐습니다";
+    }
+    log::infof("종 등록: 키 {} 개체 0x{:X} 핸들 0x{:08X} -> 획득 {}", key, found,
+               handle, ok ? "요청" : "거부");
+}
+
 bool companion_run_command(const std::string& line, std::string* reply) {
     const auto args = split_ws(line);
     if (args.empty()) return false;

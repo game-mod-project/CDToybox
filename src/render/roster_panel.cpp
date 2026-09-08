@@ -536,7 +536,7 @@ void draw_nearby_tab() {
 
 // --- 단순 목록 탭 (탈것·용병 타입·캐릭터) ------------------------------
 void draw_list_tab(const std::vector<game::RosterEntry>& all,
-                   bool show_merc_type) {
+                   bool show_merc_type, bool can_register = false) {
     static std::vector<const game::RosterEntry*> view;
     view.clear();
     view.reserve(all.size());
@@ -549,6 +549,28 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
     if (g_selected_key != 0) {
         ImGui::SameLine();
         ImGui::Text("| 선택: %u %s", g_selected_key, g_selected_name);
+    }
+    if (can_register) {
+        // 고른 종을 동반자로 올린다. 소환해서 그 개체를 획득하는
+        // 두 걸음이고, 모드가 이어서 처리한다.
+        const bool busy = game::companion_register_busy();
+        ImGui::BeginDisabled(busy || g_selected_key == 0);
+        if (ImGui::Button("선택한 종을 동반자로 등록")) {
+            game::companion_register_start(g_selected_key);
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && g_selected_key != 0) {
+            ImGui::SetTooltip(
+                "이 종을 눈앞에 소환하고 곧바로 획득합니다.\n"
+                "되는 종과 안 되는 종이 있습니다 - 표에 고용 예여야 하고\n"
+                "게임의 소환 표에도 있어야 합니다.\n"
+                "적대적으로 나오는 종(곰 등)은 획득이 거부됩니다.");
+        }
+        const char* note = game::companion_register_note();
+        if (note != nullptr && note[0] != 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", note);
+        }
     }
     ImGui::Separator();
 
@@ -602,6 +624,8 @@ void draw_roster_panel(bool* open) {
     ImGui::TextDisabled(
         "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
 
+    game::companion_register_tick(g_near_reader);
+
     if (ImGui::BeginTabBar("roster_tabs")) {
         if (ImGui::BeginTabItem("동반자")) { g_tab = 0; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("근처")) { g_tab = 1; ImGui::EndTabItem(); }
@@ -623,7 +647,7 @@ void draw_roster_panel(bool* open) {
         case 0: draw_companion_tab(); break;
         case 1: draw_nearby_tab(); break;
         case 5: draw_companion_item_tab(); break;
-        case 2: draw_list_tab(game::vehicle_catalog(), false); break;
+        case 2: draw_list_tab(game::vehicle_catalog(), false, true); break;
         case 3:
             if (game::mercenary_catalog().empty()) {
                 ImGui::TextDisabled("용병 타입 표를 못 찾았습니다.");
@@ -631,7 +655,7 @@ void draw_roster_panel(bool* open) {
                 draw_list_tab(game::mercenary_catalog(), true);
             }
             break;
-        default: draw_list_tab(game::character_catalog(), false); break;
+        default: draw_list_tab(game::character_catalog(), false, true); break;
     }
 
     ImGui::End();
