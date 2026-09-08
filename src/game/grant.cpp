@@ -1673,7 +1673,7 @@ void run_hire_species(std::uintptr_t session, std::uint16_t key,
     }
 
     auto fn = reinterpret_cast<HireSpeciesFn>(g_reader->module_base() +
-                                              kHireSpeciesRva);
+                                              kHireCheckRva);
     std::uint32_t result = 0xFFFFFFFFu;
     o.called = true;
     o.crashed = !call_hire_species_guarded(fn, reinterpret_cast<void*>(clan),
@@ -1686,8 +1686,9 @@ void run_hire_species(std::uintptr_t session, std::uint16_t key,
         g_last_hs.valid = true;
         g_last_hs.key = key;
         g_last_hs.code = result;
-        log::infof("종 등록: 키 {} -> 코드 0x{:08X} ({})", key, result,
-                   result == 0 ? "성공" : "거부");
+        log::infof("등록 검사: 행 {} -> 코드 0x{:08X} ({}). 검사일 뿐이라 "
+                   "명부에는 들어가지 않는다",
+                   key, result, result == 0 ? "통과" : "거부");
     }
     if (out != nullptr) *out = o;
 }
