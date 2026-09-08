@@ -16,6 +16,10 @@ constexpr const char* kActorManagerClass = ".?AVClientActorManager@pa@@";
 constexpr std::size_t kActorHolder = 0x68;
 constexpr std::size_t kHolderInfo = 0x20;
 constexpr std::size_t kInfoRow = 0x30;
+// 액터 +0x68 보관객체 안의 ClientMercenaryActorComponent 와
+// 그 안의 고용주 핸들. 자세한 근거는 actors.h 설명.
+constexpr std::size_t kHolderMercComp = 0x118;
+constexpr std::size_t kMercCompOwner = 0x18;
 
 bool read_bucket(const mem::Reader& r, std::uintptr_t at, std::uintptr_t* arr,
                  std::uint32_t* count, std::uint32_t* cap) {
@@ -127,6 +131,27 @@ bool actor_character_row(const mem::Reader& reader, std::uintptr_t actor,
     return true;
 }
 
+bool actor_owner_handle(const mem::Reader& reader, std::uintptr_t actor,
+                        std::uint32_t* owner_out) {
+    if (actor == 0 || owner_out == nullptr) return false;
+    std::uint64_t holder = 0, comp = 0;
+    if (!reader.read_value(actor + kActorHolder, &holder) || holder == 0) return false;
+    if (!reader.read_value(static_cast<std::uintptr_t>(holder) + kHolderMercComp,
+                           &comp) ||
+        comp == 0) {
+        // 동반자 컴포넌트가 없는 액터도 있다. 그건 임자가
+        // 없는 것이 아니라 몰라서 모르는 것이다.
+        return false;
+    }
+    std::uint32_t owner = 0;
+    if (!reader.read_value(static_cast<std::uintptr_t>(comp) + kMercCompOwner,
+                           &owner)) {
+        return false;
+    }
+    *owner_out = owner;
+    return true;
+}
+
 
 bool read_actor_handles(const mem::Reader& reader, std::uintptr_t manager,
                         std::vector<std::pair<std::uintptr_t, std::uint32_t>>* out) {
@@ -209,6 +234,8 @@ bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
                 la.hirable = e->hirable;
             }
         }
+        std::uint32_t owner = 0;
+        if (actor_owner_handle(reader, a, &owner)) la.owner = owner;
         list.push_back(std::move(la));
     }
     *out = std::move(list);

@@ -404,7 +404,7 @@ void draw_nearby_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("nearby", 9, flags)) {
+    if (ImGui::BeginTable("nearby", 10, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 104);
         ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed, 82);
@@ -413,6 +413,7 @@ void draw_nearby_tab() {
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
         ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
         ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("소유", ImGuiTableColumnFlags_WidthFixed, 56);
         ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableSetupColumn("거두기", ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableHeadersRow();
@@ -468,10 +469,25 @@ void draw_nearby_tab() {
                 ImGui::TableSetColumnIndex(6);
                 ImGui::TextUnformatted(a->hirable ? "가능" : "");
                 ImGui::TableSetColumnIndex(7);
+                // 이미 임자가 있는 개체는 획득이 거부된다. 누르고 나서
+                // 코드 0x97AE29C9 를 보기 전에 표에서 구분한다
+                // (실측 2026-09-09, 근거는 game/actors.h 설명).
+                if (a->owned()) {
+                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "소유");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "이미 임자가 있는 개체입니다 (고용주 핸들 0x%08X).\n"
+                            "이미 길들인 전설마·스토리 동료가 여기 해당합니다.",
+                            a->owner);
+                    }
+                } else if (a->is_companion()) {
+                    ImGui::TextDisabled("-");
+                }
+                ImGui::TableSetColumnIndex(8);
                 // 획득: 그 자리에서 동반자로 등록한다(2338). 실제 게임플레이
                 // 거래라 되돌리려면 게임의 반려동물 풀어주기를 쓴다.
                 const bool can = a->is_companion() && a->handle != 0 &&
-                                 game::hire_target_ready();
+                                 !a->owned() && game::hire_target_ready();
                 char btn[32];
                 std::snprintf(btn, sizeof(btn), "획득##hire%d", i);
                 ImGui::BeginDisabled(!can);
@@ -495,13 +511,18 @@ void draw_nearby_tab() {
                     }
                 }
                 ImGui::EndDisabled();
+                if (ImGui::IsItemHovered() && !can && a->owned()) {
+                    ImGui::SetTooltip(
+                        "이미 임자가 있어 등록되지 않습니다.\n"
+                        "게임이 코드 0x97AE29C9 로 거부하는 자리입니다.");
+                }
                 if (ImGui::IsItemHovered() && can) {
                     ImGui::SetTooltip(
                         "이 개체를 동반자로 등록합니다.\n"
                         "소환이 안 되면 게임의 소환 쿨타임입니다.\n"
                         "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
                 }
-                ImGui::TableSetColumnIndex(8);
+                ImGui::TableSetColumnIndex(9);
                 // 거두기(2386): 알에서 깬 개체를 거두는 경로다. 야생 개체를
                 // 잡는 길이 아니다(실측 2026-09-07: 임의의 야생 동물에게
                 // 쏘면 아무 일도 일어나지 않는다). 표본이 있어 남겨 두지만
