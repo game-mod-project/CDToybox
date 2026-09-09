@@ -299,30 +299,47 @@ const std::vector<ClanEntry>& clan_roster() { return g_roster; }
 const mem::Rtti* clan_rtti() { return g_rtti; }
 
 void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
+    // 응답 칸은 하나라 연속 획득하면 앞의 것이 덮어쓰인다 -
+    // 실측 2026-09-09: 8번 연속 획득에서 뒤처리가 한 번도 안 걸렸고,
+    // 죽은 핸들이 다섯 개 남았다. 그래서 번호 하나를 쪻는 대신
+    // **명부 전체를 훑는다.** 살아있는 핸들은 건드리지 않으므로
+    // 훑는 것 자체는 안전하다.
+    //
+    // 매 프레임 훑을 수는 없으니 간격을 둔다. 응답이 있었으면
+    // 짧게, 없으면 드문드문.
+    static unsigned long long s_last = 0;
+    const unsigned long long now = GetTickCount64();
     const HireAck ack = last_hire_ack();
-    if (!ack.valid || ack.handled || ack.merc_no == 0) return;
-    if (GetTickCount64() - ack.at_ms < kHireCleanupDelayMs) return;
+    const bool fresh = ack.valid && !ack.handled &&
+                       now - ack.at_ms >= kHireCleanupDelayMs;
+    const unsigned long long period = fresh ? 1000 : 15000;
+    if (s_last != 0 && now - s_last < period) return;
+    s_last = now;
 
-    SpawnFlagTarget t;
-    if (!resolve_spawn_flag(rtti, reader, ack.merc_no, &t)) return;
-    if (t.server_handle == 0 && t.client_handle == 0) {
-        mark_hire_ack_handled();
-        return;
+    std::uintptr_t srv = 0;
+    if (!clan_component_cached(reader, rtti, false, &srv)) return;
+    std::vector<ClanEntry> list;
+    if (!read_clan_roster(reader, srv, &list)) return;
+
+    int cleared = 0;
+    for (const auto& e : list) {
+        if (e.handle == 0) continue;
+        bool known = false;
+        if (actor_handle_alive(reader, e.handle, &known)) continue;  // 살아있다
+        if (!known) return;   // 액터 목록을 모른다 - 다음 기회에
+        SpawnFlagTarget t;
+        if (!resolve_spawn_flag(rtti, reader, e.merc_no, &t)) continue;
+        if (t.server_handle == 0 && t.client_handle == 0) continue;
+        const std::uint32_t zero = 0;
+        if (mem::safe_write_bytes(t.server, &zero, 4) &&
+            mem::safe_write_bytes(t.client, &zero, 4)) {
+            ++cleared;
+            log::infof("소환 판정 정리: 번호 {} 의 죽은 액터 핸들 0x{:08X} 를 지웠다",
+                       e.merc_no, t.server_handle);
+        }
     }
-    // 살아있는 개체면 그대로 둔다. 목록을 모를 때도 그대로 둔다.
-    bool known = false;
-    const bool alive = actor_handle_alive(reader, t.server_handle, &known);
-    if (!known) return;          // 다음 프레임에 다시 본다
-    if (alive) {
-        mark_hire_ack_handled();
-        return;
-    }
-    const std::uint32_t zero = 0;
-    const bool ok = mem::safe_write_bytes(t.server, &zero, 4) &&
-                    mem::safe_write_bytes(t.client, &zero, 4);
-    mark_hire_ack_handled();
-    log::infof("획득 뒤처리: 번호 {} 의 죽은 액터 핸들 0x{:08X} 를 지웠다 ({})",
-               ack.merc_no, t.server_handle, ok ? "성공" : "쓰기 실패");
+    if (fresh) mark_hire_ack_handled();
+    if (cleared > 0) refresh_clan_roster(reader);
 }
 
 }  // namespace cdtb::game

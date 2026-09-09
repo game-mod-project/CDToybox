@@ -120,6 +120,23 @@ inline constexpr std::uint8_t kMercTypePet = 4;
 inline constexpr std::uint8_t kMercTypeDomestic = 5;
 
 // 탈것·마차·펫·가축 - "동반자" 로 다루는 용병 타입인가.
+// 게임이 목록으로 보여 주는 세 갈래.
+//
+// 명부에는 들어가도 게임 화면 어디에도 안 뜨는 타입이 있다 -
+// 실측 2026-09-09: 성체 와이번(`Animal_Wyvern_30508`, 타입행 6)으로
+// 바꾸자 탈것·특수 탑승물·반려동물 어느 목록에도 없었다.
+// 새끼 와이번(행 6608)은 타입행 9 라 잘 보인다.
+//
+// 그래서 목록·고르기는 이 셋만 보여 준다. 안 보이는 타입으로
+// 바꾸면 되돌리기 전까지 게임에서 찾을 수가 없다.
+inline constexpr std::uint16_t kMercRowHorse = 1;     // 탈것(말)
+inline constexpr std::uint16_t kMercRowSpecial = 5;   // 특수 탑승물
+inline constexpr std::uint16_t kMercRowPet = 9;       // 반려동물
+
+constexpr bool is_listed_companion_row(std::uint16_t row) {
+    return row == kMercRowHorse || row == kMercRowSpecial || row == kMercRowPet;
+}
+
 constexpr bool is_companion_merc_type(std::uint8_t t) {
     return t >= kMercTypeVehicle && t <= kMercTypeDomestic;
 }
