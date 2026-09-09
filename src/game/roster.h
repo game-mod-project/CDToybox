@@ -276,6 +276,19 @@ std::uint8_t mercenary_type_of_row(std::uint16_t row);
 // 1이라 이 용도로 못 쓴다(merc_playable 설명).
 bool is_playable_merc_row(std::uint16_t row);
 
+// 명부를 세 갈래로 접는다. 기준은 `_mercenaryType` 이다(용병 표 21행을
+// 실측해 얻은 대응, 2026-09-10).
+//
+//   People  사람.   1 Mercenary_Main(플레이어블) · 6 근접 · 7 원거리
+//                   · 8 일꾼 · 9 상점 · 12 객원
+//                   -> 플레이어블 캐릭터들이 속한 **용병대**의 멤버다.
+//   Mount   탈것·펫. 2 탈것 · 3 마차 · 4 펫 · 5 가축(어류·곤충 포함)
+//   System  시스템.  10 관찰자(WorldObserver) · 11 회복
+//                   -> 플레이어 동반자가 아니다. 기본으로 접어 둔다.
+enum class CompanionGroup { People, Mount, System, Unknown };
+CompanionGroup companion_group_of_row(std::uint16_t merc_row);
+const char* companion_group_name(CompanionGroup g);
+
 // --- 플레이어블 캐릭터 -------------------------------------------------
 //
 // 실측 2026-09-09. 두 갈래로 갈린다.
