@@ -314,8 +314,14 @@ void auto_analysis_loop() {
         // 명부 탐색은 아이템 이름보다 뒤다 - 앞에 두면 매 바퀴 10초 넘게
         // 잡아먹어 대응표가 그만큼 늦는다(2026-09-09).
         const bool items_done = discover_items(rtti, reader);
+        // 아이템 **대응표**는 아이템 표가 끝난 뒤에야 된다. 위에서 한 번
+        // 부르지만 그때는 아직 표가 없어 실패하고, 바로 아래 break 로
+        // 빠져나가 다시 시도할 기회가 없었다 - 그래서 인벤토리 패널이
+        // "대응표를 아직 못 읽었습니다" 로 남았다(실측 2026-09-09).
+        // 표가 방금 완성됐을 수 있으니 여기서 한 번 더 부른다.
+        if (items_done) discover_item_ids(rtti, reader);
         discover_clan(rtti, reader);
-        if (items_done && inventory_ready()) break;
+        if (items_done && inventory_ready() && item_ids_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
         }

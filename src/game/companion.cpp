@@ -158,7 +158,8 @@ std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
 std::mutex g_last_mutex;
 HireTargetCapture g_last_hire;
-HireAck g_last_ack;
+HireAck g_acks[kHireAckSlots];
+int g_ack_next = 0;
 CatchCapture g_last_catch;
 
 void dump_payload(void* packet, const char* tag) {
@@ -201,10 +202,12 @@ void dump_payload(void* packet, const char* tag) {
         std::memcpy(&no, pl + 5 + 12, sizeof(no));
         if (no != 0) {
             std::lock_guard<std::mutex> lock(g_last_mutex);
-            g_last_ack.valid = true;
-            g_last_ack.merc_no = no;
-            g_last_ack.at_ms = GetTickCount64();
-            g_last_ack.handled = false;
+            HireAck& a = g_acks[g_ack_next];
+            g_ack_next = (g_ack_next + 1) % kHireAckSlots;
+            a.valid = true;
+            a.merc_no = no;
+            a.at_ms = GetTickCount64();
+            a.handled = false;
             log::infof("획득 응답: 새 동반자 번호 {}", no);
         }
     }
@@ -286,14 +289,32 @@ bool hook_one(const mem::Rtti& rtti, const mem::Reader& reader, const char* cls,
 
 }  // namespace
 
-HireAck last_hire_ack() {
+int pending_hire_acks(HireAck* out, int cap) {
+    if (out == nullptr || cap <= 0) return 0;
     std::lock_guard<std::mutex> lock(g_last_mutex);
-    return g_last_ack;
+    int n = 0;
+    for (const auto& a : g_acks) {
+        if (!a.valid || a.handled || a.merc_no == 0) continue;
+        out[n++] = a;
+        if (n >= cap) break;
+    }
+    return n;
 }
 
-void mark_hire_ack_handled() {
+void mark_hire_ack_handled(std::uint64_t merc_no) {
     std::lock_guard<std::mutex> lock(g_last_mutex);
-    g_last_ack.handled = true;
+    for (auto& a : g_acks) {
+        if (a.valid && a.merc_no == merc_no) a.handled = true;
+    }
+}
+
+HireAck last_hire_ack() {
+    std::lock_guard<std::mutex> lock(g_last_mutex);
+    HireAck best;
+    for (const auto& a : g_acks) {
+        if (a.valid && (!best.valid || a.at_ms > best.at_ms)) best = a;
+    }
+    return best;
 }
 
 HireTargetCapture last_hire_target() {

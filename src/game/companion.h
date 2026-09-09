@@ -124,9 +124,17 @@ struct HireAck {
     unsigned long long at_ms = 0;
     bool handled = false;   // 뒤처리를 끝냈나
 };
+// 응답을 여러 개 기억한다. 칸이 하나면 연속 획득에서 앞의 것이
+// 덮어쓰여 뒤처리가 전부 누락된다 - 실측 2026-09-09: 8번 연속
+// 획득에서 뒤처리 로그가 한 줄도 없었다.
+inline constexpr int kHireAckSlots = 16;
+
+// 아직 뒤처리를 안 한 응답을 모아 낸다. 반환값은 채운 개수.
+int pending_hire_acks(HireAck* out, int cap);
+// 그 번호의 응답을 끝났다고 표시한다.
+void mark_hire_ack_handled(std::uint64_t merc_no);
+// 가장 최근 것 하나(화면 표시용).
 HireAck last_hire_ack();
-// 뒤처리를 끝냈다고 표시한다.
-void mark_hire_ack_handled();
 
 // ----------------------------------------------------------------------
 // ----------------------------------------------------------------------
