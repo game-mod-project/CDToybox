@@ -176,6 +176,8 @@ bool build_catalog_from_manager(const mem::Reader& reader,
                 read_engine_string(reader, static_cast<std::uintptr_t>(str_obj));
         }
         if (kind == RosterKind::Character) {
+            // 현지화 엔티티는 +0x00 의 u32 전체다(roster.h 설명).
+            reader.read_value(record, &entry.loc_entity);
             std::uint16_t row = 0xFFFF;
             if (reader.read_value(record + kCharMercRow, &row)) {
                 entry.merc_row = row;
@@ -304,25 +306,16 @@ std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
     for (auto& e : *entries) {
         // 레코드 키로 먼저, 안 되면 내부 이름 끝의 숫자로. 둘이
         // 일치하는 행도 많지만 어긋나는 행도 그만큼 많다.
-        // 끝자리 숫자는 **엔티티 키일 때만** 쓴다.
+        // 현지화 엔티티는 레코드 +0x00 의 u32 전체다(roster.h 설명).
+        // 그것 하나면 된다 - 예전에 쓰던 "키로 찾고 안 되면 내부 이름
+        // 끝자리 숫자로" 폴백은 걷어냈다. 그 폴백이 엉뚱한 이름을
+        // 붙였다(실측 2026-09-09):
         //
-        // `_1`·`_2`·`_1000` 같은 작은 수는 변형 번호지 키가 아니다.
-        // 그것을 키로 써서 엉뚜한 이름을 붙였다 - 실측 2026-09-09:
+        //   Animal_Baby_Wyvern_1  -> 엔티티 1     "클리프"(주인공)
+        //   Animal_Wolf_Wild_30023 -> 엔티티 30023 "암탉"
         //
-        //   Animal_Baby_Wyvern_1   -> 엔티티 1    "클리프"(주인공)
-        //   Riding_Wyvern_1000     -> 엔티티 1000 "하인"
-        //   Animal_Tiger_Wild_2    -> 엔티티 2    "얀"
-        //
-        // 사용자가 바꾸기에서 새끼 와이번을 못 찾은 이유가 이것이다.
-        // 틀린 이름은 이름이 없는 것보다 나쁘다 - 없으면 내부 이름이
-        // 나오고, 그것은 적어도 맞는 정보다.
-        //
-        // 다섯 자릿수 이상은 남긴다 - Animal_Parrot_Wild_32884 처럼
-        // 끝자리가 진짜 엔티티 키인 행이 있고 그쪽은 이름이 맞는다.
-        constexpr std::uint32_t kMinEntityKey = 10000;
-        std::uint32_t suffix = roster_name_suffix(e.name);
-        if (suffix < kMinEntityKey) suffix = 0;
-        std::uint32_t candidates[2] = {e.key, suffix};
+        // u32 로 고쳐 읽으니 각각 "새끼 와이번"·"대형 늑대" 가 나온다.
+        std::uint32_t candidates[2] = {e.loc_entity, e.key};
         if (candidates[1] == candidates[0]) candidates[1] = 0;
         for (const std::uint32_t entity : candidates) {
             if (entity == 0) continue;
