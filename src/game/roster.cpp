@@ -304,7 +304,25 @@ std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
     for (auto& e : *entries) {
         // 레코드 키로 먼저, 안 되면 내부 이름 끝의 숫자로. 둘이
         // 일치하는 행도 많지만 어긋나는 행도 그만큼 많다.
-        std::uint32_t candidates[2] = {e.key, roster_name_suffix(e.name)};
+        // 끝자리 숫자는 **엔티티 키일 때만** 쓴다.
+        //
+        // `_1`·`_2`·`_1000` 같은 작은 수는 변형 번호지 키가 아니다.
+        // 그것을 키로 써서 엉뚜한 이름을 붙였다 - 실측 2026-09-09:
+        //
+        //   Animal_Baby_Wyvern_1   -> 엔티티 1    "클리프"(주인공)
+        //   Riding_Wyvern_1000     -> 엔티티 1000 "하인"
+        //   Animal_Tiger_Wild_2    -> 엔티티 2    "얀"
+        //
+        // 사용자가 바꾸기에서 새끼 와이번을 못 찾은 이유가 이것이다.
+        // 틀린 이름은 이름이 없는 것보다 나쁘다 - 없으면 내부 이름이
+        // 나오고, 그것은 적어도 맞는 정보다.
+        //
+        // 다섯 자릿수 이상은 남긴다 - Animal_Parrot_Wild_32884 처럼
+        // 끝자리가 진짜 엔티티 키인 행이 있고 그쪽은 이름이 맞는다.
+        constexpr std::uint32_t kMinEntityKey = 10000;
+        std::uint32_t suffix = roster_name_suffix(e.name);
+        if (suffix < kMinEntityKey) suffix = 0;
+        std::uint32_t candidates[2] = {e.key, suffix};
         if (candidates[1] == candidates[0]) candidates[1] = 0;
         for (const std::uint32_t entity : candidates) {
             if (entity == 0) continue;
