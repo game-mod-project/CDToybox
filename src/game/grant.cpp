@@ -275,6 +275,37 @@ constexpr int kNormalTraces = 4;
 std::atomic<int> g_normal_traces{0};
 std::uintptr_t g_normal_outer[kNormalTraces]{};
 
+// 구동을 시작하는 **그 자리**를 한 줄로 남긴다.
+//
+// 구동이 게임 안에서 돌아오지 않는 일이 간헐적으로 생긴다
+// (실측 2026-09-09: 지급 한 번, 획득 두 번). __finally 가 돌지
+// 않았으니 예외가 아니라 진짜로 막힌 것이고, 게임 코드 한복판에서
+// 게임 함수를 부르는 재진입 교착으로 보인다.
+//
+// 성공한 구동과 막힌 구동의 **부르는 자리**를 비교하면 어느 자리가
+// 안전한지 갈린다. 막히면 이 줄이 마지막으로 남으므로 그 자리가
+// 범인이다. 구동할 때만 찍으므로 비용은 없다시피 하다.
+void log_drive_site() {
+    if (g_reader == nullptr) return;
+    void* frames[8]{};
+    const USHORT n = RtlCaptureStackBackTrace(0, 8, frames, nullptr);
+    const std::uintptr_t base = g_reader->module_base();
+    const std::size_t size = g_reader->module_size();
+    std::string line;
+    char buf[32];
+    for (USHORT i = 0; i < n; ++i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) {
+            std::snprintf(buf, sizeof(buf), " +%llX",
+                          static_cast<unsigned long long>(a - base));
+        } else {
+            std::snprintf(buf, sizeof(buf), " ?");
+        }
+        line += buf;
+    }
+    log::infof("구동 자리 (스레드 {}):{}", GetCurrentThreadId(), line);
+}
+
 void log_normal_stack() {
     void* frames[48]{};
     const USHORT n = RtlCaptureStackBackTrace(0, 48, frames, nullptr);
@@ -474,6 +505,7 @@ bool run_pending_if_any() {
     //
     // 이것이 없으면 g_running 이 영원히 true 로 남아 그 뒤 모든 지급·
     // 획득이 죽고, 게임을 다시 시작하는 수밖에 없었다.
+    log_drive_site();
     __try {
         ran = run_one_picked();
     } __finally {
