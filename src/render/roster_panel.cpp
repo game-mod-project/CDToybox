@@ -9,6 +9,7 @@
 
 #include "game/actors.h"
 #include "game/clan.h"
+#include "mem/safe_read.h"
 #include "game/camera.h"
 #include "game/companion.h"
 #include "game/grant.h"
@@ -73,6 +74,47 @@ double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
 mem::LocalReader g_near_reader;
 double g_clan_last_refresh = 0.0;
+// 종 바꾸기 대화상자 상태. 번호가 0이면 닫혀 있다.
+std::uint64_t g_species_no = 0;
+std::uint16_t g_species_type = 0xFFFF;   // 대상의 동반자 타입 행
+char g_species_query[64] = "";
+bool g_species_same_type = true;
+char g_species_msg[160] = "";
+
+// 종을 바꿔 쓴다. 주소는 그 자리에서 다시 찾는다 - 들고 있다가 쓰면
+// 안 된다(2026-09-09 사고, game/clan.h 설명).
+bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
+    const mem::Rtti* rtti = game::clan_rtti();
+    if (rtti == nullptr) {
+        std::snprintf(g_species_msg, sizeof(g_species_msg), "RTTI 준비 전입니다");
+        return false;
+    }
+    game::SpeciesWriteTarget t;
+    if (!game::resolve_species_write(*rtti, g_near_reader, merc_no, &t)) {
+        std::snprintf(g_species_msg, sizeof(g_species_msg),
+                      "자리를 못 찾았습니다 - 월드 안인지 보세요");
+        return false;
+    }
+    const std::uint8_t buf[2] = {static_cast<std::uint8_t>(row & 0xFF),
+                                 static_cast<std::uint8_t>(row >> 8)};
+    // 클라·서버 양쪽에 써야 한다. 서버만 쓰면 게임이 보는 사본은
+    // 그대로다(실측 2026-09-09).
+    if (!mem::safe_write_bytes(t.server, buf, 2) ||
+        !mem::safe_write_bytes(t.client, buf, 2)) {
+        std::snprintf(g_species_msg, sizeof(g_species_msg), "쓰기 실패");
+        return false;
+    }
+    game::SpeciesWriteTarget after;
+    if (game::resolve_species_write(*rtti, g_near_reader, merc_no, &after) &&
+        after.server_row == row && after.client_row == row) {
+        std::snprintf(g_species_msg, sizeof(g_species_msg), "바꿨습니다 (행 %u)", row);
+        game::refresh_clan_roster(g_near_reader);
+        return true;
+    }
+    std::snprintf(g_species_msg, sizeof(g_species_msg),
+                  "쓴 뒤 확인이 어긋났습니다 - 다시 보세요");
+    return false;
+}
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
 char g_selected_name[128] = "";
 
@@ -327,6 +369,82 @@ void draw_companion_item_tab() {
     ImGui::EndTable();
 }
 
+// 종을 고르는 대화상자.
+//
+// 기본은 **같은 동반자 타입**만 보인다. 타입을 넘으면 용병단의
+// 타입별 한도(컴포넌트 +0xF8)와 어긋날 수 있고 아직 시험해 보지
+// 않았다. 체크를 풀면 전체가 나오되 경고를 붙인다.
+void draw_species_popup() {
+    if (!ImGui::BeginPopup("종 바꾸기")) return;
+    ImGui::Text("번호 %llu", static_cast<unsigned long long>(g_species_no));
+    ImGui::SameLine();
+    ImGui::TextDisabled("현재 타입 %s",
+                       g_species_type == 0xFFFF
+                           ? "-"
+                           : type_label(g_species_type,
+                                        game::mercenary_type_name(g_species_type)));
+    ImGui::Checkbox("같은 타입만", &g_species_same_type);
+    if (!g_species_same_type) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
+                           "타입을 넘는 교체는 시험되지 않았습니다");
+    }
+    ImGui::SetNextItemWidth(260);
+    ImGui::InputTextWithHint("##species_q", "이름으로 거르기", g_species_query,
+                             sizeof(g_species_query));
+    if (g_species_msg[0] != 0) {
+        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "%s", g_species_msg);
+    }
+    const ImGuiTableFlags f = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_BordersInnerV;
+    if (ImGui::BeginTable("species_pick", 4, f, ImVec2(560, 320))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 80);
+        ImGui::TableHeadersRow();
+        const auto& cat = game::character_catalog();
+        static std::vector<const game::RosterEntry*> hits;
+        hits.clear();
+        for (const auto& c : cat) {
+            if (!c.is_companion()) continue;
+            if (g_species_same_type && c.merc_row != g_species_type) continue;
+            if (g_species_query[0] != 0 &&
+                !(contains_ci(c.name, g_species_query) ||
+                  contains_ci(c.label, g_species_query))) {
+                continue;
+            }
+            hits.push_back(&c);
+        }
+        ImGuiListClipper cl;
+        cl.Begin(static_cast<int>(hits.size()));
+        while (cl.Step()) {
+            for (int k = cl.DisplayStart; k < cl.DisplayEnd; ++k) {
+                const game::RosterEntry* c = hits[static_cast<std::size_t>(k)];
+                ImGui::TableNextRow();
+                ImGui::PushID(k);
+                ImGui::TableSetColumnIndex(0);
+                char rl[32];
+                std::snprintf(rl, sizeof(rl), "%u##pick%d", c->row, k);
+                if (ImGui::Selectable(rl, false, ImGuiSelectableFlags_SpanAllColumns)) {
+                    apply_species(g_species_no, static_cast<std::uint16_t>(c->row));
+                }
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(c->label.empty() ? "-" : c->label.c_str());
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(c->name.c_str());
+                ImGui::TableSetColumnIndex(3);
+                ImGui::TextUnformatted(
+                    type_label(c->merc_row, game::mercenary_type_name(c->merc_row)));
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndPopup();
+}
+
 // --- 내 동반자 탭 -----------------------------------------------------
 //
 // 용병단 컴포넌트의 명부를 그대로 보인다(game/clan.h). 지금까지는
@@ -367,7 +485,7 @@ void draw_my_companions_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (!ImGui::BeginTable("my_companions", 7, flags)) return;
+    if (!ImGui::BeginTable("my_companions", 8, flags)) return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 74);
     ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -376,6 +494,7 @@ void draw_my_companions_tab() {
     ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
     ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 56);
     ImGui::TableSetupColumn("월드", ImGuiTableColumnFlags_WidthFixed, 44);
+    ImGui::TableSetupColumn("종", ImGuiTableColumnFlags_WidthFixed, 74);
     ImGui::TableHeadersRow();
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(view.size()));
@@ -412,6 +531,18 @@ void draw_my_companions_tab() {
             ImGui::TableSetColumnIndex(6);
             if (e->spawned()) ImGui::TextUnformatted("예");
             else ImGui::TextDisabled("-");
+            ImGui::TableSetColumnIndex(7);
+            // 종을 바꾸면 게임 목록·소환·저장까지 따라온다(실측
+            // 2026-09-09: 혹멧돼지 -> 사자, 타고 다니고 리로드를 넘음).
+            if (ImGui::SmallButton("바꾸기")) {
+                g_species_no = e->merc_no;
+                g_species_type = e->merc_row;
+                g_species_query[0] = 0;
+                g_species_msg[0] = 0;
+                g_species_same_type = true;
+                ImGui::OpenPopup("종 바꾸기");
+            }
+            draw_species_popup();
             ImGui::PopID();
         }
     }

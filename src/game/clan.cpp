@@ -214,4 +214,6 @@ bool refresh_clan_roster(const mem::Reader& reader) {
 
 const std::vector<ClanEntry>& clan_roster() { return g_roster; }
 
+const mem::Rtti* clan_rtti() { return g_rtti; }
+
 }  // namespace cdtb::game
