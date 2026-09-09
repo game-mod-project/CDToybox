@@ -236,6 +236,8 @@ std::atomic<bool> g_running{false};
 // 구동이 시작된 시각. 물렸을 때 얼마나 오래됐는지 보려고 둔다.
 std::atomic<unsigned long long> g_running_at{0};
 std::atomic<unsigned long long> g_last_done{0};
+// 실행 중이던 구동을 손으로 풀었다 = 그 호출이 안 돌아왔다는 뜻.
+std::atomic<bool> g_drive_dead{false};
 // 지급이 실제로 실행되는 스레드 = 게임 로직 스레드. 액터 조회가
 // depth==1·TLS 준비 상태로 도는 그 스레드다. 작업 실행 래퍼가 이
 // 스레드에서도 도는지 가리는 데 쓴다.
@@ -1229,7 +1231,14 @@ bool drive_gate_reset() {
             }
         }
     }
-    if (stuck_running) g_running.store(false, std::memory_order_release);
+    if (stuck_running) {
+        // 실행 중이던 것을 푸는 것은 그 호출이 게임 안에서 돌아오지
+        // 않았다는 뜻이다. 그 스레드는 재귀 깊이가 박혀 다시 구동을
+        // 서비스하지 못한다. 숨기지 말고 표시한다.
+        g_running.store(false, std::memory_order_release);
+        g_drive_dead.store(true, std::memory_order_release);
+        log::errorf("구동 지점이 게임 안에서 멈췄다 - 게임을 다시 시작해야 한다");
+    }
     log::warnf("구동 게이트를 손으로 풀었다 (대기 {}ms, 실행 {}ms)",
                g.pending_age_ms, g.running_age_ms);
     return true;
@@ -2090,6 +2099,10 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     return true;
 }
 
+
+bool drive_point_dead() {
+    return g_drive_dead.load(std::memory_order_acquire);
+}
 
 bool spawn_pending(DriveLane lane) {
     return lane_of(lane).has.load(std::memory_order_acquire);

@@ -1,6 +1,7 @@
 #include "game/clan.h"
 
 #include <atomic>
+#include <windows.h>
 #include <utility>
 
 #include "game/roster.h"
@@ -203,6 +204,12 @@ bool refresh_clan_roster(const mem::Reader& reader) {
         !read_clan_roster(reader, c, &list)) {
         // 월드를 나갔다 들어오면 컴포넌트가 바뀐다. 한 번 다시 찾는다.
         if (g_rtti == nullptr) return false;
+        // 다시 찾는 것은 RTTI 인스턴스 스캔이라 기가바이트를 훑는다.
+        // 그리는 스레드에서 2초마다 하면 화면이 쌓린다 - 간격을 둔다.
+        static std::uint64_t s_last_scan = 0;
+        const std::uint64_t now = GetTickCount64();
+        if (s_last_scan != 0 && now - s_last_scan < 10000) return false;
+        s_last_scan = now;
         std::uintptr_t again = 0;
         if (!find_clan_component(reader, *g_rtti, &again) || again == 0) return false;
         if (!read_clan_roster(reader, again, &list)) return false;

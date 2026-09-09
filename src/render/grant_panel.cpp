@@ -201,6 +201,11 @@ bool draw_drive_gate() {
     const ImVec4 warn(0.9f, 0.6f, 0.3f, 1.0f);
     const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
 
+    if (game::drive_point_dead()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                           "구동 지점이 게임 안에서 멈췄습니다 - "
+                           "게임을 다시 시작해야 지급·획득이 동작합니다");
+    }
     if (g.running) {
         // 실행 중은 원래 몇 초다. 분 단위면 게임 안에서 안 돌아온 것이다.
         ImGui::TextColored(stuck ? bad : warn,
