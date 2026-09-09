@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/config.h"
+#include "core/crashlog.h"
 #include "core/log.h"
 #include "proxy/xinput_proxy.h"
 #include "render/d3d12_hook.h"
@@ -34,6 +35,9 @@ DWORD WINAPI init_thread(LPVOID) {
     const std::wstring dir = cdtb::self_directory();
 
     cdtb::log::init(dir + L"CDToybox.log");
+    // 로그보다 먼저 걸어 둔다. 지금까지 크래시가 나면 로그가
+    // 끊긴 자리만 남고 죽은 위치는 못 봤다.
+    cdtb::crashlog::install((dir + L"CDToybox.crash.txt").c_str());
     cdtb::log::infof("CDToybox 0단계 시작");
 
     const std::wstring ini = dir + L"CDToybox.ini";

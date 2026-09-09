@@ -45,6 +45,7 @@ add_library(cdtb_core STATIC
     src/mem/image_dump.cpp
     src/mem/watchpoint.cpp
     src/core/log.cpp
+    src/core/crashlog.cpp
     src/core/config.cpp
     src/core/guard.cpp
 )
