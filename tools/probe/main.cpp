@@ -1427,6 +1427,16 @@ void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
                     e.label.empty() ? "" : e.label.c_str(),
                     e.spawned() ? "  [월드]" : "", owner.c_str());
     }
+    // 소유자 갈래를 세어 둔다. 플레이어블(클리프·데미안·웅카…) 개인
+    // 소유인지, 개인 임자가 없는 용병대 몫인지, NPC 개인 것인지.
+    std::size_t own_playable = 0, own_npc = 0, own_none = 0;
+    for (const auto& e : list) {
+        if (e.owner_row == 0xFFFF) ++own_none;
+        else if (e.owner_playable) ++own_playable;
+        else ++own_npc;
+    }
+    std::printf("소유: 플레이어블 %zu · 용병대(임자 없음) %zu · NPC %zu\n",
+                own_playable, own_none, own_npc);
 }
 
 // 플레이어블 캐릭터를 가릴 수 있는지 본다. MercenaryInfo 의

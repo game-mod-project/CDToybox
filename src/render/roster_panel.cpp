@@ -204,6 +204,17 @@ const char* type_label(std::uint16_t row, const std::string& internal) {
     if (internal == "Domestic") return "가축";
     if (internal == "Fish") return "물고기";
     if (internal == "Insect") return "곤충";
+    // 사람 용병들. 플레이어블 캐릭터가 속한 용병대의 멤버다 - 칼·루소는
+    // 상점, 루크·실반·알드릭은 근접, 로널드·오토·프리츠는 원거리.
+    // 그동안 영문 그대로 나와서 명부에 왜 있는지 안 보였다.
+    if (internal == "Mercenary_Main") return "플레이어블";
+    if (internal == "Mercenary_Melee") return "용병(근접)";
+    if (internal == "Mercenary_Range") return "용병(원거리)";
+    if (internal == "Mercenary_Worker") return "용병(일꾼)";
+    if (internal == "Mercenary_GuestWorker") return "용병(객원)";
+    if (internal == "Mercenary_Shop") return "용병(상점)";
+    if (internal == "Observer") return "관찰자";
+    if (internal == "RecoveryItem") return "회복";
     if (internal.empty()) {
         static char buf[16];
         std::snprintf(buf, sizeof(buf), "행 %u", row);
@@ -623,7 +634,11 @@ void draw_my_companions_tab() {
             // 레코드 +0x148. 게임 자신의 소유자 판정(RVA 0x209FE40)이
             // 비교하는 그 자리다(clan.h 설명).
             if (e->owner_row == 0xFFFF) {
-                ImGui::TextDisabled("-");
+                // 개인 임자가 기록되지 않은 것. 게임에서는 플레이어블
+                // 캐릭터들이 속한 **용병대**의 것으로 보면 된다(사용자
+                // 확인). 실측으로 아는 것은 "+0x148 에 개인이 없다" 까지고,
+                // '용병대' 라는 이름은 그 게임 안 의미를 붙인 것이다.
+                ImGui::TextDisabled("용병대");
             } else {
                 char on[64];
                 if (e->owner_name.empty())
