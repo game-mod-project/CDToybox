@@ -412,7 +412,7 @@ void draw_species_popup() {
     if (!g_species_same_type) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
-                           "타입을 넘는 교체는 시험되지 않았습니다");
+                           "타입을 넘는 교체도 됩니다 - 펫→특수 탑승물 확인됨");
     }
     ImGui::SetNextItemWidth(260);
     ImGui::InputTextWithHint("##species_q", "이름으로 거르기", g_species_query,
