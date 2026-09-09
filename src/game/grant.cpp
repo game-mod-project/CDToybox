@@ -181,11 +181,22 @@ struct LaneSlot {
 };
 LaneSlot g_lane[kDriveLaneCount];
 
+// 쿨타임은 **레인별**이다. 실행은 직렬이어야 하지만, 지급을 했다고
+// 획득까지 2초 막을 이유는 없다(사용자 지적 2026-09-09).
+std::atomic<unsigned long long> g_lane_done[kDriveLaneCount]{};
+
 LaneSlot& lane_of(DriveLane l) {
     return g_lane[static_cast<int>(l)];
 }
 
 // 어느 레인이든 걸린 것이 있는가.
+// 그 레인이 마지막으로 난 시각. 쿨타임은 레인별이다.
+unsigned long long lane_done_ms(const LaneSlot& l) {
+    const int idx = static_cast<int>(&l - &g_lane[0]);
+    if (idx < 0 || idx >= kDriveLaneCount) return 0;
+    return g_lane_done[idx].load(std::memory_order_acquire);
+}
+
 bool any_pending() {
     for (auto& l : g_lane) {
         if (l.has.load(std::memory_order_acquire)) return true;
@@ -477,6 +488,8 @@ bool safe_deref(std::uintptr_t at, std::uintptr_t* out);
 // 실제로 하나를 실행했으면 true.
 // 실제 실행부. 예외가 난 자리를 밖으로 보내지 않고 그대로 둔다 -
 // 게이트 푸는 일은 부르는 쪽의 __finally 가 맡는다.
+int g_last_lane = -1;
+
 bool run_one_picked() {
     bool ran = false;
     // 레인을 순서대로 본다. 한 번에 하나만 실행한다 - 실행 지점은
@@ -488,6 +501,7 @@ bool run_one_picked() {
             break;
         }
     }
+    g_last_lane = picked;
     if (picked >= 0) {
         ran = true;
         const Pending req = g_lane[picked].req;
@@ -560,7 +574,11 @@ bool run_pending_if_any() {
     __try {
         ran = run_one_picked();
     } __finally {
-        g_last_done.store(GetTickCount64(), std::memory_order_release);
+        const unsigned long long done_at = GetTickCount64();
+        g_last_done.store(done_at, std::memory_order_release);
+        if (g_last_lane >= 0 && g_last_lane < kDriveLaneCount) {
+            g_lane_done[g_last_lane].store(done_at, std::memory_order_release);
+        }
         g_running.store(false, std::memory_order_release);
         if (AbnormalTermination()) {
             log::errorf("구동이 예외로 풀렸다 - 게이트는 풀었으니 계속 쓸 수 있다");
@@ -1373,8 +1391,7 @@ bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
     LaneSlot& lane = lane_of(DriveLane::Companion);
     if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
     if (g_drive_fault.load(std::memory_order_acquire) == session) return false;
@@ -1944,8 +1961,7 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
     LaneSlot& lane = lane_of(DriveLane::Item);
     if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
     lane.req = Pending{};
@@ -2118,8 +2134,7 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
     LaneSlot& lane = lane_of(DriveLane::Companion);
     if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
     lane.req = Pending{};
@@ -2145,8 +2160,7 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     LaneSlot& lane = lane_of(DriveLane::Item);
     if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
 
@@ -2189,8 +2203,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     LaneSlot& lane = lane_of(DriveLane::Item);
     if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
 

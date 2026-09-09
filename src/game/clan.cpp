@@ -306,34 +306,50 @@ const std::vector<ClanEntry>& clan_roster() { return g_roster; }
 const mem::Rtti* clan_rtti() { return g_rtti; }
 
 void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
-    // 응답 칸은 하나라 연속 획득하면 앞의 것이 덮어쓰인다 -
-    // 실측 2026-09-09: 8번 연속 획득에서 뒤처리가 한 번도 안 걸렸고,
-    // 죽은 핸들이 다섯 개 남았다. 그래서 번호 하나를 쪻는 대신
-    // **명부 전체를 훑는다.** 살아있는 핸들은 건드리지 않으므로
-    // 훑는 것 자체는 안전하다.
-    //
-    // 매 프레임 훑을 수는 없으니 간격을 둔다. 응답이 있었으면
-    // 짧게, 없으면 드문드문.
     static unsigned long long s_last = 0;
     const unsigned long long now = GetTickCount64();
-    const HireAck ack = last_hire_ack();
-    const bool fresh = ack.valid && !ack.handled &&
-                       now - ack.at_ms >= kHireCleanupDelayMs;
-    const unsigned long long period = fresh ? 1000 : 15000;
-    if (s_last != 0 && now - s_last < period) return;
-    s_last = now;
 
+    // (1) 우리가 획득한 것은 **살아있어도** 소환 판정을 지운다.
+    //
+    // 2338 은 월드에 서 있던 야생 개체를 그대로 등록하므로 그 순간의
+    // 핸들이 레코드에 박힌다. 그 액터는 살아있지만 **제대로 소환된
+    // 동반자 개체가 아니라** 게임은 "이미 나와 있음" 으로 보고 소환도
+    // 해제도 거부한다 - 실측 2026-09-09: 참새·회색 앵무새가 살아있는
+    // 야생 액터로 그대로 서 있었고 둘 다 소환이 안 됐다.
+    //
+    // 그래서 생존 여부를 보지 않고 지운다. 우리가 방금 등록한 것이라
+    // 그 핸들은 어찌됐든 정상 소환 결과가 아니다.
+    HireAck acks[kHireAckSlots];
+    const int n = pending_hire_acks(acks, kHireAckSlots);
+    for (int i = 0; i < n; ++i) {
+        if (now - acks[i].at_ms < kHireCleanupDelayMs) continue;
+        SpawnFlagTarget t;
+        if (!resolve_spawn_flag(rtti, reader, acks[i].merc_no, &t)) continue;
+        mark_hire_ack_handled(acks[i].merc_no);
+        if (t.server_handle == 0 && t.client_handle == 0) continue;
+        const std::uint32_t zero = 0;
+        if (mem::safe_write_bytes(t.server, &zero, 4) &&
+            mem::safe_write_bytes(t.client, &zero, 4)) {
+            log::infof("획득 뒤처리: 번호 {} 의 소환 판정(핸들 0x{:08X})을 풀었다",
+                       acks[i].merc_no, t.server_handle);
+        }
+    }
+    if (n > 0) refresh_clan_roster(reader);
+
+    // (2) 그 밖의 죽은 핸들을 훑는다. 이쪽은 살아있으면 건드리지
+    // 않는다 - 진짜로 나와 있는 개체의 판정을 지우면 중복 소환이 된다.
+    if (s_last != 0 && now - s_last < 15000) return;
+    s_last = now;
     std::uintptr_t srv = 0;
     if (!clan_component_cached(reader, rtti, false, &srv)) return;
     std::vector<ClanEntry> list;
     if (!read_clan_roster(reader, srv, &list)) return;
-
     int cleared = 0;
     for (const auto& e : list) {
         if (e.handle == 0) continue;
         bool known = false;
-        if (actor_handle_alive(reader, e.handle, &known)) continue;  // 살아있다
-        if (!known) return;   // 액터 목록을 모른다 - 다음 기회에
+        if (actor_handle_alive(reader, e.handle, &known)) continue;
+        if (!known) return;
         SpawnFlagTarget t;
         if (!resolve_spawn_flag(rtti, reader, e.merc_no, &t)) continue;
         if (t.server_handle == 0 && t.client_handle == 0) continue;
@@ -341,11 +357,10 @@ void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
         if (mem::safe_write_bytes(t.server, &zero, 4) &&
             mem::safe_write_bytes(t.client, &zero, 4)) {
             ++cleared;
-            log::infof("소환 판정 정리: 번호 {} 의 죽은 액터 핸들 0x{:08X} 를 지웠다",
+            log::infof("소환 판정 정리: 번호 {} 의 죽은 핸들 0x{:08X} 를 지웠다",
                        e.merc_no, t.server_handle);
         }
     }
-    if (fresh) mark_hire_ack_handled();
     if (cleared > 0) refresh_clan_roster(reader);
 }
 

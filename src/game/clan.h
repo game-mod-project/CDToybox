@@ -63,6 +63,7 @@ struct ClanEntry {
     // 부적로 얻은 Riding_Bear_1001(이 구간이 0)은 소환·탑승까지 잘 됐다.
     bool wild_origin = false;
 
+
     bool spawned() const { return handle != 0; }
     const std::string& display() const { return label.empty() ? name : label; }
 };
