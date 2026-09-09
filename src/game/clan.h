@@ -110,5 +110,8 @@ bool clan_ready();
 // 지금 읽는다. 실패하면 false 이고 옛 판을 유지한다.
 bool refresh_clan_roster(const mem::Reader& reader);
 const std::vector<ClanEntry>& clan_roster();
+// discover_clan 이 쓴 RTTI. 준비 전이면 nullptr.
+// 오버레이가 resolve_species_write 를 부르려면 이것이 필요하다.
+const mem::Rtti* clan_rtti();
 
 }  // namespace cdtb::game
