@@ -228,6 +228,7 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
         if (e.owner_row != 0xFFFF) {
             if (const RosterEntry* o = character_by_row(e.owner_row))
                 e.owner_name = o->display();
+            e.owner_playable = is_playable_character_row(reader, e.owner_row);
         }
         if (const RosterEntry* r = character_by_row(e.row)) {
             e.key = r->key;

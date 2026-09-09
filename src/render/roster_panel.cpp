@@ -458,7 +458,7 @@ void draw_species_popup() {
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 80);
-        ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthFixed, 52);
+        ImGui::TableSetupColumn("탑승", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableHeadersRow();
         const auto& cat = game::character_catalog();
         static std::vector<const game::RosterEntry*> hits;
@@ -499,10 +499,23 @@ void draw_species_popup() {
                 ImGui::TextUnformatted(
                     type_label(c->merc_row, game::mercenary_type_name(c->merc_row)));
                 ImGui::TableSetColumnIndex(4);
-                // _equipInfo. 없다고 못 쓰는 것은 아니다 - 열기구 3종과
-                // 호랑이가 여기 걸린다. 시험해 볼 수 있게 보여만 준다.
-                if (c->equip_info == 0xFFFF) ImGui::TextDisabled("없음");
-                else ImGui::Text("%u", c->equip_info);
+                // _equipInfo 가 없으면 **소환은 되지만 탈 수 없다** -
+                // 실측 2026-09-09: Animal_Tiger_Wild_2(7038)는 못 탔고,
+                // 장비가 있는 Animal_Tiger_Wild_1(3438)은 탔다.
+                // (안 움직인다는 것은 근거가 아니다 - 탈것은 타지 않으면
+                //  원래 움직이지 않는다.) 숨기지 않고 알려 준다.
+                if (c->equip_info == 0xFFFF) {
+                    ImGui::TextDisabled("불가");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "장비 정보가 없는 종입니다.\n"
+                            "소환은 되지만 탈 수 없습니다.\n"
+                            "실측: Animal_Tiger_Wild_2(7038)는 못 탔고,\n"
+                            "Animal_Tiger_Wild_1(3438)은 탔습니다.");
+                    }
+                } else {
+                    ImGui::TextUnformatted("가능");
+                }
                 ImGui::PopID();
             }
         }
@@ -611,10 +624,17 @@ void draw_my_companions_tab() {
             // 비교하는 그 자리다(clan.h 설명).
             if (e->owner_row == 0xFFFF) {
                 ImGui::TextDisabled("-");
-            } else if (!e->owner_name.empty()) {
-                ImGui::TextUnformatted(e->owner_name.c_str());
             } else {
-                ImGui::Text("행 %u", e->owner_row);
+                char on[64];
+                if (e->owner_name.empty())
+                    std::snprintf(on, sizeof(on), "행 %u", e->owner_row);
+                else
+                    std::snprintf(on, sizeof(on), "%s", e->owner_name.c_str());
+                // 플레이어블(클리프·데미안·웅카…)은 그대로, NPC 소유는
+                // 흐리게. 판정은 이름이 아니라 데이터다 - 주인공은 지금
+                // 조종 중인 캐릭터 행, 나머지는 Mercenary_Main 타입이다.
+                if (e->owner_playable) ImGui::TextUnformatted(on);
+                else ImGui::TextDisabled("%s", on);
             }
             ImGui::TableSetColumnIndex(7);
             if (e->spawned()) ImGui::TextUnformatted("예");

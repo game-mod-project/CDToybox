@@ -71,6 +71,9 @@ struct ClanEntry {
     // 갈릴 것으로 본다.
     std::uint16_t owner_row = 0xFFFF;
     std::string owner_name;   // owner_row 를 캐릭터 표로 푼 이름
+    // 그 소유자가 플레이어블 캐릭터인가 (주인공이거나 Mercenary_Main).
+    // 클리프·데미안·웅카가 여기 걸린다(roster.h is_playable_character_row).
+    bool owner_playable = false;
 
     // 여기 "야생 획득분" 표시(레코드 +0x30~+0x4F 가 0 이 아닌가)가
     // 있었다. 2026-09-09 명부 8개를 실측해 보니 그 구간은 출신과

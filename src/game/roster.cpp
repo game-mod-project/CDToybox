@@ -31,6 +31,7 @@ constexpr std::size_t kCharCountAble = 0x16E;   // u8  _isMercenaryCountAble
 
 // 용병 레코드 (실측 2026-09-05)
 constexpr std::size_t kMercType = 0x20;  // u8 _mercenaryType
+constexpr std::size_t kMercPlayable = 0x22;  // u8 _isPlayable
 
 // 엔진 문자열 객체
 constexpr std::size_t kStrData = 0x00;    // char* UTF-8
@@ -167,6 +168,9 @@ bool build_catalog_from_manager(const mem::Reader& reader,
             entry.key = i;
             std::uint8_t t = 0;
             if (reader.read_value(record + kMercType, &t)) entry.merc_type = t;
+            std::uint8_t playable = 0;
+            if (reader.read_value(record + kMercPlayable, &playable))
+                entry.merc_playable = playable != 0;
         } else {
             std::uint16_t key = 0;
             if (!read_u16_key(reader, record + kRecKey, &key)) continue;
@@ -480,6 +484,43 @@ std::uint8_t mercenary_type_of_row(std::uint16_t row) {
         if (e.key == row) return e.merc_type;
     }
     return 0;
+}
+
+bool is_playable_merc_row(std::uint16_t row) {
+    return mercenary_type_of_row(row) == kMercTypeMain;
+}
+
+namespace {
+// 전역 하나를 사슬대로 따라가 캐릭터 행을 낸다. 못 읽으면 0xFFFF.
+std::uint16_t session_char_row(const mem::Reader& reader, std::uint64_t rva) {
+    const std::uintptr_t base = reader.module_base();
+    if (base == 0) return 0xFFFF;
+    std::uintptr_t p = 0;
+    if (!reader.read_value(base + rva, &p) || p == 0) return 0xFFFF;
+    if (!reader.read_value(p, &p) || p == 0) return 0xFFFF;
+    if (!reader.read_value(p + 8, &p) || p == 0) return 0xFFFF;
+    if (!reader.read_value(p + 0x28, &p) || p == 0) return 0xFFFF;
+    std::uint16_t row = 0xFFFF;
+    if (!reader.read_value(p + kSessionCharRowOff, &row)) return 0xFFFF;
+    return row;
+}
+}  // namespace
+
+std::uint16_t main_character_row(const mem::Reader& reader) {
+    const std::size_t n = character_catalog().size();
+    for (std::uint64_t rva : {kSessionGlobalRvaA, kSessionGlobalRvaB}) {
+        const std::uint16_t row = session_char_row(reader, rva);
+        // 표 안의 행이어야 진짜다. 아니면 다른 전역을 본다.
+        if (row != 0xFFFF && (n == 0 || row < n)) return row;
+    }
+    return 0xFFFF;
+}
+
+bool is_playable_character_row(const mem::Reader& reader, std::uint32_t row) {
+    if (row == 0xFFFF) return false;
+    if (row == main_character_row(reader)) return true;
+    const RosterEntry* e = character_by_row(row);
+    return e != nullptr && is_playable_merc_row(e->merc_row);
 }
 
 }  // namespace cdtb::game

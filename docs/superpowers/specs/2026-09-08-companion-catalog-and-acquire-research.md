@@ -887,6 +887,59 @@ CharacterInfo 를 찾아 `_mercenaryInfo`(+0xBE) -> MercenaryInfo 의
 
 ---
 
+## 6.19 플레이어블 캐릭터 구분 · _equipInfo 의 진짜 뜻 (2026-09-09 21:30)
+
+### 플레이어블 캐릭터는 데이터로 갈린다
+
+두 갈래다. 이름을 박지 않으므로 DLC·모드로 늘어도 따라간다.
+
+1. **주인공 클리프**는 용병 표에 없다 - 캐릭터 행 0 `Kliff`,
+   `_mercenaryInfo` 0xFFFF. 게임이 소유자 판정(0x209FE40)에서 쓰는
+   사슬로 **지금 조종 중인 캐릭터 행**을 읽는다. 실측값 0.
+
+   ```
+   전역 0x6C29AF8 (또는 0x6C29B00) -> [+0] -> [+8] -> [+0x28] -> +0x100 u16
+   ```
+
+2. **바꿔 탈 수 있는 나머지**는 `MercenaryInfo._mercenaryType == 1`
+   (Mercenary_Main)이다. 지금 6행뿐이다.
+
+   | 캐릭터 행 | 내부 이름 | 표시명 |
+   |---|---|---|
+   | 3 | Damian | 데미안 |
+   | 5 | Oongka | 웅카 |
+   | 6 | Yann | 얀 |
+   | 7 | Yahn | 얀 |
+   | 8 | Nairah | 나이라 |
+   | 9 | Witch | 마녀 |
+
+**`_isPlayable`(MercenaryInfo +0x22)은 이 용도로 못 쓴다.** 실측하니
+Mercenary_Main 뿐 아니라 Vehicle_Horse·Vehicle_Dragon·
+Vehicle_WarMachine·Vehicle_Special·Vehicle 까지 전부 1이다
+(Vehicle_Ship·펫·가축·용병은 0). 뜻은 "플레이어가 조종하는가" 에 가깝다.
+
+### `_equipInfo` 는 표시 관문이 아니라 **탑승 가능 여부**였다
+
+6.18 에서 조건을 뺐더니 호랑이가 목록에 돌아왔고, 사용자가 시험했다.
+
+| 종 | 행 | 타입행 | _equipInfo | 결과 |
+|---|---|---|---|---|
+| `Animal_Tiger_Wild_1` | 3438 | 5 | 9 | **탑승 O** |
+| `Animal_Tiger_Wild_2` | 7038 | 5 | 65535 | 소환 O, **탑승 X** |
+
+그래서 숨기는 대신 팝업에 **탑승 가능/불가** 로 찍는다. 고르는 사람이
+알고 고르면 된다.
+
+주의: "안 움직인다"는 근거가 아니다 - 탈것은 타지 않으면 원래 움직이지
+않는다(사용자 지적). 실측된 것은 탑승 불가 하나다.
+
+### 소유자 컬럼
+
+레코드 +0x148 로 푼 소유자가 플레이어블이면 그대로, NPC 소유면 흐리게
+찍는다. 판정은 위 두 갈래를 쓴다.
+
+---
+
 ## 7. 근거 파일
 
 - 정적 분석 이번 회차: `tools/rtti/disasm.py` · `find_class.py` 로 수행.
