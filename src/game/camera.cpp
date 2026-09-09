@@ -270,13 +270,21 @@ void auto_analysis_loop() {
         t = step("로스터", t);
         discover_actor_manager(rtti, reader);
         t = step("액터 매니저", t);
-        // 내 동반자 명부(용병단 컴포넌트). 월드 안에서만 잡힌다.
-        discover_clan(rtti, reader);
-        t = step("동반자 명부", t);
         log_new_actors(rtti, reader);
         t = step("액터 목록", t);
         const bool got_cam = discover_with(rtti, reader, nullptr);
-        step("카메라", t);
+        t = step("카메라", t);
+        // 내 동반자 명부(용병단 컴포넌트)는 **맨 뒤에서** 잡는다.
+        //
+        // RTTI 인스턴스 스캔이라 실측 10.7초가 든다. 앞에 두면 그만큼
+        // 아이템 대응표가 늦어진다 - 사용자가 "인벤토리 로드가 너무
+        // 오래 걸린다" 고 짚은 것이 이것이다(2026-09-09). 명부는 월드에
+        // 들어가 동반자 기능을 쓸 때나 필요하므로 급하지 않다.
+        //
+        // 그래도 배경에서 미리 잡아 두기는 해야 한다 - 그리는 스레드가
+        // 이 스캔을 돌면 종 바꾸기에서 게임이 멈춘다(game/clan.cpp).
+        discover_clan(rtti, reader);
+        step("동반자 명부", t);
         log::infof("탐색 {}번째 통과: {}ms", attempt,
                    ::GetTickCount64() - pass_t0);
         if (got_cam && g_set.active != 0) {
@@ -303,8 +311,11 @@ void auto_analysis_loop() {
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
         discover_actor_manager(rtti, reader);
+        // 명부 탐색은 아이템 이름보다 뒤다 - 앞에 두면 매 바퀴 10초 넘게
+        // 잡아먹어 대응표가 그만큼 늦는다(2026-09-09).
+        const bool items_done = discover_items(rtti, reader);
         discover_clan(rtti, reader);
-        if (discover_items(rtti, reader) && inventory_ready()) break;
+        if (items_done && inventory_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
         }
