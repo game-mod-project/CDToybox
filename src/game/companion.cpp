@@ -442,6 +442,11 @@ constexpr int kSpawnLogMax = 60;
 std::mutex g_spawn_mutex;
 SpawnWorkResult g_last_spawn;
 
+// 코드 0 은 성공이지만, **0 이 아니라고 실패가 아니다.** 2026-09-09
+// 실측: 종을 바꾼 까마귀·앵무새를 소환하니 코드 0xFAABC030 이 나왔는데
+// 둘 다 실제로 소환됐고 탑승까지 됐다. 그 값은 게임 안 121곳이 쓰는
+// 범용 코드(전역 RVA 0x6BB7EB8)라 판정에 쓸 수 없다. 그래서 코드를
+// 16진수로 그대로 남기고 뜻을 붙이지 않는다.
 void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
                                 std::uint64_t merc_no, float* pos) {
     // 이 호출이 안 돌아오는 것이 지금 쫓는 문제다(2026-09-09: 종을 바꾼
@@ -461,12 +466,12 @@ void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
         }
         if (pos != nullptr) {
             log::infof("소환 작업: 번호 {} 좌표 ({:.1f}, {:.1f}, {:.1f}) "
-                       "-> 코드 {} ({})",
+                       "-> 코드 0x{:X}{}",
                        merc_no, pos[0], pos[1], pos[2], code,
-                       code == 0 ? "성공" : "거부");
+                       code == 0 ? " (성공)" : "");
         } else {
-            log::infof("소환 작업: 번호 {} 좌표 없음 -> 코드 {} ({})", merc_no,
-                       code, code == 0 ? "성공" : "거부");
+            log::infof("소환 작업: 번호 {} 좌표 없음 -> 코드 0x{:X}{}", merc_no,
+                       code, code == 0 ? " (성공)" : "");
         }
     }
     return r;
