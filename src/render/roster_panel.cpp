@@ -554,14 +554,52 @@ void draw_my_companions_tab() {
         game::refresh_clan_roster(g_near_reader);
         g_clan_last_refresh = now;
     }
+    const auto& all = game::clan_roster();
+
+    // 세 갈래로 접는다. 관찰자 같은 시스템 항목은 플레이어 동반자가
+    // 아니라 기본으로 접어 둔다 - 대신 개수를 늘 보여 주므로 무엇이
+    // 접혀 있는지는 숨겨지지 않는다.
+    static bool show_people = true;
+    static bool show_mount = true;
+    static bool show_system = false;
+    std::size_t n_people = 0, n_mount = 0, n_system = 0, n_other = 0;
+    for (const auto& e : all) {
+        switch (game::companion_group_of_row(e.merc_row)) {
+            case game::CompanionGroup::People: ++n_people; break;
+            case game::CompanionGroup::Mount:  ++n_mount; break;
+            case game::CompanionGroup::System: ++n_system; break;
+            default: ++n_other; break;
+        }
+    }
+    char lb[48];
+    ImGui::SameLine();
+    std::snprintf(lb, sizeof(lb), "용병대원 (%zu)", n_people);
+    ImGui::Checkbox(lb, &show_people);
+    ImGui::SameLine();
+    std::snprintf(lb, sizeof(lb), "탈것·펫 (%zu)", n_mount);
+    ImGui::Checkbox(lb, &show_mount);
+    ImGui::SameLine();
+    std::snprintf(lb, sizeof(lb), "시스템 (%zu)", n_system);
+    ImGui::Checkbox(lb, &show_system);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "관찰자·회복 같은 시스템 항목입니다.\n"
+            "플레이어 동반자가 아니라 기본으로 접혀 있습니다.");
+    }
     ImGui::SameLine();
     ImGui::Checkbox("탈것·특수·반려동물만", &g_clan_listed_only);
-    const auto& all = game::clan_roster();
+
     static std::vector<const game::ClanEntry*> view;
     view.clear();
     std::size_t spawned = 0;
     for (const auto& e : all) {
         if (e.spawned()) ++spawned;
+        switch (game::companion_group_of_row(e.merc_row)) {
+            case game::CompanionGroup::People: if (!show_people) continue; break;
+            case game::CompanionGroup::Mount:  if (!show_mount) continue; break;
+            case game::CompanionGroup::System: if (!show_system) continue; break;
+            default: break;   // 미상은 숨기지 않는다 - 놓치면 안 된다
+        }
         if (g_clan_listed_only && !game::is_listed_companion_row(e.merc_row)) {
             continue;
         }

@@ -490,6 +490,29 @@ bool is_playable_merc_row(std::uint16_t row) {
     return mercenary_type_of_row(row) == kMercTypeMain;
 }
 
+CompanionGroup companion_group_of_row(std::uint16_t merc_row) {
+    if (merc_row == 0xFFFF) return CompanionGroup::Unknown;
+    switch (mercenary_type_of_row(merc_row)) {
+        case 1: case 6: case 7: case 8: case 9: case 12:
+            return CompanionGroup::People;
+        case 2: case 3: case 4: case 5:
+            return CompanionGroup::Mount;
+        case 10: case 11:
+            return CompanionGroup::System;
+        default:
+            return CompanionGroup::Unknown;
+    }
+}
+
+const char* companion_group_name(CompanionGroup g) {
+    switch (g) {
+        case CompanionGroup::People: return "용병대원";
+        case CompanionGroup::Mount:  return "탈것·펫";
+        case CompanionGroup::System: return "시스템";
+        default:                     return "미상";
+    }
+}
+
 namespace {
 // 전역 하나를 사슬대로 따라가 캐릭터 행을 낸다. 못 읽으면 0xFFFF.
 std::uint16_t session_char_row(const mem::Reader& reader, std::uint64_t rva) {
