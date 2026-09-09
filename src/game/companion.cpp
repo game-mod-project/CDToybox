@@ -1061,6 +1061,69 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         say(buf);
         return true;
     }
+    if (cmd == "sessions") {
+        // 세션 표를 있는 그대로 찍는다. 아무것도 구동하지 않는다.
+        //
+        // 세이브/로드 뒤 지급이 먹통이 되는 까닭을 가리려면 표 자체를
+        // 봐야 하는데, 이 표는 훅이 모으는 모드 안쪽 값이라 밖에서
+        // probe 로는 못 본다. 로드 전후로 한 번씩 찍으면 셋 중 무엇인지
+        // 갈린다 - 칸이 차서 새 세션이 못 들어왔는가(포화), 옛 이름표가
+        // 새 세션을 가렸는가, 아니면 정말 게이트가 안 열리는가.
+        //
+        // 읽기는 전부 안전 읽기(LocalReader = SEH)라 풀린 세션을 만나도
+        // 죽지 않고 실패로 돌아온다.
+        if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
+        const mem::Reader& rd = *g_cmd_reader;
+        std::uintptr_t seen[16]{};
+        std::uint32_t hits[16]{};
+        const int n = seen_sessions(seen, hits, 16);
+        const int cap = session_capacity();
+        bool server[16]{};
+        bool gate_ok[16]{};
+        std::uint64_t last[16]{};
+        std::uintptr_t gates[16]{};
+        int servers = 0;
+        int opens = 0;
+        const std::uint64_t now = ::GetTickCount64();
+        log::infof("세션표 {}/{}{}", n, cap,
+                   n >= cap ? "  ** 포화 - 새 세션은 조용히 버려진다 **" : "");
+        for (int i = 0; i < n; ++i) {
+            server[i] = session_is_server(i);
+            last[i] = session_last_seen(i);
+            gate_ok[i] = gate_object(rd, seen[i], &gates[i]);
+            if (server[i]) ++servers;
+            if (server[i] && gate_ok[i]) ++opens;
+            const char* cls = session_class(i);
+            log::infof(
+                "  [{}] 0x{:X} {} 호출 {} 마지막 {}ms 전 게이트 {} 0x{:X} "
+                "생존 {} 액터 0x{:X} {}",
+                i, seen[i], server[i] ? "서버" : "클라", hits[i],
+                last[i] == 0 ? 0 : now - last[i], gate_ok[i] ? "열림" : "끊김",
+                gates[i], session_looks_live(rd, seen[i]) ? "예" : "아니오",
+                session_actor(i), cls[0] == 0 ? "(이름표 없음)" : cls);
+        }
+        // 세 경로가 각각 무엇을 고르는지 나란히 낸다. 기준이 서로 달라
+        // 한쪽만 먹통이 되는 일이 실제로 있었다(2026-09-07).
+        auto pick_line = [&](const char* who, int idx) {
+            if (idx < 0 || idx >= n) {
+                log::infof("  선택 {}: 없음", who);
+            } else {
+                log::infof("  선택 {}: [{}] 0x{:X}", who, idx, seen[idx]);
+            }
+        };
+        pick_line("지급패널(서버+게이트+호출최다)",
+                  best_gate_session_index(gate_ok, hits, server, n));
+        pick_line("보관함(서버+호출최다)", best_actor_index(hits, server, n));
+        pick_line("동반자(서버+freshness)",
+                  best_live_session_index(hits, server, last, n, now,
+                                          kSessionFreshMs));
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+                      "표 %d/%d 서버 %d 게이트열림 %d%s - 로그를 보라", n, cap,
+                      servers, opens, n >= cap ? " (포화)" : "");
+        say(buf);
+        return true;
+    }
     if (cmd == "actordump") {
         // 지금 월드에 살아 있는 액터를 이름 조각으로 찾아 로그에 낸다.
         // 소환한 개체가 실제로 생겼는지 화면을 보지 않고 확인한다.

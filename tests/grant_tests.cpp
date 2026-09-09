@@ -119,6 +119,54 @@ TEST(best_actor_returns_none_when_empty) {
     CHECK_EQ(cdtb::game::best_actor_index(nullptr, nullptr, 0), -1);
 }
 
+// 지급이 통하는지는 게이트가 실제로 풀리는지로 갈린다 - 호출 횟수나
+// 최근성이 아니다(실측 2026-09-07: 로드 뒤에도 지급이 되던 세션이
+// last_seen 이 뒤처졌다는 이유로 걸러져 "세션 못 찾음" 이 됐다).
+TEST(best_gate_session_picks_the_busiest_open_server) {
+    const bool gate[3] = {true, true, false};
+    const std::uint32_t hits[3] = {5, 900, 99999};
+    const bool server[3] = {true, true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 3), 1);
+}
+
+TEST(best_gate_session_skips_a_closed_gate) {
+    // 호출 1위라도 문이 닫혀 있으면 처리기가 조용히 반환한다.
+    const bool gate[2] = {false, true};
+    const std::uint32_t hits[2] = {17020, 3};
+    const bool server[2] = {true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), 1);
+}
+
+TEST(best_gate_session_still_ignores_client_side) {
+    const bool gate[2] = {true, true};
+    const std::uint32_t hits[2] = {99999, 4};
+    const bool server[2] = {false, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), 1);
+}
+
+// 못 고르면 -1 이다. stale 세션으로 폴백하지 않는다 - 폴백이 있던
+// 동안에는 풀린 세션으로 구동해 게임 안에서 죽었다.
+TEST(best_gate_session_returns_none_when_every_gate_is_closed) {
+    const bool gate[2] = {false, false};
+    const std::uint32_t hits[2] = {10, 20};
+    const bool server[2] = {true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), -1);
+}
+
+TEST(best_gate_session_returns_none_when_empty) {
+    CHECK_EQ(cdtb::game::best_gate_session_index(nullptr, nullptr, nullptr, 0),
+             -1);
+}
+
+// 횟수가 같으면 뒤엣것을 잡는다. 표는 뒤로 갈수록 새 세션이라,
+// 로드 뒤 갓 들어온 세션이 옛 세션에 밀리지 않는다.
+TEST(best_gate_session_prefers_the_newer_slot_on_a_tie) {
+    const bool gate[2] = {true, true};
+    const std::uint32_t hits[2] = {7, 7};
+    const bool server[2] = {true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), 1);
+}
+
 // 세션 표는 지워지지 않는다. 접속이 다시 맺어지면 옛 세션이 누적
 // 호출 1위로 남는데 그 메모리는 이미 풀렸다 - 그것으로 구동하면
 // 게임 안에서 0xC0000005 로 죽는다(실측 2026-09-06, 네 번 반복한 뒤

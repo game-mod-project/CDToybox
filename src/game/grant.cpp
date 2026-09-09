@@ -1250,6 +1250,26 @@ int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n) {
     return best;
 }
 
+int session_capacity() { return kSeenCap; }
+
+int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
+                            const bool* is_server, int n) {
+    if (gate_open == nullptr || hits == nullptr || is_server == nullptr) {
+        return -1;
+    }
+    int best = -1;
+    std::uint32_t best_hits = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!is_server[i] || !gate_open[i]) continue;
+        // 같으면 뒤엣것을 잡는다 - 표는 뒤로 갈수록 새 세션이다.
+        if (best < 0 || hits[i] >= best_hits) {
+            best = i;
+            best_hits = hits[i];
+        }
+    }
+    return best;
+}
+
 std::uintptr_t session_actor(int index) {
     if (index < 0 || index >= kSeenCap) return 0;
     return g_sess_actor[index];

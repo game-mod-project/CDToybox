@@ -128,6 +128,19 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
 // 부르므로 횟수가 압도적이다 - 실측에서 17020회 대 1110회 대 1~3회.
 int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n);
 
+// 세션 표의 칸 수. 표는 한 번 들어온 주소를 지우지 않고, 칸이 차면
+// 새 세션을 조용히 버린다 - 로드를 거듭하면 살아 있는 세션이 표에
+// 못 들어올 수 있다. 진단이 그 포화를 볼 수 있어야 한다.
+int session_capacity();
+
+// 게이트가 실제로 풀리는 서버 세션 중 호출 최다. 없으면 -1.
+//
+// 지급 패널이 쓰는 규칙이다. 게이트 통과 여부는 부르는 쪽이
+// gate_object 로 미리 재서 넘긴다 - 이 함수는 메모리를 읽지 않으므로
+// 시험할 수 있고, 진단(sessions 명령)과 패널이 같은 함수를 본다.
+int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
+                            const bool* is_server, int n);
+
 // 세션마다 게임이 돌려준 액터와 그 클래스. 프레임마다 RTTI 를 푸는
 // 것은 비싸므로 분석 스레드가 한 번 붙여 준다.
 //

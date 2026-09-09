@@ -396,18 +396,14 @@ void draw_grant_panel(bool* open) {
     (void)last;
     if (!g_picked_by_hand) {
         const mem::LocalReader rd;
-        int best = -1;
-        std::uint32_t best_hits = 0;
+        bool gate_open[16]{};
         std::uintptr_t gate = 0;
         for (int i = 0; i < n; ++i) {
-            if (!server[i]) continue;
-            if (!game::gate_object(rd, seen[i], &gate)) continue;
-            if (best < 0 || hits[i] >= best_hits) {
-                best = i;
-                best_hits = hits[i];
-            }
+            gate_open[i] = game::gate_object(rd, seen[i], &gate);
         }
-        g_pick = best;
+        // 고르는 규칙은 grant.cpp 에 있다. 진단(sessions 명령)이 같은
+        // 함수를 보므로, 화면을 안 봐도 패널이 무엇을 고를지 알 수 있다.
+        g_pick = game::best_gate_session_index(gate_open, hits, server, n);
     }
 
     // --- 무엇을 줄 것인가 -------------------------------------------
