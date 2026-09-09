@@ -74,6 +74,9 @@ double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
 const char* g_near_busy_why = "";  // 왜 못 받았는지
 mem::LocalReader g_near_reader;
 double g_clan_last_refresh = 0.0;
+// 기본은 게임이 보여 주는 세 갈래만. 사람 용병·안 보이는 타입을
+// 되돌려야 할 때를 위해 전체 보기를 남긴다.
+bool g_clan_listed_only = true;
 // 종 바꾸기 대화상자 상태. 번호가 0이면 닫혀 있다.
 std::uint64_t g_species_no = 0;
 std::uint16_t g_species_type = 0xFFFF;   // 대상의 동반자 타입 행
@@ -433,7 +436,9 @@ void draw_species_popup() {
         static std::vector<const game::RosterEntry*> hits;
         hits.clear();
         for (const auto& c : cat) {
-            if (!c.is_companion()) continue;
+            // 게임에 안 뜨는 타입은 고를 수 없게 한다. 그쪽으로 바꾸면
+            // 되돌리기 전까지 게임에서 찾지 못한다(roster.h 설명).
+            if (!game::is_listed_companion_row(c.merc_row)) continue;
             if (g_species_same_type && c.merc_row != g_species_type) continue;
             if (g_species_query[0] != 0 &&
                 !(contains_ci(c.name, g_species_query) ||
@@ -488,12 +493,17 @@ void draw_my_companions_tab() {
         game::refresh_clan_roster(g_near_reader);
         g_clan_last_refresh = now;
     }
+    ImGui::SameLine();
+    ImGui::Checkbox("탈것·특수·반려동물만", &g_clan_listed_only);
     const auto& all = game::clan_roster();
     static std::vector<const game::ClanEntry*> view;
     view.clear();
     std::size_t spawned = 0;
     for (const auto& e : all) {
         if (e.spawned()) ++spawned;
+        if (g_clan_listed_only && !game::is_listed_companion_row(e.merc_row)) {
+            continue;
+        }
         if (g_query[0] != 0) {
             char keybuf[16];
             std::snprintf(keybuf, sizeof(keybuf), "%u", e.key);
@@ -588,7 +598,7 @@ void draw_nearby_tab() {
     bool refresh = false;
     if (ImGui::SmallButton("새로고침")) refresh = true;
     ImGui::SameLine();
-    ImGui::Checkbox("동반자만", &g_near_companion_only);
+    ImGui::Checkbox("탈것·특수·반려동물만", &g_near_companion_only);
     if (now - g_near_last_refresh > 2.0) refresh = true;
     if (refresh) {
         game::refresh_live_actors(g_near_reader);
@@ -598,7 +608,10 @@ void draw_nearby_tab() {
     static std::vector<const game::LiveActor*> view;
     view.clear();
     for (const auto& a : all) {
-        if (g_near_companion_only && !a.is_companion()) continue;
+        // 게임이 목록으로 보여 주는 세 갈래만 보인다(roster.h 설명).
+        if (g_near_companion_only && !game::is_listed_companion_row(a.merc_row)) {
+            continue;
+        }
         if (g_query[0] != 0) {
             char keybuf[16];
             std::snprintf(keybuf, sizeof(keybuf), "%u", a.key);
