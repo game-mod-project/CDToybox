@@ -743,7 +743,11 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     ++g_detour_depth;
     const std::uintptr_t actor = g_orig_actor_getter(session);
 
-    if (session != nullptr) {
+    // 액터를 낸 세션만 표에 적는다. 지급은 세션 -> 액터 경로를 타므로
+    // 널만 돌려주는 세션은 애초에 후보가 못 되는데, 실측 2026-09-10 에
+    // 그런 세션(…E0600~…E0C00 등)이 16칸 중 9칸을 먹어 정작 살아 있는
+    // 세션이 들어올 자리를 없앴다.
+    if (session != nullptr && actor != 0) {
         const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
         const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap, s);
