@@ -76,6 +76,8 @@ void usage() {
         "  invlist raw [주소]          + 뜻을 모르는 칸까지\n"
         "  invexport [파일]            인벤토리를 보관함 파일로\n"
         "  clan                        내가 가진 동반자 명부\n"
+        "  charfind <조각> [최대]        캐릭터를 이름으로 찾아 행·키를 낸다\n"
+        "  setspecies <번호> <행>     동반자의 종을 바꿈(클라+서버, 검증 후)\n"
         "  dumpimage [파일] [--raw]    실행 중 프로세스의 모듈 이미지를\n"
         "                              디스어셈블러가 읽는 PE 로 뜬다\n"
         "\n"
@@ -1412,6 +1414,88 @@ void cmd_clan(mem::Rtti& rt, const mem::Reader& reader) {
                     e.label.empty() ? "" : e.label.c_str(),
                     e.spawned() ? "  [월드]" : "");
     }
+}
+
+// 캐릭터를 이름으로 찾는다. **행 번호**를 내는 것이 목적이다 -
+// 명부 레코드의 +0x20 과 고용 검사가 쓰는 것이 키가 아니라 행이다.
+void cmd_charfind(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: charfind <이름조각> [최대=40]\n");
+        return;
+    }
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터를 못 찾았습니다.\n");
+        return;
+    }
+    const std::string want = ansi_to_utf8(argv[2]);
+    const std::size_t cap = (argc > 3) ? std::strtoull(argv[3], nullptr, 10) : 40;
+    const auto& cat = game::character_catalog();
+    std::size_t n = 0;
+    for (const auto& e : cat) {
+        if (e.name.find(want) == std::string::npos &&
+            e.label.find(want) == std::string::npos) {
+            continue;
+        }
+        if (n++ >= cap) break;
+        std::printf("  행 %5u  키 %6u  타입행 %2d  %-44s %s\n", e.row, e.key,
+                    e.merc_row == 0xFFFF ? -1 : static_cast<int>(e.merc_row),
+                    e.name.c_str(), e.label.c_str());
+    }
+    std::printf("%zu건 (캐릭터 %zu 중)\n", n, cat.size());
+}
+
+// 동반자의 종을 바꿔 쓴다. **이것만 쓸 것** - 생 poke 로
+// 명부에 쓰면 안 된다.
+//
+// 2026-09-09 사고: 명부 주소를 읽어 둔 뒤 그 사이에 동반자가 늘어
+// 게임이 레코드를 통째로 새로 만들었는데, 그것을 모르고 예전
+// 주소에 써서 남의 객체(GameData_GimmickPointData)를 망가뜨렸고
+// 게임이 팀겼다. 그래서 이 명령은 쓰기 직전에 번호로 다시
+// 찾고, 표식(+0x22==0xFFFF)과 번호(+0x28)를 확인하고, 쓴 뒤 다시 읽어
+// 확인한다.
+void cmd_setspecies(mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+                    int argc, char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: setspecies <용병번호> <새 행번호>\n"
+                    "  번호는 clan, 행번호는 charfind 로 찾는다.\n");
+        return;
+    }
+    const std::uint64_t no = std::strtoull(argv[2], nullptr, 0);
+    const unsigned long row = std::strtoul(argv[3], nullptr, 0);
+    if (no == 0 || row > 0xFFFE) { std::printf("인자가 이상하다.\n"); return; }
+    const auto want = static_cast<std::uint16_t>(row);
+
+    game::SpeciesWriteTarget t;
+    if (!game::resolve_species_write(rt, reader, no, &t)) {
+        std::printf("자리를 못 찾았다 (서버 0x%llX, 클라 0x%llX).\n"
+                    "  번호가 맞는지, 월드 안인지 볼 것.\n",
+                    static_cast<unsigned long long>(t.server),
+                    static_cast<unsigned long long>(t.client));
+        return;
+    }
+    std::printf("번호 %llu: 서버 0x%llX(행 %u) · 클라 0x%llX(행 %u) -> 행 %u\n",
+                static_cast<unsigned long long>(no),
+                static_cast<unsigned long long>(t.server), t.server_row,
+                static_cast<unsigned long long>(t.client), t.client_row, want);
+    std::uint8_t buf[2] = {static_cast<std::uint8_t>(want & 0xFF),
+                           static_cast<std::uint8_t>(want >> 8)};
+    if (!r.write(t.server, buf, 2) || !r.write(t.client, buf, 2)) {
+        std::printf("쓰기 실패.\n");
+        return;
+    }
+    // 쓴 뒤 반드시 다시 찾아 확인한다. 쓰는 사이에 명부가
+    // 재구성되면 엉뚜한 자리에 쓴 것이다.
+    game::SpeciesWriteTarget after;
+    if (!game::resolve_species_write(rt, reader, no, &after)) {
+        std::printf("쓴 뒤 다시 찾지 못했다 - 명부가 바뀌었을 수 있다!\n");
+        return;
+    }
+    std::printf("확인: 서버 행 %u, 클라 행 %u %s\n", after.server_row,
+                after.client_row,
+                (after.server_row == want && after.client_row == want)
+                    ? "- 반영됨"
+                    : "- 어깋난다");
 }
 
 void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
@@ -3459,6 +3543,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "clan") { cmd_clan(rt, reader); return 0; }
+    if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
+    if (cmd == "setspecies") { cmd_setspecies(rt, reader, r, argc, argv); return 0; }
     if (cmd == "instcount") {
         cmd_instcount(rt, argc, argv);
         return 0;

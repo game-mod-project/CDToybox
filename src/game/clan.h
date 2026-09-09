@@ -70,6 +70,37 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
                       std::vector<ClanEntry>* out);
 
 
+// --- 종 바꿔 쓰기 (자리 해석까지만) ------------------------------
+//
+// **명부 레코드 주소는 휘발성이다.** 동반자가 하나라도 늘거나
+// 줄면 게임이 용병단 컴포넌트와 레코드를 통째로 새로 만든다 -
+// 실측 2026-09-09: 작업 중에 사용자가 용병 네을 고용하자 22 -> 26 이
+// 되면서 컴포넌트 주소까지 바뀜고(0x58172223480 -> 0x581C51A9300),
+// 옆던 레코드 자리는 `GameData_GimmickPointData` 가 차지했다. 그것을
+// 모르고 예전 주소에 되돌리기를 써서 **남의 객체에 2바이트를
+// 썼다.**
+//
+// 그래서 이 모듈은 주소를 돌려주기만 하고, 부를 때마다 **번호로
+// 다시 찾아** 표식(+0x22 == 0xFFFF)과 번호(+0x28)를 확인한다. 불러 두고
+// 나중에 쓰면 같은 사고가 다시 난다 - 쓰기 직전에 부를 것.
+//
+// 쓰기 자체는 호출자가 한다. DLL 은 제 주소 공간이고 probe 는
+// WriteProcessMemory 라 공통 추상화가 없기 때문이다.
+struct SpeciesWriteTarget {
+    std::uintptr_t server = 0;      // 서버 레코드의 +0x20 주소. 0 이면 못 찾음
+    std::uintptr_t client = 0;      // 클라 레코드의 +0x20 주소
+    std::uint16_t server_row = 0xFFFF;
+    std::uint16_t client_row = 0xFFFF;
+    bool ok() const { return server != 0 && client != 0; }
+};
+
+// 번호로 두 세계의 종 필드 주소를 그 자리에서 찾는다.
+//
+// 클라·서버 양쪽에 써야 한다. 서버 쪽만 바꾸면 우리 눈에는 바뀌어
+// 보이지만 게임이 보는 사본은 그대로다(실측 2026-09-09).
+bool resolve_species_write(const mem::Rtti& rtti, const mem::Reader& reader,
+                           std::uint64_t merc_no, SpeciesWriteTarget* out);
+
 // --- 모드용 캐시 --------------------------------------------------------
 // 액터 매니저와 같은 방식이다. 컴포넌트를 한 번 찾아 두고, 요청이
 // 있을 때만 다시 읽는다. 월드를 나가면 컴포넌트가 바뀔 수 있으므로
