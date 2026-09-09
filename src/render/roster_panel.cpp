@@ -369,6 +369,26 @@ void draw_companion_item_tab() {
     ImGui::EndTable();
 }
 
+// 동반자 레인의 구동 상태. 누른 자리에서 보여 줘야 오해가 없다.
+void draw_companion_drive_gate() {
+    const game::DriveGate g = game::drive_gate_state(game::DriveLane::Companion);
+    const ImVec4 warn(0.9f, 0.8f, 0.3f, 1.0f);
+    const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
+    const bool stuck = g.pending && g.pending_age_ms > 30000;
+    if (g.running) {
+        ImGui::TextColored(warn, "구동 중: 게임 스레드가 %.1f초째 안 돌아왔습니다",
+                           g.running_age_ms / 1000.0);
+    }
+    if (g.pending) {
+        ImGui::TextColored(stuck ? bad : warn,
+                           "동반자 구동 대기 중: %.1f초째 (월드가 돌고 있어야 실행됩니다)",
+                           g.pending_age_ms / 1000.0);
+    }
+    if (g.cooldown_left_ms > 0) {
+        ImGui::TextDisabled("쿨다운 %.1f초", g.cooldown_left_ms / 1000.0);
+    }
+}
+
 // 종을 고르는 대화상자.
 //
 // 기본은 **같은 동반자 타입**만 보인다. 타입을 넘으면 용병단의
@@ -601,6 +621,11 @@ void draw_nearby_tab() {
                                sr.code);
         }
     }
+
+    // 구동 상태를 여기서 보여 준다. 예전에는 아이템 지급 패널에만 떴어
+    // 획득을 눌렀는데 ‘아이템 지급’ 이 대기 중으로 보였다(사용자 지적
+    // 2026-09-09). 이젠 레인이 나뉘어 있고, 여기는 동반자 레인만 본다.
+    draw_companion_drive_gate();
 
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).

@@ -191,7 +191,7 @@ constexpr unsigned long long kGateStuckMs = 30000;
 // 쿨다운으로 오인하고 한참을 헤맸다. 로그와 `drive` 명령을 봐야만 알 수
 // 있었다. 그 숫자를 여기 그대로 낸다.
 bool draw_drive_gate() {
-    const game::DriveGate g = game::drive_gate_state();
+    const game::DriveGate g = game::drive_gate_state(game::DriveLane::Item);
     const bool held = g.pending || g.running || g.cooldown_left_ms > 0 ||
                       g.fault_session != 0;
     if (!held) return false;
@@ -528,7 +528,7 @@ void draw_grant_panel(bool* open) {
 
     if (g_called) {
         g_outcome = game::last_outcome();
-        if (game::spawn_pending()) {
+        if (game::spawn_pending(game::DriveLane::Item)) {
             ImGui::TextDisabled("게임 스레드를 기다리는 중...");
         } else if (!g_call_ok) {
             // 2초 쿨다운이 아니라 게이트가 물린 것일 수 있다. 게이트를

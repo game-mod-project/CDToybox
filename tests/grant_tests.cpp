@@ -555,7 +555,20 @@ TEST(find_entity_lookup_fails_without_the_anchor) {
 TEST(request_refuses_without_a_session) {
     const float pos[3] = {0.0f, 0.0f, 0.0f};
     CHECK(!cdtb::game::request_spawn(0, 50001, 1, pos));
-    CHECK(!cdtb::game::spawn_pending());
+    CHECK(!cdtb::game::spawn_pending(cdtb::game::DriveLane::Item));
+}
+
+// 구동 대기열은 용도별로 나뉘어 있다. 예전에는 칸이 하나라 아이템
+// 지급과 동반자 구동이 서로를 막았고, 대기 상태가 엉뚜한 패널에
+// 떴다(사용자 지적 2026-09-09).
+TEST(drive_lanes_are_independent) {
+    using cdtb::game::DriveLane;
+    CHECK(!cdtb::game::spawn_pending(DriveLane::Item));
+    CHECK(!cdtb::game::spawn_pending(DriveLane::Companion));
+    const auto item = cdtb::game::drive_gate_state(DriveLane::Item);
+    const auto comp = cdtb::game::drive_gate_state(DriveLane::Companion);
+    CHECK(!item.pending);
+    CHECK(!comp.pending);
 }
 
 // 렌더 스레드에서 직접 부르면 죽는다 - 작업 함수 안쪽이 TLS 를 쓰는데

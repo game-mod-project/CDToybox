@@ -172,26 +172,48 @@ void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
 void run_message(std::uintptr_t session, const MessageDesc& msg,
                  const std::uint8_t* wire, std::size_t len, SpawnOutcome* out);
 
-Pending g_pending;
-std::atomic<bool> g_has_pending{false};
+// 레인별 칸. 아이템 지급과 동반자 구동이 서로를 막지 않게
+// 칸을 나눠 둔다(grant.h DriveLane 설명).
+struct LaneSlot {
+    Pending req;
+    std::atomic<bool> has{false};
+    std::atomic<std::uint64_t> at{0};
+};
+LaneSlot g_lane[kDriveLaneCount];
+
+LaneSlot& lane_of(DriveLane l) {
+    return g_lane[static_cast<int>(l)];
+}
+
+// 어느 레인이든 걸린 것이 있는가.
+bool any_pending() {
+    for (auto& l : g_lane) {
+        if (l.has.load(std::memory_order_acquire)) return true;
+    }
+    return false;
+}
 
 // 요청을 건 시각. 게임 스레드가 집어 가지 않으면 대기열이 영영 막힌다
 // - 실측 2026-09-06: 메뉴 화면에서 건 요청 하나가 6분 넘게 남아 그 뒤
 // 모든 요청이 거부됐다. 실행 지점은 월드가 돌 때만 불리므로, 오래
 // 묵은 요청은 버리고 새 요청을 받는다.
-std::atomic<std::uint64_t> g_pending_at{0};
 constexpr std::uint64_t kPendingMaxMs = 15000;
 
 // 묵은 요청이면 버린다. 버렸으면 true.
 bool drop_stale_pending() {
-    if (!g_has_pending.load(std::memory_order_acquire)) return false;
-    const std::uint64_t at = g_pending_at.load(std::memory_order_acquire);
-    if (at == 0 || GetTickCount64() - at < kPendingMaxMs) return false;
-    if (!g_has_pending.exchange(false, std::memory_order_acq_rel)) return false;
-    log::warnf("대기열: {}ms 동안 실행되지 않은 요청을 버린다 - 월드가 돌고 "
-               "있어야 실행된다",
-               GetTickCount64() - at);
-    return true;
+    bool dropped = false;
+    for (int i = 0; i < kDriveLaneCount; ++i) {
+        LaneSlot& l = g_lane[i];
+        if (!l.has.load(std::memory_order_acquire)) continue;
+        const std::uint64_t at = l.at.load(std::memory_order_acquire);
+        if (at == 0 || GetTickCount64() - at < kPendingMaxMs) continue;
+        if (!l.has.exchange(false, std::memory_order_acq_rel)) continue;
+        log::warnf("대기열[{}]: {}ms 동안 실행되지 않은 요청을 버린다 - "
+                   "월드가 돌고 있어야 실행된다",
+                   i, GetTickCount64() - at);
+        dropped = true;
+    }
+    return dropped;
 }
 
 
@@ -382,14 +404,23 @@ bool safe_deref(std::uintptr_t at, std::uintptr_t* out);
 // 걸어 둔 요청이 있으면 여기서 실행한다. 조건을 한 곳에 모은다.
 // 실제로 하나를 실행했으면 true.
 bool run_pending_if_any() {
-    if (!g_has_pending.load(std::memory_order_acquire)) return false;
+    if (!any_pending()) return false;
     if (!thread_ready_for_spawn()) return false;
     if (g_running.exchange(true, std::memory_order_acq_rel)) return false;
     g_running_at.store(GetTickCount64(), std::memory_order_release);
     bool ran = false;
-    if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
+    // 레인을 순서대로 본다. 한 번에 하나만 실행한다 - 실행 지점은
+    // 여전히 직렬화되어야 한다.
+    int picked = -1;
+    for (int i = 0; i < kDriveLaneCount; ++i) {
+        if (g_lane[i].has.exchange(false, std::memory_order_acq_rel)) {
+            picked = i;
+            break;
+        }
+    }
+    if (picked >= 0) {
         ran = true;
-        const Pending req = g_pending;
+        const Pending req = g_lane[picked].req;
         switch (req.kind) {
             case Kind::Inventory:
                 run_give(req.session, req.key, req.count, req.extras,
@@ -514,7 +545,7 @@ void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
             log::infof("메시지 펌프 호출 {}회 (스레드 {})", calls,
                        GetCurrentThreadId());
         }
-        if (g_has_pending.load(std::memory_order_acquire)) note_pump_context();
+        if (any_pending()) note_pump_context();
     }
     --g_pump_depth;
 }
@@ -626,7 +657,7 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         // 지급이 안 걸린 평소 상태의 스택을 몇 개 잡는다 - 매 프레임
         // 세션 업데이트 루프를 찾기 위한 것. 상한이 차면 아무것도 안 한다.
         if (g_reader != nullptr &&
-            !g_has_pending.load(std::memory_order_acquire) &&
+            !any_pending() &&
             g_normal_traces.load(std::memory_order_acquire) < kNormalTraces) {
             log_normal_stack();
         }
@@ -1161,12 +1192,13 @@ bool session_looks_live(const mem::Reader& reader, std::uintptr_t session) {
     return true;
 }
 
-DriveGate drive_gate_state() {
+DriveGate drive_gate_state(DriveLane lane) {
+    LaneSlot& l = lane_of(lane);
     DriveGate g;
-    g.pending = g_has_pending.load(std::memory_order_acquire);
+    g.pending = l.has.load(std::memory_order_acquire);
     g.running = g_running.load(std::memory_order_acquire);
     const unsigned long long now = GetTickCount64();
-    const unsigned long long pat = g_pending_at.load(std::memory_order_acquire);
+    const unsigned long long pat = l.at.load(std::memory_order_acquire);
     const unsigned long long rat = g_running_at.load(std::memory_order_acquire);
     g.pending_age_ms = (g.pending && pat != 0) ? now - pat : 0;
     g.running_age_ms = (g.running && rat != 0) ? now - rat : 0;
@@ -1180,11 +1212,23 @@ DriveGate drive_gate_state() {
 bool drive_gate_reset() {
     // 오래 물려 있을 때만 푼다. 진짜로 도는 중에 풀면 게임 스레드가
     // 쓰는 자리를 다른 요청이 덮어쓴다.
-    const DriveGate g = drive_gate_state();
-    const bool stuck_pending = g.pending && g.pending_age_ms > 30000;
+    // 레인 어느 쪽이든 30초 넘게 물려 있으면 그것만 푸다.
+    bool stuck_pending = false;
+    for (int i = 0; i < kDriveLaneCount; ++i) {
+        const DriveGate lg = drive_gate_state(static_cast<DriveLane>(i));
+        if (lg.pending && lg.pending_age_ms > 30000) stuck_pending = true;
+    }
+    const DriveGate g = drive_gate_state(DriveLane::Item);
     const bool stuck_running = g.running && g.running_age_ms > 30000;
     if (!stuck_pending && !stuck_running) return false;
-    if (stuck_pending) g_has_pending.store(false, std::memory_order_release);
+    if (stuck_pending) {
+        for (int i = 0; i < kDriveLaneCount; ++i) {
+            const DriveGate lg = drive_gate_state(static_cast<DriveLane>(i));
+            if (lg.pending && lg.pending_age_ms > 30000) {
+                g_lane[i].has.store(false, std::memory_order_release);
+            }
+        }
+    }
     if (stuck_running) g_running.store(false, std::memory_order_release);
     log::warnf("구동 게이트를 손으로 풀었다 (대기 {}ms, 실행 {}ms)",
                g.pending_age_ms, g.running_age_ms);
@@ -1207,7 +1251,8 @@ bool hire_species_ready() {
 bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
     if (!hire_species_ready() || session == 0 || char_key == 0) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Companion);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
         kCooldownMs) {
@@ -1215,13 +1260,13 @@ bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
     }
     if (g_drive_fault.load(std::memory_order_acquire) == session) return false;
 
-    g_pending = Pending{};
-    g_pending.kind = Kind::HireSpecies;
-    g_pending.session = session;
-    g_pending.key = char_key;
+    lane.req = Pending{};
+    lane.req.kind = Kind::HireSpecies;
+    lane.req.session = session;
+    lane.req.key = char_key;
     g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("종 등록 요청을 걸었다 (키 {}) - 게임 스레드를 기다린다",
                char_key);
     return true;
@@ -1777,20 +1822,21 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
                        std::uint16_t b) {
     if (!endurance_ready() || session == 0) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Item);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
         kCooldownMs) {
         return false;
     }
-    g_pending = Pending{};
-    g_pending.kind = Kind::Endurance;
-    g_pending.session = session;
-    g_pending.a = a;
-    g_pending.b = b;
+    lane.req = Pending{};
+    lane.req.kind = Kind::Endurance;
+    lane.req.session = session;
+    lane.req.a = a;
+    lane.req.b = b;
     g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("내구도 요청을 걸었다");
     return true;
 }
@@ -1950,21 +1996,22 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
     if (g_reader == nullptr) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Companion);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
         kCooldownMs) {
         return false;
     }
-    g_pending = Pending{};
-    g_pending.kind = Kind::Message;
-    g_pending.session = session;
-    g_pending.msg = msg;
-    std::memcpy(g_pending.wire, wire, len);
-    g_pending.wire_len = len;
+    lane.req = Pending{};
+    lane.req.kind = Kind::Message;
+    lane.req.session = session;
+    lane.req.msg = msg;
+    std::memcpy(lane.req.wire, wire, len);
+    lane.req.wire_len = len;
     g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("메시지 구동 요청을 걸었다 (ID {} 길이 {}) - 게임 스레드를 기다린다",
                msg.id, len);
     return true;
@@ -1976,19 +2023,20 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Item);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
         kCooldownMs) {
         return false;
     }
 
-    g_pending = Pending{};
-    g_pending.kind = Kind::Inventory;
-    g_pending.to_inventory = true;
-    g_pending.session = session;
-    g_pending.key = item_key;
-    g_pending.count = count;
+    lane.req = Pending{};
+    lane.req.kind = Kind::Inventory;
+    lane.req.to_inventory = true;
+    lane.req.session = session;
+    lane.req.key = item_key;
+    lane.req.count = count;
     // 소켓은 여기서 최종으로 자른다. 2026-09-04 에는 아예 0 으로 밀었는데,
     // 그 판정("업데이트가 소켓 전달을 없앴다")은 생성 함수 0x2A70000 의
     // **두 갈래 중 하나만 보고** 내린 오독이었다. 실제로는:
@@ -2000,10 +2048,10 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     GiveExtras safe = extras;
     safe.socket_count =
         clamp_socket_count(extras.socket_count, socket_room_for(item_key));
-    g_pending.extras = safe;
+    lane.req.extras = safe;
     g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}"
                " 소켓 {}/{}) - 게임 스레드를 기다린다",
                safe.temper, safe.endurance, safe.sharpness,
@@ -2019,31 +2067,32 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     }
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Item);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
     if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
         kCooldownMs) {
         return false;
     }
 
-    g_pending = Pending{};
-    g_pending.kind = Kind::Ground;
-    g_pending.session = session;
-    g_pending.key = item_key;
-    g_pending.count = count;
-    g_pending.pos[0] = pos[0];
-    g_pending.pos[1] = pos[1];
-    g_pending.pos[2] = pos[2];
+    lane.req = Pending{};
+    lane.req.kind = Kind::Ground;
+    lane.req.session = session;
+    lane.req.key = item_key;
+    lane.req.count = count;
+    lane.req.pos[0] = pos[0];
+    lane.req.pos[1] = pos[1];
+    lane.req.pos[2] = pos[2];
     g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("바닥 스폰 요청을 걸었다 - 게임 스레드를 기다린다");
     return true;
 }
 
 
-bool spawn_pending() {
-    return g_has_pending.load(std::memory_order_acquire);
+bool spawn_pending(DriveLane lane) {
+    return lane_of(lane).has.load(std::memory_order_acquire);
 }
 
 const SpawnOutcome& last_outcome() { return g_outcome; }

@@ -200,6 +200,22 @@ std::uintptr_t drive_fault_session();
 //
 // 실측 2026-09-08: 한 번 물리면 재시작 전까지 지급도 소환도 안 됐는데
 // 밖에서 원인을 볼 방법이 없었다. 게임 결함으로 오인하기 쉬웠다.
+// 구동 대기열은 용도별로 나뉘어 있다.
+//
+// 예전에는 칸이 하나라 아이템 지급과 동반자 구동이 같은 자리를
+// 나눠 썼다. 그러면 (1) 한쪽이 걸리면 다른 쪽까지 막히고,
+// (2) 대기 상태가 엉뚜한 패널에 만 떴다 - 근처 탭에서 획득을
+// 눌렀는데 ‘아이템 지급’ 패널에 대기 중이 뜼는 것을 사용자가
+// 짚었다(2026-09-09).
+//
+// 실행 자체는 여전히 한 번에 하나다(게임 스레드 실행 지점·쿨다운).
+// 나누는 것은 **걸어 두는 칸**과 그 상태 표시다.
+enum class DriveLane {
+    Item = 0,       // 아이템 지급·바닥 스폰·내구도
+    Companion = 1,  // 동반자 구동(획득·거두기·부적 사용·메시지)
+};
+inline constexpr int kDriveLaneCount = 2;
+
 struct DriveGate {
     bool pending = false;
     bool running = false;
@@ -208,7 +224,8 @@ struct DriveGate {
     unsigned long long cooldown_left_ms = 0;
     std::uintptr_t fault_session = 0;
 };
-DriveGate drive_gate_state();
+// 레인 하나의 상태. running·쿨다운·fault 는 전체 공유라 같은 값이 나온다.
+DriveGate drive_gate_state(DriveLane lane);
 // 30초 넘게 물려 있을 때만 푼다. 진짜로 도는 중에는 풀지 않는다.
 bool drive_gate_reset();
 
@@ -490,7 +507,8 @@ HireSpeciesResult last_hire_species();
 // 월드에 실제로 있어야 한다는 제약이 붙는다.
 
 // 걸어 둔 요청이 처리됐는가. 아직이면 false.
-bool spawn_pending();
+// 그 레인에 걸린 요청이 있는가.
+bool spawn_pending(DriveLane lane);
 const SpawnOutcome& last_outcome();
 
 // 바닥 스폰 메시지를 해석해 둔다.
