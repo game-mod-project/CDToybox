@@ -452,21 +452,21 @@ void draw_species_popup() {
     }
     const ImGuiTableFlags f = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_BordersInnerV;
-    if (ImGui::BeginTable("species_pick", 4, f, ImVec2(560, 320))) {
+    if (ImGui::BeginTable("species_pick", 5, f, ImVec2(620, 320))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 80);
+        ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableHeadersRow();
         const auto& cat = game::character_catalog();
         static std::vector<const game::RosterEntry*> hits;
         hits.clear();
         for (const auto& c : cat) {
-            // 게임에 안 뜨는 타입은 고를 수 없게 한다. 그쪽으로 바꾸면
-            // 되돌리기 전까지 게임에서 찾지 못한다(roster.h 설명).
-            // 거르는 기준은 _equipInfo 가 있는가다 - **관찰에 기댄
-            // 임시 기준**이지 확인된 인과가 아니다(roster.h listable).
+            // 걸러내는 것은 동반자 타입 하나다 - 낙타·성체 와이번이
+            // 게임에 안 뜬 이유가 타입행 6(Vehicle) 이었다. 예전에
+            // 함께 걸던 _equipInfo 조건은 근거가 없어 뺐다(roster.h).
             if (!c.listable()) continue;
             if (!game::is_listed_companion_row(c.merc_row)) continue;
             if (g_species_same_type && c.merc_row != g_species_type) continue;
@@ -498,6 +498,11 @@ void draw_species_popup() {
                 ImGui::TableSetColumnIndex(3);
                 ImGui::TextUnformatted(
                     type_label(c->merc_row, game::mercenary_type_name(c->merc_row)));
+                ImGui::TableSetColumnIndex(4);
+                // _equipInfo. 없다고 못 쓰는 것은 아니다 - 열기구 3종과
+                // 호랑이가 여기 걸린다. 시험해 볼 수 있게 보여만 준다.
+                if (c->equip_info == 0xFFFF) ImGui::TextDisabled("없음");
+                else ImGui::Text("%u", c->equip_info);
                 ImGui::PopID();
             }
         }

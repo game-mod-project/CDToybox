@@ -1429,6 +1429,38 @@ void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
     }
 }
 
+// 표시 관문 후보들을 전수로 교차 집계한다. "게임 목록에 뜨는 종"의
+// 기준이 무엇인지 관찰이 아니라 숫자로 가리려고 만들었다.
+void cmd_gate(const mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_roster(rt, reader)) { std::printf("로스터 실패\n"); return; }
+    const auto& cat = game::character_catalog();
+    struct Cell { int total = 0; int no_equip = 0; int no_count = 0; };
+    std::map<int, Cell> by_type;
+    for (const auto& e : cat) {
+        if (!e.is_companion()) continue;
+        Cell& c = by_type[static_cast<int>(e.merc_row)];
+        ++c.total;
+        if (e.equip_info == 0xFFFF) ++c.no_equip;
+        if (!e.merc_countable) ++c.no_count;
+    }
+    std::printf("타입행  전체  장비없음  셈안함   이름\n");
+    for (const auto& [row, c] : by_type) {
+        std::printf("%6d %5d %9d %8d   %s\n", row, c.total, c.no_equip,
+                    c.no_count, game::mercenary_type_name(
+                        static_cast<std::uint16_t>(row)).c_str());
+    }
+    // 목록에 올리는 세 타입(1 탈것 / 5 특수 / 9 반려) 안에서 장비
+    // 정보가 없는 것들. 지금 기준이 실제로 거르는 것이 이것뿐이다.
+    std::printf("\n장비 정보가 없는 1/5/9 종:\n");
+    for (const auto& e : cat) {
+        if (!e.is_companion() || e.equip_info != 0xFFFF) continue;
+        const int t = static_cast<int>(e.merc_row);
+        if (t != 1 && t != 5 && t != 9) continue;
+        std::printf("  행 %5u  타입행 %2d  %-44s %s\n", e.row, t,
+                    e.name.c_str(), e.label.c_str());
+    }
+}
+
 // 캐릭터를 이름으로 찾는다. **행 번호**를 내는 것이 목적이다 -
 // 명부 레코드의 +0x20 과 고용 검사가 쓰는 것이 키가 아니라 행이다.
 void cmd_charfind(mem::Rtti& rt, const mem::Reader& reader, int argc,
@@ -3602,6 +3634,7 @@ int main(int argc, char** argv) {
     }
     if (cmd == "clan") { cmd_clan(rt, reader, argc, argv); return 0; }
     if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
+    if (cmd == "gate") { cmd_gate(rt, reader); return 0; }
     if (cmd == "setspecies") { cmd_setspecies(rt, reader, r, argc, argv); return 0; }
     if (cmd == "unspawn") { cmd_unspawn(rt, reader, r, argc, argv); return 0; }
     if (cmd == "instcount") {
