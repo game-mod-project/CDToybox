@@ -750,20 +750,33 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     if (session != nullptr && actor != 0) {
         const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
-        const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap, s);
-        // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
-        // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
-        const std::uint64_t tick = ::GetTickCount64();
-        for (int i = 0; i < now; ++i) {
-            if (g_sess[i] == s) {
-                g_sess_actor[i] = actor;
-                // 살아 있다는 유일한 증거. 표에서 지울 수는 없으니
-                // 언제 봤는지를 남겨 고를 때 거른다.
-                g_sess_last[i] = tick;
-                break;
+        bool fresh = false;
+        const int slot =
+            session_slot_for(g_sess, g_sess_last, m, kSeenCap, s, &fresh);
+        if (slot >= 0) {
+            if (fresh) {
+                // 앞 세션의 흔적을 먼저 지우고 주소를 맨 마지막에
+                // 세운다. 순서가 거꾸로면 읽는 쪽이 "새 주소 + 옛
+                // 이름표" 인 찰나를 볼 수 있는데, 그것이 바로 새 세션을
+                // 클라이언트로 오인해 후보에서 빼는 자리다.
+                g_sess_class[slot][0] = 0;
+                g_sess_server[slot] = false;
+                g_sess_actor[slot] = 0;
+                g_sess_hits[slot] = 0;
+                g_sess[slot] = s;
+            }
+            ++g_sess_hits[slot];
+            // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
+            // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
+            g_sess_actor[slot] = actor;
+            // 마지막으로 액터를 낸 시각. 축출이 이 값으로 가장 오래된
+            // 칸을 고른다 - 살아 있는 세션은 게임이 쉬지 않고 부르므로
+            // 밀려나지 않는다.
+            g_sess_last[slot] = ::GetTickCount64();
+            if (slot >= m) {
+                g_sess_count.store(slot + 1, std::memory_order_release);
             }
         }
-        if (now != m) g_sess_count.store(now, std::memory_order_release);
     }
     if (actor != 0) {
         g_last_actor.store(actor, std::memory_order_relaxed);
@@ -1218,6 +1231,24 @@ int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
     slots[count] = value;
     hits[count] = 1;
     return count + 1;
+}
+
+int session_slot_for(const std::uintptr_t* slots,
+                     const std::uint64_t* last_seen, int count, int cap,
+                     std::uintptr_t value, bool* fresh_slot) {
+    if (fresh_slot != nullptr) *fresh_slot = false;
+    if (slots == nullptr || last_seen == nullptr || cap <= 0) return -1;
+    for (int i = 0; i < count && i < cap; ++i) {
+        if (slots[i] == value) return i;
+    }
+    if (fresh_slot != nullptr) *fresh_slot = true;
+    if (count < cap) return count;
+    // 꽉 찼다. 가장 오래 전에 본 자리를 내준다.
+    int oldest = 0;
+    for (int i = 1; i < cap; ++i) {
+        if (last_seen[i] < last_seen[oldest]) oldest = i;
+    }
+    return oldest;
 }
 
 int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {

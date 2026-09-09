@@ -93,6 +93,49 @@ TEST(note_actor_stops_when_full) {
 
 // 게임이 함수 앞머리에서 하는 검사와 같은 것을 우리도 먼저 한다.
 // 코드에 그대로 있다: 키가 0이면 실패, 개수가 0 이하면 실패.
+// 표는 축출이 없어서 월드에 한 번 들어가면 16칸이 다 찼고, 그 뒤에
+// 생긴 세션은 조용히 버려졌다 - 인플레이스 로드 뒤 지급이 먹통이 된
+// 원인이다(실측 2026-09-10). 자리가 없으면 가장 오래된 칸을 내준다.
+TEST(session_slot_returns_the_existing_slot) {
+    const std::uintptr_t slots[4] = {0x11, 0x22, 0, 0};
+    const std::uint64_t last[4] = {100, 200, 0, 0};
+    bool fresh = true;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 2, 4, 0x22, &fresh), 1);
+    CHECK(!fresh);
+}
+
+TEST(session_slot_takes_the_next_free_one) {
+    const std::uintptr_t slots[4] = {0x11, 0x22, 0, 0};
+    const std::uint64_t last[4] = {100, 200, 0, 0};
+    bool fresh = false;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 2, 4, 0x33, &fresh), 2);
+    CHECK(fresh);
+}
+
+TEST(session_slot_evicts_the_oldest_when_full) {
+    const std::uintptr_t slots[3] = {0x11, 0x22, 0x33};
+    const std::uint64_t last[3] = {900, 100, 500};
+    bool fresh = false;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 3, 3, 0x44, &fresh), 1);
+    CHECK(fresh);
+}
+
+// 살아 있는 세션은 게임이 쉬지 않고 부르므로 마지막으로 본 시각이 늘
+// 앞선다 - 축출이 그것을 밀어내면 안 된다.
+TEST(session_slot_does_not_evict_the_live_one) {
+    const std::uintptr_t slots[3] = {0x11, 0x22, 0x33};
+    const std::uint64_t last[3] = {1000, 999, 1};
+    bool fresh = false;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 3, 3, 0x44, &fresh), 2);
+}
+
+TEST(session_slot_returns_none_without_a_table) {
+    bool fresh = true;
+    CHECK_EQ(cdtb::game::session_slot_for(nullptr, nullptr, 0, 16, 0x11, &fresh),
+             -1);
+    CHECK(!fresh);
+}
+
 // 조회 함수는 서버 쪽과 클라이언트 쪽을 다 돌려주고, 서버 쪽만
 // 해도 여럿이다(NPC·상자). 실측에서 플레이어 것은 17020회, 다음이
 // 1110회, 나머지는 1~3회였다. 서버 쪽 중 가장 많이 불린 것을 고른다.
