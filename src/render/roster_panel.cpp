@@ -371,6 +371,11 @@ void draw_companion_item_tab() {
 
 // 동반자 레인의 구동 상태. 누른 자리에서 보여 줘야 오해가 없다.
 void draw_companion_drive_gate() {
+    if (game::drive_point_dead()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                           "구동 지점이 게임 안에서 멈췄습니다 - "
+                           "게임을 다시 시작해야 지급·획득이 동작합니다");
+    }
     const game::DriveGate g = game::drive_gate_state(game::DriveLane::Companion);
     const ImVec4 warn(0.9f, 0.8f, 0.3f, 1.0f);
     const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
@@ -527,7 +532,12 @@ void draw_my_companions_tab() {
             char label[64];
             std::snprintf(label, sizeof(label), "%llu##clan%d",
                           static_cast<unsigned long long>(e->merc_no), i);
-            if (ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAllColumns)) {
+            // AllowOverlap 이 없으면 행 전체를 덤는 이 항목이 같은 줄의
+            // [바꾸기] 클릭을 삼킨다 - 근처 탭에서 이미 고쳤던 문제인데
+            // 새 탭에 빼먹어 버튼이 아예 안 들었다(사용자 지적 2026-09-09).
+            if (ImGui::Selectable(label, false,
+                                  ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowOverlap)) {
                 char addr[32];
                 std::snprintf(addr, sizeof(addr), "0x%llX",
                               static_cast<unsigned long long>(e->record));
