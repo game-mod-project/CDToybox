@@ -101,6 +101,41 @@ struct SpeciesWriteTarget {
 bool resolve_species_write(const mem::Rtti& rtti, const mem::Reader& reader,
                            std::uint64_t merc_no, SpeciesWriteTarget* out);
 
+// --- 소환 판정 바로잡기 --------------------------------------------
+//
+// 레코드 `+0x50` 은 이 동반자가 지금 쓰고 있는 액터 핸들이고,
+// 게임은 **그 값이 0 이 아니면 ‘이미 소환됨’ 으로 본다.**
+//
+// 근처 획득(2338)은 월드에 서 있던 야생 개체를 그대로 등록하므로
+// 그 순간의 핸들이 여기 박힌다. 그 액터가 사라진 뒤에도 값은 남아
+// **실제로는 없는데 있는 것으로 판정된다** - 그래서 소환도 해제도
+// 먹지 않는다. 지역 이동·세이브 로드가 풀어 주던 것이 이것이다
+// (사용자 증상 + 실측 2026-09-09: 명부는 [월드] 인데 살아있는 액터
+//  250개 어디에도 그 개체가 없었다).
+struct SpawnFlagTarget {
+    std::uintptr_t server = 0;      // 서버 레코드의 +0x50 주소
+    std::uintptr_t client = 0;      // 클라 레코드의 +0x50 주소
+    std::uint32_t server_handle = 0;
+    std::uint32_t client_handle = 0;
+    bool ok() const { return server != 0 && client != 0; }
+};
+
+// 번호로 두 세계의 핸들 자리를 그 자리에서 찾는다. 규칙은
+// resolve_species_write 와 같다 - 주소를 들고 있다가 쓰지 않는다.
+bool resolve_spawn_flag(const mem::Rtti& rtti, const mem::Reader& reader,
+                        std::uint64_t merc_no, SpawnFlagTarget* out);
+
+// 획득 뒤처리. 매 프레임 불러도 싼다 - 할 일이 없으면 바로 나온다.
+//
+// 2338 획득이 남긴 죽은 액터 핸들을 지운다. 살아있는 핸들은 건드리지
+// 않는다 - 진짜로 나와 있는 개체의 판정을 지우면 중복 소환이 된다.
+// 액터 목록을 모를 때도 건드리지 않는다.
+//
+// 핸들이 사라지는 데 시간이 걸리므로 응답 뒤 잠시 기다렸다 본다.
+void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader);
+// 응답 뒤 이만큼 지나야 본다.
+inline constexpr unsigned long long kHireCleanupDelayMs = 3000;
+
 // --- 모드용 캐시 --------------------------------------------------------
 // 액터 매니저와 같은 방식이다. 컴포넌트를 한 번 찾아 두고, 요청이
 // 있을 때만 다시 읽는다. 월드를 나가면 컴포넌트가 바뀔 수 있으므로
@@ -113,5 +148,11 @@ const std::vector<ClanEntry>& clan_roster();
 // discover_clan 이 쓴 RTTI. 준비 전이면 nullptr.
 // 오버레이가 resolve_species_write 를 부르려면 이것이 필요하다.
 const mem::Rtti* clan_rtti();
+
+// 클라이언트 쪽 명부를 걷는다. 서버와 따로 가지고 있으므로
+// 둘을 비교하면 ‘서버에는 들어갔는데 클라가 모른다’ 를 잡을 수 있다.
+// 획득 직후 소환이 먹통이 되는 증상의 유력 후보다(조사 2026-09-09).
+bool find_clan_component_client(const mem::Reader& reader, const mem::Rtti& rtti,
+                                std::uintptr_t* out);
 
 }  // namespace cdtb::game

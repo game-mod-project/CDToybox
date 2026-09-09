@@ -108,6 +108,26 @@ struct HireWorkResult {
 };
 HireWorkResult last_hire_work();
 
+// 획득 응답(`TrocTrResponseHiredMercenaryToTargetAck`, 2107) 에서 꾹낸
+// 새 동반자 번호. 본문 20바이트 = {u32 사용자, u32 대상, u32 사용자,
+// u64 MercenaryNo} 이고 번호는 본문 +12 에 있다(실측 2026-09-09).
+//
+// 이것이 필요한 이유: 2338 획득은 명부 레코드의 +0x50 에 **그 순간의
+// 야생 액터 핸들**을 박아 둘다. 그 액터는 곳 사라지는데 값은 남아
+// 게임이 "이미 소환됨" 으로 오판하고, 그러면 그 개체는 소환도
+// 해제도 안 된다. 지금까지 지역 이동·세이브 로드로만 풀리던 그것이다.
+inline constexpr std::uint16_t kHireAckId = 2107;
+
+struct HireAck {
+    bool valid = false;
+    std::uint64_t merc_no = 0;
+    unsigned long long at_ms = 0;
+    bool handled = false;   // 뒤처리를 끝냈나
+};
+HireAck last_hire_ack();
+// 뒤처리를 끝냈다고 표시한다.
+void mark_hire_ack_handled();
+
 // ----------------------------------------------------------------------
 // ----------------------------------------------------------------------
 // 아이템 사용 구동 (`TrocTrUseItemByItemInfoReq`, ID 2976)
