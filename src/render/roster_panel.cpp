@@ -465,8 +465,8 @@ void draw_species_popup() {
         for (const auto& c : cat) {
             // 게임에 안 뜨는 타입은 고를 수 없게 한다. 그쪽으로 바꾸면
             // 되돌리기 전까지 게임에서 찾지 못한다(roster.h 설명).
-            // 탈것 표 연결이 없는 종은 게임 목록 어디에도 안 뜼다
-            // (roster.h vehicle_link). 타입보다 이쪽이 정확한 기준이다.
+            // 거르는 기준은 _equipInfo 가 있는가다 - **관찰에 기댄
+            // 임시 기준**이지 확인된 인과가 아니다(roster.h listable).
             if (!c.listable()) continue;
             if (!game::is_listed_companion_row(c.merc_row)) continue;
             if (g_species_same_type && c.merc_row != g_species_type) continue;
@@ -552,7 +552,7 @@ void draw_my_companions_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (!ImGui::BeginTable("my_companions", 8, flags)) return;
+    if (!ImGui::BeginTable("my_companions", 9, flags)) return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 74);
     ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -560,6 +560,7 @@ void draw_my_companions_tab() {
     ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
     ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
     ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 56);
+    ImGui::TableSetupColumn("소유자", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("월드", ImGuiTableColumnFlags_WidthFixed, 44);
     ImGui::TableSetupColumn("종", ImGuiTableColumnFlags_WidthFixed, 74);
     ImGui::TableHeadersRow();
@@ -601,9 +602,19 @@ void draw_my_companions_tab() {
             ImGui::TableSetColumnIndex(5);
             ImGui::Text("%u", e->key);
             ImGui::TableSetColumnIndex(6);
+            // 레코드 +0x148. 게임 자신의 소유자 판정(RVA 0x209FE40)이
+            // 비교하는 그 자리다(clan.h 설명).
+            if (e->owner_row == 0xFFFF) {
+                ImGui::TextDisabled("-");
+            } else if (!e->owner_name.empty()) {
+                ImGui::TextUnformatted(e->owner_name.c_str());
+            } else {
+                ImGui::Text("행 %u", e->owner_row);
+            }
+            ImGui::TableSetColumnIndex(7);
             if (e->spawned()) ImGui::TextUnformatted("예");
             else ImGui::TextDisabled("-");
-            ImGui::TableSetColumnIndex(7);
+            ImGui::TableSetColumnIndex(8);
             // 종을 바꾸면 게임 목록·소환·저장까지 따라온다(실측
             // 2026-09-09: 혹멧돼지 -> 사자, 타고 다니고 리로드를 넘음).
             //

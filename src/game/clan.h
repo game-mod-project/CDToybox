@@ -37,6 +37,8 @@ inline constexpr std::size_t kClanRecordRow = 0x20;
 inline constexpr std::size_t kClanRecordGuard = 0x22;
 inline constexpr std::size_t kClanRecordNo = 0x28;
 inline constexpr std::size_t kClanRecordHandle = 0x50;
+inline constexpr std::size_t kClanRecordOwner = 0x148;  // u16 소유자 캐릭터 행
+                                                       // (게임 판정 RVA 0x209FE40)
 // 명부가 이보다 크면 컴포넌트를 잘못 집은 것이다.
 inline constexpr std::uint32_t kClanMaxRecords = 4096;
 
@@ -51,6 +53,24 @@ struct ClanEntry {
     std::string name;             // 내부 이름
     std::string label;            // 인게임 표시명
     std::uint16_t merc_row = 0xFFFF;  // 동반자 타입 행
+
+    // 레코드 +0x148 u16 = **소유자의 캐릭터 행 번호**. 0xFFFF 면 없음.
+    //
+    // 게임 자신의 소유자 판정 함수(RVA 0x209FE40)에서 확정했다
+    // (실측 2026-09-09). 그 함수는 종(+0x20)으로 CharacterInfo 를 찾아
+    // `_mercenaryInfo`(+0xBE) -> MercenaryInfo 의 `_summonOwnerOption`
+    // (+0x5D) 을 보고, 분류에 따라 이 자리를 비교한다.
+    //
+    //   0  -> 무조건 거짓
+    //   1  -> 넘긴 행 == 주인공 행 이어야 하고, 그다음 +0x148 == 주인공 행
+    //   2  -> +0x148 == 주인공 행
+    //   3  -> +0x148 == 넘긴 행
+    //
+    // 어느 분류든 **비교 대상은 +0x148 하나**다. 그래서 이 값이
+    // 소유자다. 스토리 동료가 명부에 섞여 보이는 이유도 여기서
+    // 갈릴 것으로 본다.
+    std::uint16_t owner_row = 0xFFFF;
+    std::string owner_name;   // owner_row 를 캐릭터 표로 푼 이름
 
     // 여기 "야생 획득분" 표시(레코드 +0x30~+0x4F 가 0 이 아닌가)가
     // 있었다. 2026-09-09 명부 8개를 실측해 보니 그 구간은 출신과

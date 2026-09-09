@@ -77,13 +77,22 @@ struct RosterEntry {
     bool hirable = false;
     bool catchable = false;
     bool unique = false;
-    // 탈것(VehicleInfo) 표 연결. 0xFFFF 면 없다.
+    // `_equipInfo` (+0x6A). **탈것 표 연결이 아니다** - 그렇게 적어
+    // 뒀던 것은 틀렸다(이름 확정 2026-09-09, tools/rtti/fields.py).
+    // 0xFFFF 면 장비 정보가 없다.
     //
-    // **이 값이 없으면 게임 목록 어디에도 안 뜼다** - 실측 2026-09-09:
-    // 낙타(3583)·성체 와이번(4214)은 0xFFFF 이고 탈것·특수·반려동물
-    // 어느 목록에도, 캐릭터 선택창에도 없었다. 사자(3436)는 9,
-    // 새끼 와이번(6608)은 10, Riding_Wyvern_1000(6804)은 9 로 전부 보인다.
-    std::uint16_t vehicle_link = 0xFFFF;
+    // 관찰: 낙타(3583)·성체 와이번(4214)은 0xFFFF 이고 게임 목록
+    // 어디에도 안 떴다. 사자(3436) 9, 새끼 와이번(6608) 10,
+    // Riding_Wyvern_1000(6804) 9 는 전부 보인다. **상관은 있으나
+    // 인과는 확인 안 됐다** - 아래 owned_merc_row 와 견줘 볼 것.
+    std::uint16_t equip_info = 0xFFFF;
+
+    // `_ownedMercenaryCharacterInfo` (+0x100). 야생판 종이 가리키는
+    // **소유판 캐릭터 행**. 0xFFFF 면 없다. 종을 고를 때 야생판 대신
+    // 이쪽을 골라야 하는지 판정할 후보다.
+    std::uint16_t owned_merc_row = 0xFFFF;
+    // `_isMercenaryCountAble` (+0x16E). 동반자 수에 세는가.
+    bool merc_countable = false;
 
     // 게임의 소환 표에 이 키가 있는가. 캐릭터 표 전용.
     // 소환 치트(2988)가 키를 이 표에서 찾고, 없으면 오류를 낸다.
@@ -93,7 +102,14 @@ struct RosterEntry {
 
     bool is_companion() const { return merc_row != 0xFFFF; }
     // 게임이 목록에 올려 주는 종인가. 종을 고를 때의 기준이다.
-    bool listable() const { return is_companion() && vehicle_link != 0xFFFF; }
+    // 게임이 목록에 올려 주는 종인가. 종을 고를 때의 기준이다.
+    //
+    // `_equipInfo` 를 쓰는 것은 **관찰에 기댄 임시 기준**이다. 이름이
+    // 뜻하는 바(장비 정보)와 "목록에 뜬다" 사이에 직접적인 연결이
+    // 확인되지 않았다. 게임을 켜고 낙타·성체 와이번과 정상 종의
+    // owned_merc_row·merc_countable 을 견줘 더 나은 기준이 나오면
+    // 갈아탄다. 그때까지는 걸러진 이유가 보이도록 팝업에 값을 찍는다.
+    bool listable() const { return is_companion() && equip_info != 0xFFFF; }
 };
 
 // ----------------------------------------------------------------------
