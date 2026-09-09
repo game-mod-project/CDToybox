@@ -405,11 +405,9 @@ bool safe_deref(std::uintptr_t at, std::uintptr_t* out);
 
 // 걸어 둔 요청이 있으면 여기서 실행한다. 조건을 한 곳에 모은다.
 // 실제로 하나를 실행했으면 true.
-bool run_pending_if_any() {
-    if (!any_pending()) return false;
-    if (!thread_ready_for_spawn()) return false;
-    if (g_running.exchange(true, std::memory_order_acq_rel)) return false;
-    g_running_at.store(GetTickCount64(), std::memory_order_release);
+// 실제 실행부. 예외가 난 자리를 밖으로 보내지 않고 그대로 둔다 -
+// 게이트 푸는 일은 부르는 쪽의 __finally 가 맡는다.
+bool run_one_picked() {
     bool ran = false;
     // 레인을 순서대로 본다. 한 번에 하나만 실행한다 - 실행 지점은
     // 여전히 직렬화되어야 한다.
@@ -454,8 +452,37 @@ bool run_pending_if_any() {
                        req.session);
         }
     }
-    g_last_done.store(GetTickCount64(), std::memory_order_release);
-    g_running.store(false, std::memory_order_release);
+    return ran;
+}
+
+// 걸어 둔 요청이 있으면 여기서 실행한다. 조건을 한 곳에 모은다.
+// 실제로 하나를 실행했으면 true.
+bool run_pending_if_any() {
+
+    if (!any_pending()) return false;
+    if (!thread_ready_for_spawn()) return false;
+    if (g_running.exchange(true, std::memory_order_acq_rel)) return false;
+    g_running_at.store(GetTickCount64(), std::memory_order_release);
+    bool ran = false;
+    // **게이트는 무슨 일이 있어도 푸단다.**
+    //
+    // 실측 2026-09-09: 지급과 획득이 각각 한 번씩, 작업을 시작해 놓고
+    // "끝" 로그 없이 사라졌다. 그런데 게임은 62 FPS 로 멀썩히 돌고
+    // 있었다 - 즉 게임 스레드가 멈춘 것이 아니라 **예외가 이 함수를
+    // 건너뛰어 풀렸다.** 이 빌드는 /EHsc 라 SEH 는 C++ 소멸자를
+    // 돌리지 않으므로 RAII 로는 막힐 수 없다. __finally 여야 한다.
+    //
+    // 이것이 없으면 g_running 이 영원히 true 로 남아 그 뒤 모든 지급·
+    // 획득이 죽고, 게임을 다시 시작하는 수밖에 없었다.
+    __try {
+        ran = run_one_picked();
+    } __finally {
+        g_last_done.store(GetTickCount64(), std::memory_order_release);
+        g_running.store(false, std::memory_order_release);
+        if (AbnormalTermination()) {
+            log::errorf("구동이 예외로 풀렸다 - 게이트는 풀었으니 계속 쓸 수 있다");
+        }
+    }
     return ran;
 }
 
