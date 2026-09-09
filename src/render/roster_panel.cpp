@@ -438,6 +438,9 @@ void draw_species_popup() {
         for (const auto& c : cat) {
             // 게임에 안 뜨는 타입은 고를 수 없게 한다. 그쪽으로 바꾸면
             // 되돌리기 전까지 게임에서 찾지 못한다(roster.h 설명).
+            // 탈것 표 연결이 없는 종은 게임 목록 어디에도 안 뜼다
+            // (roster.h vehicle_link). 타입보다 이쪽이 정확한 기준이다.
+            if (!c.listable()) continue;
             if (!game::is_listed_companion_row(c.merc_row)) continue;
             if (g_species_same_type && c.merc_row != g_species_type) continue;
             if (g_species_query[0] != 0 &&
@@ -574,6 +577,9 @@ void draw_my_companions_tab() {
             ImGui::TableSetColumnIndex(7);
             // 종을 바꾸면 게임 목록·소환·저장까지 따라온다(실측
             // 2026-09-09: 혹멧돼지 -> 사자, 타고 다니고 리로드를 넘음).
+            // 야생 획득분은 레코드에 그 개체의 값이 남아 있어, 종을 바꾸면
+            // 소환 때 게임이 죽는다(clan.h wild_origin 설명).
+            ImGui::BeginDisabled(e->wild_origin);
             if (ImGui::SmallButton("바꾸기")) {
                 g_species_no = e->merc_no;
                 g_species_type = e->merc_row;
@@ -581,6 +587,13 @@ void draw_my_companions_tab() {
                 g_species_msg[0] = 0;
                 g_species_same_type = true;
                 ImGui::OpenPopup("종 바꾸기");
+            }
+            ImGui::EndDisabled();
+            if (e->wild_origin && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "근처에서 직접 획득한 개체라 종을 바꿀 수 없습니다.\n"
+                    "바꾸면 목록에는 떠도 소환하는 순간 게임이 죽습니다.\n"
+                    "부적으로 얻은 동반자는 바꿀 수 있습니다.");
             }
             draw_species_popup();
             ImGui::PopID();
