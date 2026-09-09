@@ -17,3 +17,10 @@ cheat_report.txt
 # 도구 상태 (추적 안 함)
 .omc/
 .semgrep/
+
+# 참고 모드 내려받기 (Nexus CT/ASI)와 그 부산물. 레포에 두고 보되
+# 추적하지 않는다 - git status 를 매번 어지럽혔다.
+*.CT
+*.zip
+CHANGELOG_Table.txt
+CrimsonInvEditor.itemmap.txt
