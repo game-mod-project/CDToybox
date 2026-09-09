@@ -606,9 +606,11 @@ void draw_my_companions_tab() {
             ImGui::TableSetColumnIndex(7);
             // 종을 바꾸면 게임 목록·소환·저장까지 따라온다(실측
             // 2026-09-09: 혹멧돼지 -> 사자, 타고 다니고 리로드를 넘음).
-            // 야생 획득분은 레코드에 그 개체의 값이 남아 있어, 종을 바꾸면
-            // 소환 때 게임이 죽는다(clan.h wild_origin 설명).
-            ImGui::BeginDisabled(e->wild_origin);
+            //
+            // 한때 "야생 획득분은 바꾸면 죽는다" 며 이 버튼을 막았는데,
+            // 그 판정 근거(레코드 +0x30~+0x4F)가 출신과 무관하다는 것이
+            // 실측으로 드러나 걷어냈다. 막아야 할 것을 못 막고 멀쩡한
+            // 것만 막고 있었다.
             if (ImGui::SmallButton("바꾸기")) {
                 g_species_no = e->merc_no;
                 g_species_type = e->merc_row;
@@ -616,13 +618,6 @@ void draw_my_companions_tab() {
                 g_species_msg[0] = 0;
                 g_species_same_type = false;
                 ImGui::OpenPopup("종 바꾸기");
-            }
-            ImGui::EndDisabled();
-            if (e->wild_origin && ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(
-                    "근처에서 직접 획득한 개체라 종을 바꿀 수 없습니다.\n"
-                    "바꾸면 목록에는 떠도 소환하는 순간 게임이 죽습니다.\n"
-                    "부적으로 얻은 동반자는 바꿀 수 있습니다.");
             }
             draw_species_popup();
             ImGui::PopID();
