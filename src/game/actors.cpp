@@ -268,6 +268,21 @@ bool discover_actor_manager(const mem::Rtti& rtti, const mem::Reader& reader) {
     return true;
 }
 
+bool actor_handle_alive(const mem::Reader& reader, std::uint32_t handle,
+                        bool* known_out) {
+    if (known_out != nullptr) *known_out = false;
+    if (handle == 0) return false;
+    const std::uintptr_t m = g_manager.load(std::memory_order_acquire);
+    if (m == 0) return false;
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> handles;
+    if (!read_actor_handles(reader, m, &handles) || handles.empty()) return false;
+    if (known_out != nullptr) *known_out = true;
+    for (const auto& hp : handles) {
+        if (hp.second == handle) return true;
+    }
+    return false;
+}
+
 bool actor_manager_ready() { return g_manager.load(std::memory_order_acquire) != 0; }
 
 bool refresh_live_actors(const mem::Reader& reader) {

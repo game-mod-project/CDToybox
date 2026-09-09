@@ -26,6 +26,7 @@
 #include "render/player_panel.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
+#include "game/clan.h"
 #include "game/freecam.h"
 #include "game/items.h"
 #include "game/player.h"
@@ -570,6 +571,16 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
+
+        // 획득 뒤처리. 2338 은 명부 레코드에 그 순간의 야생 액터
+        // 핸들을 박아 두는데, 그 액터가 사라져도 값은 남아 게임이
+        // "이미 소환됨" 으로 오판한다 - 그러면 그 개체는 소환도
+        // 해제도 안 된다(사용자 증상, 실측 2026-09-09). 지금까지
+        // 지역 이동·세이브 로드로만 풀리던 그것이다. 가시성과
+        // 무관하게 돌아야 오버레이를 닫아 둠 때도 풀린다.
+        if (const mem::Rtti* rtti = cdtb::game::clan_rtti()) {
+            cdtb::game::tick_hire_cleanup(*rtti, reader);
+        }
 
         // 소켓 상한은 아이템표에 거는 것이라 **매 실행 다시 걸어야 한다**
         // (표는 exe 에서 새로 읽힌다). 설정이 켜져 있으면 표가 올라온

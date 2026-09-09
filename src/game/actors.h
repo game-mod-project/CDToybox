@@ -121,6 +121,11 @@ bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
 // 매니저를 한 번 찾아 두고(discover), 요청이 있을 때만 다시 걷는다.
 bool discover_actor_manager(const mem::Rtti& rtti, const mem::Reader& reader);
 bool actor_manager_ready();
+// 그 핸들이 지금 살아있는 액터를 가리키는가.
+// 매니저를 못 잡았으면 판단하지 않고 false 를 낸다 - 이 함수로
+// "죽은 핸들" 을 판정해 지우므로, 모를 때는 건드리지 않는 쪽이 안전하다.
+bool actor_handle_alive(const mem::Reader& reader, std::uint32_t handle,
+                        bool* known_out);
 // 지금 걷는다. 그리는 쪽이 버튼/주기로 부른다. 실패하면 false 이고 옛 판 유지.
 bool refresh_live_actors(const mem::Reader& reader);
 const std::vector<LiveActor>& live_actors();

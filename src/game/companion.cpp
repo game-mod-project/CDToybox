@@ -158,6 +158,7 @@ std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
 std::mutex g_last_mutex;
 HireTargetCapture g_last_hire;
+HireAck g_last_ack;
 CatchCapture g_last_catch;
 
 void dump_payload(void* packet, const char* tag) {
@@ -192,6 +193,19 @@ void dump_payload(void* packet, const char* tag) {
         } else {
             log::warnf("붙잡기: 본문이 8바이트가 아니다 ({}). 정적 분석과 다름",
                        body);
+        }
+    }
+    if (id == kHireAckId && body >= 20 && len >= 5 + 20) {
+        // 본문 +12 의 u64 가 새로 생긴 동반자 번호다(companion.h 설명).
+        std::uint64_t no = 0;
+        std::memcpy(&no, pl + 5 + 12, sizeof(no));
+        if (no != 0) {
+            std::lock_guard<std::mutex> lock(g_last_mutex);
+            g_last_ack.valid = true;
+            g_last_ack.merc_no = no;
+            g_last_ack.at_ms = GetTickCount64();
+            g_last_ack.handled = false;
+            log::infof("획득 응답: 새 동반자 번호 {}", no);
         }
     }
     if (id == kHireToTargetId) {
@@ -271,6 +285,16 @@ bool hook_one(const mem::Rtti& rtti, const mem::Reader& reader, const char* cls,
 }
 
 }  // namespace
+
+HireAck last_hire_ack() {
+    std::lock_guard<std::mutex> lock(g_last_mutex);
+    return g_last_ack;
+}
+
+void mark_hire_ack_handled() {
+    std::lock_guard<std::mutex> lock(g_last_mutex);
+    g_last_ack.handled = true;
+}
 
 HireTargetCapture last_hire_target() {
     std::lock_guard<std::mutex> lock(g_last_mutex);

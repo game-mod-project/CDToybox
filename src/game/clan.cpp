@@ -4,6 +4,10 @@
 #include <windows.h>
 #include <utility>
 
+#include "game/actors.h"
+#include "game/companion.h"
+#include "core/log.h"
+#include "mem/safe_read.h"
 #include "game/roster.h"
 
 namespace cdtb::game {
@@ -69,6 +73,36 @@ bool find_clan_of_class(const mem::Reader& reader, const mem::Rtti& rtti,
     return true;
 }
 
+// 컴포넌트를 캐시해 둔다.
+//
+// find_clan_of_class 는 RTTI 인스턴스 스캔이라 기가바이트를 훑는다.
+// 종 바꾸기 한 번에 네 번(클라·서버 × 쓰기·재확인) 돌면 게임이
+// 멈춰 보인다 - 사용자가 짚은 그 멈춤이다(2026-09-09).
+//
+// 캐시한 것이 아직 컴포넌트 꼴인지는 **값싼 검사**로 볼 수 있다
+// (looks_like_clan_component). 그것만 통과하면 그대로 쓴다. 동반자가
+// 늘거나 줄어 새 컴포넌트가 만들어지면 그때만 다시 찾는다.
+std::atomic<std::uintptr_t> g_cached_server{0};
+std::atomic<std::uintptr_t> g_cached_client{0};
+
+bool clan_component_cached(const mem::Reader& reader, const mem::Rtti& rtti,
+                           bool client, std::uintptr_t* out) {
+    std::atomic<std::uintptr_t>& slot = client ? g_cached_client : g_cached_server;
+    const std::uintptr_t have = slot.load(std::memory_order_acquire);
+    if (have != 0 && looks_like_clan_component(reader, have)) {
+        *out = have;
+        return true;
+    }
+    std::uintptr_t found = 0;
+    if (!find_clan_of_class(reader, rtti,
+                            client ? kClanClientClass : kClanClass, &found)) {
+        return false;
+    }
+    slot.store(found, std::memory_order_release);
+    *out = found;
+    return true;
+}
+
 // 번호로 레코드를 찾는다. 표식(+0x22)까지 확인해야 재활용된 메모리에
 // 쓰는 사고를 막는다.
 bool find_record_by_no(const mem::Reader& reader, std::uintptr_t clan,
@@ -109,7 +143,7 @@ bool resolve_species_write(const mem::Rtti& rtti, const mem::Reader& reader,
     if (out == nullptr || merc_no == 0) return false;
     SpeciesWriteTarget t;
     std::uintptr_t srv = 0, cli = 0;
-    if (find_clan_of_class(reader, rtti, kClanClass, &srv)) {
+    if (clan_component_cached(reader, rtti, false, &srv)) {
         std::uintptr_t rec = 0;
         std::uint16_t row = 0xFFFF;
         if (find_record_by_no(reader, srv, merc_no, &rec, &row)) {
@@ -117,12 +151,37 @@ bool resolve_species_write(const mem::Rtti& rtti, const mem::Reader& reader,
             t.server_row = row;
         }
     }
-    if (find_clan_of_class(reader, rtti, kClanClientClass, &cli)) {
+    if (clan_component_cached(reader, rtti, true, &cli)) {
         std::uintptr_t rec = 0;
         std::uint16_t row = 0xFFFF;
         if (find_record_by_no(reader, cli, merc_no, &rec, &row)) {
             t.client = rec + kClanRecordRow;
             t.client_row = row;
+        }
+    }
+    *out = t;
+    return t.ok();
+}
+
+bool resolve_spawn_flag(const mem::Rtti& rtti, const mem::Reader& reader,
+                        std::uint64_t merc_no, SpawnFlagTarget* out) {
+    if (out == nullptr || merc_no == 0) return false;
+    SpawnFlagTarget t;
+    std::uintptr_t srv = 0, cli = 0;
+    if (clan_component_cached(reader, rtti, false, &srv)) {
+        std::uintptr_t rec = 0;
+        std::uint16_t row = 0xFFFF;
+        if (find_record_by_no(reader, srv, merc_no, &rec, &row)) {
+            t.server = rec + kClanRecordHandle;
+            reader.read_value(t.server, &t.server_handle);
+        }
+    }
+    if (clan_component_cached(reader, rtti, true, &cli)) {
+        std::uintptr_t rec = 0;
+        std::uint16_t row = 0xFFFF;
+        if (find_record_by_no(reader, cli, merc_no, &rec, &row)) {
+            t.client = rec + kClanRecordHandle;
+            reader.read_value(t.client, &t.client_handle);
         }
     }
     *out = t;
@@ -136,6 +195,12 @@ bool find_clan_component(const mem::Reader& reader, const mem::Rtti& rtti,
     // 엉뚱했다). 명부를 가장 많이 든 것을 고른다 - 액터 매니저에서
     // 쓴 것과 같은 방식이다.
     return find_clan_of_class(reader, rtti, kClanClass, out);
+}
+
+bool find_clan_component_client(const mem::Reader& reader, const mem::Rtti& rtti,
+                                std::uintptr_t* out) {
+    if (out == nullptr) return false;
+    return find_clan_of_class(reader, rtti, kClanClientClass, out);
 }
 
 bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
@@ -188,7 +253,17 @@ bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::uintptr_t c = 0;
     if (!find_clan_component(reader, rtti, &c)) return false;
     g_clan.store(c, std::memory_order_release);
+    g_cached_server.store(c, std::memory_order_release);
     g_rtti = &rtti;
+    // 클라이언트 쪽도 **여기서** 미리 잡아 둔다. RTTI 인스턴스 스캔은
+    // 실측 30초가 넘는다(probe 로 재 보니 두 번에 1분 8초). 그리는
+    // 스레드가 그것을 돌면 게임이 그만큼 멈춘다 - 사용자가 종 바꾸기에서
+    // 겪은 멈춤이 이것이다(2026-09-09). 이 함수는 배경 분석 스레드가
+    // 시작할 때 부르므로 여기서 치르는 것이 맞다.
+    std::uintptr_t cli = 0;
+    if (find_clan_of_class(reader, rtti, kClanClientClass, &cli)) {
+        g_cached_client.store(cli, std::memory_order_release);
+    }
     return true;
 }
 
@@ -222,5 +297,32 @@ bool refresh_clan_roster(const mem::Reader& reader) {
 const std::vector<ClanEntry>& clan_roster() { return g_roster; }
 
 const mem::Rtti* clan_rtti() { return g_rtti; }
+
+void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
+    const HireAck ack = last_hire_ack();
+    if (!ack.valid || ack.handled || ack.merc_no == 0) return;
+    if (GetTickCount64() - ack.at_ms < kHireCleanupDelayMs) return;
+
+    SpawnFlagTarget t;
+    if (!resolve_spawn_flag(rtti, reader, ack.merc_no, &t)) return;
+    if (t.server_handle == 0 && t.client_handle == 0) {
+        mark_hire_ack_handled();
+        return;
+    }
+    // 살아있는 개체면 그대로 둔다. 목록을 모를 때도 그대로 둔다.
+    bool known = false;
+    const bool alive = actor_handle_alive(reader, t.server_handle, &known);
+    if (!known) return;          // 다음 프레임에 다시 본다
+    if (alive) {
+        mark_hire_ack_handled();
+        return;
+    }
+    const std::uint32_t zero = 0;
+    const bool ok = mem::safe_write_bytes(t.server, &zero, 4) &&
+                    mem::safe_write_bytes(t.client, &zero, 4);
+    mark_hire_ack_handled();
+    log::infof("획득 뒤처리: 번호 {} 의 죽은 액터 핸들 0x{:08X} 를 지웠다 ({})",
+               ack.merc_no, t.server_handle, ok ? "성공" : "쓰기 실패");
+}
 
 }  // namespace cdtb::game

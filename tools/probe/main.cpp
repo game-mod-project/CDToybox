@@ -78,6 +78,7 @@ void usage() {
         "  clan                        내가 가진 동반자 명부\n"
         "  charfind <조각> [최대]        캐릭터를 이름으로 찾아 행·키를 낸다\n"
         "  setspecies <번호> <행>     동반자의 종을 바꿈(클라+서버, 검증 후)\n"
+        "  unspawn <번호> [read]     죽은 액터 핸들을 지워 소환 판정을 푸다\n"
         "  dumpimage [파일] [--raw]    실행 중 프로세스의 모듈 이미지를\n"
         "                              디스어셈블러가 읽는 PE 로 뜬다\n"
         "\n"
@@ -1388,12 +1389,18 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // 내가 가진 동반자 명부. 전부 읽기다.
 //
 // 용병단 컴포넌트의 레코드 배열을 걷는다(game/clan.h).
-void cmd_clan(mem::Rtti& rt, const mem::Reader& reader) {
+void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
     if (!game::discover_roster(rt, reader)) {
         std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
     }
+    const bool want_client = (argc > 2 && std::strcmp(argv[2], "client") == 0);
     std::uintptr_t clan = 0;
-    if (!game::find_clan_component(reader, rt, &clan)) {
+    const bool found = want_client
+                           ? game::find_clan_component_client(reader, rt, &clan)
+                           : game::find_clan_component(reader, rt, &clan);
+    std::printf("%s 명부\n",
+                want_client ? "클라이언트" : "서버");
+    if (!found) {
         std::printf("용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
         return;
     }
@@ -1496,6 +1503,49 @@ void cmd_setspecies(mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                 (after.server_row == want && after.client_row == want)
                     ? "- 반영됨"
                     : "- 어깋난다");
+}
+
+// 소환 판정을 바로잡는다. 레코드 +0x50 에 남은 죽은 액터 핸들을
+// 지운다. 자세한 근거는 game/clan.h 설명.
+void cmd_unspawn(mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+                 int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: unspawn <용병번호> [read]\n"
+                    "  read 를 붙이면 읽기만 한다.\n");
+        return;
+    }
+    const std::uint64_t no = std::strtoull(argv[2], nullptr, 0);
+    const bool read_only = (argc > 3 && std::strcmp(argv[3], "read") == 0);
+    if (no == 0) { std::printf("번호가 0 이다.\n"); return; }
+    game::SpawnFlagTarget t;
+    if (!game::resolve_spawn_flag(rt, reader, no, &t)) {
+        std::printf("자리를 못 찾았다 (서버 0x%llX, 클라 0x%llX).\n",
+                    static_cast<unsigned long long>(t.server),
+                    static_cast<unsigned long long>(t.client));
+        return;
+    }
+    std::printf("번호 %llu: 서버 0x%llX 핸들 %08X · 클라 0x%llX 핸들 %08X\n",
+                static_cast<unsigned long long>(no),
+                static_cast<unsigned long long>(t.server), t.server_handle,
+                static_cast<unsigned long long>(t.client), t.client_handle);
+    if (read_only) return;
+    if (t.server_handle == 0 && t.client_handle == 0) {
+        std::printf("이미 0 이라 할 일이 없다.\n");
+        return;
+    }
+    const std::uint32_t zero = 0;
+    if (!r.write(t.server, &zero, 4) || !r.write(t.client, &zero, 4)) {
+        std::printf("쓰기 실패.\n");
+        return;
+    }
+    game::SpawnFlagTarget after;
+    if (game::resolve_spawn_flag(rt, reader, no, &after)) {
+        std::printf("확인: 서버 %08X, 클라 %08X %s\n", after.server_handle,
+                    after.client_handle,
+                    (after.server_handle == 0 && after.client_handle == 0)
+                        ? "- 풀렸다"
+                        : "- 어깋난다");
+    }
 }
 
 void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
@@ -3542,9 +3592,10 @@ int main(int argc, char** argv) {
         cmd_fields(rt, r, parse_addr(argv[2]), n);
         return 0;
     }
-    if (cmd == "clan") { cmd_clan(rt, reader); return 0; }
+    if (cmd == "clan") { cmd_clan(rt, reader, argc, argv); return 0; }
     if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
     if (cmd == "setspecies") { cmd_setspecies(rt, reader, r, argc, argv); return 0; }
+    if (cmd == "unspawn") { cmd_unspawn(rt, reader, r, argc, argv); return 0; }
     if (cmd == "instcount") {
         cmd_instcount(rt, argc, argv);
         return 0;
