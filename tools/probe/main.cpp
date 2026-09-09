@@ -1445,9 +1445,9 @@ void cmd_charfind(mem::Rtti& rt, const mem::Reader& reader, int argc,
             continue;
         }
         if (n++ >= cap) break;
-        std::printf("  행 %5u  키 %6u  타입행 %2d  %-44s %s\n", e.row, e.key,
+        std::printf("  행 %5u  키 %6u  타입행 %2d  탈것연결 %5u  %-40s %s\n", e.row, e.key,
                     e.merc_row == 0xFFFF ? -1 : static_cast<int>(e.merc_row),
-                    e.name.c_str(), e.label.c_str());
+                    e.vehicle_link, e.name.c_str(), e.label.c_str());
     }
     std::printf("%zu건 (캐릭터 %zu 중)\n", n, cat.size());
 }

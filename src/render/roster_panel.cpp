@@ -81,8 +81,13 @@ bool g_clan_listed_only = true;
 std::uint64_t g_species_no = 0;
 std::uint16_t g_species_type = 0xFFFF;   // 대상의 동반자 타입 행
 char g_species_query[64] = "";
-bool g_species_same_type = true;
+// 기본은 **꺼 둔다.** 타입을 넘는 교체가 이미 검증됐고
+// (펫->특수 탑승물 성공), 켜 두면 골라야 할 것이 안 보여
+// 이유를 알 수 없다 - 사용자가 새끼 와이번을 못 찾은 것이
+// 이 기본값 때문이었다(2026-09-09).
+bool g_species_same_type = false;
 char g_species_msg[160] = "";
+std::size_t g_species_hits = 0;
 
 // 종을 바꿔 쓴다. 주소는 그 자리에서 다시 찾는다 - 들고 있다가 쓰면
 // 안 된다(2026-09-09 사고, game/clan.h 설명).
@@ -418,8 +423,10 @@ void draw_species_popup() {
                            "타입을 넘는 교체도 됩니다 - 펫→특수 탑승물 확인됨");
     }
     ImGui::SetNextItemWidth(260);
-    ImGui::InputTextWithHint("##species_q", "이름으로 거르기", g_species_query,
+    ImGui::InputTextWithHint("##species_q", "이름 또는 내부 이름(예 Wyvern)으로 거르기", g_species_query,
                              sizeof(g_species_query));
+    ImGui::SameLine();
+    ImGui::TextDisabled("후보 %zu개", g_species_hits);
     if (g_species_msg[0] != 0) {
         ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "%s", g_species_msg);
     }
@@ -450,6 +457,7 @@ void draw_species_popup() {
             }
             hits.push_back(&c);
         }
+        g_species_hits = hits.size();
         ImGuiListClipper cl;
         cl.Begin(static_cast<int>(hits.size()));
         while (cl.Step()) {
@@ -585,7 +593,7 @@ void draw_my_companions_tab() {
                 g_species_type = e->merc_row;
                 g_species_query[0] = 0;
                 g_species_msg[0] = 0;
-                g_species_same_type = true;
+                g_species_same_type = false;
                 ImGui::OpenPopup("종 바꾸기");
             }
             ImGui::EndDisabled();
