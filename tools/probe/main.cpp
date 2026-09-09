@@ -1414,12 +1414,13 @@ void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
     std::printf("용병단 0x%llX - 동반자 %zu명, 그중 월드에 %zu명\n",
                 static_cast<unsigned long long>(clan), list.size(), spawned);
     for (const auto& e : list) {
-        std::printf("  번호 %8llu  행 %5u  키 %6u  타입행 %2d  %-42s %s%s\n",
+        std::printf("  번호 %8llu  행 %5u  키 %6u  타입행 %2d  %-42s %s%s%s\n",
                     static_cast<unsigned long long>(e.merc_no), e.row, e.key,
                     e.merc_row == 0xFFFF ? -1 : static_cast<int>(e.merc_row),
                     e.name.empty() ? "(이름 없음)" : e.name.c_str(),
                     e.label.empty() ? "" : e.label.c_str(),
-                    e.spawned() ? "  [월드]" : "");
+                    e.spawned() ? "  [월드]" : "",
+                    e.wild_origin ? "  [야생획득]" : "");
     }
 }
 

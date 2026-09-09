@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "game/actors.h"
+#include "core/log.h"
 #include "game/clan.h"
 #include "mem/safe_read.h"
 #include "game/camera.h"
@@ -112,6 +113,16 @@ bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
                       "자리를 못 찾았습니다 - 월드 안인지 보세요");
         return false;
     }
+    // 게임 상태를 바꾸는 일은 **반드시 로그에 남긴다.**
+    //
+    // 이것이 없어서 사용자가 "바꾸기 뒤 팅겼다" 고 했을 때 무엇을 무엇으로
+    // 바꿨는지 로그로 알 수가 없었다(2026-09-09). 쓰기는 남기고 본다.
+    const game::RosterEntry* from = game::character_by_row(t.server_row);
+    const game::RosterEntry* to = game::character_by_row(row);
+    log::infof("종 바꾸기: 번호 {} 행 {}({}) -> 행 {}({})", merc_no,
+               t.server_row, from != nullptr ? from->name : std::string("?"),
+               row, to != nullptr ? to->name : std::string("?"));
+
     const std::uint8_t buf[2] = {static_cast<std::uint8_t>(row & 0xFF),
                                  static_cast<std::uint8_t>(row >> 8)};
     // 클라·서버 양쪽에 써야 한다. 서버만 쓰면 게임이 보는 사본은
