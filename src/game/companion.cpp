@@ -978,7 +978,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
     }
     if (cmd == "drive") {
         // 구동 게이트 상태를 본다. `drive reset` 이면 오래 물린 것을 푼다.
-        const DriveGate g = drive_gate_state();
+        const DriveGate g = drive_gate_state(DriveLane::Companion);
         log::infof("구동 게이트: 대기 {}({}ms) 실행 {}({}ms) 쿨다운 {}ms "
                    "잠긴세션 0x{:X}",
                    g.pending ? "예" : "아니오", g.pending_age_ms,

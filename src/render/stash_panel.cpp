@@ -170,7 +170,7 @@ void draw_stash_panel(bool* open) {
 
     // 큐가 남아 있으면 한 개씩 흘려보낸다. request_give 가 쿨다운에
     // 걸리면 false 를 주므로 다음 프레임에 다시 시도한다.
-    if (g_queue_at < g_queue.size() && !game::spawn_pending()) {
+    if (g_queue_at < g_queue.size() && !game::spawn_pending(game::DriveLane::Item)) {
         std::uintptr_t seen[16]{};
         std::uint32_t hits[16]{};
         const int n = game::seen_sessions(seen, hits, 16);
