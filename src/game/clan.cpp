@@ -224,6 +224,11 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
         if (!reader.read_value(base + kClanRecordRow, &e.row)) continue;
         reader.read_value(base + kClanRecordNo, &e.merc_no);
         reader.read_value(base + kClanRecordHandle, &e.handle);
+        reader.read_value(base + kClanRecordOwner, &e.owner_row);
+        if (e.owner_row != 0xFFFF) {
+            if (const RosterEntry* o = character_by_row(e.owner_row))
+                e.owner_name = o->display();
+        }
         if (const RosterEntry* r = character_by_row(e.row)) {
             e.key = r->key;
             e.name = r->name;
