@@ -1305,6 +1305,27 @@ int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
     return best;
 }
 
+std::uintptr_t pick_drive_session(const mem::Reader& reader) {
+    std::uintptr_t seen[kSeenCap]{};
+    std::uint32_t hits[kSeenCap]{};
+    const int n = seen_sessions(seen, hits, kSeenCap);
+    if (n == 0) return 0;
+    bool server[kSeenCap]{};
+    bool gate_open[kSeenCap]{};
+    std::uintptr_t gate = 0;
+    for (int i = 0; i < n; ++i) {
+        server[i] = session_is_server(i);
+        // 안전 읽기라 풀린 세션은 여기서 자연히 실패한다.
+        gate_open[i] = gate_object(reader, seen[i], &gate);
+    }
+    const int pick = best_gate_session_index(gate_open, hits, server, n);
+    if (pick < 0) return 0;
+    const std::uintptr_t session = seen[pick];
+    // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
+    if (session != drive_fault_session()) clear_drive_fault();
+    return session;
+}
+
 std::uintptr_t session_actor(int index) {
     if (index < 0 || index >= kSeenCap) return 0;
     return g_sess_actor[index];

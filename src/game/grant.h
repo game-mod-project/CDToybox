@@ -163,6 +163,19 @@ int session_capacity();
 int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
                             const bool* is_server, int n);
 
+// 지급·구동에 쓸 세션을 고른다. 서버 쪽이면서 **게이트가 실제로
+// 풀리는** 것 중 호출 최다. 없으면 0.
+//
+// 세 경로(지급 패널·보관함·동반자)가 저마다 다른 기준으로 골랐고,
+// 그래서 로드 뒤 한쪽만 먹통이 되거나 한쪽만 죽은 세션을 잡았다.
+// 규칙은 하나여야 한다.
+//
+// 게이트 통과가 유일하게 믿을 수 있는 생존 신호다 - 실측 2026-09-10,
+// 인플레이스 로드 직후: 죽은 세션이 session_looks_live 에 "예" 를 줬고
+// freshness 도 통과했다(표 전체가 똑같이 오래되면 '가장 최근 것 대비'
+// 비교가 무의미해진다). 게이트만은 정확히 닫혔다.
+std::uintptr_t pick_drive_session(const mem::Reader& reader);
+
 // 세션마다 게임이 돌려준 액터와 그 클래스. 프레임마다 RTTI 를 푸는
 // 것은 비싸므로 분석 스레드가 한 번 붙여 준다.
 //
