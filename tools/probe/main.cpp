@@ -1429,6 +1429,26 @@ void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
     }
 }
 
+// 플레이어블 캐릭터를 가릴 수 있는지 본다. MercenaryInfo 의
+// `_isPlayable`(+0x22) 이 후보다.
+void cmd_playable(const mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_roster(rt, reader)) { std::printf("로스터 실패\n"); return; }
+    std::printf("지금 조종 중인 캐릭터 행: %u\n",
+                game::main_character_row(reader));
+    std::printf("용병 표 (_isPlayable):\n");
+    for (const auto& m : game::mercenary_catalog()) {
+        std::printf("  행 %2u  타입 %2u  플레이어블 %d  %s\n", m.row,
+                    m.merc_type, m.merc_playable ? 1 : 0, m.name.c_str());
+    }
+    std::printf("\n플레이어블 타입에 속한 캐릭터:\n");
+    for (const auto& e : game::character_catalog()) {
+        if (!e.is_companion()) continue;
+        if (!game::is_playable_merc_row(e.merc_row)) continue;
+        std::printf("  행 %5u  키 %6u  타입행 %2u  %-40s %s\n", e.row, e.key,
+                    e.merc_row, e.name.c_str(), e.label.c_str());
+    }
+}
+
 // 표시 관문 후보들을 전수로 교차 집계한다. "게임 목록에 뜨는 종"의
 // 기준이 무엇인지 관찰이 아니라 숫자로 가리려고 만들었다.
 void cmd_gate(const mem::Rtti& rt, const mem::Reader& reader) {
@@ -3635,6 +3655,7 @@ int main(int argc, char** argv) {
     if (cmd == "clan") { cmd_clan(rt, reader, argc, argv); return 0; }
     if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
     if (cmd == "gate") { cmd_gate(rt, reader); return 0; }
+    if (cmd == "playable") { cmd_playable(rt, reader); return 0; }
     if (cmd == "setspecies") { cmd_setspecies(rt, reader, r, argc, argv); return 0; }
     if (cmd == "unspawn") { cmd_unspawn(rt, reader, r, argc, argv); return 0; }
     if (cmd == "instcount") {

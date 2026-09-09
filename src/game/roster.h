@@ -99,6 +99,14 @@ struct RosterEntry {
     bool spawnable = false;
     // 용병 표 전용.
     std::uint8_t merc_type = 0;  // _mercenaryType
+    // 용병 표 전용. `_isPlayable` (+0x22).
+    //
+    // **"플레이어블 캐릭터"가 아니라 "플레이어가 조종하는가"다** -
+    // 실측 2026-09-09: Mercenary_Main 뿐 아니라 Vehicle_Horse·
+    // Vehicle_Dragon·Vehicle_WarMachine·Vehicle_Special·Vehicle 까지
+    // 전부 1이고, Vehicle_Ship 과 펫·가축·용병은 0이다. 즉 탈것 여부에
+    // 가깝다. 플레이어블 캐릭터는 _mercenaryType 으로 가린다.
+    bool merc_playable = false;
 
     bool is_companion() const { return merc_row != 0xFFFF; }
     // 게임이 목록에 올려 주는 종인가. 종을 고를 때의 기준이다.
@@ -261,5 +269,36 @@ const RosterEntry* character_by_row(std::uint32_t row);
 const std::string& mercenary_type_name(std::uint16_t row);
 // 행 번호 -> _mercenaryType. 모르면 0.
 std::uint8_t mercenary_type_of_row(std::uint16_t row);
+// 그 용병 타입이 **플레이어블 캐릭터**인가.
+//
+// 기준은 `_mercenaryType == 1`(Mercenary_Main)이다. 이름을 박지 않고
+// 데이터로 가리므로 DLC·모드로 늘어도 따라간다. `_isPlayable` 은 탈것도
+// 1이라 이 용도로 못 쓴다(merc_playable 설명).
+bool is_playable_merc_row(std::uint16_t row);
+
+// --- 플레이어블 캐릭터 -------------------------------------------------
+//
+// 실측 2026-09-09. 두 갈래로 갈린다.
+//
+//  1) **주인공 클리프**는 용병 표에 없다(행 0 `Kliff`, _mercenaryInfo
+//     0xFFFF). 그래서 타입으로는 안 잡힌다. 대신 게임이 소유자 판정
+//     (RVA 0x209FE40)에서 쓰는 사슬로 **지금 조종 중인 캐릭터 행**을
+//     읽는다.
+//
+//       전역 0x6C29AF8 (또는 0x6C29B00) -> [+0] -> [+8] -> [+0x28]
+//         -> +0x100 u16 = 캐릭터 행
+//
+//  2) 바꿔 탈 수 있는 나머지는 `_mercenaryType == 1`(Mercenary_Main)이다.
+//     지금 6행: 데미안(3)·웅카(5)·얀(6·7)·나이라(8)·마녀(9). 이름을
+//     박지 않으므로 DLC·모드로 늘어도 따라간다.
+inline constexpr std::uint64_t kSessionGlobalRvaA = 0x6C29AF8;
+inline constexpr std::uint64_t kSessionGlobalRvaB = 0x6C29B00;
+inline constexpr std::size_t kSessionCharRowOff = 0x100;
+
+// 지금 조종 중인 캐릭터의 행. 못 읽으면 0xFFFF.
+std::uint16_t main_character_row(const mem::Reader& reader);
+
+// 그 캐릭터 행이 플레이어블인가 (주인공이거나 Mercenary_Main).
+bool is_playable_character_row(const mem::Reader& reader, std::uint32_t row);
 
 }  // namespace cdtb::game
