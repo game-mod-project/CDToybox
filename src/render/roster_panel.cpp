@@ -77,6 +77,15 @@ double g_clan_last_refresh = 0.0;
 // 기본은 게임이 보여 주는 세 갈래만. 사람 용병·안 보이는 타입을
 // 되돌려야 할 때를 위해 전체 보기를 남긴다.
 bool g_clan_listed_only = true;
+// 그리는 루프 한복판에서 명부를 다시 읽으면 안 된다.
+//
+// 표는 g_roster 항목의 **포인터**를 담아 순회하는데,
+// refresh_clan_roster 가 g_roster 를 통째로 교체해 그 포인터가 전부
+// 무효해진다. 종을 바꾸자마자 해제된 메모리를 읽어 게임이
+// 팀겼다(사용자 증상 2026-09-09).
+//
+// 그래서 표시만 해 두고 **다음 프레임 맨 앞에서** 읽는다.
+bool g_clan_needs_refresh = false;
 // 종 바꾸기 대화상자 상태. 번호가 0이면 닫혀 있다.
 std::uint64_t g_species_no = 0;
 std::uint16_t g_species_type = 0xFFFF;   // 대상의 동반자 타입 행
@@ -116,7 +125,7 @@ bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
     if (game::resolve_species_write(*rtti, g_near_reader, merc_no, &after) &&
         after.server_row == row && after.client_row == row) {
         std::snprintf(g_species_msg, sizeof(g_species_msg), "바꿨습니다 (행 %u)", row);
-        game::refresh_clan_roster(g_near_reader);
+        g_clan_needs_refresh = true;   // 그리는 루프 밖에서 읽는다
         return true;
     }
     std::snprintf(g_species_msg, sizeof(g_species_msg),
@@ -497,7 +506,8 @@ void draw_my_companions_tab() {
         return;
     }
     const double now = ImGui::GetTime();
-    bool refresh = false;
+    bool refresh = g_clan_needs_refresh;
+    g_clan_needs_refresh = false;
     if (ImGui::SmallButton("새로고침")) refresh = true;
     if (now - g_clan_last_refresh > 2.0) refresh = true;
     if (refresh) {
