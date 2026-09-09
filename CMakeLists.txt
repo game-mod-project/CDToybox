@@ -87,6 +87,7 @@ add_library(cdtoybox SHARED
     src/game/player.cpp
     src/game/nofall.cpp
     src/game/specguard.cpp
+    src/game/spawnguard.cpp
     src/game/spec_heal.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
@@ -172,6 +173,7 @@ add_executable(cdtb_probe
     src/game/player.cpp
     src/game/nofall.cpp
     src/game/specguard.cpp
+    src/game/spawnguard.cpp
     src/game/spec_heal.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)

@@ -31,6 +31,7 @@
 #include "game/items.h"
 #include "game/player.h"
 #include "game/specguard.h"
+#include "game/spawnguard.h"
 #include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
@@ -571,6 +572,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
+        cdtb::game::spawnguard_install(reader);
 
         // 획득 뒤처리. 2338 은 명부 레코드에 그 순간의 야생 액터
         // 핸들을 박아 두는데, 그 액터가 사라져도 값은 남아 게임이
