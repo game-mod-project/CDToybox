@@ -25,6 +25,7 @@ constexpr std::size_t kCharMercRow = 0xBE;     // u16 _mercenaryInfo (행 번호
 constexpr std::size_t kCharCatchable = 0x148;  // u8 _isCatchable
 constexpr std::size_t kCharUnique = 0x14B;     // u8 _isUnique
 constexpr std::size_t kCharHirable = 0x156;    // u8 _isHirable
+constexpr std::size_t kCharVehicleLink = 0x16A;  // u16 탈것 표 연결(roster.h)
 
 // 용병 레코드 (실측 2026-09-05)
 constexpr std::size_t kMercType = 0x20;  // u8 _mercenaryType
@@ -182,6 +183,7 @@ bool build_catalog_from_manager(const mem::Reader& reader,
             read_flag(reader, record + kCharCatchable, &entry.catchable);
             read_flag(reader, record + kCharUnique, &entry.unique);
             read_flag(reader, record + kCharHirable, &entry.hirable);
+            reader.read_value(record + kCharVehicleLink, &entry.vehicle_link);
         }
         catalog.push_back(std::move(entry));
     }

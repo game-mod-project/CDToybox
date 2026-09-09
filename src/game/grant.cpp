@@ -285,6 +285,45 @@ std::uintptr_t g_normal_outer[kNormalTraces]{};
 // 성공한 구동과 막힌 구동의 **부르는 자리**를 비교하면 어느 자리가
 // 안전한지 갈린다. 막히면 이 줄이 마지막으로 남으므로 그 자리가
 // 범인이다. 구동할 때만 찍으므로 비용은 없다시피 하다.
+// 실측으로 확인된 **안전한 구동 자리**.
+//
+// 구동 지점(det_actor_getter)은 게임 코드 한복판이라, 그 자리가 이미
+// 락을 쥐고 있으면 게임 함수를 부르는 순간 교착한다. 그러면 게임
+// 로직 스레드가 통째로 멈춰 **저장도 정상 종료도 안 된다**.
+//
+// 자리를 찍어 비교하니 성공과 멈춤이 서로 다른 자리였다
+// (실측 2026-09-09).
+//
+//   성공  +2A0263D +2A2BBBF ...   지급·획득 전부 이 자리
+//   멈춤  +27A95D5 +1041C5B7 ...  이 자리에서 게임이 멈췄다
+//
+// 그래서 확인된 자리에서만 구동한다. 모르는 자리면 이번은
+// 건너뛰고 요청은 그대로 둔다 - 다음에 안전한 자리가 오면 돌아간다.
+// 새 자리를 더 모으려면 건너륐 자리를 로그에서 보고 여기 넣는다.
+constexpr std::uint64_t kGoodDriveSites[] = {0x2A0263D};
+
+// 부르는 자리(모듈 안 첫 프레임)를 낸다. 모르면 0.
+std::uint64_t drive_site_rva() {
+    if (g_reader == nullptr) return 0;
+    void* frames[8]{};
+    const USHORT n = RtlCaptureStackBackTrace(0, 8, frames, nullptr);
+    const std::uintptr_t base = g_reader->module_base();
+    const std::size_t size = g_reader->module_size();
+    for (USHORT i = 0; i < n; ++i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) return a - base;
+    }
+    return 0;
+}
+
+bool drive_site_is_good(std::uint64_t site) {
+    if (site == 0) return false;
+    for (const auto g : kGoodDriveSites) {
+        if (g == site) return true;
+    }
+    return false;
+}
+
 void log_drive_site() {
     if (g_reader == nullptr) return;
     void* frames[8]{};
@@ -505,6 +544,18 @@ bool run_pending_if_any() {
     //
     // 이것이 없으면 g_running 이 영원히 true 로 남아 그 뒤 모든 지급·
     // 획득이 죽고, 게임을 다시 시작하는 수밖에 없었다.
+    // 확인된 자리가 아니면 구동하지 않는다. 요청은 그대로 둔다.
+    const std::uint64_t site = drive_site_rva();
+    if (!drive_site_is_good(site)) {
+        static std::uint64_t s_last_skip = 0;
+        if (s_last_skip != site) {
+            s_last_skip = site;
+            log::infof("구동 건너뜀: 확인되지 않은 자리 +{:X} - 안전한 자리를 기다린다",
+                       site);
+        }
+        g_running.store(false, std::memory_order_release);
+        return false;
+    }
     log_drive_site();
     __try {
         ran = run_one_picked();

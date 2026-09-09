@@ -63,6 +63,13 @@ struct RosterEntry {
     bool hirable = false;
     bool catchable = false;
     bool unique = false;
+    // 탈것(VehicleInfo) 표 연결. 0xFFFF 면 없다.
+    //
+    // **이 값이 없으면 게임 목록 어디에도 안 뜼다** - 실측 2026-09-09:
+    // 낙타(3583)·성체 와이번(4214)은 0xFFFF 이고 탈것·특수·반려동물
+    // 어느 목록에도, 캐릭터 선택창에도 없었다. 사자(3436)는 9,
+    // 새끼 와이번(6608)은 10, Riding_Wyvern_1000(6804)은 9 로 전부 보인다.
+    std::uint16_t vehicle_link = 0xFFFF;
 
     // 게임의 소환 표에 이 키가 있는가. 캐릭터 표 전용.
     // 소환 치트(2988)가 키를 이 표에서 찾고, 없으면 오류를 낸다.
@@ -71,6 +78,8 @@ struct RosterEntry {
     std::uint8_t merc_type = 0;  // _mercenaryType
 
     bool is_companion() const { return merc_row != 0xFFFF; }
+    // 게임이 목록에 올려 주는 종인가. 종을 고를 때의 기준이다.
+    bool listable() const { return is_companion() && vehicle_link != 0xFFFF; }
 };
 
 // ----------------------------------------------------------------------

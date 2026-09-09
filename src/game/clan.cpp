@@ -224,6 +224,13 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
         if (!reader.read_value(base + kClanRecordRow, &e.row)) continue;
         reader.read_value(base + kClanRecordNo, &e.merc_no);
         reader.read_value(base + kClanRecordHandle, &e.handle);
+        // +0x30~+0x4F 에 뭐라도 남아 있으면 야생 획득분이다(clan.h 설명).
+        std::uint8_t tail[0x20]{};
+        if (reader.read(base + 0x30, tail, sizeof(tail))) {
+            for (unsigned char b : tail) {
+                if (b != 0) { e.wild_origin = true; break; }
+            }
+        }
         if (const RosterEntry* r = character_by_row(e.row)) {
             e.key = r->key;
             e.name = r->name;

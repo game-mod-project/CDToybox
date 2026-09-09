@@ -52,6 +52,17 @@ struct ClanEntry {
     std::string label;            // 인게임 표시명
     std::uint16_t merc_row = 0xFFFF;  // 동반자 타입 행
 
+    // 레코드 +0x30~+0x4F 에 값이 남아 있는가.
+    //
+    // 근처 획득(2338)으로 야생 개체를 들이면 그 개체의 값(float 여럿)이
+    // 여기 남는다. 부적·정상 경로로 들어온 레코드는 전부 0 이다.
+    //
+    // **종을 바꿀 때 이게 차있으면 소환이 게임을 죽인다** - 실측
+    // 2026-09-09: 야생 성체 와이번을 획득해 Riding_Wyvern_1000 으로
+    // 바꾸니 목록에는 떴는데 고르자 팀겼고, 같은 종으로 바꾸더라도
+    // 부적로 얻은 Riding_Bear_1001(이 구간이 0)은 소환·탑승까지 잘 됐다.
+    bool wild_origin = false;
+
     bool spawned() const { return handle != 0; }
     const std::string& display() const { return label.empty() ? name : label; }
 };
