@@ -16,7 +16,9 @@
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/roster.h"
+#include "render/colors.h"
 #include "render/layout.h"
+#include "render/notice.h"
 
 namespace cdtb::render {
 namespace {
@@ -66,15 +68,15 @@ const CompanionItem kCompanionItems[] = {
     {1001784, "새끼 고슴도치", "미상", "동반자인지조차 확인 안 됨", false},
 };
 
-double g_item_busy_until = 0.0;
-const char* g_item_busy_why = "";
-int g_tab = 0;  // 0=동반자, 1=근처, 2=탈것, 3=용병 타입, 4=캐릭터
+Notice g_item_notice;   // 동반자 아이템 탭의 지급 결과
+// 탭. 값은 탭 선언 순서와 무관하다 - switch 로만 쓴다.
+enum class RosterTab { Companion, Nearby, Vehicle, MercType, Character, Items, Mine };
+RosterTab g_tab = RosterTab::Companion;
 bool g_near_companion_only = true;
 // 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
 // 대부분 NPC·몬스터·시체라 고를 이유가 없다.
 double g_near_last_refresh = 0.0;
-double g_near_busy_until = 0.0;   // 요청을 못 받았다고 알리는 시각
-const char* g_near_busy_why = "";  // 왜 못 받았는지
+Notice g_near_notice;   // 근처 탭의 획득 요청 결과
 mem::LocalReader g_near_reader;
 double g_clan_last_refresh = 0.0;
 // 기본은 게임이 보여 주는 세 갈래만. 사람 용병·안 보이는 타입을
@@ -98,7 +100,8 @@ char g_species_query[64] = "";
 // 이유를 알 수 없다 - 사용자가 새끼 와이번을 못 찾은 것이
 // 이 기본값 때문이었다(2026-09-09).
 bool g_species_same_type = false;
-char g_species_msg[160] = "";
+Notice g_species_notice;   // 종 바꾸기 팝업의 결과
+int g_species_pick = -1;   // 팝업에서 고른 행. 음수면 없음
 std::size_t g_species_hits = 0;
 
 // 종을 바꿔 쓴다. 주소는 그 자리에서 다시 찾는다 - 들고 있다가 쓰면
@@ -106,13 +109,13 @@ std::size_t g_species_hits = 0;
 bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
     const mem::Rtti* rtti = game::clan_rtti();
     if (rtti == nullptr) {
-        std::snprintf(g_species_msg, sizeof(g_species_msg), "RTTI 준비 전입니다");
+        notice_set(&g_species_notice, NoticeLevel::Bad, "RTTI 준비 전입니다");
         return false;
     }
     game::SpeciesWriteTarget t;
     if (!game::resolve_species_write(*rtti, g_near_reader, merc_no, &t)) {
-        std::snprintf(g_species_msg, sizeof(g_species_msg),
-                      "자리를 못 찾았습니다 - 월드 안인지 보세요");
+        notice_set(&g_species_notice, NoticeLevel::Bad,
+                   "자리를 못 찾았습니다 - 월드 안인지 보세요");
         return false;
     }
     // 게임 상태를 바꾸는 일은 **반드시 로그에 남긴다.**
@@ -131,18 +134,18 @@ bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
     // 그대로다(실측 2026-09-09).
     if (!mem::safe_write_bytes(t.server, buf, 2) ||
         !mem::safe_write_bytes(t.client, buf, 2)) {
-        std::snprintf(g_species_msg, sizeof(g_species_msg), "쓰기 실패");
+        notice_set(&g_species_notice, NoticeLevel::Bad, "쓰기 실패");
         return false;
     }
     game::SpeciesWriteTarget after;
     if (game::resolve_species_write(*rtti, g_near_reader, merc_no, &after) &&
         after.server_row == row && after.client_row == row) {
-        std::snprintf(g_species_msg, sizeof(g_species_msg), "바꿨습니다 (행 %u)", row);
+        notice_set(&g_species_notice, NoticeLevel::Ok, "바꿨습니다 (행 {})", row);
         g_clan_needs_refresh = true;   // 그리는 루프 밖에서 읽는다
         return true;
     }
-    std::snprintf(g_species_msg, sizeof(g_species_msg),
-                  "쓴 뒤 확인이 어긋났습니다 - 다시 보세요");
+    notice_set(&g_species_notice, NoticeLevel::Bad,
+               "쓴 뒤 확인이 어긋났습니다 - 다시 보세요");
     return false;
 }
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
@@ -349,15 +352,11 @@ void draw_companion_tab() {
 // 메모리를 읽는 것은 여기서 2초에 한 번 또는 버튼을 눌렀을 때뿐이다.
 // 동반자를 주는 아이템을 지급한다. 지급은 이미 검증된 경로다.
 void draw_companion_item_tab() {
-    const double now = ImGui::GetTime();
     ImGui::TextDisabled(
         "\"실측\"은 실제로 되는 것을 본 줄입니다. \"미확인\"은 이름만 보고 "
         "모은 것이라 동반자 아이템인지도 모릅니다 - 지급해서 확인해 "
         "보세요.");
-    if (now < g_item_busy_until) {
-        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s",
-                           g_item_busy_why);
-    }
+    notice_draw(g_item_notice);
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY;
@@ -399,11 +398,14 @@ void draw_companion_item_tab() {
             const bool queued =
                 sess != 0 &&
                 game::request_give(sess, it.key, 1, game::GiveExtras{});
-            g_item_busy_until = now + 3.0;
-            g_item_busy_why =
-                queued ? "지급 요청을 걸었습니다 - 인벤토리를 확인하세요"
-                       : (sess == 0 ? "살아 있는 서버 세션이 없습니다"
-                                    : "요청이 밀렸습니다 - 잠시 뒤 다시");
+            if (queued) {
+                notice_set(&g_item_notice, NoticeLevel::Ok,
+                           "지급 요청을 걸었습니다 - 인벤토리를 확인하세요");
+            } else {
+                notice_set(&g_item_notice, NoticeLevel::Warn, "{}",
+                           sess == 0 ? "살아 있는 서버 세션이 없습니다"
+                                     : "요청이 밀렸습니다 - 잠시 뒤 다시");
+            }
         }
         ImGui::PopID();
     }
@@ -413,13 +415,13 @@ void draw_companion_item_tab() {
 // 동반자 레인의 구동 상태. 누른 자리에서 보여 줘야 오해가 없다.
 void draw_companion_drive_gate() {
     if (game::drive_point_dead()) {
-        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+        ImGui::TextColored(col::kBad,
                            "구동 지점이 게임 안에서 멈췄습니다 - "
                            "게임을 다시 시작해야 지급·획득이 동작합니다");
     }
     const game::DriveGate g = game::drive_gate_state(game::DriveLane::Companion);
-    const ImVec4 warn(0.9f, 0.8f, 0.3f, 1.0f);
-    const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
+    const ImVec4 warn = col::kWarn;
+    const ImVec4 bad = col::kBad;
     const bool stuck = g.pending && g.pending_age_ms > 30000;
     if (g.running) {
         ImGui::TextColored(warn, "구동 중: 게임 스레드가 %.1f초째 안 돌아왔습니다",
@@ -453,17 +455,15 @@ void draw_species_popup() {
     ImGui::Checkbox("같은 타입만", &g_species_same_type);
     if (!g_species_same_type) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
-                           "타입을 넘는 교체도 됩니다 - 펫→특수 탑승물 확인됨");
+        ImGui::TextDisabled(
+            "타입을 넘는 교체도 됩니다 - 펫→특수 탑승물 확인됨");
     }
     ImGui::SetNextItemWidth(260);
     ImGui::InputTextWithHint("##species_q", "이름 또는 내부 이름(예 Wyvern)으로 거르기", g_species_query,
                              sizeof(g_species_query));
     ImGui::SameLine();
     ImGui::TextDisabled("후보 %zu개", g_species_hits);
-    if (g_species_msg[0] != 0) {
-        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "%s", g_species_msg);
-    }
+    notice_draw(g_species_notice);
     const ImGuiTableFlags f = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_BordersInnerV;
     if (ImGui::BeginTable("species_pick", 5, f, ImVec2(620, 320))) {
@@ -502,8 +502,11 @@ void draw_species_popup() {
                 ImGui::TableSetColumnIndex(0);
                 char rl[32];
                 std::snprintf(rl, sizeof(rl), "%u##pick%d", c->row, k);
-                if (ImGui::Selectable(rl, false, ImGuiSelectableFlags_SpanAllColumns)) {
-                    apply_species(g_species_no, static_cast<std::uint16_t>(c->row));
+                // 줄 클릭은 고르기만 한다. 수천 줄에서 오클릭 한 번이 곧
+                // 게임 메모리 쓰기였다 - 적용은 아래 버튼이 한다.
+                if (ImGui::Selectable(rl, static_cast<int>(c->row) == g_species_pick,
+                                      ImGuiSelectableFlags_SpanAllColumns)) {
+                    g_species_pick = static_cast<int>(c->row);
                 }
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextUnformatted(c->label.empty() ? "-" : c->label.c_str());
@@ -534,6 +537,28 @@ void draw_species_popup() {
             }
         }
         ImGui::EndTable();
+    }
+    const game::RosterEntry* pick =
+        g_species_pick >= 0
+            ? game::character_by_row(static_cast<std::uint16_t>(g_species_pick))
+            : nullptr;
+    if (pick != nullptr) {
+        ImGui::Text("선택: %s (행 %d)",
+                    pick->label.empty() ? pick->name.c_str() : pick->label.c_str(),
+                    g_species_pick);
+    } else {
+        ImGui::TextDisabled("줄을 눌러 고르세요");
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(pick == nullptr);
+    if (ImGui::Button("바꾸기 적용")) {
+        apply_species(g_species_no, static_cast<std::uint16_t>(g_species_pick));
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("명부 레코드의 종을 그 자리에서 고쳐 씁니다.\n"
+                          "저장·리로드에 남습니다.\n"
+                          "되돌리려면 원래 종으로 다시 바꾸세요.");
     }
     ImGui::EndPopup();
 }
@@ -578,13 +603,13 @@ void draw_my_companions_tab() {
     }
     char lb[48];
     ImGui::SameLine();
-    std::snprintf(lb, sizeof(lb), "용병대원 (%zu)", n_people);
+    std::snprintf(lb, sizeof(lb), "용병대원 (%zu)###clan_people", n_people);
     ImGui::Checkbox(lb, &show_people);
     ImGui::SameLine();
-    std::snprintf(lb, sizeof(lb), "탈것·펫 (%zu)", n_mount);
+    std::snprintf(lb, sizeof(lb), "탈것·펫 (%zu)###clan_mount", n_mount);
     ImGui::Checkbox(lb, &show_mount);
     ImGui::SameLine();
-    std::snprintf(lb, sizeof(lb), "시스템 (%zu)", n_system);
+    std::snprintf(lb, sizeof(lb), "시스템 (%zu)###clan_system", n_system);
     ImGui::Checkbox(lb, &show_system);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
@@ -709,9 +734,14 @@ void draw_my_companions_tab() {
                 g_species_no = e->merc_no;
                 g_species_type = e->merc_row;
                 g_species_query[0] = 0;
-                g_species_msg[0] = 0;
-                g_species_same_type = false;
+                g_species_pick = -1;
+                notice_clear(&g_species_notice);
                 ImGui::OpenPopup("종 바꾸기");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("명부 레코드의 종을 그 자리에서 고쳐 씁니다.\n"
+                                  "저장·리로드에 남습니다.\n"
+                                  "되돌리려면 원래 종으로 다시 바꾸세요.");
             }
             draw_species_popup();
             ImGui::PopID();
@@ -764,12 +794,12 @@ void draw_nearby_tab() {
     const game::SpawnWorkResult sr = game::last_spawn_work();
     if (sr.valid && sr.code != 0) {
         if (sr.code == game::kSpawnCooldownCode) {
-            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
+            ImGui::TextColored(col::kWarn,
                                "소환 거부 (번호 %llu) - 소환 쿨타임으로 보입니다. "
                                "잠시 뒤 다시 시도하세요",
                                static_cast<unsigned long long>(sr.merc_no));
         } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+            ImGui::TextColored(col::kWarn,
                                "소환 거부 (번호 %llu) 코드 0x%08X",
                                static_cast<unsigned long long>(sr.merc_no),
                                sr.code);
@@ -783,12 +813,10 @@ void draw_nearby_tab() {
 
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).
-    if (g_near_busy_until > now) {
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "%s", g_near_busy_why);
-    }
+    notice_draw(g_near_notice);
     // 죽은 세션은 잠긴다. 왜 눌러도 안 되는지 화면에 그대로 쓴다.
     if (game::drive_fault_session() != 0) {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f),
+        ImGui::TextColored(col::kBad,
                            "구동이 게임 안에서 죽어 세션을 잠갔습니다. "
                            "월드를 다시 들어가면 풀립니다.");
     }
@@ -796,10 +824,10 @@ void draw_nearby_tab() {
     const game::HireWorkResult hr = game::last_hire_work();
     if (hr.valid) {
         if (hr.code == 0) {
-            ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f),
+            ImGui::TextColored(col::kOk,
                                "최근 획득 0x%08X: 성공", hr.handle);
         } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+            ImGui::TextColored(col::kWarn,
                                "최근 획득 0x%08X: 거부 (코드 0x%08X)", hr.handle,
                                hr.code);
         }
@@ -876,7 +904,7 @@ void draw_nearby_tab() {
                 // 코드 0x97AE29C9 를 보기 전에 표에서 구분한다
                 // (실측 2026-09-09, 근거는 game/actors.h 설명).
                 if (a->owned()) {
-                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "소유");
+                    ImGui::TextColored(col::kWarn, "소유");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
                             "이미 임자가 있는 개체입니다 (고용주 핸들 0x%08X).\n"
@@ -899,31 +927,36 @@ void draw_nearby_tab() {
                     const bool queued =
                         sess != 0 && game::request_hire_target(sess, a->handle, 0);
                     if (!queued) {
-                        g_near_busy_until = now + 3.0;
-                        if (sess == 0) {
-                            g_near_busy_why =
-                                "살아 있는 서버 세션이 없습니다 - 월드에 "
-                                "들어가서 잠시 기다리세요";
-                        } else if (sess == game::drive_fault_session()) {
-                            g_near_busy_why = "세션이 잠겨 있습니다";
-                        } else {
-                            g_near_busy_why =
-                                "요청이 밀렸습니다 - 앞의 작업이 끝나면 "
-                                "다시 누르세요";
-                        }
+                        notice_set(&g_near_notice, NoticeLevel::Warn, "{}",
+                                   sess == 0
+                                       ? "살아 있는 서버 세션이 없습니다 - 월드에 "
+                                         "들어가서 잠시 기다리세요"
+                                   : sess == game::drive_fault_session()
+                                       ? "세션이 잠겨 있습니다"
+                                       : "요청이 밀렸습니다 - 앞의 작업이 끝나면 "
+                                         "다시 누르세요");
                     }
                 }
                 ImGui::EndDisabled();
-                if (ImGui::IsItemHovered() && !can && a->owned()) {
-                    ImGui::SetTooltip(
-                        "이미 임자가 있어 등록되지 않습니다.\n"
-                        "게임이 코드 0x97AE29C9 로 거부하는 자리입니다.");
-                }
-                if (ImGui::IsItemHovered() && can) {
-                    ImGui::SetTooltip(
-                        "이 개체를 동반자로 등록합니다.\n"
-                        "소환이 안 되면 게임의 소환 쿨타임입니다.\n"
-                        "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
+                // 비활성 버튼은 AllowWhenDisabled 가 없으면 hover 가 false 라
+                // 툴팁이 절대 안 떴다. 막힌 이유별로 가른다.
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    if (can) {
+                        ImGui::SetTooltip(
+                            "이 개체를 동반자로 등록합니다.\n"
+                            "소환이 안 되면 게임의 소환 쿨타임입니다.\n"
+                            "되돌리려면 게임의 반려동물 풀어주기를 쓰세요.");
+                    } else if (a->owned()) {
+                        ImGui::SetTooltip(
+                            "이미 임자가 있어 등록되지 않습니다.\n"
+                            "게임이 코드 0x97AE29C9 로 거부하는 자리입니다.");
+                    } else if (!a->is_companion()) {
+                        ImGui::SetTooltip("동반자로 등록할 수 있는 종이 아닙니다.");
+                    } else if (a->handle == 0) {
+                        ImGui::SetTooltip("액터 핸들이 아직 없습니다 - 잠시 뒤 다시 보세요.");
+                    } else {
+                        ImGui::SetTooltip("획득 경로가 아직 준비되지 않았습니다.");
+                    }
                 }
                 ImGui::TableSetColumnIndex(9);
                 // 거두기(2386): 알에서 깬 개체를 거두는 경로다. 야생 개체를
@@ -939,10 +972,9 @@ void draw_nearby_tab() {
                     const bool queued =
                         sess != 0 && game::request_catch(sess, a->handle, 0);
                     if (!queued) {
-                        g_near_busy_until = now + 3.0;
-                        g_near_busy_why =
-                            sess == 0 ? "살아 있는 서버 세션이 없습니다"
-                                      : "요청이 밀렸습니다 - 잠시 뒤 다시";
+                        notice_set(&g_near_notice, NoticeLevel::Warn, "{}",
+                                   sess == 0 ? "살아 있는 서버 세션이 없습니다"
+                                             : "요청이 밀렸습니다 - 잠시 뒤 다시");
                     }
                 }
                 ImGui::EndDisabled();
@@ -1028,13 +1060,13 @@ void draw_roster_panel(bool* open) {
         "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
 
     if (ImGui::BeginTabBar("roster_tabs")) {
-        if (ImGui::BeginTabItem("동반자")) { g_tab = 0; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("근처")) { g_tab = 1; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("탈것")) { g_tab = 2; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("용병 타입")) { g_tab = 3; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("캐릭터")) { g_tab = 4; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("내 동반자")) { g_tab = 6; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("동반자 아이템")) { g_tab = 5; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("동반자")) { g_tab = RosterTab::Companion; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("근처")) { g_tab = RosterTab::Nearby; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("탈것")) { g_tab = RosterTab::Vehicle; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("용병 타입")) { g_tab = RosterTab::MercType; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("캐릭터")) { g_tab = RosterTab::Character; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("내 동반자")) { g_tab = RosterTab::Mine; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("동반자 아이템")) { g_tab = RosterTab::Items; ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 
@@ -1046,12 +1078,14 @@ void draw_roster_panel(bool* open) {
     // 파괴적이다(specs/2026-09-04-game-update-break.md). 동반자 소환·획득의
     // 설계는 specs/2026-09-05-companion-summon-acquire-design.md.
     switch (g_tab) {
-        case 0: draw_companion_tab(); break;
-        case 1: draw_nearby_tab(); break;
-        case 5: draw_companion_item_tab(); break;
-        case 6: draw_my_companions_tab(); break;
-        case 2: draw_list_tab(game::vehicle_catalog(), false); break;
-        case 3:
+        case RosterTab::Companion: draw_companion_tab(); break;
+        case RosterTab::Nearby: draw_nearby_tab(); break;
+        case RosterTab::Items: draw_companion_item_tab(); break;
+        case RosterTab::Mine: draw_my_companions_tab(); break;
+        case RosterTab::Vehicle:
+            draw_list_tab(game::vehicle_catalog(), false);
+            break;
+        case RosterTab::MercType:
             if (game::mercenary_catalog().empty()) {
                 ImGui::TextDisabled("용병 타입 표를 못 찾았습니다.");
             } else {
