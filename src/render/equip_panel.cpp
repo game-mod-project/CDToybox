@@ -13,6 +13,7 @@
 #include "game/items.h"
 #include "mem/reader.h"
 #include "render/gem_picker.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 namespace {
@@ -112,8 +113,7 @@ void draw_dye_popup(const mem::Reader& reader,
 }  // namespace
 
 void draw_equip_panel(bool* open) {
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 420.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("장비 소켓 · 연마 · 염색", open)) {
+    if (!begin_window(Win::Equip, open)) {
         ImGui::End();
         return;
     }

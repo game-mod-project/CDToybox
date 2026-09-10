@@ -14,6 +14,7 @@
 #include "render/icon_atlas.h"
 #include "render/gem_picker.h"
 #include "render/item_style.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 namespace {
@@ -345,9 +346,7 @@ unsigned int grant_sharpness() {
 }
 
 void draw_grant_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(1180, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("아이템 지급", open)) {
+    if (!begin_window(Win::Grant, open)) {
         ImGui::End();
         return;
     }

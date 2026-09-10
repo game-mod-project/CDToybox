@@ -15,6 +15,7 @@
 #include "render/filter_bar.h"
 #include "render/gates.h"
 #include "render/icon_atlas.h"
+#include "render/layout.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -137,12 +138,7 @@ void apply_sort_specs() {
 }  // namespace
 
 void draw_item_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(400, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
-    // 너무 좁히면 표가 읽히지 않는다. 아래로는 못 내려가게 막는다.
-    ImGui::SetNextWindowSizeConstraints(ImVec2(430.0f, 240.0f),
-                                        ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("아이템 목록", open)) {
+    if (!begin_window(Win::Items, open)) {
         ImGui::End();
         return;
     }

@@ -16,6 +16,7 @@
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/roster.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 namespace {
@@ -1013,8 +1014,7 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
 }  // namespace
 
 void draw_roster_panel(bool* open) {
-    ImGui::SetNextWindowSize(ImVec2(560, 520), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("탈것 · 용병 · 캐릭터", open)) {
+    if (!begin_window(Win::Roster, open)) {
         ImGui::End();
         return;
     }

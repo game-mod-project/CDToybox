@@ -17,6 +17,7 @@
 #include "game/item_view.h"
 #include "game/stash.h"
 #include "render/grant_panel.h"
+#include "render/layout.h"
 #include "render/overlay.h"
 #include "render/stash_panel.h"
 #include "render/item_style.h"
@@ -474,9 +475,7 @@ void draw_socket_cap() {
 }  // namespace
 
 void draw_inventory_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(400, 600), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(680.0f, 420.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("인벤토리", open)) {
+    if (!begin_window(Win::Inventory, open)) {
         ImGui::End();
         return;
     }

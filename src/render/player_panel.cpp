@@ -5,12 +5,12 @@
 #include "game/nofall.h"
 #include "game/player.h"
 #include "mem/reader.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 
 void draw_player_panel(bool* open) {
-    ImGui::SetNextWindowSize(ImVec2(320.0f, 220.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("플레이어 치트", open)) {
+    if (!begin_window(Win::Player, open)) {
         ImGui::End();
         return;
     }

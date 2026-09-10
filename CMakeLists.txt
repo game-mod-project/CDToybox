@@ -76,6 +76,8 @@ add_library(cdtoybox SHARED
     src/render/confirm_state.cpp
     src/render/confirm.cpp
     src/render/gates.cpp
+    src/render/layout_table.cpp
+    src/render/layout.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -132,6 +134,7 @@ add_executable(cdtb_tests
     tests/actors_tests.cpp
     tests/image_dump_tests.cpp
     tests/ui_state_tests.cpp
+    tests/layout_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp
@@ -146,6 +149,7 @@ add_executable(cdtb_tests
     src/game/clan.cpp
     src/render/notice_state.cpp
     src/render/confirm_state.cpp
+    src/render/layout_table.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)

@@ -19,6 +19,7 @@
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
 #include "render/icon_atlas.h"
+#include "render/layout.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
 #include "render/item_panel.h"
@@ -354,52 +355,51 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 // 창마다 ✕ 를 달아 치울 수 있게 했으면, **다시 여는 자리**가 반드시
 // 있어야 한다. 없으면 한 번 닫은 창은 영영 못 본다. 그 자리가 본창
 // 이고, 그래서 본창은 닫히지 않는다.
-struct WindowFlags {
-    bool items = true;
-    bool grant = true;
-    bool stash = true;
-    bool inventory = true;
-    bool roster = false;   // 탈것·용병·캐릭터 뷰어. 필요할 때 연다
-    bool equip = false;    // 장비 소켓/연마 에디터. 필요할 때 연다
-    bool player = false;   // 플레이어 치트(Godmode 등). 필요할 때 연다
-    bool camera = false;   // 개발 진단이다. 필요할 때만 연다
-};
-WindowFlags g_show;
+// 켜 둔 창. 초기값은 배치 표의 default_open 이다.
+bool g_show[cdtb::render::kWinCount] = {};
+bool g_show_inited = false;
+
+bool& shown(cdtb::render::Win w) {
+    return g_show[static_cast<int>(w)];
+}
+
+void init_show_flags() {
+    if (g_show_inited) return;
+    for (const auto& s : cdtb::render::window_specs()) shown(s.id) = s.default_open;
+    g_show_inited = true;
+}
 
 // 켜 둔 창만 그린다. ✕ 를 누르면 ImGui 가 플래그를 내려 주므로
 // 다음 프레임부터 안 그린다.
 void draw_windows() {
-    if (g_show.items) cdtb::render::draw_item_panel(&g_show.items);
-    if (g_show.grant) cdtb::render::draw_grant_panel(&g_show.grant);
-    if (g_show.stash) cdtb::render::draw_stash_panel(&g_show.stash);
-    if (g_show.inventory) {
-        cdtb::render::draw_inventory_panel(&g_show.inventory);
+    using cdtb::render::Win;
+    if (shown(Win::Items)) cdtb::render::draw_item_panel(&shown(Win::Items));
+    if (shown(Win::Grant)) cdtb::render::draw_grant_panel(&shown(Win::Grant));
+    if (shown(Win::Stash)) cdtb::render::draw_stash_panel(&shown(Win::Stash));
+    if (shown(Win::Inventory)) {
+        cdtb::render::draw_inventory_panel(&shown(Win::Inventory));
     }
-    if (g_show.roster) cdtb::render::draw_roster_panel(&g_show.roster);
-    if (g_show.equip) cdtb::render::draw_equip_panel(&g_show.equip);
-    if (g_show.player) cdtb::render::draw_player_panel(&g_show.player);
-    if (g_show.camera) cdtb::render::draw_camera_panel(&g_show.camera);
+    if (shown(Win::Roster)) cdtb::render::draw_roster_panel(&shown(Win::Roster));
+    if (shown(Win::Equip)) cdtb::render::draw_equip_panel(&shown(Win::Equip));
+    if (shown(Win::Player)) cdtb::render::draw_player_panel(&shown(Win::Player));
+    if (shown(Win::Camera)) cdtb::render::draw_camera_panel(&shown(Win::Camera));
 }
 
 void draw_ui() {
-    ImGui::SetNextWindowPos(ImVec2(60, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 260), ImGuiCond_FirstUseEver);
-    ImGui::Begin("CDToybox");
+    init_show_flags();
+    cdtb::render::begin_window(cdtb::render::Win::Main, nullptr);
 
     // 창 목록이 먼저다. 예전에는 FPS 와 개발 진단이 본창의 전부라,
-    // 무슨 창이 있는지 알 방법이 아예 없었다.
+    // 무슨 창이 있는지 알 방법이 아예 없었다. 글자는 배치 표의 label 이라
+    // 창 제목과 어긋날 수 없다. 2열 격자.
     ImGui::TextUnformatted("창");
-    ImGui::Checkbox("아이템 목록", &g_show.items);
-    ImGui::SameLine();
-    ImGui::Checkbox("아이템 지급", &g_show.grant);
-    ImGui::Checkbox("보관함", &g_show.stash);
-    ImGui::SameLine();
-    ImGui::Checkbox("인벤토리", &g_show.inventory);
-    ImGui::Checkbox("탈것·용병·캐릭터", &g_show.roster);
-    ImGui::Checkbox("장비 소켓·연마", &g_show.equip);
-    ImGui::SameLine();
-    ImGui::Checkbox("플레이어 치트", &g_show.player);
-    ImGui::Checkbox("카메라 분석", &g_show.camera);
+    int n = 0;
+    for (const auto& s : cdtb::render::window_specs()) {
+        if (s.id == cdtb::render::Win::Main) continue;
+        if ((n & 1) == 1) ImGui::SameLine(190.0f);
+        ImGui::Checkbox(s.label, &shown(s.id));
+        ++n;
+    }
 
     ImGui::Separator();
     ImGui::TextDisabled("Insert 토글 · End 비활성화 · F9 프리카메라");
@@ -467,6 +467,11 @@ using namespace detail;
 void set_config(const Config& cfg, const std::wstring& ini_path) {
     g_cfg = cfg;
     g_ini_path = ini_path;
+}
+
+void show_window(cdtb::render::Win w) {
+    init_show_flags();
+    shown(w) = true;
 }
 
 std::vector<Config::SocketCapPart> socket_cap_setting() {
