@@ -16,8 +16,11 @@
 #include "game/items.h"
 #include "game/item_view.h"
 #include "game/stash.h"
+#include "render/colors.h"
+#include "render/confirm.h"
 #include "render/grant_panel.h"
 #include "render/layout.h"
+#include "render/notice.h"
 #include "render/overlay.h"
 #include "render/stash_panel.h"
 #include "render/item_style.h"
@@ -57,6 +60,7 @@ std::vector<Row> g_rows;
 // 판이 바뀌면 자동으로 다시 읽어 '(순번 N)' 이 이름으로 채워진다.
 const void* g_rows_cat_ptr = nullptr;
 std::string g_status = "아직 안 읽었습니다";
+Notice g_notice;   // 마지막 동작 결과. g_status 는 상태(가방·개수)만
 
 // 컴포넌트가 생기기를 기다리는 중인가. 생기는 순간 스스로 읽는다.
 // 참으로 시작한다 - 창을 처음 열면 아무 버튼도 안 누르고 내용이
@@ -331,7 +335,7 @@ std::vector<game::SocketCapRule> rules_from_ui() {
 // 부위는 (분류 +0xA3, 장비타입 +0x42) 쌍이다 - 분류만으로는 갑옷과 망토가
 // 안 갈린다. 근거: specs/2026-09-07-socket-grant-unlock-research.md 9·10절.
 void draw_socket_cap() {
-    if (!ImGui::CollapsingHeader("소켓 상한 (실험)")) return;
+    if (!ImGui::CollapsingHeader("소켓 상한")) return;
     ImGui::Indent();
 
     if (g_parts.empty() || g_parts_cat_ptr != game::item_catalog().data()) {
@@ -339,8 +343,7 @@ void draw_socket_cap() {
     }
 
     if (game::socket_cap_active()) {
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
-                           "걸려 있습니다 - 부위 %zu개",
+        ImGui::TextColored(col::kOk, "걸려 있습니다 - 부위 %zu개",
                            game::socket_cap_rules().size());
     } else {
         ImGui::TextDisabled("안 걸려 있습니다 (아이템표 원래 값)");
@@ -508,6 +511,7 @@ void draw_inventory_panel(bool* open) {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_status.c_str());
+    notice_draw(g_notice);
 
     // 컴포넌트·대응표·이름이 다 준비될 때까지 로딩을 보여 준다. 이름은
     // 현지화 후에야 채워지므로 그 전에는 '(순번 N)' 만 나온다. 진행
@@ -523,7 +527,7 @@ void draw_inventory_panel(bool* open) {
                                : !game::item_ids_ready()
                                      ? "아이템 대응표를 읽는 중"
                                      : "아이템 이름 불러오는 중";
-        ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "%s%s", what, dots);
+        ImGui::TextColored(col::kBusy, "%s%s", what, dots);
         ImGui::TextWrapped(
             "월드 진입 후 자동으로 채워집니다 (보통 5~10초, 상황에 따라 더 "
             "걸릴 수 있습니다). 이 표시가 사라지지 않고 계속 남아 있으면 "
@@ -542,11 +546,13 @@ void draw_inventory_panel(bool* open) {
     draw_filter_bar(&g_bar, g_opts);   // 매 프레임 거르므로 반환값은 안 쓴다
     const game::ItemFilter filter = to_filter(g_bar, g_opts);
 
-    // 표에 바깥 창 스크롤이 생기지 않도록 아래 안내문 두 줄만큼 높이를
+    // 표에 바깥 창 스크롤이 생기지 않도록 아래 안내문 줄 수만큼 높이를
     // 남기고, 표가 그 안에서 스스로 스크롤하게 한다. 필터·헤더는 위에,
-    // 안내문은 아래에 늘 보이고 목록만 표 안에서 움직인다.
+    // 안내문은 아래에 늘 보이고 목록만 표 안에서 움직인다. 보관함 세트를
+    // 안 펼쳐 둔 동안은 안내가 한 줄 더 붙어 세 줄이다.
     const float inv_footer_h =
-        ImGui::GetTextLineHeightWithSpacing() * 2.0f +
+        ImGui::GetTextLineHeightWithSpacing() *
+            (stash_open_set() < 0 ? 3.0f : 2.0f) +
         ImGui::GetStyle().ItemSpacing.y;
     if (ImGui::BeginTable("inv", 8,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -650,14 +656,17 @@ void draw_inventory_panel(bool* open) {
             if (r.record != 0 && r.open_sockets < game::kSocketSlotMax &&
                 (r.table_cap > 0 || r.open_sockets > 0)) {
                 ImGui::SameLine();
-                if (ImGui::SmallButton("소켓 5칸")) {
+                if (confirm_small_button("소켓 5칸")) {
                     const mem::LocalReader rd;
                     const int n = game::socket_unlock_record(
                         rd, r.record, static_cast<int>(game::kSocketSlotMax));
                     if (n > 0) {
+                        notice_set(&g_notice, NoticeLevel::Ok,
+                                   "소켓 {}칸을 열었습니다", n);
                         refresh(rd);
                     } else {
-                        g_status = "소켓을 열지 못했습니다";
+                        notice_set(&g_notice, NoticeLevel::Bad,
+                                   "소켓을 열지 못했습니다");
                     }
                 }
                 if (ImGui::IsItemHovered()) {
@@ -665,7 +674,8 @@ void draw_inventory_panel(bool* open) {
                         "잠긴 칸을 엽니다 (지금 %u칸).\n"
                         "박힌 보석은 그대로 둡니다.\n"
                         "표 상한이 %u 라 툴팁에는 그만큼만 보입니다"
-                        " - '소켓 상한' 도 올리세요.",
+                        " - '소켓 상한' 도 올리세요.\n"
+                        "게임 세이브에 남고 되돌릴 수 없습니다.",
                         r.open_sockets, r.table_cap);
                 }
             }
@@ -678,8 +688,9 @@ void draw_inventory_panel(bool* open) {
         ImGui::TextDisabled("보관함에 담으려면 보관함 창에서 세트를 먼저"
                             " 펼치세요");
     }
-    ImGui::TextDisabled("제자리 수정은 게임이 되쓴다 - 값을 지급 칸으로"
-                        " 옮겨 고친 뒤 새로 지급하고 원본은 버린다");
+    ImGui::TextDisabled("개수·담금질·연마는 게임이 되쓰므로 지급 칸으로 옮겨 새로"
+                        " 지급하세요.");
+    ImGui::TextDisabled("소켓 열기만은 제자리로 되고 저장까지 남습니다.");
     ImGui::End();
 }
 
