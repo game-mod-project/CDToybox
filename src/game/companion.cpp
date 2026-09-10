@@ -1097,10 +1097,15 @@ bool companion_run_command(const std::string& line, std::string* reply) {
                 log::infof("  선택 {}: [{}] 0x{:X}", who, idx, seen[idx]);
             }
         };
-        pick_line("지급패널(서버+게이트+호출최다)",
+        // 지금 규칙은 하나다 - pick_drive_session(서버 + 게이트). 세
+        // 경로가 전부 그것을 쓴다. 나머지 두 줄은 **옛 기준이 무엇을
+        // 골랐을지**를 나란히 두는 것으로, 로드 뒤 옛 기준이 죽은
+        // 세션을 잡는 모습이 그대로 보인다(실측 2026-09-10).
+        pick_line("지금 규칙(서버+게이트)",
                   best_gate_session_index(gate_ok, hits, server, n));
-        pick_line("보관함(서버+호출최다)", best_actor_index(hits, server, n));
-        pick_line("동반자(서버+freshness)",
+        pick_line("옛 기준·참고(서버+호출최다)",
+                  best_actor_index(hits, server, n));
+        pick_line("옛 기준·참고(서버+freshness)",
                   best_live_session_index(hits, server, last, n, now,
                                           kSessionFreshMs));
         char buf[128];
