@@ -9,6 +9,7 @@
 
 #include "game/actors.h"
 #include "core/log.h"
+#include "core/slowlog.h"
 #include "game/clan.h"
 #include "mem/safe_read.h"
 #include "game/camera.h"
@@ -440,6 +441,7 @@ void draw_companion_drive_gate() {
 // 않았다. 체크를 풀면 전체가 나오되 경고를 붙인다.
 void draw_species_popup() {
     if (!ImGui::BeginPopup("종 바꾸기")) return;
+    log::Slow slow_p("종 바꾸기 팝업", 4.0);
     ImGui::Text("번호 %llu", static_cast<unsigned long long>(g_species_no));
     ImGui::SameLine();
     ImGui::TextDisabled("현재 타입 %s",
@@ -541,6 +543,7 @@ void draw_species_popup() {
 // "뭐를 가졌는지" 를 게임 UI 에서만 볼 수 있었고, 획득이 실제로 들어
 // 갔는지 확인할 수단이 없었다. 전부 읽기다.
 void draw_my_companions_tab() {
+    log::Slow slow_tab("내 동반자 탭", 8.0);
     if (!game::clan_ready()) {
         ImGui::TextDisabled("용병단 컴포넌트를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
         return;
@@ -551,6 +554,7 @@ void draw_my_companions_tab() {
     if (ImGui::SmallButton("새로고침")) refresh = true;
     if (now - g_clan_last_refresh > 2.0) refresh = true;
     if (refresh) {
+        log::Slow slow_r("명부 갱신", 4.0);
         game::refresh_clan_roster(g_near_reader);
         g_clan_last_refresh = now;
     }

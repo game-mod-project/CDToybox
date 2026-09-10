@@ -172,6 +172,11 @@ inline constexpr unsigned long long kHireCleanupDelayMs = 3000;
 // 읽기가 실패하면 다시 찾는다.
 bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader);
 bool clan_ready();
+
+// 캐시가 상했을 때 **배경 스레드**에서 다시 찾게 한다. 모드(DLL)만
+// 켠다 - 그리는 스레드가 10초 넘게 멈추면 안 되기 때문이다. probe 는
+// 켜지 않는다(짧게 살고, 그 자리에서 훑어도 된다).
+void enable_background_clan_rescan();
 // 지금 읽는다. 실패하면 false 이고 옛 판을 유지한다.
 bool refresh_clan_roster(const mem::Reader& reader);
 const std::vector<ClanEntry>& clan_roster();

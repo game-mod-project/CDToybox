@@ -84,6 +84,80 @@ bool find_clan_of_class(const mem::Reader& reader, const mem::Rtti& rtti,
 // 늘거나 줄어 새 컴포넌트가 만들어지면 그때만 다시 찾는다.
 std::atomic<std::uintptr_t> g_cached_server{0};
 std::atomic<std::uintptr_t> g_cached_client{0};
+// 서버 쪽 컴포넌트. clan_ready() 가 보는 값이라 캐시와 **함께**
+// 갱신해야 한다 - 따로 두었더니 한쪽만 갱신돼 다른 쪽이 상했다.
+std::atomic<std::uintptr_t> g_clan{0};
+
+// 캐시가 상했을 때 **그리는 스레드에서** 다시 찾으면 안 된다.
+//
+// 실측 2026-09-10: 시작 로그가 `탐색 [동반자 명부] 10688ms` 다.
+// 재탐색 한 번이 10초가 넘는다(클라이언트 쪽은 더 길다). 그런데
+// 캐시를 다시 채우는 길이 없어서 - discover_clan 은 g_clan 이 차면
+// 즉시 반환하고, refresh_clan_roster 는 g_clan 만 갱신했다 - 동반자를
+// 얻어 게임이 컴포넌트를 새로 만들면 캐시가 상한 채로 남았다. 그
+// 상태에서 tick_hire_cleanup 이 15초마다 이 함수를 부르니 15초마다
+// 10초씩 멈췄다. 사용자가 "내 동반자 탭이 게임을 멈춘다"고 한 것이
+// 이것이다.
+//
+// 그래서 배경 스레드에 맡긴다. 끝날 때까지 부르는 쪽은 false 를 받고,
+// 화면은 옛 목록을 그대로 쓴다 - 멈추는 것보다 낫다.
+std::atomic<bool> g_bg_rescan{false};      // DLL 만 켠다(probe 는 그냥 훑는다)
+std::atomic<bool> g_rescan_busy{false};
+const mem::Reader* g_rescan_reader = nullptr;
+const mem::Rtti* g_rescan_rtti = nullptr;
+std::atomic<bool> g_rescan_want[2]{};      // [0] 서버 [1] 클라이언트
+
+// 찾은 컴포넌트를 **한 자리에서** 갈무리한다. 캐시와 g_clan 이
+// 따로 갱신되던 것이 이번 멈춤의 뿌리였다.
+void store_component(bool client, std::uintptr_t found) {
+    if (client) {
+        g_cached_client.store(found, std::memory_order_release);
+    } else {
+        g_cached_server.store(found, std::memory_order_release);
+        g_clan.store(found, std::memory_order_release);
+    }
+}
+
+DWORD WINAPI rescan_worker(LPVOID) {
+    for (int k = 0; k < 2; ++k) {
+        if (!g_rescan_want[k].exchange(false)) continue;
+        const mem::Reader* r = g_rescan_reader;
+        const mem::Rtti* t = g_rescan_rtti;
+        if (r == nullptr || t == nullptr) continue;
+        const std::uint64_t t0 = GetTickCount64();
+        std::uintptr_t found = 0;
+        if (find_clan_of_class(*r, *t, k == 1 ? kClanClientClass : kClanClass,
+                               &found)) {
+            store_component(k == 1, found);
+            log::infof("명부 컴포넌트 재탐색({}) 완료 0x{:X} - {}ms",
+                       k == 1 ? "클라이언트" : "서버", found,
+                       GetTickCount64() - t0);
+        } else {
+            log::warnf("명부 컴포넌트 재탐색({}) 실패 - {}ms",
+                       k == 1 ? "클라이언트" : "서버", GetTickCount64() - t0);
+        }
+    }
+    g_rescan_busy.store(false, std::memory_order_release);
+    return 0;
+}
+
+void request_rescan(const mem::Reader& reader, const mem::Rtti& rtti,
+                    bool client) {
+    g_rescan_reader = &reader;
+    g_rescan_rtti = &rtti;
+    g_rescan_want[client ? 1 : 0].store(true, std::memory_order_release);
+    bool expected = false;
+    if (!g_rescan_busy.compare_exchange_strong(expected, true)) return;
+    const HANDLE h = ::CreateThread(nullptr, 0, rescan_worker, nullptr, 0,
+                                    nullptr);
+    if (h != nullptr) {
+        ::CloseHandle(h);
+        log::infof("명부 컴포넌트 캐시가 상했다 - 배경에서 다시 찾는다"
+                   " (10초쯤 걸린다, 화면은 멈추지 않는다)");
+    } else {
+        g_rescan_busy.store(false, std::memory_order_release);
+    }
+}
 
 bool clan_component_cached(const mem::Reader& reader, const mem::Rtti& rtti,
                            bool client, std::uintptr_t* out) {
@@ -93,12 +167,16 @@ bool clan_component_cached(const mem::Reader& reader, const mem::Rtti& rtti,
         *out = have;
         return true;
     }
+    if (g_bg_rescan.load(std::memory_order_acquire)) {
+        request_rescan(reader, rtti, client);
+        return false;   // 이번 프레임은 포기한다. 멈추는 것보다 낫다.
+    }
     std::uintptr_t found = 0;
     if (!find_clan_of_class(reader, rtti,
                             client ? kClanClientClass : kClanClass, &found)) {
         return false;
     }
-    slot.store(found, std::memory_order_release);
+    store_component(client, found);
     *out = found;
     return true;
 }
@@ -247,7 +325,6 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
 
 namespace {
 
-std::atomic<std::uintptr_t> g_clan{0};
 const mem::Rtti* g_rtti = nullptr;
 // 목록은 그리는 스레드만 만들고 읽는다 - actors 와 같은 규칙이다.
 std::vector<ClanEntry> g_roster;
@@ -258,8 +335,7 @@ bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_clan.load(std::memory_order_acquire) != 0) return true;
     std::uintptr_t c = 0;
     if (!find_clan_component(reader, rtti, &c)) return false;
-    g_clan.store(c, std::memory_order_release);
-    g_cached_server.store(c, std::memory_order_release);
+    store_component(false, c);
     g_rtti = &rtti;
     // 클라이언트 쪽도 **여기서** 미리 잡아 둔다. RTTI 인스턴스 스캔은
     // 실측 30초가 넘는다(probe 로 재 보니 두 번에 1분 8초). 그리는
@@ -268,12 +344,16 @@ bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 시작할 때 부르므로 여기서 치르는 것이 맞다.
     std::uintptr_t cli = 0;
     if (find_clan_of_class(reader, rtti, kClanClientClass, &cli)) {
-        g_cached_client.store(cli, std::memory_order_release);
+        store_component(true, cli);
     }
     return true;
 }
 
 bool clan_ready() { return g_clan.load(std::memory_order_acquire) != 0; }
+
+void enable_background_clan_rescan() {
+    g_bg_rescan.store(true, std::memory_order_release);
+}
 
 bool refresh_clan_roster(const mem::Reader& reader) {
     std::uintptr_t c = g_clan.load(std::memory_order_acquire);
@@ -285,16 +365,15 @@ bool refresh_clan_roster(const mem::Reader& reader) {
         !read_clan_roster(reader, c, &list)) {
         // 월드를 나갔다 들어오면 컴포넌트가 바뀐다. 한 번 다시 찾는다.
         if (g_rtti == nullptr) return false;
-        // 다시 찾는 것은 RTTI 인스턴스 스캔이라 기가바이트를 훑는다.
-        // 그리는 스레드에서 2초마다 하면 화면이 쌓린다 - 간격을 둔다.
-        static std::uint64_t s_last_scan = 0;
-        const std::uint64_t now = GetTickCount64();
-        if (s_last_scan != 0 && now - s_last_scan < 10000) return false;
-        s_last_scan = now;
+        // 다시 찾는 것은 10초가 넘는 RTTI 스캔이다. 그리는 스레드에서
+        // 하면 그만큼 게임이 멈춘다 - clan_component_cached 와 같은
+        // 배경 경로로 넘기고, 이번 판은 옛 목록을 그대로 둔다.
         std::uintptr_t again = 0;
-        if (!find_clan_component(reader, *g_rtti, &again) || again == 0) return false;
+        if (!clan_component_cached(reader, *g_rtti, false, &again) ||
+            again == 0) {
+            return false;
+        }
         if (!read_clan_roster(reader, again, &list)) return false;
-        g_clan.store(again, std::memory_order_release);
     }
     g_roster = std::move(list);
     return true;
