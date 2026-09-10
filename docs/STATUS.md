@@ -550,7 +550,7 @@ tools/probe/  외부 분석 도구, 명령 55개 (items · loc · inv* · equip 
               clan · roster · setspecies · aob · heapfind · dumpimage …)
 tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
               fields = 게임이 알려 주는 필드 이름)
-tests/        385개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-10)
+tests/        387개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-10)
 scripts/      build.ps1 · deploy.ps1
 ```
 
