@@ -63,7 +63,8 @@ items.h("분류 이름은 아직 못 붙였다" → `category_name`), grant_pane
 5. `equip.cpp` 가 상수 하나 때문에 `inventory.h` 전체를 끌어옴 — `kSocketLocked` 를 items.h 로 옮기면 닫힘
 6. STATUS §1.12 "한 번 고른 것을 유지한다" — 실제 `prefer` 는 동률만 깬다
 
-전부 주석·문서·한 줄짜리라 한 커밋으로 묶을 수 있다.
+전부 주석·문서·한 줄짜리라 한 커밋으로 묶을 수 있다. → 같은 날 `68de258` 로 처리했다
+(검토자 Minor 4 - 빈 줄 둘·inventory.h 주석·중복 include - 도 뒤이어 정리).
 
 ## 5. 되풀이하지 말 것
 

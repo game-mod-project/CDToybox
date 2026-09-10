@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-
 #include <string>
 #include <vector>
 
@@ -79,7 +77,7 @@ struct InventoryRecord {
 //
 //   +0x00  u16  박힌 것의 아이템 표 순번. 0xFFFF 면 빈 칸
 //   +0x02  u16  채움 표시. 보석 있으면 0xFFFF, 비면 0x0000
-//   +0x04  u8   **칸 번호(=열림) / 0xFF(=잠김)**
+//   +0x04  u8   **칸 번호(=열림) / 0xFF(=잠김, items.h 의 kSocketLocked)**
 //   +0x05  u8   뜻 모름(§§). **고정 상수가 아니다** - 한 판 안에서는
 //               열린 칸이 전부 같은데 판이 바뀌면 달라질 수 있다(실측
 //               다섯 판: 04 · 05 · 03 · 02 · 02). 로드할 때 게임이 다시
@@ -87,9 +85,6 @@ struct InventoryRecord {
 //
 // 근거: specs/2026-09-07-socket-grant-unlock-research.md 2.2 절.
 inline constexpr std::size_t kSocketSize = 6;
-
-// 소켓 칸의 `raw[4]` 가 이 값이면 아직 안 열린 칸이다.
-inline constexpr std::uint8_t kSocketLocked = 0xFF;
 
 struct InventorySocket {
     std::uint32_t slot = 0;

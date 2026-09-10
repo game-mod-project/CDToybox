@@ -287,6 +287,10 @@ inline constexpr std::uint8_t kSocketGemCategory = 74;
 // 보석 고르기(장비 창·지급 창)가 같은 조건으로 거른다.
 bool is_socket_gem(const ItemCatalogEntry& e);
 
+// 소켓 칸의 `raw[4]`(칸 번호)가 이 값이면 아직 안 열린 칸이다. 인벤 레코드와
+// 착용 장비가 같은 6바이트 소켓 형식을 쓰므로 아이템 헤더에 둔다.
+inline constexpr std::uint8_t kSocketLocked = 0xFF;
+
 // 이 아이템에 **지급으로** 실을 수 있는 소켓 칸 수. 0 이면 소켓 금지다.
 //
 // 게임의 규칙 그대로다(0x2A70000 · 0xF090BC0, 실측 디스어셈블):

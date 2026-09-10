@@ -20,7 +20,9 @@ namespace cdtb::game {
 bool find_actor_getter_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out);
 
-// 바닥에 아이템을 떨구는 실제 작업 함수를 찾는다.
+// 바닥에 아이템을 떨구는 실제 작업 함수를 찾는다. 프로덕션 호출자는 없다 -
+// 바닥 떨구기 추적을 지운 뒤(2026-09-10) tests/grant_tests.cpp 만 패턴 탐색
+// 검증에 쓴다. 참조 수 스캔이 죽은 코드로 집어도 지우지 말 것.
 bool find_spawn_ground_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out);
 
@@ -523,12 +525,6 @@ inline constexpr std::uint64_t kHireCheckRva = 0x2097BC0;
 // 그 행이 등록 가능한지 게임에게 묻는다. 게임 스레드에서 실행한다.
 bool request_hire_species(std::uintptr_t session, std::uint16_t char_row);
 bool hire_species_ready();
-// 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
-struct HireSpeciesResult {
-    bool valid = false;
-    std::uint16_t key = 0;
-    std::uint32_t code = 0;
-};
 
 // 캐릭터 소환 치트(SpawnCharacterCheatReq)는 **쓰지 않는다.**
 //
