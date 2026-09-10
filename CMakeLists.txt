@@ -71,6 +71,8 @@ add_library(cdtoybox SHARED
     src/render/roster_panel.cpp
     src/render/equip_panel.cpp
     src/render/player_panel.cpp
+    src/render/notice_state.cpp
+    src/render/notice.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -126,6 +128,7 @@ add_executable(cdtb_tests
     tests/companion_tests.cpp
     tests/actors_tests.cpp
     tests/image_dump_tests.cpp
+    tests/ui_state_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp
@@ -138,6 +141,7 @@ add_executable(cdtb_tests
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/render/notice_state.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
