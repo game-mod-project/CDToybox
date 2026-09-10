@@ -6,15 +6,6 @@
 namespace cdtb::game {
 namespace {
 
-// 이름과 키 둘 다에 건다. 지급 대상을 키로만 아는 경우가 있다.
-bool matches(const ItemCatalogEntry& e, const std::string& query) {
-    if (query.empty()) return true;
-    if (!e.name.empty() && e.name.find(query) != std::string::npos) return true;
-    char key[16];
-    std::snprintf(key, sizeof(key), "%u", e.key);
-    return std::string(key).find(query) != std::string::npos;
-}
-
 int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
                ItemSort by) {
     switch (by) {
@@ -38,15 +29,28 @@ int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
 
 }  // namespace
 
+bool passes(const ItemFilter& f, std::string_view name, int grade,
+            int category, std::uint32_t key) {
+    if (f.hide_unnamed && name.empty()) return false;
+    if (f.grade >= 0 && grade != f.grade) return false;
+    if (f.category >= 0 && category != f.category) return false;
+    if (f.query.empty()) return true;
+    if (!name.empty() && name.find(f.query) != std::string_view::npos) {
+        return true;
+    }
+    // 이름과 키 둘 다에 건다. 지급 대상을 키로만 아는 경우가 있다.
+    if (!f.match_key) return false;
+    char digits[16];
+    std::snprintf(digits, sizeof(digits), "%u", key);
+    return std::string_view(digits).find(f.query) != std::string_view::npos;
+}
+
 std::vector<const ItemCatalogEntry*> filter_items(
     const std::vector<ItemCatalogEntry>& all, const ItemFilter& filter) {
     std::vector<const ItemCatalogEntry*> out;
     out.reserve(all.size());
     for (const auto& e : all) {
-        if (filter.hide_unnamed && e.name.empty()) continue;
-        if (filter.grade >= 0 && e.grade != filter.grade) continue;
-        if (filter.category >= 0 && e.category != filter.category) continue;
-        if (!matches(e, filter.query)) continue;
+        if (!passes(filter, e.name, e.grade, e.category, e.key)) continue;
         out.push_back(&e);
     }
     return out;

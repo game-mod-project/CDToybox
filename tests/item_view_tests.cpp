@@ -202,3 +202,62 @@ TEST(sort_items_orders_by_grade) {
     CHECK_EQ(out[0]->grade, static_cast<std::uint8_t>(5));
     CHECK_EQ(out[3]->grade, static_cast<std::uint8_t>(0));
 }
+
+// ------------------------------------------------------- 술어 (passes)
+
+TEST(passes_agrees_with_filter_items) {
+    // filter_items 가 passes 를 부르도록 바뀌었다. 같은 입력에 같은
+    // 판정을 내야 한다 - 이름·키·이름없음·등급·분류를 전부 돈다.
+    const auto named = sample();
+    const auto tiers = graded();
+
+    ItemFilter fs[6];
+    fs[1].query = "화살";
+    fs[2].query = "9500";
+    fs[3].hide_unnamed = true;
+    fs[4].grade = 0;
+    fs[5].category = 56;
+
+    for (const auto* all : {&named, &tiers}) {
+        for (const auto& f : fs) {
+            const auto out = cdtb::game::filter_items(*all, f);
+            std::size_t n = 0;
+            for (const auto& e : *all) {
+                bool in = false;
+                for (const auto* o : out) {
+                    if (o == &e) in = true;
+                }
+                const bool p = cdtb::game::passes(f, e.name, e.grade,
+                                                  e.category, e.key);
+                CHECK_EQ(p, in);
+                if (p) ++n;
+            }
+            CHECK_EQ(n, out.size());
+        }
+    }
+}
+
+TEST(passes_ignores_key_when_match_key_is_off) {
+    // 인벤토리는 이름만 본다. 숫자를 쳐도 키가 걸리면 안 된다.
+    ItemFilter f;
+    f.query = "9500";
+    f.match_key = false;
+    CHECK(!cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+    f.match_key = true;
+    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+}
+
+TEST(passes_with_key_off_still_matches_name) {
+    ItemFilter f;
+    f.query = "도끼";
+    f.match_key = false;
+    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+}
+
+TEST(passes_with_key_off_drops_unnamed_even_if_key_matches) {
+    // 이름 없는 것은 키로만 찾을 수 있는데, 키를 안 보면 못 찾는다.
+    ItemFilter f;
+    f.query = "200997";
+    f.match_key = false;
+    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u));
+}
