@@ -48,9 +48,11 @@ add_library(cdtb_core STATIC
     src/core/crashlog.cpp
     src/core/config.cpp
     src/core/guard.cpp
+    src/core/vk_name.cpp
+    src/core/file_version.cpp
 )
 target_include_directories(cdtb_core PUBLIC src)
-target_link_libraries(cdtb_core PUBLIC minhook)
+target_link_libraries(cdtb_core PUBLIC minhook version)
 
 # -------------------------------------------------------------------- DLL
 add_library(cdtoybox SHARED
@@ -135,6 +137,7 @@ add_executable(cdtb_tests
     tests/image_dump_tests.cpp
     tests/ui_state_tests.cpp
     tests/layout_tests.cpp
+    tests/core_helpers_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp
