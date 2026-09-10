@@ -18,11 +18,6 @@
 namespace cdtb::game {
 namespace {
 
-// 표 조회 함수. 아이템 표를 비롯해 82개 표가 이걸 쓴다.
-//   rcx = 표 + 0x68,  rdx = &키
-constexpr const char* kTableLookupPattern =
-    "48 83 EC 08 83 79 04 00 4C 8B D1 75";
-
 // 함수 앞머리 그대로다. 주소를 박아 두면 패치마다 밀리므로 바이트로
 // 찾는다. 둘 다 349MB 이미지 안에서 유일한 것을 확인했다.
 constexpr const char* kActorGetterPattern =
@@ -86,15 +81,6 @@ std::atomic<std::uintptr_t> g_drive_fault{0};
 
 std::atomic<int> g_seen_count{0};
 
-// 바닥 스폰. 인자는 전부 포인터다 - 디스어셈블에서 확인했다.
-//   rcx 액터  rdx 결과  r8 아이템키  r9 개수  [+0x20] 필드3  [+0x28] 위치
-using SpawnFn = void*(__fastcall*)(void*, std::uint32_t*, const std::uint32_t*,
-                                   const std::int64_t*, const std::uint16_t*,
-                                   const float*);
-SpawnFn g_spawn = nullptr;
-SpawnFn g_orig_spawn = nullptr;
-bool g_trace = false;
-
 // 처리기. 역직렬화가 파싱을 마치고 부르는 그 함수다. 값이 아니라
 // 포인터를 받는다.
 //   rcx 서술자  rdx 패킷  r8 아이템키  r9 개수  arg5 필드3  arg6 위치
@@ -111,14 +97,6 @@ CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
-
-// 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
-using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
-TableLookupFn g_orig_lookup = nullptr;
-void* g_lookup_target = nullptr;
-bool g_lookup_installed = false;
-std::atomic<std::uint32_t> g_watch_key{0};
-std::atomic<int> g_watch_left{0};
 
 // 내구도 처리기. 인자 넷뿐이다.
 using EndurFn = void(__fastcall*)(void*, void*, const std::uint16_t*,
@@ -715,27 +693,6 @@ void* __fastcall det_entity_lookup(void* mgr, void* out, std::uint32_t id) {
     return g_orig_entity(mgr, out, id);
 }
 
-void* __fastcall det_table_lookup(void* table, const std::uint32_t* key) {
-    // 정확히 그 키 하나가 아니라 근처 범위를 본다. 인벤토리
-    // 식별자(5915)는 이 함수로 조회되지 않았다 - 변환이 먼저
-    // 일어나고 그 결과가 여기로 온다면 아이템 키 자리에서 잡힌다.
-    const std::uint32_t want = g_watch_key.load(std::memory_order_relaxed);
-    const bool in_range =
-        want != 0 && key != nullptr &&
-        (*key == want || (*key > want - 5000 && *key < want + 5000));
-    if (in_range && g_watch_left.load(std::memory_order_relaxed) > 0) {
-        g_watch_left.fetch_sub(1, std::memory_order_relaxed);
-        void* ret = _ReturnAddress();
-        const std::uintptr_t base = (g_reader != nullptr)
-                                        ? g_reader->module_base()
-                                        : 0;
-        log::infof("표 조회: 키 {} 표 0x{:X} 부른 곳 모듈+0x{:X}", *key,
-                   reinterpret_cast<std::uintptr_t>(table),
-                   reinterpret_cast<std::uintptr_t>(ret) - base);
-    }
-    return g_orig_lookup(table, key);
-}
-
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     // 우리가 부른 게임 함수가 이 후킹을 다시 밟는다. 진입할 때마다
@@ -835,19 +792,6 @@ bool safe_deref(std::uintptr_t at, std::uintptr_t* out) {
     }
 }
 
-bool call_spawn_guarded(SpawnFn fn, void* actor, std::uint32_t* result,
-                        const std::uint32_t* key, const std::int64_t* count,
-                        const std::uint16_t* f3, const float* pos,
-                        std::uint32_t* seh_out) {
-    __try {
-        fn(actor, result, key, count, f3, pos);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        *seh_out = static_cast<std::uint32_t>(GetExceptionCode());
-        return false;
-    }
-}
-
 // 예외 코드만으로는 어디서 죽었는지 알 수 없다. 터진 주소까지
 // 받아 둔다 - 그 주소를 파일에서 디스어셈블하면 무엇을 참조하다
 // 죽었는지 바로 보인다.
@@ -935,25 +879,6 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
 
 
 
-// 실제 작업 함수가 불릴 때마다 인자를 남긴다. 원본을 그대로 부른다.
-void* __fastcall det_spawn(void* actor, std::uint32_t* result,
-                           const std::uint32_t* key, const std::int64_t* count,
-                           const std::uint16_t* f3, const float* pos) {
-    log::infof("[추적] 바닥 떨구기 액터 0x{:X} 키 {} 개수 {} 필드3 {} "
-               "위치 {:.1f},{:.1f},{:.1f}",
-               reinterpret_cast<std::uintptr_t>(actor),
-               key != nullptr ? *key : 0,
-               count != nullptr ? *count : 0,
-               f3 != nullptr ? *f3 : 0,
-               pos != nullptr ? pos[0] : 0.0f,
-               pos != nullptr ? pos[1] : 0.0f,
-               pos != nullptr ? pos[2] : 0.0f);
-    void* r = g_orig_spawn(actor, result, key, count, f3, pos);
-    log::infof("[추적] 바닥 떨구기 결과 0x{:X}",
-               result != nullptr ? *result : 0);
-    return r;
-}
-
 bool find_one(const std::vector<std::uint8_t>& image, const char* pattern,
               std::uint64_t* rva_out) {
     if (rva_out == nullptr || image.empty()) return false;
@@ -1039,32 +964,6 @@ int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap) {
         if (hits_out != nullptr) hits_out[i] = g_ent_hits[i];
     }
     return take;
-}
-
-bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
-                         std::uint32_t watch_key) {
-    g_watch_key.store(watch_key, std::memory_order_relaxed);
-    g_watch_left.store(8, std::memory_order_relaxed);
-    if (g_lookup_installed) return true;
-
-    std::uint64_t rva = 0;
-    if (!find_one(rtti.image(), kTableLookupPattern, &rva)) {
-        log::warnf("표 조회 함수를 못 찾았다");
-        return false;
-    }
-    if (!mem::hook_init()) return false;
-    g_lookup_target = reinterpret_cast<void*>(
-        reader.module_base() + static_cast<std::uintptr_t>(rva));
-    if (!mem::hook_install(g_lookup_target, &det_table_lookup,
-                           reinterpret_cast<void**>(&g_orig_lookup))) {
-        log::errorf("표 조회 후킹 실패 (RVA 0x{:X})", rva);
-        g_lookup_target = nullptr;
-        return false;
-    }
-    g_lookup_installed = true;
-    log::infof("표 조회 후킹 설치 (RVA 0x{:X}) - 키 {} 을 지켜본다", rva,
-               watch_key);
-    return true;
 }
 
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
@@ -1788,40 +1687,6 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
 }
 
 const CheatMessage& spawn_message() { return g_spawn_msg; }
-
-bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_spawn != nullptr) return true;
-    std::uint64_t rva = 0;
-    if (!find_spawn_ground_rva(rtti.image(), &rva)) {
-        log::warnf("바닥 스폰 함수를 찾지 못했다 - 패치로 밀렸을 수 있다");
-        return false;
-    }
-    g_spawn = reinterpret_cast<SpawnFn>(
-        reader.module_base() + static_cast<std::uintptr_t>(rva));
-    log::infof("바닥 스폰 함수 확보 (RVA 0x{:X})", rva);
-    return true;
-}
-
-bool spawn_trace_install() {
-    if (g_trace) return true;
-    if (g_spawn == nullptr) return false;
-    if (!mem::hook_init()) return false;
-    if (!mem::hook_install(reinterpret_cast<void*>(g_spawn), &det_spawn,
-                           reinterpret_cast<void**>(&g_orig_spawn))) {
-        log::errorf("바닥 떨구기 추적 설치 실패");
-        return false;
-    }
-    g_trace = true;
-    log::infof("바닥 떨구기 추적 설치 - 인벤토리에서 아이템을 버려 보세요");
-    return true;
-}
-
-void spawn_trace_remove() {
-    if (!g_trace) return;
-    mem::hook_remove(reinterpret_cast<void*>(g_spawn));
-    g_orig_spawn = nullptr;
-    g_trace = false;
-}
 
 bool thread_ready_for_spawn() {
     // gs:[0x58] 는 TEB 의 ThreadLocalStoragePointer 다. 작업 함수는

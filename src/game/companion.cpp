@@ -709,67 +709,6 @@ bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
     return request_message(session, *m, wire, len);
 }
 
-namespace {
-
-using HireInvWorkFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint16_t,
-                                         std::uint16_t);
-HireInvWorkFn g_orig_hire_inv = nullptr;
-std::atomic<bool> g_hire_inv_trace{false};
-std::atomic<int> g_hire_inv_logs{0};
-constexpr int kHireInvLogMax = 60;
-std::mutex g_hire_inv_mutex;
-HireInvResult g_last_hire_inv;
-
-void* __fastcall det_hire_inv_work(void* clan, std::uint32_t* result,
-                                   std::uint16_t a, std::uint16_t b) {
-    void* r = g_orig_hire_inv(clan, result, a, b);
-    if (g_hire_inv_logs.load(std::memory_order_relaxed) < kHireInvLogMax) {
-        g_hire_inv_logs.fetch_add(1, std::memory_order_relaxed);
-        const std::uint32_t code = (result != nullptr) ? *result : 0xFFFFFFFFu;
-        {
-            std::lock_guard<std::mutex> lock(g_hire_inv_mutex);
-            g_last_hire_inv.valid = true;
-            g_last_hire_inv.a = a;
-            g_last_hire_inv.b = b;
-            g_last_hire_inv.code = code;
-        }
-        log::infof("부적 등록 작업: A {} B {} -> 코드 0x{:08X} ({})", a, b, code,
-                   code == 0 ? "성공" : "거부");
-    }
-    return r;
-}
-
-}  // namespace
-
-HireInvResult last_hire_inv() {
-    std::lock_guard<std::mutex> lock(g_hire_inv_mutex);
-    return g_last_hire_inv;
-}
-
-bool companion_hire_inv_trace_install(const mem::Reader& reader) {
-    if (g_hire_inv_trace.load(std::memory_order_acquire)) return true;
-    if (!mem::hook_init()) return false;
-    const std::uintptr_t fn = reader.module_base() + kHireInvWorkRva;
-    // 0x2AD1FC0: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi
-    std::uint8_t h[10]{};
-    if (!reader.read(fn, h, sizeof(h))) return false;
-    if (!(h[0] == 0x48 && h[1] == 0x89 && h[2] == 0x5C && h[3] == 0x24 &&
-          h[4] == 0x10 && h[5] == 0x48 && h[6] == 0x89 && h[7] == 0x74)) {
-        log::warnf("부적 등록 추적: RVA 0x{:X} 프롤로그가 다르다 - 걸지 않는다",
-                   kHireInvWorkRva);
-        return false;
-    }
-    if (!mem::hook_install(reinterpret_cast<void*>(fn), &det_hire_inv_work,
-                           reinterpret_cast<void**>(&g_orig_hire_inv))) {
-        log::warnf("부적 등록 추적: 후킹 실패");
-        return false;
-    }
-    g_hire_inv_trace.store(true, std::memory_order_release);
-    log::infof("부적 등록 추적 설치 (RVA 0x{:X}) - 거부 코드를 찍는다",
-               kHireInvWorkRva);
-    return true;
-}
-
 bool request_catch(std::uintptr_t session, std::uint32_t target,
                    std::uint32_t self) {
     const MessageDesc* m = find_message(kCatchBySummonId);

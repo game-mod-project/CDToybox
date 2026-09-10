@@ -218,7 +218,6 @@ void auto_analysis_loop() {
     //   pump_hook_install(rtti, reader);
     //   taskrun_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
-    spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
     // 동반자 획득 경로 메시지 캡처(Phase 1, 진단). 길들이기 때 뜬다.
     companion_capture_install(rtti, reader);
@@ -227,7 +226,6 @@ void auto_analysis_loop() {
     companion_resolve_messages(rtti, reader);
     companion_hire_trace_install(reader);
     companion_spawn_trace_install(reader);
-    companion_hire_inv_trace_install(reader);
     // 좌표는 카메라 쪽만 안다. 동반자 코드에 넣어 준다.
     companion_set_position_source([](float out[3]) {
         const CameraSet& set = cameras();
@@ -235,10 +233,6 @@ void auto_analysis_loop() {
         return read_world_position(set.player_component, out);
     });
     companion_command_start(reader);
-    // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
-    // 늑대의 한손검. 인벤토리 첫 칸이고 현지화에 이름이 있다.
-    table_probe_install(rtti, reader, 1163042);
-    spawn_trace_install();
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
         // 한 통과가 얼마나 걸리는지 남긴다. 어디가 느린지 로그만 보고

@@ -291,17 +291,6 @@ bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
                                  std::uint16_t b);
 bool hire_from_inventory_ready();
 
-// 등록 작업 함수. 거부 코드를 찍는다. 읽기만 한다.
-inline constexpr std::uint64_t kHireInvWorkRva = 0x2AD1FC0;
-struct HireInvResult {
-    bool valid = false;
-    std::uint16_t a = 0;
-    std::uint16_t b = 0;
-    std::uint32_t code = 0;  // 0 이면 성공
-};
-HireInvResult last_hire_inv();
-bool companion_hire_inv_trace_install(const mem::Reader& reader);
-
 inline constexpr std::uint16_t kCatchBySummonId = 2386;
 inline constexpr std::size_t kCatchWireLen = 5 + 8;
 // 표본 네 개가 전부 이 값이었다. 세션마다 달라질 수 있으니 캡처에서
