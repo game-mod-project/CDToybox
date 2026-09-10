@@ -13,6 +13,7 @@
 
 #include "core/guard.h"
 #include "core/log.h"
+#include "core/slowlog.h"
 #include "input/cursor.h"
 #include "input/wndproc.h"
 #include "render/d3d12_hook.h"
@@ -581,6 +582,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 지역 이동·세이브 로드로만 풀리던 그것이다. 가시성과
         // 무관하게 돌아야 오버레이를 닫아 둠 때도 풀린다.
         if (const mem::Rtti* rtti = cdtb::game::clan_rtti()) {
+            cdtb::log::Slow slow_c("획득 뒤처리", 8.0);
             cdtb::game::tick_hire_cleanup(*rtti, reader);
         }
 

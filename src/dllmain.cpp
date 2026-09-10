@@ -8,6 +8,7 @@
 #include "proxy/xinput_proxy.h"
 #include "render/d3d12_hook.h"
 #include "game/camera.h"
+#include "game/clan.h"
 #include "render/overlay.h"
 #include "mem/watchpoint.h"
 
@@ -54,6 +55,10 @@ DWORD WINAPI init_thread(LPVOID) {
     }
 
     // 사용자가 버튼을 누를 필요 없이 스스로 분석한다.
+    // 명부 컴포넌트를 다시 찾는 일은 배경에서 한다. 그리는 스레드가
+    // 하면 10초 넘게 게임이 멈춘다(실측 2026-09-10).
+    cdtb::game::enable_background_clan_rescan();
+
     cdtb::game::start_auto_analysis();
 
     cdtb::log::infof("초기화 완료");
