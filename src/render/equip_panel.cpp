@@ -12,14 +12,14 @@
 #include "game/equip.h"
 #include "game/items.h"
 #include "mem/reader.h"
+#include "render/gem_picker.h"
 
 namespace cdtb::render {
 namespace {
 
 std::uint64_t g_gem_inst = 0;   // 보석을 박을 대상 아이템 인스턴스
 int g_gem_k = -1;               // 그 아이템의 소켓 칸
-bool g_open_gem = false;
-char g_gem_search[64]{};
+GemPicker g_gem_picker;         // 보석 고르기 팝업 (지급 창과 같은 위젯)
 char g_msg[160]{};
 std::map<std::uint64_t, int> g_refine_edit;
 
@@ -39,46 +39,18 @@ const char* name_of_sunbeon(std::uint32_t sunbeon) {
 }
 
 void draw_gem_popup(const mem::Reader& reader) {
-    if (g_open_gem) {
-        ImGui::OpenPopup("보석 고르기##equip");
-        g_open_gem = false;
-    }
-    if (!ImGui::BeginPopup("보석 고르기##equip")) return;
-    ImGui::TextUnformatted("소켓에 박을 강화 보석(분류 74)");
-    ImGui::SetNextItemWidth(300.0f);
-    ImGui::InputTextWithHint("##gs", "이름으로 찾기", g_gem_search,
-                             sizeof(g_gem_search));
-    ImGui::BeginChild("gl", ImVec2(320.0f, 280.0f));
-    if (game::items_ready()) {
-        const auto& cat = game::item_catalog();
-        for (std::size_t i = 0; i < cat.size(); ++i) {
-            const auto& e = cat[i];
-            if (e.category != game::kSocketGemCategory || e.name.empty())
-                continue;
-            if (g_gem_search[0] != 0 &&
-                e.name.find(g_gem_search) == std::string::npos) {
-                continue;
-            }
-            char lbl[128];
-            std::snprintf(lbl, sizeof(lbl), "%s##%zu", e.name.c_str(), i);
-            if (ImGui::Selectable(lbl)) {
-                // 소켓에 박는 값은 그 보석의 순번(= 카탈로그 인덱스).
-                const int w = game::eq_write_socket(
-                    reader, g_gem_inst, g_gem_k,
-                    static_cast<std::uint16_t>(i));
-                std::snprintf(g_msg, sizeof(g_msg),
-                              w > 0 ? "소켓 %d에 '%s' 박음 (%d realm). RE-EQUIP"
-                                      " 하면 보입니다."
-                                    : "쓰기 실패 (잠긴 소켓이거나 대상 없음).",
-                              g_gem_k, e.name.c_str(), w);
-                game::equip_refresh_pieces(reader);
-                ImGui::CloseCurrentPopup();
-                break;
-            }
-        }
-    }
-    ImGui::EndChild();
-    ImGui::EndPopup();
+    GemPickerOpts o;   // 제목 기본값, 빈 칸 없음, 강조 없음
+    GemChoice c;
+    if (!gem_picker_draw(&g_gem_picker, o, &c) || c.entry == nullptr) return;
+    // 소켓에 박는 값은 그 보석의 순번(= 카탈로그 인덱스).
+    const int w = game::eq_write_socket(reader, g_gem_inst, g_gem_k,
+                                        static_cast<std::uint16_t>(c.index));
+    std::snprintf(g_msg, sizeof(g_msg),
+                  w > 0 ? "소켓 %d에 '%s' 박음 (%d realm). RE-EQUIP"
+                          " 하면 보입니다."
+                        : "쓰기 실패 (잠긴 소켓이거나 대상 없음).",
+                  g_gem_k, c.entry->name.c_str(), w);
+    game::equip_refresh_pieces(reader);
 }
 
 // 염색 고르기. 이 조각이 가진 zone 레코드마다 색을 바꾼다. zone 이
@@ -293,8 +265,7 @@ void draw_equip_panel(bool* open) {
                     if (ImGui::SmallButton("채우기")) {
                         g_gem_inst = w.instance;
                         g_gem_k = k;
-                        g_gem_search[0] = 0;
-                        g_open_gem = true;
+                        gem_picker_open(&g_gem_picker);
                     }
                 }
                 ImGui::PopID();

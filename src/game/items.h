@@ -283,6 +283,10 @@ std::int16_t max_sharpness_for(std::uint32_t item_key);
 // `category_name` 이 "심연 장비" 로 부른다.
 inline constexpr std::uint8_t kSocketGemCategory = 74;
 
+// 소켓에 박을 수 있는 강화 보석인가 - 분류 74 이고 이름이 풀린 것.
+// 보석 고르기(장비 창·지급 창)가 같은 조건으로 거른다.
+bool is_socket_gem(const ItemCatalogEntry& e);
+
 // 이 아이템에 **지급으로** 실을 수 있는 소켓 칸 수. 0 이면 소켓 금지다.
 //
 // 게임의 규칙 그대로다(0x2A70000 · 0xF090BC0, 실측 디스어셈블):

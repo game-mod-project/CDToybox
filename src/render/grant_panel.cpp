@@ -12,6 +12,7 @@
 #include "game/grant.h"
 #include "game/items.h"
 #include "render/icon_atlas.h"
+#include "render/gem_picker.h"
 #include "render/item_style.h"
 
 namespace cdtb::render {
@@ -42,7 +43,8 @@ int g_sharpness = 0;
 int g_socket_open = 0;
 // 각 칸에 박을 보석의 아이템 키. 0 이면 그 칸은 빈 채로 연다.
 std::uint32_t g_socket_keys[game::kGiveMaxSockets]{};
-char g_gem_search[64]{};   // 보석 고르기 안의 이름 찾기
+GemPicker g_gem_picker;     // 보석 고르기 팝업 (장비 창과 같은 위젯)
+int g_gem_slot = -1;        // 팝업이 고른 보석을 넣을 칸
 
 game::SpawnOutcome g_outcome;
 
@@ -135,47 +137,31 @@ void draw_sockets(const game::ItemCatalogEntry* item) {
                 ? "(빈 칸으로 열기)"
                 : ((gem != nullptr && !gem->name.empty()) ? gem->name.c_str()
                                                           : "(표에 없는 키)");
-        ImGui::SetNextItemWidth(230.0f);
-        if (ImGui::BeginCombo("##gem", label)) {
-            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint("##find", "이름으로 찾기", g_gem_search,
-                                     sizeof(g_gem_search));
-            if (ImGui::Selectable("(빈 칸으로 열기)", g_socket_keys[k] == 0)) {
-                g_socket_keys[k] = 0;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::Separator();
-            int shown = 0;
-            if (!game::items_ready()) {
-                ImGui::TextDisabled("아이템 표를 아직 못 읽었습니다");
-            } else {
-                for (const auto& e : game::item_catalog()) {
-                    if (e.category != game::kSocketGemCategory) continue;
-                    if (e.name.empty()) continue;
-                    if (g_gem_search[0] != 0 &&
-                        e.name.find(g_gem_search) == std::string::npos) {
-                        continue;
-                    }
-                    ImGui::PushID(static_cast<int>(e.key));
-                    if (ImGui::Selectable(e.name.c_str(),
-                                          e.key == g_socket_keys[k])) {
-                        g_socket_keys[k] = e.key;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::PopID();
-                    // 190종이라 다 그려도 되지만, 표가 커지면 무거워진다.
-                    if (++shown >= 400) break;
-                }
-                if (shown == 0) ImGui::TextDisabled("맞는 보석이 없습니다");
-            }
-            ImGui::EndCombo();
+        // 누르면 팝업이 뜬다. 팝업은 칸 루프 밖(아래)에서 그린다 - 여기는
+        // PushID(k) 안이라 여기서 열면 밖의 BeginPopup 이 못 찾는다.
+        if (ImGui::Button(label, ImVec2(230.0f, 0.0f))) {
+            g_gem_slot = k;
+            gem_picker_open(&g_gem_picker);
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(g_socket_keys[k] == 0);
         if (ImGui::SmallButton("비우기")) g_socket_keys[k] = 0;
         ImGui::EndDisabled();
         ImGui::PopID();
+    }
+
+    {
+        GemPickerOpts o;
+        o.allow_empty = true;
+        o.selected_key =
+            (g_gem_slot >= 0 && g_gem_slot < game::kGiveMaxSockets)
+                ? g_socket_keys[g_gem_slot]
+                : 0;
+        GemChoice c;
+        if (gem_picker_draw(&g_gem_picker, o, &c) && g_gem_slot >= 0 &&
+            g_gem_slot < game::kGiveMaxSockets) {
+            g_socket_keys[g_gem_slot] = (c.entry != nullptr) ? c.entry->key : 0;
+        }
     }
 
     ImGui::TextDisabled("보석을 안 고르면 빈 칸이 열린 채로 나옵니다.");

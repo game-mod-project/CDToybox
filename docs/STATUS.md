@@ -540,7 +540,8 @@ src/game/     20개 모듈
                 player        플레이어 치트 · nofall 낙사 방지 (1.13)
                 specguard     특수기능 div0 가드 · spec_heal 표시 보정
                 spawnguard    종 바꾼 동반자 소환 널 가드 (1.10)
-src/render/   D3D12 훅 · 오버레이 · 진단 · 아이콘 아틀라스 · 등급 색
+src/render/   D3D12 훅 · 오버레이 · 진단 · 아이콘 아틀라스 · 등급 색 ·
+              공통 위젯(filter_bar 필터바 · gem_picker 보석 고르기)
               패널 8개: 아이템 목록 · 지급 · 보관함 · 인벤토리 ·
               탈것/용병/캐릭터 · 장비 소켓·연마 · 플레이어 치트 · 스캔(+카메라)
 src/input/    WndProc 서브클래싱 · 커서 가드
@@ -549,7 +550,7 @@ tools/probe/  외부 분석 도구, 명령 55개 (items · loc · inv* · equip 
               clan · roster · setspecies · aob · heapfind · dumpimage …)
 tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
               fields = 게임이 알려 주는 필드 이름)
-tests/        364개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-10)
+tests/        385개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-10)
 scripts/      build.ps1 · deploy.ps1
 ```
 

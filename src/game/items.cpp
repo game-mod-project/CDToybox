@@ -954,4 +954,8 @@ std::uint16_t full_endurance_for(std::uint32_t item_key) {
     return 0;
 }
 
+bool is_socket_gem(const ItemCatalogEntry& e) {
+    return e.category == kSocketGemCategory && !e.name.empty();
+}
+
 }  // namespace cdtb::game

@@ -509,3 +509,20 @@ TEST(config_drops_socket_cap_parts_past_the_vector) {
     // 0 은 "안 건드림" 이라 적을 이유가 없다.
     CHECK(cdtb::config::parse_socket_cap_parts("3:5=0").empty());
 }
+
+// ------------------------------------------------------ 보석 거르기
+
+TEST(is_socket_gem_needs_category_74_and_a_name) {
+    // 장비 창과 지급 창의 보석 고르기가 같은 조건으로 거른다.
+    cdtb::game::ItemCatalogEntry e;
+    e.category = cdtb::game::kSocketGemCategory;
+    e.name = "바람 가르기";
+    CHECK(cdtb::game::is_socket_gem(e));
+    // 이름이 안 풀린 것은 고를 수 없다 - 목록에 빈 줄이 뜬다.
+    e.name.clear();
+    CHECK(!cdtb::game::is_socket_gem(e));
+    // 분류가 다르면 이름이 있어도 아니다.
+    e.name = "한손검";
+    e.category = 56;
+    CHECK(!cdtb::game::is_socket_gem(e));
+}
