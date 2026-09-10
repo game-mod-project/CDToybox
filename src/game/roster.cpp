@@ -504,15 +504,6 @@ CompanionGroup companion_group_of_row(std::uint16_t merc_row) {
     }
 }
 
-const char* companion_group_name(CompanionGroup g) {
-    switch (g) {
-        case CompanionGroup::People: return "용병대원";
-        case CompanionGroup::Mount:  return "탈것·펫";
-        case CompanionGroup::System: return "시스템";
-        default:                     return "미상";
-    }
-}
-
 namespace {
 // 전역 하나를 사슬대로 따라가 캐릭터 행을 낸다. 못 읽으면 0xFFFF.
 std::uint16_t session_char_row(const mem::Reader& reader, std::uint64_t rva) {

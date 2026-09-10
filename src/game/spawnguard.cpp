@@ -130,9 +130,6 @@ bool spawnguard_install(const mem::Reader& reader) {
     return true;
 }
 
-bool spawnguard_installed() {
-    return g_installed.load(std::memory_order_acquire);
-}
 bool spawnguard_unsupported() {
     return g_unsupported.load(std::memory_order_acquire);
 }

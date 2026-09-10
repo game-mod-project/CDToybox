@@ -65,8 +65,6 @@ bool g_installed = false;
 constexpr int kSeenCap = 16;
 std::uintptr_t g_seen[kSeenCap]{};
 std::uint32_t g_seen_hits[kSeenCap]{};
-char g_seen_class[kSeenCap][96]{};
-bool g_seen_server[kSeenCap]{};
 
 // 세션은 조회 함수의 인자다. 처리기에 넘길 것은 이쪽이다.
 std::uintptr_t g_sess[kSeenCap]{};
@@ -591,44 +589,6 @@ void note_pump_context() {
     log::infof("메시지 펌프 경계: 스레드 {} 작업 컨텍스트 0x{:X}", tid, ctx);
 }
 
-// 디스패처를 지나는 작업들. 콜백마다 한 번씩 "어느 콜백이, 어떤
-// 컨텍스트로, 그때 TLS+0x250 이 서 있는지" 를 남긴다. 매 틱 돌면서
-// TLS 가 서 있는 작업이 있으면 그것이 프레임 경계 후보다.
-constexpr int kTaskSeenCap = 24;
-std::uintptr_t g_task_cb[kTaskSeenCap]{};
-std::uint32_t g_task_hits[kTaskSeenCap]{};
-std::atomic<int> g_task_seen{0};
-
-void note_task(void* self) {
-    if (g_reader == nullptr) return;
-    const auto t = reinterpret_cast<std::uintptr_t>(self);
-    std::uintptr_t desc = 0, cb = 0, ctx = 0, tls_ctx = 0;
-    if (!safe_deref(t + 0x78, &desc) || desc == 0) return;
-    safe_deref(desc + 8, &cb);
-    safe_deref(t + 0x80, &ctx);
-    const std::uintptr_t tls = static_cast<std::uintptr_t>(__readgsqword(0x58));
-    std::uintptr_t slot0 = 0;
-    if (tls != 0 && safe_deref(tls, &slot0) && slot0 != 0) {
-        safe_deref(slot0 + 0x250, &tls_ctx);
-    }
-    const int n = g_task_seen.load(std::memory_order_acquire);
-    for (int i = 0; i < n; ++i) {
-        if (g_task_cb[i] == cb) {
-            ++g_task_hits[i];
-            return;
-        }
-    }
-    if (n >= kTaskSeenCap) return;
-    g_task_cb[n] = cb;
-    g_task_hits[n] = 1;
-    g_task_seen.store(n + 1, std::memory_order_release);
-    const std::uintptr_t base = g_reader->module_base();
-    log::infof("작업 #{}: 콜백 모듈+0x{:X} 컨텍스트 0x{:X} TLS+0x250 0x{:X} "
-               "스레드 {}",
-               n, cb >= base ? cb - base : cb, ctx, tls_ctx,
-               GetCurrentThreadId());
-}
-
 // 계측 전용이다. **g_detour_depth 를 건드리지 않는다** - 대신 펌프
 // 전용 가드(g_pump_depth)로 중첩 진입 때 로그만 걸러 낸다. 실행은
 // 하지 않는다(펌프는 메시지 구동이라 프레임 경계가 아니었다).
@@ -992,14 +952,6 @@ bool tick_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     return true;
 }
 
-void tick_hook_remove() {
-    if (!g_tick_installed) return;
-    mem::hook_remove(g_dispatch_target);
-    g_dispatch_target = nullptr;
-    g_orig_dispatch = nullptr;
-    g_tick_installed = false;
-}
-
 bool tick_hook_installed() { return g_tick_installed; }
 
 bool find_message_pump_rva(const std::vector<std::uint8_t>& image,
@@ -1106,15 +1058,6 @@ bool actor_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     return true;
 }
 
-void actor_hook_remove() {
-    if (!g_installed) return;
-    mem::hook_remove(g_actor_getter_target);
-    g_actor_getter_target = nullptr;
-    g_orig_actor_getter = nullptr;
-    g_installed = false;
-    log::infof("액터 조회 후킹 원복");
-}
-
 bool actor_hook_installed() { return g_installed; }
 
 int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
@@ -1156,16 +1099,6 @@ int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
     for (int i = 0; i < take; ++i) {
         out[i] = g_sess[i];
         if (hits_out != nullptr) hits_out[i] = g_sess_hits[i];
-    }
-    return take;
-}
-
-int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
-    const int n = g_seen_count.load(std::memory_order_acquire);
-    const int take = (n < cap) ? n : cap;
-    for (int i = 0; i < take; ++i) {
-        out[i] = g_seen[i];
-        if (hits_out != nullptr) hits_out[i] = g_seen_hits[i];
     }
     return take;
 }
@@ -1350,11 +1283,6 @@ bool drive_gate_reset() {
 // 아래에 정의돼 있다.
 bool clan_object(const mem::Reader& reader, std::uintptr_t session,
                  std::uintptr_t* out);
-
-HireSpeciesResult last_hire_species() {
-    std::lock_guard<std::mutex> lock(g_hs_mutex);
-    return g_last_hs;
-}
 
 bool hire_species_ready() {
     return g_reader != nullptr && g_orig_actor_getter != nullptr;

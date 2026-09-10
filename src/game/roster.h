@@ -287,7 +287,6 @@ bool is_playable_merc_row(std::uint16_t row);
 //                   -> 플레이어 동반자가 아니다. 기본으로 접어 둔다.
 enum class CompanionGroup { People, Mount, System, Unknown };
 CompanionGroup companion_group_of_row(std::uint16_t merc_row);
-const char* companion_group_name(CompanionGroup g);
 
 // --- 플레이어블 캐릭터 -------------------------------------------------
 //

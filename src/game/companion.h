@@ -34,21 +34,9 @@ bool decode_hire_to_target(const std::uint8_t* payload, std::size_t len,
 // 16진 덤프. cap 바이트까지만 찍고 넘치면 "…" 를 붙인다.
 std::string hex_bytes(const std::uint8_t* p, std::size_t n, std::size_t cap);
 
-// 마지막으로 잡힌 획득 대상. valid 가 false 면 아직 없다.
-struct HireTargetCapture {
-    bool valid = false;
-    std::uint32_t handle = 0;
-    std::uint8_t flag = 0;
-};
-HireTargetCapture last_hire_target();
-
-// 잡힌 메시지 수(전체).
-int companion_capture_count();
-
 // 역직렬화 훅을 건다. 한 번만. 하나라도 걸리면 true.
 bool companion_capture_install(const mem::Rtti& rtti,
                                const mem::Reader& reader);
-bool companion_capture_installed();
 
 // 고용 작업 함수 추적 (진단).
 //
@@ -96,9 +84,7 @@ SpawnWorkResult last_spawn_work();
 inline constexpr std::uint32_t kSpawnCooldownCode = 0x533C0A53;
 
 bool companion_spawn_trace_install(const mem::Reader& reader);
-bool companion_spawn_trace_installed();
 bool companion_hire_trace_install(const mem::Reader& reader);
-bool companion_hire_trace_installed();
 // 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
 struct HireWorkResult {
     bool valid = false;
@@ -133,8 +119,6 @@ inline constexpr int kHireAckSlots = 16;
 int pending_hire_acks(HireAck* out, int cap);
 // 그 번호의 응답을 끝났다고 표시한다.
 void mark_hire_ack_handled(std::uint64_t merc_no);
-// 가장 최근 것 하나(화면 표시용).
-HireAck last_hire_ack();
 
 // ----------------------------------------------------------------------
 // ----------------------------------------------------------------------

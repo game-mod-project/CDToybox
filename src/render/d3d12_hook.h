@@ -21,7 +21,6 @@ bool install_hooks();
 // 훅 본문에서 예외가 나면 그리기를 영구히 끈다. 그 뒤에도 입력을
 // 가로채면 게임 조작이 통째로 막힌다 - 실제로 그렇게 막혔다.
 bool render_disabled();
-void remove_hooks();
 
 // 이 스왑체인과 짝지어진 커맨드큐. 모르는 스왑체인이면 nullptr.
 //

@@ -59,13 +59,6 @@ bool load_original() {
     return o_GetState != nullptr && o_SetState != nullptr;
 }
 
-void unload_original() {
-    if (g_original != nullptr) {
-        ::FreeLibrary(g_original);
-        g_original = nullptr;
-    }
-}
-
 }  // namespace cdtb::proxy
 
 // ---------------------------------------------------------------- exports

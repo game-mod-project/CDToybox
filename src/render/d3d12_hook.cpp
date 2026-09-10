@@ -357,12 +357,4 @@ bool install_hooks() {
     return ok;
 }
 
-void remove_hooks() {
-    mem::hook_remove(g_addrs.resize_buffers);
-    mem::hook_remove(g_addrs.present);
-    mem::hook_remove(g_addrs.create_swap_chain_for_hwnd);
-    mem::hook_remove(g_addrs.create_swap_chain);
-    log::infof("훅 해제 완료");
-}
-
 }  // namespace cdtb::render

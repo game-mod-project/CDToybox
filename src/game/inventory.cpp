@@ -33,7 +33,6 @@ constexpr std::size_t kRecSockets = 0x60;       // ptr 소켓 배열
 // 배열을 언제나 5칸으로 잡아 실측이 예외 없이 5/5 다(0x234F930 이
 // `mov edx,5` 로 확보하고 `mov [r14+0x68],5` 로 굳힌다).
 constexpr std::size_t kRecSocketSize = 0x68;    // u32 (늘 5)
-constexpr std::size_t kRecSocketCap = 0x6C;     // u32 (늘 5)
 // **열린 소켓 칸 수**가 여기다. TrItemValue +0x5E 가 그대로 온다.
 // 0 이면 다섯 칸이 전부 잠긴(byte[4]==0xFF) 상태다.
 constexpr std::size_t kRecOpenSockets = 0x70;   // u8

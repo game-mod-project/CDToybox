@@ -24,7 +24,6 @@ namespace cdtb::game {
 
 // 후킹만 한다. 활성화와는 별개다. 실패하면 false.
 bool freecam_install();
-void freecam_uninstall();
 
 // 켜고 끈다. 켤 때 현재 카메라 위치에서 시작한다.
 // 끄면 게임이 알아서 원래 자리로 보간해 돌아간다.

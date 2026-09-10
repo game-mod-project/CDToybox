@@ -158,7 +158,6 @@ constexpr std::size_t kHexCap = 768;
 std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
 std::mutex g_last_mutex;
-HireTargetCapture g_last_hire;
 HireAck g_acks[kHireAckSlots];
 int g_ack_next = 0;
 CatchCapture g_last_catch;
@@ -216,10 +215,6 @@ void dump_payload(void* packet, const char* tag) {
         std::uint32_t handle = 0;
         std::uint8_t flag = 0;
         if (decode_hire_to_target(pl, len, &handle, &flag)) {
-            std::lock_guard<std::mutex> lock(g_last_mutex);
-            g_last_hire.valid = true;
-            g_last_hire.handle = handle;
-            g_last_hire.flag = flag;
             log::infof("획득 대상: 액터 핸들 0x{:08X} 플래그 {}", handle, flag);
         } else {
             log::warnf("획득 대상: 본문이 5바이트가 아니다 ({}). 정적 분석과 다름",
@@ -309,26 +304,6 @@ void mark_hire_ack_handled(std::uint64_t merc_no) {
     }
 }
 
-HireAck last_hire_ack() {
-    std::lock_guard<std::mutex> lock(g_last_mutex);
-    HireAck best;
-    for (const auto& a : g_acks) {
-        if (a.valid && (!best.valid || a.at_ms > best.at_ms)) best = a;
-    }
-    return best;
-}
-
-HireTargetCapture last_hire_target() {
-    std::lock_guard<std::mutex> lock(g_last_mutex);
-    return g_last_hire;
-}
-
-int companion_capture_count() { return g_dumps.load(std::memory_order_relaxed); }
-
-bool companion_capture_installed() {
-    return g_installed.load(std::memory_order_acquire);
-}
-
 bool companion_capture_install(const mem::Rtti& rtti,
                                const mem::Reader& reader) {
     if (g_installed.load(std::memory_order_acquire)) return true;
@@ -398,10 +373,6 @@ void* __fastcall det_hire_work(void* comp, std::uint32_t* result,
 HireWorkResult last_hire_work() {
     std::lock_guard<std::mutex> lock(g_hire_mutex);
     return g_last_hire_work;
-}
-
-bool companion_hire_trace_installed() {
-    return g_hire_trace.load(std::memory_order_acquire);
 }
 
 bool companion_hire_trace_install(const mem::Reader& reader) {
@@ -482,10 +453,6 @@ void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
 SpawnWorkResult last_spawn_work() {
     std::lock_guard<std::mutex> lock(g_spawn_mutex);
     return g_last_spawn;
-}
-
-bool companion_spawn_trace_installed() {
-    return g_spawn_trace.load(std::memory_order_acquire);
 }
 
 bool companion_spawn_trace_install(const mem::Reader& reader) {
