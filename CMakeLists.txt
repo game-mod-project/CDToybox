@@ -64,6 +64,7 @@ add_library(cdtoybox SHARED
     src/render/icon_atlas.cpp
     src/render/grant_panel.cpp
     src/render/item_style.cpp
+    src/render/filter_bar.cpp
     src/render/stash_panel.cpp
     src/render/inventory_panel.cpp
     src/render/roster_panel.cpp

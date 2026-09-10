@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "game/item_view.h"
+#include "render/filter_bar.h"
 #include "render/icon_atlas.h"
 #include "game/items.h"
 
@@ -22,20 +23,16 @@ namespace {
 // 거르기·정렬·쪽나누기는 game::item_view 가 한다. 여기는 그리기만
 // 한다 - 경계 계산을 UI 안에 두면 화면으로만 확인하게 된다.
 
-char g_query[128] = "";
-// 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개 개발용이라 목록에
-// 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
-bool g_hide_unnamed = true;
+// 검색·등급·분류 줄. 인벤토리 창과 같은 위젯(render/filter_bar)을 쓴다.
+// '이름 없는 것 감추기' 는 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개
+// 개발용이라 목록에 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
+FilterBar g_bar = [] { FilterBar b; b.hide_unnamed = true; return b; }();
 int g_per_page_idx = 1;                      // 아래 표의 첨자
-int g_grade_idx = 0;                         // 0=전체, 1=없음, 2..6=T1..T5
-int g_category_idx = 0;                      // 0=전체, 그 뒤는 g_categories
 game::ItemSort g_sort = game::ItemSort::Key;
 bool g_ascending = true;
 std::size_t g_page = 0;
 
 std::vector<const game::ItemCatalogEntry*> g_view;
-std::vector<std::uint8_t> g_categories;      // 표에 실제로 있는 분류 값
-std::string g_category_labels;               // Combo 용 널 구분 문자열
 bool g_dirty = true;
 std::size_t g_built_from = 0;
 // 카탈로그는 이름이 뒤늦게(현지화 후) 채워지며 새 판으로 갈린다.
@@ -53,20 +50,12 @@ std::size_t per_page() { return kPerPage[g_per_page_idx]; }
 // 보라색은 등급이 아니라 '중요물품' 표시였다.
 
 void rebuild_categories() {
-    build_category_labels(&g_categories, &g_category_labels);
+    build_category_labels(&g_bar.categories, &g_bar.category_labels);
 }
 
 void rebuild() {
     const auto& all = game::item_catalog();
-    game::ItemFilter f;
-    f.query = g_query;
-    f.hide_unnamed = g_hide_unnamed;
-    f.grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
-    f.category = (g_category_idx == 0 ||
-                  g_category_idx > static_cast<int>(g_categories.size()))
-                     ? -1
-                     : g_categories[g_category_idx - 1];
-    g_view = game::filter_items(all, f);
+    g_view = game::filter_items(all, to_filter(g_bar));
     game::sort_items(g_view, g_sort, g_ascending);
     g_built_from = all.size();
     g_built_ptr = all.data();
@@ -77,66 +66,6 @@ void rebuild() {
 // 라벨이 오른쪽에 붙는 위젯(Combo 등)이 실제로 차지하는 폭.
 float labeled_w(float item_w, const char* label) {
     return item_w + ImGui::GetStyle().ItemInnerSpacing.x + text_width(label);
-}
-
-void draw_filter_bar() {
-    const ImGuiStyle& st = ImGui::GetStyle();
-    const float clear_w = text_width("지우기") + st.FramePadding.x * 2.0f;
-    const float check_w = text_width("이름 없는 것 감추기") +
-                          ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
-
-    // 검색창은 남은 폭을 쓰되 상한을 둔다. 상한이 없으면 창을 넓혔을
-    // 때 검색창만 늘어나 오른쪽 항목이 전부 밀려 잘린다.
-    float query_w = ImGui::GetContentRegionAvail().x - clear_w -
-                    st.ItemSpacing.x;
-    if (query_w > 420.0f) query_w = 420.0f;
-    if (query_w < 140.0f) query_w = 140.0f;
-    ImGui::SetNextItemWidth(query_w);
-    if (ImGui::InputTextWithHint("##query", "이름 또는 키로 검색", g_query,
-                                 sizeof(g_query))) {
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    flow_same_line(clear_w);
-    if (ImGui::Button("지우기")) {
-        g_query[0] = '\0';
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    flow_same_line(check_w);
-    if (ImGui::Checkbox("이름 없는 것 감추기", &g_hide_unnamed)) {
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    // 라벨을 위젯 **앞**에 둔다. ImGui 기본은 뒤에 붙는데, 그러면
-    // "전체 ▼ 등급" 처럼 읽혀 무엇을 고르는 칸인지 헷갈린다.
-    const float grade_w = text_width("등급") + st.ItemInnerSpacing.x + 120.0f;
-    const float cat_w = text_width("분류") + st.ItemInnerSpacing.x + 230.0f;
-
-    flow_same_line(grade_w);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("등급");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    // 목록이 길다. 잘리지 않도록 펼침 높이를 넉넉히 준다.
-    if (ImGui::Combo("##grade", &g_grade_idx, kGradeLabels, 12)) {
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    flow_same_line(cat_w);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("분류");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(230.0f);
-    if (ImGui::Combo("##category", &g_category_idx,
-                     g_category_labels.c_str(), 20)) {
-        g_dirty = true;
-        g_page = 0;
-    }
 }
 
 void draw_pager(std::size_t total) {
@@ -250,7 +179,16 @@ void draw_item_panel(bool* open) {
     }
     if (g_dirty) rebuild();
 
-    draw_filter_bar();
+    {
+        FilterBarOpts o;
+        o.id = "items";
+        o.hint = "이름 또는 키로 검색";
+        o.show_hide_unnamed = true;
+        if (draw_filter_bar(&g_bar, o)) {
+            g_dirty = true;
+            g_page = 0;
+        }
+    }
     draw_pager(g_view.size());
 
     ImGui::Text("%zu / %zu", g_view.size(), all.size());
