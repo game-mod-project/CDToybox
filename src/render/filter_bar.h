@@ -28,6 +28,10 @@ struct FilterBarOpts {
     const char* id = "filter";            // ImGui ID 범위. 창마다 다르게
     const char* hint = "이름으로 검색";    // 검색창 힌트
     bool show_hide_unnamed = false;       // 아이템 목록만 켠다
+    // 검색어를 키 문자열에도 거는가. 힌트 문구와 한 쌍이다 - "이름 또는
+    // 키로 검색" 이면 true, "이름으로 검색" 이면 false. 떨어져 있으면
+    // 한쪽만 고쳐 어긋난다.
+    bool match_key = true;
 };
 
 // 한 줄을 그린다. 값이 바뀌었으면 true - 무엇을 할지는 부르는 쪽 일이다
@@ -36,8 +40,12 @@ struct FilterBarOpts {
 // 않는다 - 인벤은 읽은 뒤에야 분류가 생긴다.
 bool draw_filter_bar(FilterBar* s, const FilterBarOpts& o);
 
-// 상태 -> 필터. game::make_filter 로 위임한다. match_key 는 기본(true)
-// 이다 - 인벤은 받은 뒤 false 로 끈다.
-game::ItemFilter to_filter(const FilterBar& s);
+// 표에 실제로 있는 분류로 Combo 표를 다시 만든다. 부르는 쪽이 두 칸을
+// 짝지어 채우던 것을 여기서 한다 - 빠뜨리면 분류 Combo 가 조용히 안 뜬다.
+void filter_bar_rebuild_categories(FilterBar* s);
+
+// 상태 + 옵션 -> 필터. game::make_filter 로 위임하고 match_key 는
+// 옵션에서 가져온다 - 힌트 문구와 같은 자리에서 정해진다.
+game::ItemFilter to_filter(const FilterBar& s, const FilterBarOpts& o);
 
 }  // namespace cdtb::render

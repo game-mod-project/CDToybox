@@ -49,7 +49,7 @@ ItemFilter make_filter(std::string_view query, int grade_idx,
                        int category_idx, bool hide_unnamed,
                        const std::vector<std::uint8_t>& categories) {
     ItemFilter f;
-    f.query.assign(query.data(), query.size());
+    f.query.assign(query);
     f.hide_unnamed = hide_unnamed;
     f.grade = (grade_idx <= 0) ? -1 : grade_idx - 1;
     const bool cat_ok = category_idx > 0 &&
