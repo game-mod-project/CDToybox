@@ -1,4 +1,3 @@
-#include <cstring>
 #include <set>
 #include <string>
 
@@ -21,10 +20,15 @@ TEST(layout_table_has_every_window_in_order) {
 
 TEST(layout_titles_unique_labels_present) {
     std::set<std::string> titles;
+    std::set<std::string> labels;
     for (const auto& s : cdtb::render::window_specs()) {
         CHECK(s.title != nullptr && s.title[0] != 0);
         CHECK(titles.insert(s.title).second);
-        if (s.id != Win::Main) CHECK(s.label != nullptr && s.label[0] != 0);
+        if (s.id != Win::Main) {
+            CHECK(s.label != nullptr && s.label[0] != 0);
+            // 라벨은 본창 체크박스의 ImGui ID 다. 겹치면 뒤쪽 하나가 먹통이 된다.
+            CHECK(labels.insert(s.label).second);
+        }
         CHECK(s.min_w <= s.w && s.min_h <= s.h);
     }
 }

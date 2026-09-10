@@ -6,7 +6,6 @@
 
 #include <imgui.h>
 
-#include <cfloat>
 #include <cstdio>
 #include <cstring>
 #include <vector>

@@ -365,7 +365,9 @@ bool& shown(cdtb::render::Win w) {
 
 void init_show_flags() {
     if (g_show_inited) return;
-    for (const auto& s : cdtb::render::window_specs()) shown(s.id) = s.default_open;
+    for (const auto& s : cdtb::render::window_specs()) {
+        shown(s.id) = s.default_open;
+    }
     g_show_inited = true;
 }
 
@@ -396,7 +398,7 @@ void draw_ui() {
     int n = 0;
     for (const auto& s : cdtb::render::window_specs()) {
         if (s.id == cdtb::render::Win::Main) continue;
-        if ((n & 1) == 1) ImGui::SameLine(190.0f);
+        if ((n & 1) == 1) ImGui::SameLine(200.0f);
         ImGui::Checkbox(s.label, &shown(s.id));
         ++n;
     }
