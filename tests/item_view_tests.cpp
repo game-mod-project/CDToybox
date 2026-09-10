@@ -202,3 +202,103 @@ TEST(sort_items_orders_by_grade) {
     CHECK_EQ(out[0]->grade, static_cast<std::uint8_t>(5));
     CHECK_EQ(out[3]->grade, static_cast<std::uint8_t>(0));
 }
+
+// ------------------------------------------------------- 술어 (passes)
+
+TEST(passes_agrees_with_filter_items) {
+    // filter_items 가 passes 를 부르도록 바뀌었다. 같은 입력에 같은
+    // 판정을 내야 한다 - 이름·키·이름없음·등급·분류를 전부 돈다.
+    const auto named = sample();
+    const auto tiers = graded();
+
+    ItemFilter fs[6];
+    fs[1].query = "화살";
+    fs[2].query = "9500";
+    fs[3].hide_unnamed = true;
+    fs[4].grade = 0;
+    fs[5].category = 56;
+
+    for (const auto* all : {&named, &tiers}) {
+        for (const auto& f : fs) {
+            const auto out = cdtb::game::filter_items(*all, f);
+            std::size_t n = 0;
+            for (const auto& e : *all) {
+                bool in = false;
+                for (const auto* o : out) {
+                    if (o == &e) in = true;
+                }
+                const bool p = cdtb::game::passes(f, e.name, e.grade,
+                                                  e.category, e.key);
+                CHECK_EQ(p, in);
+                if (p) ++n;
+            }
+            CHECK_EQ(n, out.size());
+        }
+    }
+}
+
+TEST(passes_ignores_key_when_match_key_is_off) {
+    // 인벤토리는 이름만 본다. 숫자를 쳐도 키가 걸리면 안 된다.
+    ItemFilter f;
+    f.query = "9500";
+    f.match_key = false;
+    CHECK(!cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+    f.match_key = true;
+    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+}
+
+TEST(passes_with_key_off_still_matches_name) {
+    ItemFilter f;
+    f.query = "도끼";
+    f.match_key = false;
+    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+}
+
+TEST(passes_with_key_off_drops_unnamed_even_if_key_matches) {
+    // 이름 없는 것은 키로만 찾을 수 있는데, 키를 안 보면 못 찾는다.
+    ItemFilter f;
+    f.query = "200997";
+    f.match_key = false;
+    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u));
+}
+
+// ------------------------------------------------- Combo 색인 -> 필터
+
+TEST(make_filter_index_zero_means_all) {
+    const std::vector<std::uint8_t> cats = {56, 22};
+    const auto f = cdtb::game::make_filter("", 0, 0, false, cats);
+    CHECK_EQ(f.grade, -1);
+    CHECK_EQ(f.category, -1);
+    CHECK(f.query.empty());
+    CHECK(!f.hide_unnamed);
+    CHECK(f.match_key);
+}
+
+TEST(make_filter_grade_index_is_one_past_the_grade) {
+    // Combo 는 0 이 "전체" 라 등급이 한 칸 밀려 있다. 1 이 등급 0(없음).
+    const std::vector<std::uint8_t> cats;
+    CHECK_EQ(cdtb::game::make_filter("", 1, 0, false, cats).grade, 0);
+    CHECK_EQ(cdtb::game::make_filter("", 6, 0, false, cats).grade, 5);
+}
+
+TEST(make_filter_category_index_looks_up_the_table) {
+    const std::vector<std::uint8_t> cats = {56, 22};
+    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, cats).category, 56);
+    CHECK_EQ(cdtb::game::make_filter("", 0, 2, false, cats).category, 22);
+}
+
+TEST(make_filter_category_index_past_the_table_means_all) {
+    // 카탈로그가 새 판으로 갈리면 Combo 색인이 표 길이를 넘을 수 있다.
+    // 그때 배열 밖을 읽지 말고 "전체" 로 떨어져야 한다.
+    const std::vector<std::uint8_t> cats = {56, 22};
+    CHECK_EQ(cdtb::game::make_filter("", 0, 3, false, cats).category, -1);
+    const std::vector<std::uint8_t> none;
+    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, none).category, -1);
+}
+
+TEST(make_filter_copies_query_and_hide_unnamed) {
+    const std::vector<std::uint8_t> cats;
+    const auto f = cdtb::game::make_filter("화살", 0, 0, true, cats);
+    CHECK_EQ(f.query, std::string("화살"));
+    CHECK(f.hide_unnamed);
+}

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "game/items.h"
@@ -19,7 +21,25 @@ struct ItemFilter {
     bool hide_unnamed = false;  // 현지화 표에 없는 것을 감춘다
     int grade = -1;             // -1 = 전체, 0 = 등급 없음, 1..5 = T1..T5
     int category = -1;          // -1 = 전체
+    // query 를 키 문자열에도 거는가. 아이템 목록은 건다("이름 또는 키로
+    // 검색"). 인벤토리는 이름만 본다 - 이 차이를 숨기면 인벤에서 숫자를
+    // 쳤을 때 동작이 조용히 바뀐다.
+    bool match_key = true;
 };
+
+// 한 항목이 필터를 통과하는가. filter_items 가 이것을 부르고, 인벤토리
+// 창은 자기 행에 직접 건다 - 거르는 규칙이 두 곳에 있으면 갈라진다.
+bool passes(const ItemFilter& f, std::string_view name, int grade,
+            int category, std::uint32_t key);
+
+// Combo 색인을 필터로 옮긴다. 색인 0 은 "전체". 등급은 색인-1 이고,
+// 분류는 `categories[색인-1]` 이다(render 의 build_category_labels 가
+// 만든 표). 색인이 표를 넘으면 전체로 떨어진다 - 카탈로그가 새 판으로
+// 갈리면 그럴 수 있다. 아이템 목록과 인벤토리에 글자 그대로 복제돼
+// 있던 것을 여기 한 곳으로 모았다.
+ItemFilter make_filter(std::string_view query, int grade_idx,
+                       int category_idx, bool hide_unnamed,
+                       const std::vector<std::uint8_t>& categories);
 
 enum class ItemSort { Key, Name, NameKey, Grade, Category };
 
