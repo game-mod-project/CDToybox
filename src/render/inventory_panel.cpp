@@ -14,11 +14,13 @@
 #include "game/inventory.h"
 #include "mem/reader.h"
 #include "game/items.h"
+#include "game/item_view.h"
 #include "game/stash.h"
 #include "render/grant_panel.h"
 #include "render/overlay.h"
 #include "render/stash_panel.h"
 #include "render/item_style.h"
+#include "render/filter_bar.h"
 
 namespace cdtb::render {
 namespace {
@@ -61,13 +63,9 @@ std::string g_status = "아직 안 읽었습니다";
 // 창이 고장 난 것인지 인벤토리가 빈 것인지 구별이 안 됐다.
 bool g_waiting = true;
 
-// 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류.
-// 헬퍼는 item_style 에 함께 둔다. 한쪽만 고치면 두 창이 달라진다.
-char g_query[64]{};
-int g_grade_idx = 0;                 // 0 = 전체
-int g_category_idx = 0;              // 0 = 전체
-std::vector<std::uint8_t> g_categories;
-std::string g_category_labels;
+// 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류. 같은
+// 위젯(render/filter_bar)을 쓴다. '이름 없는 것 감추기' 는 이 창에 없다.
+FilterBar g_bar;
 int g_containers = 0;
 
 // 헤더를 눌러 정렬한다. 정렬은 그리기 전에 한 번만 하고, 그린
@@ -178,7 +176,7 @@ void refresh(const mem::Reader& reader) {
 
     g_containers = containers;
     g_rows_cat_ptr = game::item_catalog().data();
-    build_category_labels(&g_categories, &g_category_labels);
+    build_category_labels(&g_bar.categories, &g_bar.category_labels);
 
     char buf[128];
     std::snprintf(buf, sizeof(buf), "가방 %d개, 아이템 %zu개", containers,
@@ -247,49 +245,6 @@ void apply_sort() {
                          }
                          return asc ? (c < 0) : (c > 0);
                      });
-}
-
-// 아이템 목록과 같은 줄 구성이다 - 검색 · 지우기 · 등급 · 분류.
-// 폭 계산과 줄바꿈도 같은 헬퍼를 쓴다. 한쪽만 고치면 두 창이
-// 서로 다르게 생긴다.
-void draw_filter_bar() {
-    const ImGuiStyle& st = ImGui::GetStyle();
-    const float clear_w = text_width("지우기") + st.FramePadding.x * 2.0f;
-    const float grade_w = text_width("등급") + st.ItemInnerSpacing.x + 120.0f;
-    const float cat_w = text_width("분류") + st.ItemInnerSpacing.x + 230.0f;
-
-    // 검색창은 남은 폭을 쓰되 상한을 둔다. 상한이 없으면 창을 넓혔을
-    // 때 검색창만 늘어나 오른쪽 항목이 밀려 잘린다.
-    float query_w = ImGui::GetContentRegionAvail().x - clear_w -
-                    st.ItemSpacing.x;
-    if (query_w > 420.0f) query_w = 420.0f;
-    if (query_w < 140.0f) query_w = 140.0f;
-    ImGui::SetNextItemWidth(query_w);
-    ImGui::InputTextWithHint("##invquery", "이름으로 검색", g_query,
-                             sizeof(g_query));
-
-    flow_same_line(clear_w);
-    if (ImGui::Button("지우기")) g_query[0] = 0;
-
-    // 라벨을 위젯 앞에 둔다. ImGui 기본은 뒤에 붙는데 그러면
-    // "전체 ▼ 등급" 처럼 읽혀 무엇을 고르는 칸인지 헷갈린다.
-    flow_same_line(grade_w);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("등급");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::Combo("##invgrade", &g_grade_idx, kGradeLabels, 12);
-
-    // 분류는 읽은 뒤에야 만들어진다.
-    if (!g_category_labels.empty()) {
-        flow_same_line(cat_w);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("분류");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(230.0f);
-        ImGui::Combo("##invcategory", &g_category_idx,
-                     g_category_labels.c_str(), 20);
-    }
 }
 
 }  // namespace
@@ -576,15 +531,16 @@ void draw_inventory_panel(bool* open) {
     // 게임이 크래시하고 지급 경로까지 손상됐다(2026-09-05 실측). CT 처럼
     // 어느 사본이 안전한지 구조로 식별한 뒤에 다시 붙인다.
 
-    draw_filter_bar();
-
-    const int want_grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
-    const int want_cat =
-        (g_category_idx == 0 ||
-         g_category_idx > static_cast<int>(g_categories.size()))
-            ? -1
-            : static_cast<int>(g_categories[static_cast<std::size_t>(
-                  g_category_idx - 1)]);
+    {
+        FilterBarOpts o;
+        o.id = "inv";
+        o.hint = "이름으로 검색";
+        draw_filter_bar(&g_bar, o);   // 매 프레임 거르므로 반환값은 안 쓴다
+    }
+    // 이 창은 이름만 본다. 키 문자열까지 걸면 숫자를 쳤을 때 동작이
+    // 바뀐다 - 켤지는 힌트 문구와 함께 정한다(스펙 3.2).
+    game::ItemFilter filter = to_filter(g_bar);
+    filter.match_key = false;
 
     // 표에 바깥 창 스크롤이 생기지 않도록 아래 안내문 두 줄만큼 높이를
     // 남기고, 표가 그 안에서 스스로 스크롤하게 한다. 필터·헤더는 위에,
@@ -619,10 +575,7 @@ void draw_inventory_panel(bool* open) {
 
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
-            if (want_grade >= 0 && r.grade != want_grade) continue;
-            if (want_cat >= 0 && r.category != want_cat) continue;
-            if (g_query[0] != 0 &&
-                r.name.find(g_query) == std::string::npos) {
+            if (!game::passes(filter, r.name, r.grade, r.category, r.key)) {
                 continue;
             }
 
