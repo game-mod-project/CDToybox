@@ -71,9 +71,16 @@ bool draw_filter_bar(FilterBar* s, const FilterBarOpts& o) {
     return changed;
 }
 
-game::ItemFilter to_filter(const FilterBar& s) {
-    return game::make_filter(s.query, s.grade_idx, s.category_idx,
-                             s.hide_unnamed, s.categories);
+void filter_bar_rebuild_categories(FilterBar* s) {
+    build_category_labels(&s->categories, &s->category_labels);
+}
+
+game::ItemFilter to_filter(const FilterBar& s, const FilterBarOpts& o) {
+    game::ItemFilter f = game::make_filter(s.query, s.grade_idx,
+                                           s.category_idx, s.hide_unnamed,
+                                           s.categories);
+    f.match_key = o.match_key;
+    return f;
 }
 
 }  // namespace cdtb::render

@@ -302,3 +302,25 @@ TEST(make_filter_copies_query_and_hide_unnamed) {
     CHECK_EQ(f.query, std::string("화살"));
     CHECK(f.hide_unnamed);
 }
+
+// ------------------------------------------------- 후속 정리에서 더한 것
+
+TEST(passes_hides_unnamed_before_matching_its_key) {
+    // 판정 순서를 못박는다 - hide_unnamed 가 키 매칭보다 먼저다. 이름 없는
+    // 항목은 키로 찾을 수 있지만, 감추기가 켜져 있으면 키가 맞아도 뺀다.
+    ItemFilter f;
+    f.hide_unnamed = true;
+    f.query = "200997";
+    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u));
+    const auto all = sample();
+    const auto out = cdtb::game::filter_items(all, f);
+    CHECK_EQ(out.size(), static_cast<std::size_t>(0));
+}
+
+TEST(make_filter_negative_index_means_all) {
+    // Combo 는 음수를 내지 않지만, 낸다 해도 전체로 떨어져야 한다.
+    const std::vector<std::uint8_t> cats = {56, 22};
+    const auto f = cdtb::game::make_filter("", -1, -1, false, cats);
+    CHECK_EQ(f.grade, -1);
+    CHECK_EQ(f.category, -1);
+}

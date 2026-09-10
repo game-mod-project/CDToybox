@@ -9,7 +9,6 @@
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <vector>
 
 #include "game/item_view.h"
@@ -27,6 +26,15 @@ namespace {
 // '이름 없는 것 감추기' 는 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개
 // 개발용이라 목록에 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
 FilterBar g_bar = [] { FilterBar b; b.hide_unnamed = true; return b; }();
+// 이 창의 필터바 옵션. 힌트("이름 또는 키로 검색")와 match_key 가 한 쌍이다.
+const FilterBarOpts g_opts = [] {
+    FilterBarOpts o;
+    o.id = "items";
+    o.hint = "이름 또는 키로 검색";
+    o.show_hide_unnamed = true;
+    o.match_key = true;
+    return o;
+}();
 int g_per_page_idx = 1;                      // 아래 표의 첨자
 game::ItemSort g_sort = game::ItemSort::Key;
 bool g_ascending = true;
@@ -49,23 +57,15 @@ std::size_t per_page() { return kPerPage[g_per_page_idx]; }
 // 등급 색은 crimsondb.gg 의 배지 색을 그대로 쓴다. 게임 툴팁의
 // 보라색은 등급이 아니라 '중요물품' 표시였다.
 
-void rebuild_categories() {
-    build_category_labels(&g_bar.categories, &g_bar.category_labels);
-}
+void rebuild_categories() { filter_bar_rebuild_categories(&g_bar); }
 
 void rebuild() {
     const auto& all = game::item_catalog();
-    g_view = game::filter_items(all, to_filter(g_bar));
+    g_view = game::filter_items(all, to_filter(g_bar, g_opts));
     game::sort_items(g_view, g_sort, g_ascending);
     g_built_from = all.size();
     g_built_ptr = all.data();
     g_dirty = false;
-}
-
-
-// 라벨이 오른쪽에 붙는 위젯(Combo 등)이 실제로 차지하는 폭.
-float labeled_w(float item_w, const char* label) {
-    return item_w + ImGui::GetStyle().ItemInnerSpacing.x + text_width(label);
 }
 
 void draw_pager(std::size_t total) {
@@ -179,15 +179,9 @@ void draw_item_panel(bool* open) {
     }
     if (g_dirty) rebuild();
 
-    {
-        FilterBarOpts o;
-        o.id = "items";
-        o.hint = "이름 또는 키로 검색";
-        o.show_hide_unnamed = true;
-        if (draw_filter_bar(&g_bar, o)) {
-            g_dirty = true;
-            g_page = 0;
-        }
+    if (draw_filter_bar(&g_bar, g_opts)) {
+        g_dirty = true;
+        g_page = 0;
     }
     draw_pager(g_view.size());
 

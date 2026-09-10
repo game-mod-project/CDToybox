@@ -66,6 +66,15 @@ bool g_waiting = true;
 // 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류. 같은
 // 위젯(render/filter_bar)을 쓴다. '이름 없는 것 감추기' 는 이 창에 없다.
 FilterBar g_bar;
+// 이 창의 필터바 옵션. 이름만 본다 - 키 문자열까지 걸면 숫자를 쳤을 때
+// 동작이 바뀐다. 힌트("이름으로 검색")와 match_key=false 가 한 쌍이다.
+const FilterBarOpts g_opts = [] {
+    FilterBarOpts o;
+    o.id = "inv";
+    o.hint = "이름으로 검색";
+    o.match_key = false;
+    return o;
+}();
 int g_containers = 0;
 
 // 헤더를 눌러 정렬한다. 정렬은 그리기 전에 한 번만 하고, 그린
@@ -176,7 +185,7 @@ void refresh(const mem::Reader& reader) {
 
     g_containers = containers;
     g_rows_cat_ptr = game::item_catalog().data();
-    build_category_labels(&g_bar.categories, &g_bar.category_labels);
+    filter_bar_rebuild_categories(&g_bar);
 
     char buf[128];
     std::snprintf(buf, sizeof(buf), "가방 %d개, 아이템 %zu개", containers,
@@ -531,16 +540,8 @@ void draw_inventory_panel(bool* open) {
     // 게임이 크래시하고 지급 경로까지 손상됐다(2026-09-05 실측). CT 처럼
     // 어느 사본이 안전한지 구조로 식별한 뒤에 다시 붙인다.
 
-    {
-        FilterBarOpts o;
-        o.id = "inv";
-        o.hint = "이름으로 검색";
-        draw_filter_bar(&g_bar, o);   // 매 프레임 거르므로 반환값은 안 쓴다
-    }
-    // 이 창은 이름만 본다. 키 문자열까지 걸면 숫자를 쳤을 때 동작이
-    // 바뀐다 - 켤지는 힌트 문구와 함께 정한다(스펙 3.2).
-    game::ItemFilter filter = to_filter(g_bar);
-    filter.match_key = false;
+    draw_filter_bar(&g_bar, g_opts);   // 매 프레임 거르므로 반환값은 안 쓴다
+    const game::ItemFilter filter = to_filter(g_bar, g_opts);
 
     // 표에 바깥 창 스크롤이 생기지 않도록 아래 안내문 두 줄만큼 높이를
     // 남기고, 표가 그 안에서 스스로 스크롤하게 한다. 필터·헤더는 위에,
