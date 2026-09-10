@@ -92,8 +92,6 @@ void draw_camera_panel(bool* open) {
     ImGui::End();
 }
 
-void draw_scan_panel() {}   // 제거됨. 호출부 호환을 위해 남긴다.
-
 void shutdown_scan_panel() { game::stop_auto_analysis(); }
 
 }  // namespace cdtb::render

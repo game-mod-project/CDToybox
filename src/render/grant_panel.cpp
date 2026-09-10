@@ -260,8 +260,7 @@ void draw_extras(const game::ItemCatalogEntry* item) {
     }
 
     if (cap_s > 0) {
-        // 인벤토리 507개가 전부 0 이다. 화면에 무엇이 달라지는지는
-        // 아직 못 봤다 - 넣어 보고 툴팁을 확인하려고 낸 칸이다.
+        // 지급분에 연마가 실리는 것은 화면으로 확인했다(STATUS 6장).
         ImGui::TextUnformatted("연마");
         ImGui::SameLine(80.0f);
         ImGui::SetNextItemWidth(110.0f);

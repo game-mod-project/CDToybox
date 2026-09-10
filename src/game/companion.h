@@ -22,6 +22,11 @@ namespace cdtb::game {
 //
 // 획득 대상 메시지 `TrocTrHireMercenaryToTargetReq`(ID 2338) 본문은
 // 정적 분석으로 `u32 대상 액터 핸들 + u8 플래그` 5바이트다.
+//
+// 이름은 "캡처" 지만 조사용이 아니라 **생산 배관**이다. det_hire_response 가 채우는
+// g_acks 를 clan.cpp 의 획득 뒤처리(tick_hire_cleanup -> resolve_spawn_flag, 게임 메모리
+// 쓰기)가 소비하고, det_catch_summon 이 채우는 g_last_catch 를 request_catch 가 쓴다.
+// 지우면 "획득 직후 소환 먹통" 이 조용히 되살아난다(2026-09-10 죽은 코드 정리 때 확인).
 
 // 페이로드 머리를 푼다. 길이가 모자라면 false.
 bool decode_message_header(const std::uint8_t* payload, std::size_t len,
@@ -34,21 +39,9 @@ bool decode_hire_to_target(const std::uint8_t* payload, std::size_t len,
 // 16진 덤프. cap 바이트까지만 찍고 넘치면 "…" 를 붙인다.
 std::string hex_bytes(const std::uint8_t* p, std::size_t n, std::size_t cap);
 
-// 마지막으로 잡힌 획득 대상. valid 가 false 면 아직 없다.
-struct HireTargetCapture {
-    bool valid = false;
-    std::uint32_t handle = 0;
-    std::uint8_t flag = 0;
-};
-HireTargetCapture last_hire_target();
-
-// 잡힌 메시지 수(전체).
-int companion_capture_count();
-
 // 역직렬화 훅을 건다. 한 번만. 하나라도 걸리면 true.
 bool companion_capture_install(const mem::Rtti& rtti,
                                const mem::Reader& reader);
-bool companion_capture_installed();
 
 // 고용 작업 함수 추적 (진단).
 //
@@ -84,6 +77,8 @@ inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
 //
 // 이것을 몰라서 "획득한 개체는 재적재가 필요하다"고 오진했다.
 // 화면에 코드를 띄워 다음에는 바로 알아보게 한다.
+//
+// roster_panel 이 매 프레임 읽어 소환 거부 문구를 띄운다 - 조사용 아님, 지우지 말 것.
 struct SpawnWorkResult {
     bool valid = false;
     std::uint64_t merc_no = 0;
@@ -95,10 +90,9 @@ SpawnWorkResult last_spawn_work();
 // 쓸 수 있다 - 화면에는 "쿨타임으로 보임" 정도로만 적는다.
 inline constexpr std::uint32_t kSpawnCooldownCode = 0x533C0A53;
 
+// 소환 작업 결과를 last_spawn_work 로 넘기는 생산 훅. 진단용이 아니다.
 bool companion_spawn_trace_install(const mem::Reader& reader);
-bool companion_spawn_trace_installed();
 bool companion_hire_trace_install(const mem::Reader& reader);
-bool companion_hire_trace_installed();
 // 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
 struct HireWorkResult {
     bool valid = false;
@@ -133,8 +127,6 @@ inline constexpr int kHireAckSlots = 16;
 int pending_hire_acks(HireAck* out, int cap);
 // 그 번호의 응답을 끝났다고 표시한다.
 void mark_hire_ack_handled(std::uint64_t merc_no);
-// 가장 최근 것 하나(화면 표시용).
-HireAck last_hire_ack();
 
 // ----------------------------------------------------------------------
 // ----------------------------------------------------------------------
@@ -290,17 +282,6 @@ bool decode_hire_inv(const std::uint8_t* payload, std::size_t len,
 bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
                                  std::uint16_t b);
 bool hire_from_inventory_ready();
-
-// 등록 작업 함수. 거부 코드를 찍는다. 읽기만 한다.
-inline constexpr std::uint64_t kHireInvWorkRva = 0x2AD1FC0;
-struct HireInvResult {
-    bool valid = false;
-    std::uint16_t a = 0;
-    std::uint16_t b = 0;
-    std::uint32_t code = 0;  // 0 이면 성공
-};
-HireInvResult last_hire_inv();
-bool companion_hire_inv_trace_install(const mem::Reader& reader);
 
 inline constexpr std::uint16_t kCatchBySummonId = 2386;
 inline constexpr std::size_t kCatchWireLen = 5 + 8;

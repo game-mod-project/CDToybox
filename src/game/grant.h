@@ -34,7 +34,6 @@ bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
 
 // 작업 디스패처를 후킹해 걸어 둔 요청을 거기서 실행한다.
 bool tick_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
-void tick_hook_remove();
 bool tick_hook_installed();
 
 // 메시지 펌프. 게임 로직 작업의 콜백이 부르는 함수로, 세션 큐에서
@@ -72,7 +71,6 @@ bool taskrun_hook_installed();
 // 복잡한 경로를 흉내 낼 필요가 없다. 훅은 값을 적어 두기만 하고
 // 원본을 그대로 부른다.
 bool actor_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
-void actor_hook_remove();
 bool actor_hook_installed();
 
 // 본 적 있으면 그 자리의 횟수를 늘리고, 처음이면 자리를 잡는다.
@@ -101,12 +99,6 @@ int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
 int session_slot_for(const std::uintptr_t* slots,
                      const std::uint64_t* last_seen, int count, int cap,
                      std::uintptr_t value, bool* fresh_slot);
-
-// 조회 함수가 지금까지 돌려준 서로 다른 값들과 각각의 호출 횟수.
-// 클라이언트 쪽과 서버 쪽 인벤토리 컴포넌트가 둘 다 나오고, 서버
-// 쪽만 해도 여럿이다(NPC·상자 등). 플레이어 것은 게임플레이 코드가
-// 계속 부르므로 횟수가 압도적으로 많다 - 그걸로 가린다.
-int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap);
 
 // 마지막으로 본 액터. 아직 못 봤으면 0.
 std::uintptr_t last_actor();
@@ -311,17 +303,6 @@ bool find_entity_lookup(const std::uint8_t* body, std::size_t n,
 bool entity_hook_install(const mem::Rtti& rtti, const mem::Reader& reader);
 
 int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap);
-
-// 표 조회 함수를 후킹해 "이 키를 어느 표에서 찾는지" 를 잡는다.
-//
-// 인벤토리 레코드 +0x08 의 값(5915 등)은 아이템 표에도 현지화에도
-// 없다. 별도 표가 있다는 뜻인데, 같은 조회 함수를 쓰는 표가 82개라
-// 눈으로 고를 수 없다. UI 가 이름을 그릴 때 반드시 조회하므로
-// 그 순간을 잡는다.
-//
-// 찾는 키가 들어올 때만 남긴다 - 이 함수는 아주 자주 불린다.
-bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
-                         std::uint32_t watch_key);
 
 // 부르기 전에 게임이 하는 검사를 우리도 한다. 게임 코드에 그대로
 // 있다 - 키가 0이거나 개수가 0 이하면 게임이 실패로 돌려준다.
@@ -548,7 +529,6 @@ struct HireSpeciesResult {
     std::uint16_t key = 0;
     std::uint32_t code = 0;
 };
-HireSpeciesResult last_hire_species();
 
 // 캐릭터 소환 치트(SpawnCharacterCheatReq)는 **쓰지 않는다.**
 //
@@ -574,16 +554,6 @@ const SpawnOutcome& last_outcome();
 // 바닥 스폰 메시지를 해석해 둔다.
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader);
 const CheatMessage& spawn_message();
-
-// 실제 작업 함수를 찾아 둔다.
-bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
-
-// 실제 작업 함수를 후킹해 불릴 때마다 인자를 로그로 남긴다. 우리가
-// 부른 것이 거기까지 갔는지 보고, 게임이 평소에 넣는 값(특히 뜻을
-// 모르는 필드3)을 그대로 볼 수 있다 - 인벤토리에서 아이템을 버리면
-// 같은 함수가 불린다.
-bool spawn_trace_install();
-void spawn_trace_remove();
 
 // 부를 준비가 됐는가.
 bool spawn_ready();

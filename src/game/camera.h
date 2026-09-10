@@ -11,7 +11,7 @@ namespace cdtb::game {
 // 카메라 객체의 필드 오프셋. 2026-08-31 실행 중인 게임에서 실측.
 // 문서: 2026-08-31-camera-write-paths.md
 //
-// 주의 - 지역 변환(kLocalScale/kLocalRotation/kLocalPosition)은 활성
+// 주의 - 지역 변환(+0x50 스케일 / +0x5C 회전 / +0x6C 위치)은 활성
 // 카메라에서 항상 (1,1,1) / 항등 쿼터니언 / (0,0,0) 이다. 이미지
 // 전수 조사에서도 그 칸에 쓰는 코드가 0곳이었다. 카메라의 월드
 // 좌표는 카메라 객체가 아니라 PlayerCameraComponent 에 있다
@@ -19,26 +19,11 @@ namespace cdtb::game {
 // 카메라 상대 렌더링으로 보인다.
 namespace camera_offset {
 constexpr int kName = 0x48;           // 이름 객체 포인터(SSO, +0x18 에 인라인)
-constexpr int kLocalScale = 0x50;     // float[3] - 활성 카메라에서 (1,1,1)
-constexpr int kLocalRotation = 0x5C;  // 쿼터니언 float[4] - 항등
-constexpr int kLocalPosition = 0x6C;  // float[3] - (0,0,0)
-constexpr int kViewportW = 0x7C;      // int32, 실측 1920
-constexpr int kViewportH = 0x80;      // int32, 실측 1080
 constexpr int kFov = 0x9C;            // float, 도 단위. 활성 45, 프리캠 60
-constexpr int kNearClip = 0xB4;       // float, 실측 0.2
-constexpr int kFarClip = 0xB8;        // float, 실측 100000
-constexpr int kActiveFlags = 0xBC;    // 바이트 플래그. 활성 0x0101, 프리캠 0
-constexpr int kRenderView = 0xE0;     // 렌더 뷰 객체 포인터. 프리캠은 0
-constexpr int kOwner = 0x10;          // 소유 컴포넌트. 프리캠은 0
 }  // namespace camera_offset
 
 // PlayerCameraComponent 의 오프셋.
 namespace component_offset {
-// 활성 카메라의 내부 포인터(카메라 + 0x28)를 담는다. 카메라 객체를
-// 얻으려면 0x28 을 빼야 한다. 게임의 파라미터 복사 루틴도 이 슬롯을
-// 거쳐 카메라에 쓴다(0x140A59230).
-constexpr int kActiveCamera = 0x88;
-
 // 카메라 월드 좌표 float[3]. 매 프레임 변하는 것을 실측했다.
 // 이것이 프리카메라가 제어해야 할 진짜 값이다.
 //

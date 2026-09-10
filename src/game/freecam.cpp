@@ -291,15 +291,6 @@ bool freecam_install() {
     return true;
 }
 
-void freecam_uninstall() {
-    if (!g_hooked.load()) return;
-    g_active.store(false);
-    mem::hook_remove(reinterpret_cast<void*>(g_update_fn));
-    g_hooked.store(false);
-    g_original = nullptr;
-    log::infof("프리캠 훅 해제");
-}
-
 void freecam_toggle() {
     if (!g_hooked.load()) return;
 

@@ -42,7 +42,6 @@ namespace cdtb::game {
 // 확인한 뒤에만 설치한다. 아직이면 false 를 내고, 부르는 쪽이 다음
 // 프레임에 다시 시도한다.
 bool spawnguard_install(const mem::Reader& reader);
-bool spawnguard_installed();
 bool spawnguard_unsupported();   // 바이트가 달라 이 빌드에선 못 걺
 
 }  // namespace cdtb::game

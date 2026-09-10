@@ -28,7 +28,7 @@ struct ItemEntry {
     std::uint64_t name_key = 0;   // 레코드가 들고 있는 현지화 키
     std::uintptr_t record = 0;
     std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
-    std::uint8_t category = 0;    // 74종. 이름은 아직 못 붙였다
+    std::uint8_t category = 0;    // 74종. 이름은 render/item_style 의 category_name
     std::uint32_t max_stack = 0;  // 한 칸에 쌓이는 최대 개수
     // 담금질로 올릴 수 있는 최고 값. 0 이면 담금질이 없는 아이템이다.
     //

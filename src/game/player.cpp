@@ -13,7 +13,6 @@ namespace {
 
 constexpr std::size_t kStride = 0x90;
 constexpr std::size_t kType = 0x00;   // i32
-constexpr std::size_t kCur = 0x08;    // i64 (하위 i32 만 쓴다)
 constexpr std::size_t kMax = 0x18;    // i64 base(=최대)
 
 // 평면 오프셋(게이지 배열 base 기준).
