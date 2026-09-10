@@ -11,11 +11,14 @@
 #include <string>
 #include <vector>
 
+#include "core/file_version.h"
 #include "core/guard.h"
 #include "core/log.h"
 #include "core/slowlog.h"
+#include "core/vk_name.h"
 #include "input/cursor.h"
 #include "input/wndproc.h"
+#include "render/colors.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
 #include "render/icon_atlas.h"
@@ -387,6 +390,19 @@ void draw_windows() {
     if (shown(Win::Camera)) cdtb::render::draw_camera_panel(&shown(Win::Camera));
 }
 
+// 게임 exe 의 버전. 한 번 읽어 둔다 - 매 프레임 자원을 뒤질 이유가 없다.
+const std::string& game_version_line() {
+    static std::string line = [] {
+        wchar_t path[MAX_PATH]{};
+        ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+        std::string v;
+        return cdtb::file_version_string(path, &v)
+                   ? "Crimson Desert " + v
+                   : std::string("Crimson Desert (버전 확인 불가)");
+    }();
+    return line;
+}
+
 void draw_ui() {
     init_show_flags();
     cdtb::render::begin_window(cdtb::render::Win::Main, nullptr);
@@ -404,11 +420,15 @@ void draw_ui() {
     }
 
     ImGui::Separator();
-    ImGui::TextDisabled("Insert 토글 · End 비활성화 · F9 프리카메라");
-    ImGui::Text("Crimson Desert 2.00.01 / %.1f FPS", ImGui::GetIO().Framerate);
+    // 안내는 설정값에서 만든다. 키를 옮기고 안내를 안 고쳐 거짓이 된 적이 있다.
+    char kb1[16], kb2[16];
+    ImGui::TextDisabled("%s 토글 · %s 비활성화",
+                        cdtb::vk_name(g_cfg.toggle_key, kb1, sizeof(kb1)),
+                        cdtb::vk_name(g_cfg.unload_key, kb2, sizeof(kb2)));
+    ImGui::Text("%s / %.1f FPS", game_version_line().c_str(),
+                ImGui::GetIO().Framerate);
     if (!cdtb::guard::is_safe_to_modify()) {
-        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.35f, 1.0f),
-                           "쓰기 기능이 잠겨 있습니다");
+        ImGui::TextColored(cdtb::render::col::kWarn, "쓰기 기능이 잠겨 있습니다");
     }
 
     if (!g_cfg.show_diagnostics) {
@@ -421,13 +441,14 @@ void draw_ui() {
     ImGui::Separator();
 
     if (!d.error.empty()) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "오류: %s",
-                           d.error.c_str());
+        // 진단이 죽었다고 창 8개까지 숨기면 안 된다(그랬다 - 진단은 기본 켜짐).
+        ImGui::TextColored(cdtb::render::col::kBad, "오류: %s", d.error.c_str());
         ImGui::End();
+        draw_windows();
         return;
     }
 
-    if (ImGui::CollapsingHeader("모듈", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("모듈")) {
         ImGui::Text("베이스    0x%llX",
                     static_cast<unsigned long long>(d.game_base));
         ImGui::Text("이미지    %.1f MB",
@@ -442,13 +463,12 @@ void draw_ui() {
         ImGui::Unindent();
     }
 
-    if (ImGui::CollapsingHeader("스캐너 진단",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("스캐너 진단")) {
         const bool exact = d.self_marker_found &&
                            d.self_marker_found_at == d.self_marker_expected;
-        ImGui::TextColored(exact ? ImVec4(0.4f, 1, 0.4f, 1)
-                                 : ImVec4(1, 0.4f, 0.4f, 1),
-                           "자기 모듈 마커: %s", exact ? "일치" : "불일치");
+        ImGui::TextColored(
+            exact ? cdtb::render::col::kOk : cdtb::render::col::kBad,
+            "자기 모듈 마커: %s", exact ? "일치" : "불일치");
         ImGui::Text("  기대 0x%llX / 발견 0x%llX",
                     static_cast<unsigned long long>(d.self_marker_expected),
                     static_cast<unsigned long long>(d.self_marker_found_at));
