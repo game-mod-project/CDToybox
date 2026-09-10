@@ -75,6 +75,7 @@ add_library(cdtoybox SHARED
     src/render/notice.cpp
     src/render/confirm_state.cpp
     src/render/confirm.cpp
+    src/render/gates.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
