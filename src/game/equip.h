@@ -6,8 +6,11 @@
 #include "mem/reader.h"
 #include "mem/rtti.h"
 
-// 착용 장비(worn gear) 에디터의 읽기 계층. 소켓(이미 열린 칸)·연마·염색을
-// cplayer 포인터 경로로 다룬다 - 인벤토리 컨테이너 핸들도 NPC 도 필요 없다.
+// 착용 장비(worn gear) 에디터의 읽기 계층. 소켓·연마·염색을 다룬다 -
+// 인벤토리 컨테이너 핸들도 NPC 도 필요 없다. 힙에서 `EquipSlotActorComponent`
+// 를 전부 찾아(collect_equip_tables) 슬롯 태그가 서로 다른 것으로 착용 배열을
+// 유도하고(find_equip_table), 정신력 풀 + 착용 조각 최다로 플레이어 것을
+// 고른다(pick_player_table). cplayer 포인터 경로(MGRCHAIN)는 안 쓰여 지웠다.
 //
 // 출처: 소켓·장비 컴포넌트 매핑은 XeTrinityz/Trinity (MIT). Nexus 3209 CT 가
 // Cheat Engine 으로 이식한 것을 실측 참고해 다시 이식했다. 자세한 근거는
