@@ -32,6 +32,15 @@ struct ItemFilter {
 bool passes(const ItemFilter& f, std::string_view name, int grade,
             int category, std::uint32_t key);
 
+// Combo 색인을 필터로 옮긴다. 색인 0 은 "전체". 등급은 색인-1 이고,
+// 분류는 `categories[색인-1]` 이다(render 의 build_category_labels 가
+// 만든 표). 색인이 표를 넘으면 전체로 떨어진다 - 카탈로그가 새 판으로
+// 갈리면 그럴 수 있다. 아이템 목록과 인벤토리에 글자 그대로 복제돼
+// 있던 것을 여기 한 곳으로 모았다.
+ItemFilter make_filter(std::string_view query, int grade_idx,
+                       int category_idx, bool hide_unnamed,
+                       const std::vector<std::uint8_t>& categories);
+
 enum class ItemSort { Key, Name, NameKey, Grade, Category };
 
 // 조건에 맞는 항목의 포인터를 모은다. 원본 순서를 지킨다.

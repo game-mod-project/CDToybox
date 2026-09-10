@@ -261,3 +261,44 @@ TEST(passes_with_key_off_drops_unnamed_even_if_key_matches) {
     f.match_key = false;
     CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u));
 }
+
+// ------------------------------------------------- Combo 색인 -> 필터
+
+TEST(make_filter_index_zero_means_all) {
+    const std::vector<std::uint8_t> cats = {56, 22};
+    const auto f = cdtb::game::make_filter("", 0, 0, false, cats);
+    CHECK_EQ(f.grade, -1);
+    CHECK_EQ(f.category, -1);
+    CHECK(f.query.empty());
+    CHECK(!f.hide_unnamed);
+    CHECK(f.match_key);
+}
+
+TEST(make_filter_grade_index_is_one_past_the_grade) {
+    // Combo 는 0 이 "전체" 라 등급이 한 칸 밀려 있다. 1 이 등급 0(없음).
+    const std::vector<std::uint8_t> cats;
+    CHECK_EQ(cdtb::game::make_filter("", 1, 0, false, cats).grade, 0);
+    CHECK_EQ(cdtb::game::make_filter("", 6, 0, false, cats).grade, 5);
+}
+
+TEST(make_filter_category_index_looks_up_the_table) {
+    const std::vector<std::uint8_t> cats = {56, 22};
+    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, cats).category, 56);
+    CHECK_EQ(cdtb::game::make_filter("", 0, 2, false, cats).category, 22);
+}
+
+TEST(make_filter_category_index_past_the_table_means_all) {
+    // 카탈로그가 새 판으로 갈리면 Combo 색인이 표 길이를 넘을 수 있다.
+    // 그때 배열 밖을 읽지 말고 "전체" 로 떨어져야 한다.
+    const std::vector<std::uint8_t> cats = {56, 22};
+    CHECK_EQ(cdtb::game::make_filter("", 0, 3, false, cats).category, -1);
+    const std::vector<std::uint8_t> none;
+    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, none).category, -1);
+}
+
+TEST(make_filter_copies_query_and_hide_unnamed) {
+    const std::vector<std::uint8_t> cats;
+    const auto f = cdtb::game::make_filter("화살", 0, 0, true, cats);
+    CHECK_EQ(f.query, std::string("화살"));
+    CHECK(f.hide_unnamed);
+}

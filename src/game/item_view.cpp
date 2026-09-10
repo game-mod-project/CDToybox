@@ -45,6 +45,21 @@ bool passes(const ItemFilter& f, std::string_view name, int grade,
     return std::string_view(digits).find(f.query) != std::string_view::npos;
 }
 
+ItemFilter make_filter(std::string_view query, int grade_idx,
+                       int category_idx, bool hide_unnamed,
+                       const std::vector<std::uint8_t>& categories) {
+    ItemFilter f;
+    f.query.assign(query.data(), query.size());
+    f.hide_unnamed = hide_unnamed;
+    f.grade = (grade_idx <= 0) ? -1 : grade_idx - 1;
+    const bool cat_ok = category_idx > 0 &&
+                        category_idx <= static_cast<int>(categories.size());
+    f.category = cat_ok
+                     ? categories[static_cast<std::size_t>(category_idx - 1)]
+                     : -1;
+    return f;
+}
+
 std::vector<const ItemCatalogEntry*> filter_items(
     const std::vector<ItemCatalogEntry>& all, const ItemFilter& filter) {
     std::vector<const ItemCatalogEntry*> out;
