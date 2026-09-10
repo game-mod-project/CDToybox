@@ -4,7 +4,6 @@
 #include <intrin.h>
 
 #include <atomic>
-#include <mutex>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -217,8 +216,6 @@ thread_local int g_detour_depth = 0;
 // depth==1)을 깬 적이 있다(2026-09-04). 계측은 실행 게이트를 건드리면
 // 안 된다.
 thread_local int g_pump_depth = 0;
-std::mutex g_hs_mutex;
-HireSpeciesResult g_last_hs;
 std::atomic<bool> g_running{false};
 // 구동이 시작된 시각. 물렸을 때 얼마나 오래됐는지 보려고 둔다.
 std::atomic<unsigned long long> g_running_at{0};
@@ -833,11 +830,6 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
         return false;
     }
 }
-
-// 캐릭터 소환 크래시 시점의 호출 스택. 널 해시가 어디서 불렸는지
-// 찾으려 예외 필터에서 뜬다(그 시점엔 스택이 살아 있다).
-
-
 
 bool find_one(const std::vector<std::uint8_t>& image, const char* pattern,
               std::uint64_t* rva_out) {
@@ -1733,10 +1725,6 @@ void run_hire_species(std::uintptr_t session, std::uint16_t key,
         log::errorf("종 등록이 게임 안에서 죽었다: 0x{:X} at 0x{:X} (RVA 0x{:X})",
                     o.seh, o.fault, o.fault - g_reader->module_base());
     } else {
-        std::lock_guard<std::mutex> lock(g_hs_mutex);
-        g_last_hs.valid = true;
-        g_last_hs.key = key;
-        g_last_hs.code = result;
         log::infof("등록 검사: 행 {} -> 코드 0x{:08X} ({}). 검사일 뿐이라 "
                    "명부에는 들어가지 않는다",
                    key, result, result == 0 ? "통과" : "거부");

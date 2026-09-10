@@ -88,9 +88,6 @@ struct InventoryRecord {
 // 근거: specs/2026-09-07-socket-grant-unlock-research.md 2.2 절.
 inline constexpr std::size_t kSocketSize = 6;
 
-// 소켓 칸의 `raw[4]` 가 이 값이면 아직 안 열린 칸이다.
-inline constexpr std::uint8_t kSocketLocked = 0xFF;
-
 struct InventorySocket {
     std::uint32_t slot = 0;
     std::uint16_t index = 0xFFFF;

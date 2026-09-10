@@ -72,8 +72,9 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
 int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
                          std::vector<EquipTable>* out);
 
-// 플레이어의 착용장비를 한 번에 읽는다(가장 큰 테이블 = 플레이어). out 은
-// 그 테이블, pieces 는 그 착용 장비. 실패면 false.
+// 플레이어의 착용장비를 한 번에 읽는다 - 테이블은 pick_player_table 이 고른다
+// (정신력 풀 + 착용 조각 최다). out 은 그 테이블, pieces 는 그 착용 장비.
+// 실패면 false.
 bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
                       EquipTable* table_out, std::vector<WornPiece>* pieces_out);
 
