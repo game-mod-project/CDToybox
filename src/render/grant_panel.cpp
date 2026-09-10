@@ -301,15 +301,17 @@ void draw_selected(const game::ItemCatalogEntry* item) {
     } else {
         ImGui::TextColored(grade_color(item->grade), "%s", item->name.c_str());
     }
-    ImGui::SameLine();
     const char* cat = category_name(item->category);
     // 등급이 없으면 "-" 를 찍지 않는다 - "화살 · - · 탄환" 으로 보였다.
     const char* gl = game::grade_label(item->grade);
     const bool has_grade = gl != nullptr && gl[0] != 0 && std::strcmp(gl, "-") != 0;
     const bool has_cat = cat != nullptr && cat[0] != 0;
+    // SameLine 은 진짜 찍을 때만 - 둘 다 없으면 다음 줄이 이름 옆에 붙었다.
     if (has_grade && has_cat) {
+        ImGui::SameLine();
         ImGui::TextDisabled("· %s · %s", gl, cat);
     } else if (has_grade || has_cat) {
+        ImGui::SameLine();
         ImGui::TextDisabled("· %s", has_grade ? gl : cat);
     }
 }
@@ -325,6 +327,7 @@ void reset_sockets() {
 void set_grant_item_key(unsigned int key) {
     g_item_key = static_cast<int>(key);
     g_called = false;      // 새 아이템을 고르면 이전 결과는 지운다
+    notice_clear(&g_notice);
     reset_sockets();
 }
 
@@ -466,8 +469,12 @@ void draw_grant_panel(bool* open) {
     if (blocked != nullptr) {
         ImGui::TextColored(col::kWarn, "%s", blocked);
     } else {
-        if (blocked_give != nullptr) ImGui::TextColored(col::kWarn, "%s", blocked_give);
-        if (blocked_spawn != nullptr) ImGui::TextColored(col::kWarn, "%s", blocked_spawn);
+        if (blocked_give != nullptr) {
+            ImGui::TextColored(col::kWarn, "%s", blocked_give);
+        }
+        if (blocked_spawn != nullptr) {
+            ImGui::TextColored(col::kWarn, "%s", blocked_spawn);
+        }
     }
 
     // --- 버튼 -------------------------------------------------------
@@ -510,6 +517,8 @@ void draw_grant_panel(bool* open) {
         }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;
+        // 누르면 이전 결과를 지운다 - 같은 문구가 반복돼도 시각이 다시 찍히게
+        notice_clear(&g_notice);
         g_last_to_inventory = true;
     }
     ImGui::EndDisabled();
@@ -528,6 +537,7 @@ void draw_grant_panel(bool* open) {
         g_call_ok = game::request_spawn(
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
         g_called = true;
+        notice_clear(&g_notice);
         g_last_to_inventory = false;
     }
     ImGui::EndDisabled();
