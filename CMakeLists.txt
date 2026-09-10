@@ -73,6 +73,8 @@ add_library(cdtoybox SHARED
     src/render/player_panel.cpp
     src/render/notice_state.cpp
     src/render/notice.cpp
+    src/render/confirm_state.cpp
+    src/render/confirm.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -142,6 +144,7 @@ add_executable(cdtb_tests
     src/game/actors.cpp
     src/game/clan.cpp
     src/render/notice_state.cpp
+    src/render/confirm_state.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
