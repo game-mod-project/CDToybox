@@ -1699,8 +1699,6 @@ struct CharTrace {
     int ordinal = -1;             // record 의 u16 순번 (0xFFFF 면 없음)
 };
 
-
-
 void run_hire_species(std::uintptr_t session, std::uint16_t key,
                       SpawnOutcome* out) {
     SpawnOutcome o;

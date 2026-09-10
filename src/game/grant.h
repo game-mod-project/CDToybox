@@ -525,6 +525,7 @@ inline constexpr std::uint64_t kHireCheckRva = 0x2097BC0;
 // 그 행이 등록 가능한지 게임에게 묻는다. 게임 스레드에서 실행한다.
 bool request_hire_species(std::uintptr_t session, std::uint16_t char_row);
 bool hire_species_ready();
+
 // 캐릭터 소환 치트(SpawnCharacterCheatReq)는 **쓰지 않는다.**
 //
 // 반복 구동하면 게임 스레드가 처리기 안에서 빠져나오지 못한다 - 실측
