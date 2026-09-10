@@ -171,13 +171,13 @@ void draw_stash_panel(bool* open) {
     // 큐가 남아 있으면 한 개씩 흘려보낸다. request_give 가 쿨다운에
     // 걸리면 false 를 주므로 다음 프레임에 다시 시도한다.
     if (g_queue_at < g_queue.size() && !game::spawn_pending(game::DriveLane::Item)) {
-        std::uintptr_t seen[16]{};
-        std::uint32_t hits[16]{};
-        const int n = game::seen_sessions(seen, hits, 16);
-        bool server[16]{};
-        for (int i = 0; i < n; ++i) server[i] = game::session_is_server(i);
-        const int pick = game::best_actor_index(hits, server, n);
-        if (pick >= 0) {
+        // 지급 세션은 grant.cpp 가 한 규칙으로 고른다 - 서버 + 게이트.
+        // 여기서만 호출 최다로 골랐더니, 인플레이스 로드 뒤 게이트가
+        // 닫힌 죽은 세션을 그대로 잡았다(실측 2026-09-10). 그 세션으로
+        // 구동하면 게임 안에서 0xC0000005 로 죽는다.
+        const mem::LocalReader rd;
+        const std::uintptr_t session = game::pick_drive_session(rd);
+        if (session != 0) {
             const auto& e = g_queue[g_queue_at];
             // 담금질은 아이템마다 상한이 있고 넘으면 게임이 조용히
             // 거절한다 - 그러면 큐가 그 자리에서 영영 멈춘다. 파일에
@@ -239,7 +239,7 @@ void draw_stash_panel(bool* open) {
                 ++extras.socket_count;
             }
 
-            if (game::request_give(seen[pick], e.key, e.count, extras)) {
+            if (game::request_give(session, e.key, e.count, extras)) {
                 ++g_queue_at;
             }
         } else {

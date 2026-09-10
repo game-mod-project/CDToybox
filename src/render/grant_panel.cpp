@@ -18,7 +18,8 @@ namespace cdtb::render {
 namespace {
 
 int g_pick = -1;
-bool g_picked_by_hand = false;
+// 손으로 고른 세션의 **주소**. 0 이면 자동으로 고른다.
+std::uintptr_t g_hand_session = 0;
 int g_item_key = 50001;      // 화살
 int g_count = 1;
 // 카메라 좌표를 넘기면 시선 쪽에 생겨 발밑이 아니다. 게임이 위치를
@@ -394,21 +395,36 @@ void draw_grant_panel(bool* open) {
     // "세션 못 찾음"이 됐다. gate_object 는 안전 읽기라 풀린 세션은 자연히
     // 실패하므로, 게이트 통과 자체가 곧 "지급 가능" 판정이다.
     (void)last;
-    if (!g_picked_by_hand) {
-        const mem::LocalReader rd;
-        int best = -1;
-        std::uint32_t best_hits = 0;
+    const mem::LocalReader rd;
+    bool gate_open[16]{};
+    {
         std::uintptr_t gate = 0;
         for (int i = 0; i < n; ++i) {
-            if (!server[i]) continue;
-            if (!game::gate_object(rd, seen[i], &gate)) continue;
-            if (best < 0 || hits[i] >= best_hits) {
-                best = i;
-                best_hits = hits[i];
+            gate_open[i] = game::gate_object(rd, seen[i], &gate);
+        }
+    }
+    // 손으로 고른 세션은 **주소로** 기억한다. 칸 번호로 들고 있으면
+    // 표가 바뀐 뒤 엉뚱한 칸을 가리키고, 그 칸이 죽어 있어도 저절로
+    // 풀리지 않아 "자동으로 다시 고르기" 를 누르기 전까지 먹통이었다.
+    int hand = -1;
+    if (g_hand_session != 0) {
+        for (int i = 0; i < n; ++i) {
+            if (seen[i] == g_hand_session) {
+                hand = i;
+                break;
             }
         }
-        g_pick = best;
+        // 표에서 사라졌거나 문이 닫혔으면 손을 뗀다 - 자동으로 돌아간다.
+        if (hand < 0 || !gate_open[hand]) {
+            g_hand_session = 0;
+            hand = -1;
+        }
     }
+    // 고르는 규칙은 grant.cpp 에 있다. 진단(sessions 명령)이 같은
+    // 함수를 보므로, 화면을 안 봐도 패널이 무엇을 고를지 알 수 있다.
+    g_pick = (hand >= 0)
+                 ? hand
+                 : game::best_gate_session_index(gate_open, hits, server, n);
 
     // --- 무엇을 줄 것인가 -------------------------------------------
     const game::ItemCatalogEntry* item = selected_item();
@@ -570,8 +586,8 @@ void draw_grant_panel(bool* open) {
             ImGui::TextDisabled("바닥 스폰 ID %u · 처리기 0x%llX", msg.id,
                                 static_cast<unsigned long long>(msg.handler));
         }
-        if (g_picked_by_hand && ImGui::SmallButton("자동으로 다시 고르기")) {
-            g_picked_by_hand = false;
+        if (g_hand_session != 0 && ImGui::SmallButton("자동으로 다시 고르기")) {
+            g_hand_session = 0;
         }
         if (ImGui::BeginTable("sessions", 3,
                               ImGuiTableFlags_RowBg |
@@ -584,7 +600,7 @@ void draw_grant_panel(bool* open) {
                 if (ImGui::Selectable(id, g_pick == i,
                                       ImGuiSelectableFlags_SpanAllColumns)) {
                     g_pick = i;
-                    g_picked_by_hand = true;
+                    g_hand_session = seen[i];
                 }
                 ImGui::SameLine();
                 ImGui::Text("0x%llX",

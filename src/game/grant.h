@@ -80,6 +80,28 @@ bool actor_hook_installed();
 int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
                std::uintptr_t value);
 
+// 세션을 적어 둘 자리를 고른다.
+//
+//   - 이미 표에 있으면 그 자리 (`*fresh_slot` = 거짓)
+//   - 빈 자리가 있으면 그 자리 (`*fresh_slot` = 참)
+//   - 꽉 찼으면 **가장 오래 전에 본 자리**를 밀어낸다 (`*fresh_slot` = 참)
+//
+// 표에는 지금까지 축출이 없었다. 월드에 한 번 들어가면 16칸이 다 차고,
+// 그 뒤에 생긴 세션은 조용히 버려졌다 - 인플레이스 저장/로드 뒤 살아
+// 있는 세션이 표에 아예 못 들어와 지급이 먹통이 된 원인이다(실측
+// 2026-09-10: 로드 전후로 표의 주소 16개가 하나도 안 바뀌었고, 전부
+// 82초 넘게 안 불린 죽은 칸이었다).
+//
+// 살아 있는 세션은 게임이 쉬지 않고 부르므로 마지막으로 본 시각이 늘
+// 앞선다 - 가장 오래된 자리를 밀어내면 살아 있는 것은 밀리지 않는다.
+//
+// `*fresh_slot` 이 참이면 그 칸은 새 세션 것이다. 부르는 쪽이 호출수·
+// 이름표·액터를 지워야 한다. 안 지우면 옛 이름표가 새 세션을 가려
+// 서버 쪽인데도 후보에서 빠진다.
+int session_slot_for(const std::uintptr_t* slots,
+                     const std::uint64_t* last_seen, int count, int cap,
+                     std::uintptr_t value, bool* fresh_slot);
+
 // 조회 함수가 지금까지 돌려준 서로 다른 값들과 각각의 호출 횟수.
 // 클라이언트 쪽과 서버 쪽 인벤토리 컴포넌트가 둘 다 나오고, 서버
 // 쪽만 해도 여럿이다(NPC·상자 등). 플레이어 것은 게임플레이 코드가
@@ -127,6 +149,32 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
 // NPC·상자 등 여럿이지만, 플레이어 것은 게임플레이 코드가 계속
 // 부르므로 횟수가 압도적이다 - 실측에서 17020회 대 1110회 대 1~3회.
 int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n);
+
+// 세션 표의 칸 수. 표는 한 번 들어온 주소를 지우지 않고, 칸이 차면
+// 새 세션을 조용히 버린다 - 로드를 거듭하면 살아 있는 세션이 표에
+// 못 들어올 수 있다. 진단이 그 포화를 볼 수 있어야 한다.
+int session_capacity();
+
+// 게이트가 실제로 풀리는 서버 세션 중 호출 최다. 없으면 -1.
+//
+// 지급 패널이 쓰는 규칙이다. 게이트 통과 여부는 부르는 쪽이
+// gate_object 로 미리 재서 넘긴다 - 이 함수는 메모리를 읽지 않으므로
+// 시험할 수 있고, 진단(sessions 명령)과 패널이 같은 함수를 본다.
+int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
+                            const bool* is_server, int n);
+
+// 지급·구동에 쓸 세션을 고른다. 서버 쪽이면서 **게이트가 실제로
+// 풀리는** 것 중 호출 최다. 없으면 0.
+//
+// 세 경로(지급 패널·보관함·동반자)가 저마다 다른 기준으로 골랐고,
+// 그래서 로드 뒤 한쪽만 먹통이 되거나 한쪽만 죽은 세션을 잡았다.
+// 규칙은 하나여야 한다.
+//
+// 게이트 통과가 유일하게 믿을 수 있는 생존 신호다 - 실측 2026-09-10,
+// 인플레이스 로드 직후: 죽은 세션이 session_looks_live 에 "예" 를 줬고
+// freshness 도 통과했다(표 전체가 똑같이 오래되면 '가장 최근 것 대비'
+// 비교가 무의미해진다). 게이트만은 정확히 닫혔다.
+std::uintptr_t pick_drive_session(const mem::Reader& reader);
 
 // 세션마다 게임이 돌려준 액터와 그 클래스. 프레임마다 RTTI 를 푸는
 // 것은 비싸므로 분석 스레드가 한 번 붙여 준다.

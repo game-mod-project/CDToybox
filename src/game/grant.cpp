@@ -743,23 +743,40 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     ++g_detour_depth;
     const std::uintptr_t actor = g_orig_actor_getter(session);
 
-    if (session != nullptr) {
+    // 액터를 낸 세션만 표에 적는다. 지급은 세션 -> 액터 경로를 타므로
+    // 널만 돌려주는 세션은 애초에 후보가 못 되는데, 실측 2026-09-10 에
+    // 그런 세션(…E0600~…E0C00 등)이 16칸 중 9칸을 먹어 정작 살아 있는
+    // 세션이 들어올 자리를 없앴다.
+    if (session != nullptr && actor != 0) {
         const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
-        const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap, s);
-        // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
-        // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
-        const std::uint64_t tick = ::GetTickCount64();
-        for (int i = 0; i < now; ++i) {
-            if (g_sess[i] == s) {
-                g_sess_actor[i] = actor;
-                // 살아 있다는 유일한 증거. 표에서 지울 수는 없으니
-                // 언제 봤는지를 남겨 고를 때 거른다.
-                g_sess_last[i] = tick;
-                break;
+        bool fresh = false;
+        const int slot =
+            session_slot_for(g_sess, g_sess_last, m, kSeenCap, s, &fresh);
+        if (slot >= 0) {
+            if (fresh) {
+                // 앞 세션의 흔적을 먼저 지우고 주소를 맨 마지막에
+                // 세운다. 순서가 거꾸로면 읽는 쪽이 "새 주소 + 옛
+                // 이름표" 인 찰나를 볼 수 있는데, 그것이 바로 새 세션을
+                // 클라이언트로 오인해 후보에서 빼는 자리다.
+                g_sess_class[slot][0] = 0;
+                g_sess_server[slot] = false;
+                g_sess_actor[slot] = 0;
+                g_sess_hits[slot] = 0;
+                g_sess[slot] = s;
+            }
+            ++g_sess_hits[slot];
+            // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
+            // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
+            g_sess_actor[slot] = actor;
+            // 마지막으로 액터를 낸 시각. 축출이 이 값으로 가장 오래된
+            // 칸을 고른다 - 살아 있는 세션은 게임이 쉬지 않고 부르므로
+            // 밀려나지 않는다.
+            g_sess_last[slot] = ::GetTickCount64();
+            if (slot >= m) {
+                g_sess_count.store(slot + 1, std::memory_order_release);
             }
         }
-        if (now != m) g_sess_count.store(now, std::memory_order_release);
     }
     if (actor != 0) {
         g_last_actor.store(actor, std::memory_order_relaxed);
@@ -1216,6 +1233,24 @@ int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
     return count + 1;
 }
 
+int session_slot_for(const std::uintptr_t* slots,
+                     const std::uint64_t* last_seen, int count, int cap,
+                     std::uintptr_t value, bool* fresh_slot) {
+    if (fresh_slot != nullptr) *fresh_slot = false;
+    if (slots == nullptr || last_seen == nullptr || cap <= 0) return -1;
+    for (int i = 0; i < count && i < cap; ++i) {
+        if (slots[i] == value) return i;
+    }
+    if (fresh_slot != nullptr) *fresh_slot = true;
+    if (count < cap) return count;
+    // 꽉 찼다. 가장 오래 전에 본 자리를 내준다.
+    int oldest = 0;
+    for (int i = 1; i < cap; ++i) {
+        if (last_seen[i] < last_seen[oldest]) oldest = i;
+    }
+    return oldest;
+}
+
 int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
     const int n = g_sess_count.load(std::memory_order_acquire);
     const int take = (n < cap) ? n : cap;
@@ -1248,6 +1283,47 @@ int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n) {
         if (best < 0 || hits[i] > hits[best]) best = i;
     }
     return best;
+}
+
+int session_capacity() { return kSeenCap; }
+
+int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
+                            const bool* is_server, int n) {
+    if (gate_open == nullptr || hits == nullptr || is_server == nullptr) {
+        return -1;
+    }
+    int best = -1;
+    std::uint32_t best_hits = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!is_server[i] || !gate_open[i]) continue;
+        // 같으면 뒤엣것을 잡는다 - 표는 뒤로 갈수록 새 세션이다.
+        if (best < 0 || hits[i] >= best_hits) {
+            best = i;
+            best_hits = hits[i];
+        }
+    }
+    return best;
+}
+
+std::uintptr_t pick_drive_session(const mem::Reader& reader) {
+    std::uintptr_t seen[kSeenCap]{};
+    std::uint32_t hits[kSeenCap]{};
+    const int n = seen_sessions(seen, hits, kSeenCap);
+    if (n == 0) return 0;
+    bool server[kSeenCap]{};
+    bool gate_open[kSeenCap]{};
+    std::uintptr_t gate = 0;
+    for (int i = 0; i < n; ++i) {
+        server[i] = session_is_server(i);
+        // 안전 읽기라 풀린 세션은 여기서 자연히 실패한다.
+        gate_open[i] = gate_object(reader, seen[i], &gate);
+    }
+    const int pick = best_gate_session_index(gate_open, hits, server, n);
+    if (pick < 0) return 0;
+    const std::uintptr_t session = seen[pick];
+    // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
+    if (session != drive_fault_session()) clear_drive_fault();
+    return session;
 }
 
 std::uintptr_t session_actor(int index) {

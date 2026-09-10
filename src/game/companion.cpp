@@ -805,45 +805,31 @@ std::thread g_cmd_thread;
 const mem::Reader* g_cmd_reader = nullptr;
 std::vector<std::uintptr_t> g_actor_snapshot;  // actordiff 기준
 
-// 그란트 패널과 같은 규칙: 서버 세션 중 가장 유력한 것.
+// 지급 패널과 같은 규칙: 서버 쪽 + 게이트가 풀리는 세션.
 std::uintptr_t pick_server_session_impl() {
-    std::uintptr_t seen[16]{};
-    std::uint32_t hits[16]{};
-    const int n = seen_sessions(seen, hits, 16);
-    if (n == 0) return 0;
-    bool server[16]{};
-    std::uint64_t last[16]{};
-    for (int i = 0; i < n; ++i) {
-        server[i] = session_is_server(i);
-        last[i] = session_last_seen(i);
-    }
-    // 호출 횟수만 보면 안 된다. 표는 지워지지 않으므로 접속이 다시
-    // 맺어진 뒤에도 옛 세션이 누적 횟수 1위로 남아 계속 뽑히고,
-    // 그 풀린 포인터로 구동하면 게임 안에서 죽는다 - 실측 2026-09-06.
-    const int pick = best_live_session_index(hits, server, last, n,
-                                             ::GetTickCount64(),
-                                             kSessionFreshMs);
-    if (pick < 0 || pick >= n) {
-        // 못 골랐으면 왜 못 골랐는지 표를 그대로 남긴다. 문턱을
-        // 추측으로 정하지 않으려면 실제 간격이 보여야 한다.
+    // 고르는 규칙은 grant.cpp 하나에 있다 - 서버 + 게이트 통과.
+    //
+    // 예전에는 여기서 freshness 로 따로 골랐다. 인플레이스 로드 뒤에는
+    // 표의 모든 칸이 똑같이 오래돼 '가장 최근 것 대비' 비교가 의미를
+    // 잃고, 죽은 세션이 그대로 뽑혔다. session_looks_live 도 그 세션에
+    // "예" 를 줘서 못 걸렀다(실측 2026-09-10).
+    const mem::LocalReader local;
+    const mem::Reader& rd = (g_cmd_reader != nullptr) ? *g_cmd_reader : local;
+    const std::uintptr_t session = pick_drive_session(rd);
+    if (session == 0) {
+        // 못 골랐으면 왜 못 골랐는지 표를 그대로 남긴다.
+        std::uintptr_t seen[16]{};
+        std::uint32_t hits[16]{};
+        const int n = seen_sessions(seen, hits, 16);
         const std::uint64_t now = ::GetTickCount64();
-        log::warnf("살아 있는 서버 세션 없음 - 후보 {}개", n);
+        log::warnf("게이트가 열린 서버 세션 없음 - 후보 {}개", n);
         for (int i = 0; i < n; ++i) {
+            const std::uint64_t last = session_last_seen(i);
             log::warnf("  [{}] 0x{:X} {} 호출 {} 마지막 {}ms 전", i, seen[i],
-                       server[i] ? "서버" : "클라", hits[i],
-                       last[i] == 0 ? 0 : now - last[i]);
+                       session_is_server(i) ? "서버" : "클라", hits[i],
+                       last == 0 ? 0 : now - last);
         }
-        return 0;
     }
-    const std::uintptr_t session = seen[pick];
-    // 시각만으로는 멈춘 게임과 죽은 세션이 구별되지 않는다. 처리기가
-    // 만지는 자리를 직접 읽어 본다.
-    if (g_cmd_reader != nullptr && !session_looks_live(*g_cmd_reader, session)) {
-        log::warnf("세션 0x{:X} 는 살아 있지 않다 - 구동하지 않는다", session);
-        return 0;
-    }
-    // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
-    if (session != 0 && session != drive_fault_session()) clear_drive_fault();
     return session;
 }
 
@@ -1058,6 +1044,74 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         char buf[96];
         std::snprintf(buf, sizeof(buf), "세션 0x%llX 잠금 해제",
                       static_cast<unsigned long long>(locked));
+        say(buf);
+        return true;
+    }
+    if (cmd == "sessions") {
+        // 세션 표를 있는 그대로 찍는다. 아무것도 구동하지 않는다.
+        //
+        // 세이브/로드 뒤 지급이 먹통이 되는 까닭을 가리려면 표 자체를
+        // 봐야 하는데, 이 표는 훅이 모으는 모드 안쪽 값이라 밖에서
+        // probe 로는 못 본다. 로드 전후로 한 번씩 찍으면 셋 중 무엇인지
+        // 갈린다 - 칸이 차서 새 세션이 못 들어왔는가(포화), 옛 이름표가
+        // 새 세션을 가렸는가, 아니면 정말 게이트가 안 열리는가.
+        //
+        // 읽기는 전부 안전 읽기(LocalReader = SEH)라 풀린 세션을 만나도
+        // 죽지 않고 실패로 돌아온다.
+        if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
+        const mem::Reader& rd = *g_cmd_reader;
+        std::uintptr_t seen[16]{};
+        std::uint32_t hits[16]{};
+        const int n = seen_sessions(seen, hits, 16);
+        const int cap = session_capacity();
+        bool server[16]{};
+        bool gate_ok[16]{};
+        std::uint64_t last[16]{};
+        std::uintptr_t gates[16]{};
+        int servers = 0;
+        int opens = 0;
+        const std::uint64_t now = ::GetTickCount64();
+        log::infof("세션표 {}/{}{}", n, cap,
+                   n >= cap ? "  ** 포화 - 새 세션은 조용히 버려진다 **" : "");
+        for (int i = 0; i < n; ++i) {
+            server[i] = session_is_server(i);
+            last[i] = session_last_seen(i);
+            gate_ok[i] = gate_object(rd, seen[i], &gates[i]);
+            if (server[i]) ++servers;
+            if (server[i] && gate_ok[i]) ++opens;
+            const char* cls = session_class(i);
+            log::infof(
+                "  [{}] 0x{:X} {} 호출 {} 마지막 {}ms 전 게이트 {} 0x{:X} "
+                "생존 {} 액터 0x{:X} {}",
+                i, seen[i], server[i] ? "서버" : "클라", hits[i],
+                last[i] == 0 ? 0 : now - last[i], gate_ok[i] ? "열림" : "끊김",
+                gates[i], session_looks_live(rd, seen[i]) ? "예" : "아니오",
+                session_actor(i), cls[0] == 0 ? "(이름표 없음)" : cls);
+        }
+        // 세 경로가 각각 무엇을 고르는지 나란히 낸다. 기준이 서로 달라
+        // 한쪽만 먹통이 되는 일이 실제로 있었다(2026-09-07).
+        auto pick_line = [&](const char* who, int idx) {
+            if (idx < 0 || idx >= n) {
+                log::infof("  선택 {}: 없음", who);
+            } else {
+                log::infof("  선택 {}: [{}] 0x{:X}", who, idx, seen[idx]);
+            }
+        };
+        // 지금 규칙은 하나다 - pick_drive_session(서버 + 게이트). 세
+        // 경로가 전부 그것을 쓴다. 나머지 두 줄은 **옛 기준이 무엇을
+        // 골랐을지**를 나란히 두는 것으로, 로드 뒤 옛 기준이 죽은
+        // 세션을 잡는 모습이 그대로 보인다(실측 2026-09-10).
+        pick_line("지금 규칙(서버+게이트)",
+                  best_gate_session_index(gate_ok, hits, server, n));
+        pick_line("옛 기준·참고(서버+호출최다)",
+                  best_actor_index(hits, server, n));
+        pick_line("옛 기준·참고(서버+freshness)",
+                  best_live_session_index(hits, server, last, n, now,
+                                          kSessionFreshMs));
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+                      "표 %d/%d 서버 %d 게이트열림 %d%s - 로그를 보라", n, cap,
+                      servers, opens, n >= cap ? " (포화)" : "");
         say(buf);
         return true;
     }
