@@ -12,16 +12,20 @@
 #include "game/equip.h"
 #include "game/items.h"
 #include "mem/reader.h"
+#include "render/colors.h"
+#include "render/confirm.h"
 #include "render/gem_picker.h"
 #include "render/layout.h"
+#include "render/notice.h"
 
 namespace cdtb::render {
 namespace {
 
 std::uint64_t g_gem_inst = 0;   // 보석을 박을 대상 아이템 인스턴스
 int g_gem_k = -1;               // 그 아이템의 소켓 칸
+char g_gem_title[96]{};         // 보석 팝업 제목 - 어느 장비의 몇 번 칸인지
 GemPicker g_gem_picker;         // 보석 고르기 팝업 (지급 창과 같은 위젯)
-char g_msg[160]{};
+Notice g_notice;
 std::map<std::uint64_t, int> g_refine_edit;
 
 // 염색 팝업 대상과 편집값. 편집값은 (인스턴스,rec)별로 유지한다 -
@@ -40,17 +44,26 @@ const char* name_of_sunbeon(std::uint32_t sunbeon) {
 }
 
 void draw_gem_popup(const mem::Reader& reader) {
-    GemPickerOpts o;   // 제목 기본값, 빈 칸 없음, 강조 없음
+    GemPickerOpts o;   // 빈 칸에만 '채우기' 가 뜨므로 강조할 현재 보석은 없다
+    o.title = g_gem_title;
     GemChoice c;
     if (!gem_picker_draw(&g_gem_picker, o, &c) || c.entry == nullptr) return;
     // 소켓에 박는 값은 그 보석의 순번(= 카탈로그 인덱스).
     const int w = game::eq_write_socket(reader, g_gem_inst, g_gem_k,
                                         static_cast<std::uint16_t>(c.index));
-    std::snprintf(g_msg, sizeof(g_msg),
-                  w > 0 ? "소켓 %d에 '%s' 박음 (%d realm). RE-EQUIP"
-                          " 하면 보입니다."
-                        : "쓰기 실패 (잠긴 소켓이거나 대상 없음).",
-                  g_gem_k, c.entry->name.c_str(), w);
+    if (w >= 2) {
+        notice_set(&g_notice, NoticeLevel::Ok,
+                   "소켓 {}에 '{}' 을 박았습니다 (클라·서버 모두). 벗었다 다시"
+                   " 착용하면 화면에 반영됩니다.",
+                   g_gem_k, c.entry->name);
+    } else if (w == 1) {
+        notice_set(&g_notice, NoticeLevel::Warn,
+                   "소켓 {}에 '{}' 을 한쪽만 박았습니다 - 다시 시도하세요.",
+                   g_gem_k, c.entry->name);
+    } else {
+        notice_set(&g_notice, NoticeLevel::Bad,
+                   "쓰기 실패 (잠긴 소켓이거나 대상 없음).");
+    }
     game::equip_refresh_pieces(reader);
 }
 
@@ -79,7 +92,8 @@ void draw_dye_popup(const mem::Reader& reader,
         return;
     }
 
-    ImGui::TextUnformatted("zone 별 색. 재장착(RE-EQUIP) 해야 보입니다.");
+    ImGui::TextUnformatted("zone 별 색입니다. 벗었다 다시 착용하면 화면에"
+                           " 반영됩니다.");
     for (const auto& d : piece->dyes) {
         ImGui::PushID(d.rec);
         auto key = std::make_pair(g_dye_inst, d.rec);
@@ -98,11 +112,14 @@ void draw_dye_popup(const mem::Reader& reader,
             const auto bb = static_cast<std::uint8_t>(col[2] * 255.0f + 0.5f);
             const int w =
                 game::eq_write_dye(reader, g_dye_inst, d.rec, rr, gg, bb);
-            std::snprintf(g_msg, sizeof(g_msg),
-                          w > 0 ? "zone %d 염색 적용 (%d realm). RE-EQUIP 하면"
-                                  " 보입니다."
-                                : "염색 쓰기 실패.",
-                          d.zone, w);
+            if (w > 0) {
+                notice_set(&g_notice, NoticeLevel::Ok,
+                           "zone {} 염색을 적용했습니다. 벗었다 다시 착용하면"
+                           " 화면에 반영됩니다.",
+                           d.zone);
+            } else {
+                notice_set(&g_notice, NoticeLevel::Bad, "염색 쓰기 실패.");
+            }
             game::equip_refresh_pieces(reader);
         }
         ImGui::PopID();
@@ -137,8 +154,9 @@ void draw_equip_panel(bool* open) {
     }
 
     // 착용 장비 전부 최대 연마(10). 착용 목록은 전부 장비라 연마 불가
-    // 판정이 필요 없다(참고 모드는 인벤 전체라 gear 만 골랐다). both-realms.
-    if (ImGui::Button("전부 연마 10")) {
+    // 판정이 필요 없다(참고 모드는 인벤 전체라 gear 만 골랐다). 클라·서버
+    // 모두 쓴다.
+    if (confirm_button("전부 연마 10")) {
         int done = 0, part = 0;
         for (const auto& w : pieces) {
             const int wc = game::eq_write_refine(reader, w.instance, 10);
@@ -150,17 +168,26 @@ void draw_equip_panel(bool* open) {
         }
         g_refine_edit.clear();
         game::equip_refresh_pieces(reader);
-        std::snprintf(g_msg, sizeof(g_msg),
-                      "%d개 both-realms, %d개 한쪽만 연마 10. RE-EQUIP 하면"
-                      " 보입니다.",
-                      done, part);
+        if (done + part == 0) {
+            notice_set(&g_notice, NoticeLevel::Warn,
+                       "쓴 것이 없습니다 (대상 없음).");
+        } else if (part > 0) {
+            notice_set(&g_notice, NoticeLevel::Warn,
+                       "{}개 연마 10, {}개는 한쪽만 적용됐습니다 - 다시"
+                       " 시도하세요.",
+                       done, part);
+        } else {
+            notice_set(&g_notice, NoticeLevel::Ok,
+                       "{}개 연마 10. 벗었다 다시 착용하면 화면에 반영됩니다.",
+                       done);
+        }
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(착용 장비 전체를 +10 으로)");
 
     // 착용 장비 전부 5칸 개방. 이미 열린 칸과 박힌 보석은 안 건드린다.
     ImGui::SameLine();
-    if (ImGui::Button("전부 소켓 5칸")) {
+    if (confirm_button("전부 소켓 5칸")) {
         int done = 0, part = 0;
         for (const auto& w : pieces) {
             const int wc = game::eq_unlock_sockets(reader, w.instance, 5);
@@ -171,24 +198,31 @@ void draw_equip_panel(bool* open) {
             }
         }
         game::equip_refresh_pieces(reader);
-        std::snprintf(g_msg, sizeof(g_msg),
-                      "%d개 both-realms, %d개 한쪽만 소켓 5칸. RE-EQUIP 하면"
-                      " 보입니다.",
-                      done, part);
+        if (done + part == 0) {
+            notice_set(&g_notice, NoticeLevel::Warn,
+                       "쓴 것이 없습니다 (대상 없음).");
+        } else if (part > 0) {
+            notice_set(&g_notice, NoticeLevel::Warn,
+                       "{}개 소켓 5칸, {}개는 한쪽만 적용됐습니다 - 다시"
+                       " 시도하세요.",
+                       done, part);
+        } else {
+            notice_set(&g_notice, NoticeLevel::Ok,
+                       "{}개 소켓 5칸. 벗었다 다시 착용하면 화면에 반영됩니다.",
+                       done);
+        }
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(잠긴 칸까지 연다)");
 
-    if (g_msg[0]) {
-        ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "%s", g_msg);
-    }
+    notice_draw(g_notice);
 
     constexpr ImGuiTableFlags kF = ImGuiTableFlags_Borders |
                                    ImGuiTableFlags_RowBg |
                                    ImGuiTableFlags_ScrollY;
     if (ImGui::BeginTable("worn", 4, kF)) {
         ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-        ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 150.0f);
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("염색", ImGuiTableColumnFlags_WidthFixed, 90.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -212,7 +246,7 @@ void draw_equip_panel(bool* open) {
             // 입력이 리셋돼 값이 안 바뀐다(연마가 안 먹던 원인).
             int& rf = g_refine_edit.try_emplace(w.instance, w.refine)
                           .first->second;
-            ImGui::SetNextItemWidth(55.0f);
+            ImGui::SetNextItemWidth(100.0f);
             ImGui::InputInt("##rf", &rf, 1, 1);
             if (rf < 0) rf = 0;
             if (rf > 2000) rf = 2000;
@@ -220,11 +254,19 @@ void draw_equip_panel(bool* open) {
             if (ImGui::SmallButton("적용")) {
                 const int wc = game::eq_write_refine(
                     reader, w.instance, static_cast<std::uint16_t>(rf));
-                std::snprintf(g_msg, sizeof(g_msg),
-                              wc > 0 ? "연마 %d 적용 (%d realm). RE-EQUIP 하면"
-                                       " 보입니다."
-                                     : "연마 쓰기 실패.",
-                              rf, wc);
+                if (wc >= 2) {
+                    notice_set(&g_notice, NoticeLevel::Ok,
+                               "연마 {} 을 적용했습니다 (클라·서버 모두)."
+                               " 벗었다 다시 착용하면 화면에 반영됩니다.",
+                               rf);
+                } else if (wc == 1) {
+                    notice_set(&g_notice, NoticeLevel::Warn,
+                               "연마 {} 을 한쪽만 적용했습니다 - 다시"
+                               " 시도하세요.",
+                               rf);
+                } else {
+                    notice_set(&g_notice, NoticeLevel::Bad, "연마 쓰기 실패.");
+                }
                 game::equip_refresh_pieces(reader);
             }
 
@@ -238,14 +280,18 @@ void draw_equip_panel(bool* open) {
                     // 앞칸이 잠겨 있으면 그 칸부터 순서대로 열린다.
                     ImGui::TextDisabled("%d:", k);
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("열기")) {
+                    if (confirm_small_button("열기")) {
                         const int n = game::eq_unlock_sockets(reader,
                                                               w.instance, k + 1);
-                        std::snprintf(g_msg, sizeof(g_msg),
-                                      n > 0 ? "소켓 %d칸까지 열었다 (%d realm)."
-                                              " RE-EQUIP 하면 보입니다."
-                                            : "열기 실패 (대상 없음).",
-                                      k + 1, n);
+                        if (n > 0) {
+                            notice_set(&g_notice, NoticeLevel::Ok,
+                                       "소켓 {}칸까지 열었습니다. 벗었다 다시"
+                                       " 착용하면 화면에 반영됩니다.",
+                                       k + 1);
+                        } else {
+                            notice_set(&g_notice, NoticeLevel::Bad,
+                                       "열기 실패 (대상 없음).");
+                        }
                         game::equip_refresh_pieces(reader);
                     }
                 } else if (s.marker == 0xFFFF && s.gem != 0xFFFF) {
@@ -253,10 +299,18 @@ void draw_equip_panel(bool* open) {
                     ImGui::Text("%d: %s", k, gn ? gn : "(보석)");
                     if (gn && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", gn);
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("비우기")) {
-                        game::eq_write_socket(reader, w.instance, k, 0xFFFF);
-                        std::snprintf(g_msg, sizeof(g_msg),
-                                      "소켓 %d 비움. RE-EQUIP.", k);
+                    if (confirm_small_button("비우기")) {
+                        const int wc = game::eq_write_socket(reader, w.instance,
+                                                             k, 0xFFFF);
+                        if (wc >= 1) {
+                            notice_set(&g_notice, NoticeLevel::Ok,
+                                       "소켓 {} 을 비웠습니다. 벗었다 다시"
+                                       " 착용하면 화면에 반영됩니다.",
+                                       k);
+                        } else {
+                            notice_set(&g_notice, NoticeLevel::Bad,
+                                       "비우기 실패.");
+                        }
                         game::equip_refresh_pieces(reader);
                     }
                 } else {
@@ -265,6 +319,9 @@ void draw_equip_panel(bool* open) {
                     if (ImGui::SmallButton("채우기")) {
                         g_gem_inst = w.instance;
                         g_gem_k = k;
+                        const char* nm = name_of_sunbeon(w.key);
+                        std::snprintf(g_gem_title, sizeof(g_gem_title), "%s 소켓 %d",
+                                      nm != nullptr ? nm : "(이름 없음)", k);
                         gem_picker_open(&g_gem_picker);
                     }
                 }
