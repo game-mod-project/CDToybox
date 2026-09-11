@@ -40,6 +40,15 @@ unsigned long long g_game_clip_frame = 0;   // 막은 요청이 들어온 프레
 // "게임이 아직도 가두고 있나" 를 묻는다(리뷰 F-1) - 마우스룩이면 매 프레임 요청이
 // 오므로 마지막 기록은 늘 한 프레임 안이다.
 std::atomic<unsigned long long> g_frame_seq{0};
+// 진단 - 열려 있는 동안 막은/통과시킨 호출 수. 게임 스레드가 올리고 렌더 스레드가
+// 닫을 때 읽어 한 줄 남긴다(오버레이 창에서 마우스가 굳는다는 보고 2026-09-12 의
+// 원인 추적: 게임이 매 프레임 가두는지, 예산을 넘겨 통과한 것이 있는지).
+std::atomic<unsigned> g_n_block_pos{0};
+std::atomic<unsigned> g_n_block_clip{0};
+std::atomic<unsigned> g_n_pass_pos{0};
+std::atomic<unsigned> g_n_pass_clip{0};
+unsigned long long g_open_frame = 0;   // 연 프레임 번호(렌더 스레드만)
+bool g_hidden_logged = false;          // 열린 동안 게임이 숨긴 것을 한 번만 남긴다
 int g_blocked = 0;
 bool g_limit_logged = false;
 
@@ -61,7 +70,13 @@ BOOL WINAPI det_set_cursor_pos(int x, int y) {
     // (hook_disable) 여기 멈춰 있던 스레드가 깨어나도 안전하다.
     const SetCursorPosFn orig = g_orig_set_pos;
     if (orig == nullptr) return TRUE;
-    if (active() && cursor_should_block(g_blocked++, kBlockLimit)) return TRUE;
+    if (active()) {
+        if (cursor_should_block(g_blocked++, kBlockLimit)) {
+            g_n_block_pos.fetch_add(1, std::memory_order_relaxed);
+            return TRUE;
+        }
+        g_n_pass_pos.fetch_add(1, std::memory_order_relaxed);
+    }
     return orig(x, y);
 }
 
@@ -69,16 +84,20 @@ BOOL WINAPI det_set_cursor_pos(int x, int y) {
 BOOL WINAPI det_clip_cursor(const RECT* rect) {
     const ClipCursorFn orig = g_orig_clip;
     if (orig == nullptr) return TRUE;
-    if (active() && cursor_should_block(g_blocked++, kBlockLimit)) {
-        // 게임이 원한 것을 기억해 둔다 - 닫을 때 그대로 돌려준다.
-        {
-            std::lock_guard<std::mutex> lock(g_clip_mutex);
-            g_game_clip_seen = true;
-            g_game_clip_null = (rect == nullptr);
-            if (rect != nullptr) g_game_clip = *rect;
-            g_game_clip_frame = g_frame_seq.load(std::memory_order_relaxed);
+    if (active()) {
+        if (cursor_should_block(g_blocked++, kBlockLimit)) {
+            // 게임이 원한 것을 기억해 둔다 - 닫을 때 그대로 돌려준다.
+            {
+                std::lock_guard<std::mutex> lock(g_clip_mutex);
+                g_game_clip_seen = true;
+                g_game_clip_null = (rect == nullptr);
+                if (rect != nullptr) g_game_clip = *rect;
+                g_game_clip_frame = g_frame_seq.load(std::memory_order_relaxed);
+            }
+            g_n_block_clip.fetch_add(1, std::memory_order_relaxed);
+            return orig(nullptr);
         }
-        return orig(nullptr);
+        g_n_pass_clip.fetch_add(1, std::memory_order_relaxed);
     }
     return orig(rect);
 }
@@ -231,6 +250,22 @@ void cursor_guard_sync(bool overlay_visible) {
     g_blocked = 0;      // 예산은 프레임마다 되돌린다
     const unsigned long long frame =
         g_frame_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+    // 열려 있는 동안 게임이 커서를 숨기면(오버레이를 연 채 인벤을 닫으면 게임이
+    // ShowCursor(FALSE) 를 0 아래로 내린다) 다시 띄운다 - 열린 동안은 OS 커서를
+    // 쓰기로 했고, 닫을 때는 상대 복원이라 게임의 순변화가 그대로 살아남는다
+    // (사용자 보고 2026-09-12: 오버레이 창에서 마우스가 굳음).
+    if (overlay_visible && g_hidden_by_us) {
+        const int c = probe_count();
+        if (c < 0) {
+            drive_to(0);
+            if (!g_hidden_logged) {
+                log::infof("커서 가드: 열린 동안 게임이 커서를 숨겼다 (카운터 {}, 열린 지 "
+                           "{} 프레임) - 다시 띄운다",
+                           c, frame - g_open_frame);
+                g_hidden_logged = true;
+            }
+        }
+    }
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
         g_saved_count = probe_count();
@@ -245,34 +280,51 @@ void cursor_guard_sync(bool overlay_visible) {
         // 다투는 대신 하나로 합친다.
         drive_to(0);
         g_hidden_by_us = true;
+        g_open_frame = frame;
+        g_hidden_logged = false;
+        g_n_block_pos.store(0, std::memory_order_relaxed);
+        g_n_block_clip.store(0, std::memory_order_relaxed);
+        g_n_pass_pos.store(0, std::memory_order_relaxed);
+        g_n_pass_clip.store(0, std::memory_order_relaxed);
+        log::infof("커서 가드 열기: 카운터 {} → 0 (프레임 {})", g_saved_count, frame);
     } else {
         // 그 사이 게임이 바꾼 만큼(인벤을 열며 +1 등)을 얹어 되돌린다. 목표가
         // saved + now 라 델타는 now 와 무관하게 늘 g_saved_count 다(대수적으로 상쇄,
         // 재리뷰 관찰 2) - 그래도 시험이 지키는 함수를 생산 경로가 그대로 지나가게
         // 한 번 잰다.
-        {
-            const int now = probe_count();
-            drive_by(cursor_show_delta(now, cursor_restore_count(g_saved_count, now)));
-        }
+        const int now = probe_count();
+        const int target = cursor_restore_count(g_saved_count, now);
+        drive_by(cursor_show_delta(now, target));
         // 가두기는 게임의 마지막 요청대로. 마우스룩이면 이번·직전 프레임에도 가두려
         // 했을 테니 그것을 다시 걸고, 커서 UI 로 넘어가 요청이 끊겼거나 풀기였으면 푼다.
+        bool seen = false, was_null = true;
+        RECT rect{};
+        unsigned long long at = 0;
         {
-            bool seen = false, was_null = true;
-            RECT rect{};
-            unsigned long long at = 0;
-            {
-                std::lock_guard<std::mutex> lock(g_clip_mutex);
-                seen = g_game_clip_seen;
-                was_null = g_game_clip_null;
-                rect = g_game_clip;
-                at = g_game_clip_frame;
-            }
-            if (cursor_clip_restore(seen, was_null, at, frame) == ClipRestore::Reapply) {
-                g_orig_clip(&rect);
-            } else {
-                g_orig_clip(nullptr);
-            }
+            std::lock_guard<std::mutex> lock(g_clip_mutex);
+            seen = g_game_clip_seen;
+            was_null = g_game_clip_null;
+            rect = g_game_clip;
+            at = g_game_clip_frame;
         }
+        const ClipRestore how = cursor_clip_restore(seen, was_null, at, frame);
+        if (how == ClipRestore::Reapply) {
+            g_orig_clip(&rect);
+        } else {
+            g_orig_clip(nullptr);
+        }
+        // 한 줄 진단: 게임이 열린 동안 무엇을 했는지(매 프레임 가두는지, 예산을 넘겨
+        // 통과한 것이 있는지, 카운터를 어디로 옮겼는지).
+        log::infof("커서 가드 닫기: 카운터 {} → {} (열 때 {}), 가두기 {} (요청 {} 널 {} "
+                   "사각형 {},{},{},{} 프레임 {}/{}), 막음 SetCursorPos {} ClipCursor {}, "
+                   "통과 {} {}, 열린 프레임 {}",
+                   now, target, g_saved_count,
+                   how == ClipRestore::Reapply ? "다시 걺" : "풂", seen, was_null,
+                   rect.left, rect.top, rect.right, rect.bottom, at, frame,
+                   g_n_block_pos.load(std::memory_order_relaxed),
+                   g_n_block_clip.load(std::memory_order_relaxed),
+                   g_n_pass_pos.load(std::memory_order_relaxed),
+                   g_n_pass_clip.load(std::memory_order_relaxed), frame - g_open_frame);
         g_hidden_by_us = false;
         g_limit_logged = false;
         // 렌더가 멎은 채 켜져 있어도 키보드가 통째로 안 막히게
