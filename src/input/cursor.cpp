@@ -35,7 +35,11 @@ std::mutex g_clip_mutex;
 bool g_game_clip_seen = false;
 bool g_game_clip_null = true;
 RECT g_game_clip{};
-unsigned long long g_game_clip_ms = 0;
+unsigned long long g_game_clip_frame = 0;   // 막은 요청이 들어온 프레임 번호
+// 프레임 번호. cursor_guard_sync 가 프레임마다 하나 올린다. 시계 대신 이것으로
+// "게임이 아직도 가두고 있나" 를 묻는다(리뷰 F-1) - 마우스룩이면 매 프레임 요청이
+// 오므로 마지막 기록은 늘 한 프레임 안이다.
+std::atomic<unsigned long long> g_frame_seq{0};
 int g_blocked = 0;
 bool g_limit_logged = false;
 
@@ -72,7 +76,7 @@ BOOL WINAPI det_clip_cursor(const RECT* rect) {
             g_game_clip_seen = true;
             g_game_clip_null = (rect == nullptr);
             if (rect != nullptr) g_game_clip = *rect;
-            g_game_clip_ms = ::GetTickCount64();
+            g_game_clip_frame = g_frame_seq.load(std::memory_order_relaxed);
         }
         return orig(nullptr);
     }
@@ -101,22 +105,26 @@ int probe_count() {
     return after_up - 1;
 }
 
-void drive_to(int target) {
-    const int delta = cursor_show_delta(probe_count(), target);
+void drive_by(int delta) {
     for (int i = 0; i < delta; ++i) g_orig_show(TRUE);
     for (int i = 0; i > delta; --i) g_orig_show(FALSE);
 }
+
+void drive_to(int target) { drive_by(cursor_show_delta(probe_count(), target)); }
 
 }  // namespace
 
 int cursor_show_delta(int current, int target) { return target - current; }
 
-ClipRestore cursor_clip_restore(bool seen, unsigned long long last_ms,
-                                unsigned long long now_ms,
-                                unsigned long long fresh_ms) {
-    if (!seen || now_ms < last_ms) return ClipRestore::Release;
-    return (now_ms - last_ms <= fresh_ms) ? ClipRestore::Reapply
-                                          : ClipRestore::Release;
+ClipRestore cursor_clip_restore(bool seen, bool was_null,
+                                unsigned long long at_frame,
+                                unsigned long long now_frame,
+                                unsigned long long fresh_frames) {
+    // 요청이 없었거나, 마지막 요청이 풀기였거나(인벤이 ClipCursor(nullptr) 를 불렀다),
+    // 번호가 되감겼으면 푼다.
+    if (!seen || was_null || now_frame < at_frame) return ClipRestore::Release;
+    return (now_frame - at_frame <= fresh_frames) ? ClipRestore::Reapply
+                                                  : ClipRestore::Release;
 }
 
 int cursor_restore_count(int saved, int current_since_zero) {
@@ -221,6 +229,8 @@ void cursor_guard_sync(bool overlay_visible) {
         g_limit_logged = true;
     }
     g_blocked = 0;      // 예산은 프레임마다 되돌린다
+    const unsigned long long frame =
+        g_frame_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
         g_saved_count = probe_count();
@@ -236,24 +246,26 @@ void cursor_guard_sync(bool overlay_visible) {
         drive_to(0);
         g_hidden_by_us = true;
     } else {
-        // 그 사이 게임이 바꾼 만큼(인벤을 열며 +1 등)을 얹어 되돌린다.
-        drive_to(cursor_restore_count(g_saved_count, probe_count()));
-        // 가두기는 게임의 마지막 요청대로. 마우스룩이면 방금(500ms 안)도 가두려 했을
-        // 테니 그것을 다시 걸고, 커서 UI 로 넘어가 요청이 끊겼으면 푼다.
+        // 그 사이 게임이 바꾼 만큼(인벤을 열며 +1 등)을 얹어 되돌린다. 한 번만 재서
+        // 목표와 델타를 함께 구한다(닫는 순간의 깜빡임을 줄인다 - 리뷰 관찰 5).
         {
-            bool seen = false, is_null = true;
+            const int now = probe_count();
+            drive_by(cursor_show_delta(now, cursor_restore_count(g_saved_count, now)));
+        }
+        // 가두기는 게임의 마지막 요청대로. 마우스룩이면 이번·직전 프레임에도 가두려
+        // 했을 테니 그것을 다시 걸고, 커서 UI 로 넘어가 요청이 끊겼거나 풀기였으면 푼다.
+        {
+            bool seen = false, was_null = true;
             RECT rect{};
             unsigned long long at = 0;
             {
                 std::lock_guard<std::mutex> lock(g_clip_mutex);
                 seen = g_game_clip_seen;
-                is_null = g_game_clip_null;
+                was_null = g_game_clip_null;
                 rect = g_game_clip;
-                at = g_game_clip_ms;
+                at = g_game_clip_frame;
             }
-            const ClipRestore how =
-                cursor_clip_restore(seen, at, ::GetTickCount64());
-            if (how == ClipRestore::Reapply && !is_null) {
+            if (cursor_clip_restore(seen, was_null, at, frame) == ClipRestore::Reapply) {
                 g_orig_clip(&rect);
             } else {
                 g_orig_clip(nullptr);
