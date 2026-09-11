@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "game/actors.h"
+#include "game/grant.h"
 #include "game/companion.h"
 #include "core/log.h"
 #include "core/write_log.h"
@@ -108,6 +109,11 @@ std::atomic<bool> g_rescan_busy{false};
 const mem::Reader* g_rescan_reader = nullptr;
 const mem::Rtti* g_rescan_rtti = nullptr;
 std::atomic<bool> g_rescan_want[2]{};      // [0] 서버 [1] 클라이언트
+// discover_clan 이 쓴 RTTI(clan_rtti 로 공개). 배경 워커가 먼저 찾은 경우에도 채운다 -
+// 비면 종 바꾸기·획득 뒤처리·캐시 복구가 전부 막힌다(리뷰 C3).
+std::atomic<const mem::Rtti*> g_rtti{nullptr};
+// 실패해도 남긴다 - 다시 찾기(배경 재탐색)용.
+std::atomic<const mem::Rtti*> g_discovery_rtti{nullptr};
 
 // 찾은 컴포넌트를 **한 자리에서** 갈무리한다. 캐시와 g_clan 이
 // 따로 갱신되던 것이 이번 멈춤의 뿌리였다.
@@ -131,6 +137,10 @@ DWORD WINAPI rescan_worker(LPVOID) {
         if (find_clan_of_class(*r, *t, k == 1 ? kClanClientClass : kClanClass,
                                &found)) {
             store_component(k == 1, found);
+            if (k == 0) {
+                const mem::Rtti* expected = nullptr;
+                g_rtti.compare_exchange_strong(expected, t);
+            }
             log::infof("명부 컴포넌트 재탐색({}) 완료 0x{:X} - {}ms",
                        k == 1 ? "클라이언트" : "서버", found,
                        GetTickCount64() - t0);
@@ -327,21 +337,37 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
 
 namespace {
 
-const mem::Rtti* g_rtti = nullptr;
 // 목록은 그리는 스레드만 만들고 읽는다 - actors 와 같은 규칙이다.
 std::vector<ClanEntry> g_roster;
 
 }  // namespace
 
-const mem::Rtti* g_discovery_rtti = nullptr;   // 실패해도 남긴다 - 배경 재탐색용
-
 bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_clan.load(std::memory_order_acquire) != 0) return true;
-    g_discovery_rtti = &rtti;
+    g_discovery_rtti.store(&rtti, std::memory_order_release);
+    // 1) 값싼 길: 세션 표에 잡힌 세션의 [+0x68]+0x110 - 고용 경로(2338)가 쓰는 바로 그
+    //    용병단 컴포넌트다. 읽기 두 번이라 매 바퀴 불러도 되고 세션 이름표도 필요
+    //    없다(리뷰 O2). 월드에 들어가 세션이 잡히면 곧 잡힌다.
     std::uintptr_t c = 0;
-    if (!find_clan_component(reader, rtti, &c)) return false;
+    if (clan_object(reader, 0, &c) && looks_like_clan_component(reader, c)) {
+        store_component(false, c);
+        g_rtti.store(&rtti, std::memory_order_release);
+        log::infof("동반자 명부: 세션 사슬로 잡았다 0x{:X}", c);
+        return true;
+    }
+    // 2) RTTI 스캔(10~17초)은 월드 안(세션 이름표까지 붙은 뒤)에서만, 30초에 한 번.
+    //    월드 밖이면 헛수고고, 안인데 사슬이 비었으면 잠시 뒤 다시 보는 편이 낫다.
+    if (pick_drive_session(reader) == 0) return false;
+    static std::uint64_t s_last_scan_ms = 0;
+    const std::uint64_t now = ::GetTickCount64();
+    if (s_last_scan_ms != 0 && now - s_last_scan_ms < 30000) return false;
+    s_last_scan_ms = now;
+    if (!find_clan_component(reader, rtti, &c)) {
+        log::infof("동반자 명부: 월드 안인데 RTTI 스캔으로도 못 찾았다 - 30초 뒤 다시");
+        return false;
+    }
     store_component(false, c);
-    g_rtti = &rtti;
+    g_rtti.store(&rtti, std::memory_order_release);
     // 클라이언트 쪽도 **여기서** 미리 잡아 둔다. RTTI 인스턴스 스캔은
     // 실측 30초가 넘는다(probe 로 재 보니 두 번에 1분 8초). 그리는
     // 스레드가 그것을 돌면 게임이 그만큼 멈춘다 - 사용자가 종 바꾸기에서
@@ -358,11 +384,20 @@ bool clan_ready() { return g_clan.load(std::memory_order_acquire) != 0; }
 
 bool clan_request_discovery(const mem::Reader& reader) {
     if (clan_ready()) return true;
-    if (g_discovery_rtti == nullptr ||
-        !g_bg_rescan.load(std::memory_order_acquire)) {
-        return false;
+    const mem::Rtti* t = g_discovery_rtti.load(std::memory_order_acquire);
+    // 값싼 길부터 - 그리는 스레드에서도 읽기 두 번이라 괜찮다.
+    std::uintptr_t c = 0;
+    if (clan_object(reader, 0, &c) && looks_like_clan_component(reader, c)) {
+        store_component(false, c);
+        if (t != nullptr) {
+            const mem::Rtti* expected = nullptr;
+            g_rtti.compare_exchange_strong(expected, t);
+        }
+        log::infof("동반자 명부: 다시 찾기 - 세션 사슬로 잡았다 0x{:X}", c);
+        return true;
     }
-    request_rescan(reader, *g_discovery_rtti, false);
+    if (t == nullptr || !g_bg_rescan.load(std::memory_order_acquire)) return false;
+    request_rescan(reader, *t, false);   // RTTI 스캔은 배경 워커에서
     return true;
 }
 
@@ -379,12 +414,13 @@ bool refresh_clan_roster(const mem::Reader& reader) {
     if (!looks_like_clan_component(reader, c) ||
         !read_clan_roster(reader, c, &list)) {
         // 월드를 나갔다 들어오면 컴포넌트가 바뀐다. 한 번 다시 찾는다.
-        if (g_rtti == nullptr) return false;
+        const mem::Rtti* rt = g_rtti.load(std::memory_order_acquire);
+        if (rt == nullptr) return false;
         // 다시 찾는 것은 10초가 넘는 RTTI 스캔이다. 그리는 스레드에서
         // 하면 그만큼 게임이 멈춘다 - clan_component_cached 와 같은
         // 배경 경로로 넘기고, 이번 판은 옛 목록을 그대로 둔다.
         std::uintptr_t again = 0;
-        if (!clan_component_cached(reader, *g_rtti, false, &again) ||
+        if (!clan_component_cached(reader, *rt, false, &again) ||
             again == 0) {
             return false;
         }
@@ -396,7 +432,7 @@ bool refresh_clan_roster(const mem::Reader& reader) {
 
 const std::vector<ClanEntry>& clan_roster() { return g_roster; }
 
-const mem::Rtti* clan_rtti() { return g_rtti; }
+const mem::Rtti* clan_rtti() { return g_rtti.load(std::memory_order_acquire); }
 
 void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
     static unsigned long long s_last = 0;

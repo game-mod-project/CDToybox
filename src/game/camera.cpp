@@ -314,9 +314,8 @@ void auto_analysis_loop() {
         // "대응표를 아직 못 읽었습니다" 로 남았다(실측 2026-09-09).
         // 표가 방금 완성됐을 수 있으니 여기서 한 번 더 부른다.
         if (items_done) discover_item_ids(rtti, reader);
-        // 명부 컴포넌트는 월드에 들어가야 생긴다 - 세션이 잡힌 뒤에만 훑는다
-        // (그 전에는 10초 넘는 스캔이 헛수고다).
-        if (pick_drive_session(reader) != 0) discover_clan(rtti, reader);
+        // 명부: 값싼 세션 사슬 먼저, RTTI 스캔은 월드 안에서만(clan.cpp 가 가른다).
+        discover_clan(rtti, reader);
         if (items_done && inventory_ready() && item_ids_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
@@ -324,19 +323,6 @@ void auto_analysis_loop() {
     }
     if (!items_named() && !g_stop.load()) {
         log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
-    }
-    // 위 루프는 아이템·인벤이 준비되면 끝나는데 그것이 월드 진입보다 빠를 수 있다
-    // (실측 2026-09-11 21:38: 루프 종료 21:38:47, 세션 21:39:05). 그러면 명부를 한
-    // 번도 못 훑어 "내 동반자" 가 영영 비었다. 여기서 세션이 잡힐 때까지 기다렸다
-    // 훑고, 못 찾으면 30초 물러섰다 다시 한다(한 번에 10~17초 스캔).
-    while (!clan_ready() && !g_stop.load()) {
-        if (pick_drive_session(reader) != 0) {
-            if (discover_clan(rtti, reader)) break;
-            log::infof("동반자 명부: 월드 안인데 아직 못 찾았다 - 30초 뒤 다시 훑는다");
-            for (int j = 0; j < 300 && !g_stop.load(); ++j) ::Sleep(100);
-        } else {
-            for (int j = 0; j < 50 && !g_stop.load(); ++j) ::Sleep(100);
-        }
     }
 
     // 세션은 플레이하는 내내 새로 생긴다. 위의 두 루프는 각각 카메라와
@@ -349,6 +335,13 @@ void auto_analysis_loop() {
     int spin = 0;
     while (!g_stop.load()) {
         log_new_actors(rtti, reader);
+
+        // 명부 컴포넌트도 월드에 들어가야 생기고, 앞의 루프들이 먼저 끝나면 못 잡은
+        // 채 남았다(실측 2026-09-11: 2번 루프 종료 21:38:47, 세션 21:39:05). 여기서
+        // 계속 본다 - 세션 사슬 두 번 읽기라 값싸고, RTTI 스캔은 clan.cpp 가 월드
+        // 안·30초 간격으로 막는다. 별도 대기 루프로 두면 이 루프(세션 이름표·인벤·
+        // 장비·치트)를 막아 스스로를 굶긴다(리뷰 C1·C2).
+        if (!clan_ready()) discover_clan(rtti, reader);
 
         // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
         // 표보다 늦어서, 앞의 루프들이 먼저 끝나면 못 잡은 채로
