@@ -15,6 +15,7 @@
 #include "game/items.h"
 #include "game/stash.h"
 #include "render/colors.h"
+#include "render/confirm.h"
 #include "render/gates.h"
 #include "render/grant_panel.h"
 #include "render/icon_atlas.h"
@@ -223,8 +224,27 @@ const game::ItemCatalogEntry* find_item(std::uint32_t key) {
     return game::item_by_key(key);
 }
 
+// 이름이 max_w 를 넘으면 글자(UTF-8) 경계에서 잘라 "…" 을 붙이고, 전체는 툴팁으로.
+void draw_name_clipped(const char* name, ImVec4 color, float max_w) {
+    const float w = ImGui::CalcTextSize(name).x;
+    if (w <= max_w) {
+        ImGui::TextColored(color, "%s", name);
+        return;
+    }
+    std::string cut(name);
+    while (!cut.empty() &&
+           ImGui::CalcTextSize((cut + "…").c_str()).x > max_w) {
+        cut.pop_back();
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) {
+            cut.pop_back();
+        }
+    }
+    ImGui::TextColored(color, "%s…", cut.c_str());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name);
+}
+
 // 아이콘 + 이름을 한 줄로. 목록과 같은 색을 쓴다.
-void draw_item_line(std::uint32_t key) {
+void draw_item_line(std::uint32_t key, float name_w) {
     const IconRef ico = icon_for(key);
     if (ico.valid) {
         ImGui::Image(ico.tex, ImVec2(kIconSize, kIconSize), ico.uv0, ico.uv1);
@@ -237,7 +257,7 @@ void draw_item_line(std::uint32_t key) {
     if (it == nullptr || it->name.empty()) {
         ImGui::TextDisabled("키 %u", key);
     } else {
-        ImGui::TextColored(grade_color(it->grade), "%s", it->name.c_str());
+        draw_name_clipped(it->name.c_str(), grade_color(it->grade), name_w);
     }
 }
 
@@ -279,6 +299,7 @@ bool stash_add_entry(int set, const game::StashEntry& entry) {
 void stash_toggle_favorite(unsigned int key) {
     if (!g_loaded) load();
     g_stash.toggle_favorite(key);
+    log::infof("보관함: 즐겨찾기 {} {}", key, g_stash.is_favorite(key) ? "추가" : "제거");
     mark_dirty();
 }
 
@@ -339,8 +360,18 @@ void draw_stash_panel(bool* open) {
     ImGui::Separator();
 
     // --- 즐겨찾기 ---------------------------------------------------
-    if (ImGui::CollapsingHeader("즐겨찾기", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const auto favs = g_stash.favorites();   // 지우면서 도니 복사한다
+    const auto favs = g_stash.favorites();   // 지우면서 도니 복사한다
+    char fav_hdr[48];
+    std::snprintf(fav_hdr, sizeof(fav_hdr), "즐겨찾기 (%zu)###favs", favs.size());
+    if (ImGui::CollapsingHeader(fav_hdr, ImGuiTreeNodeFlags_DefaultOpen)) {
+        // 즐겨찾기가 많아도 세트를 스크롤 밖으로 밀어내지 않게 창 높이의 45% 까지만.
+        const float row_h = kIconSize + ImGui::GetStyle().ItemSpacing.y;
+        const float want = favs.empty() ? ImGui::GetTextLineHeightWithSpacing()
+                                        : row_h * static_cast<float>(favs.size()) +
+                                              ImGui::GetStyle().WindowPadding.y;
+        const float cap = ImGui::GetWindowHeight() * 0.45f;
+        ImGui::BeginChild("favs", ImVec2(0, want < cap ? want : cap), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_None);
         if (favs.empty()) {
             ImGui::TextDisabled("아이템 목록에서 별표를 눌러 담으세요");
         }
@@ -348,6 +379,7 @@ void draw_stash_panel(bool* open) {
             ImGui::PushID(static_cast<int>(key));
             if (ImGui::SmallButton("빼기")) {
                 g_stash.toggle_favorite(key);
+                log::infof("보관함: 즐겨찾기 {} 제거", key);
                 mark_dirty();
             }
             ImGui::SameLine();
@@ -356,23 +388,28 @@ void draw_stash_panel(bool* open) {
                 queue_start({game::StashEntry{key, 1}}, "즐겨찾기");
             }
             ImGui::SameLine();
-            draw_item_line(key);
+            draw_item_line(key, ImGui::GetContentRegionAvail().x);
             ImGui::PopID();
         }
+        ImGui::EndChild();
     }
 
     // --- 세트 -------------------------------------------------------
     ImGui::Separator();
+    ImGui::Text("세트 (%d)", g_stash.set_count());
     ImGui::SetNextItemWidth(180.0f);
     ImGui::InputTextWithHint("##newset", "새 세트 이름", g_new_name,
                              sizeof(g_new_name));
     ImGui::SameLine();
-    if (ImGui::Button("세트 만들기") && g_new_name[0] != 0) {
+    ImGui::BeginDisabled(g_new_name[0] == 0);
+    if (ImGui::Button("세트 만들기")) {
         g_stash.add_set(g_new_name);
         g_open_set_name = g_new_name;
+        log::infof("보관함: 세트 '{}' 만듦", g_new_name);
         g_new_name[0] = 0;
         mark_dirty();
     }
+    ImGui::EndDisabled();
 
     for (int i = 0; i < g_stash.set_count(); ++i) {
         game::StashSet* set = g_stash.set_at(i);
@@ -387,7 +424,8 @@ void draw_stash_panel(bool* open) {
                 queue_start(set->items, set->name.c_str());
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("세트 지우기")) {
+            if (confirm_small_button("세트 지우기")) {
+                log::infof("보관함: 세트 '{}' 지움 ({}개 항목)", set->name, set->items.size());
                 g_stash.remove_set(i);
                 mark_dirty();
                 ImGui::PopID();
@@ -426,8 +464,12 @@ void draw_stash_panel(bool* open) {
                     queue_start({set->items[j]}, "세트 항목");
                 }
                 ImGui::SameLine();
-                draw_item_line(set->items[j].key);
-                ImGui::SameLine();
+                draw_item_line(set->items[j].key,
+                               ImGui::GetContentRegionAvail().x - 150.0f);
+                // 오른쪽 끝에서 140px. GetWindowContentRegionMax 는 폐기 예정이라
+                // 커서 기준으로 잰다.
+                ImGui::SameLine(ImGui::GetCursorPosX() +
+                                ImGui::GetContentRegionAvail().x - 140.0f);
 
                 // 겹쳐 쌓이는 아이템은 개수를 고칠 수 있어야 한다.
                 // 지금까지는 담을 때의 값이 그대로 굳어 있었다.
@@ -438,7 +480,7 @@ void draw_stash_panel(bool* open) {
                     int n = (item.count > 0x7FFFFFFF)
                                 ? 0x7FFFFFFF
                                 : static_cast<int>(item.count);
-                    ImGui::SetNextItemWidth(110.0f);
+                    ImGui::SetNextItemWidth(90.0f);
                     if (ImGui::InputInt("##cnt", &n, 1, 10)) {
                         n = game::clamp_count_to_stack(n, cap);
                         if (n != item.count) {
