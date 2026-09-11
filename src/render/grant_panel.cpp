@@ -7,16 +7,20 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "game/camera.h"
 #include "game/grant.h"
 #include "game/items.h"
 #include "render/colors.h"
+#include "render/gates.h"
 #include "render/icon_atlas.h"
 #include "render/gem_picker.h"
 #include "render/item_style.h"
 #include "render/layout.h"
 #include "render/notice.h"
+#include "render/table_sort_imgui.h"
 
 namespace cdtb::render {
 namespace {
@@ -33,6 +37,7 @@ bool g_let_game_pick_pos = false;
 
 bool g_called = false;
 bool g_call_ok = false;
+std::uint32_t g_my_serial = 0;   // 이 창이 마지막으로 건 요청 번호
 bool g_last_to_inventory = true;
 Notice g_notice;            // 결과 줄. 문구가 바뀔 때만 시각을 찍는다
 
@@ -63,20 +68,9 @@ bool camera_position(float out[3]) {
     return game::read_world_position(set.player_component, out);
 }
 
-// ".?AVServerInventoryActorComponent@pa@@" 에서 쓸 만한 부분만.
-const char* short_class(const char* mangled) {
-    if (mangled == nullptr || mangled[0] == 0) return "(확인 중)";
-    const char* p = std::strstr(mangled, ".?AV");
-    return (p != nullptr) ? p + 4 : mangled;
-}
-
 // 키로 아이템을 찾는다. 없으면 nullptr.
 const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
-    if (!game::items_ready() || key == 0) return nullptr;
-    for (const auto& e : game::item_catalog()) {
-        if (e.key == key) return &e;
-    }
-    return nullptr;
+    return game::item_by_key(key);
 }
 
 // 지금 고른 키의 아이템. 없으면 nullptr.
@@ -367,11 +361,6 @@ void draw_grant_panel(bool* open) {
     std::uintptr_t seen[16]{};
     std::uint32_t hits[16]{};
     const int n = game::seen_sessions(seen, hits, 16);
-    if (n == 0) {
-        ImGui::TextDisabled("월드에 들어가면 준비됩니다.");
-        ImGui::End();
-        return;
-    }
 
     bool server[16]{};
     std::uint64_t last[16]{};
@@ -448,6 +437,13 @@ void draw_grant_panel(bool* open) {
     draw_extras(item);
     draw_sockets(item);
 
+    // 세션이 없으면 여기까지만 - 아이템·키·개수는 월드 밖에서 미리 맞춰 두는
+    // 흐름이라 그리고, 버튼만 안 낸다. 회색 한 줄 대신 다른 창과 같은 게이트.
+    if (!loading_gate(n > 0, "플레이어 세션")) {
+        ImGui::End();
+        return;
+    }
+
     // --- 막힌 이유는 항상 적는다 ------------------------------------
     const char* blocked = nullptr;
     if (g_pick < 0 || g_pick >= n) {
@@ -516,13 +512,14 @@ void draw_grant_panel(bool* open) {
             extras.socket_count = static_cast<std::uint8_t>(open);
         }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
+        if (g_call_ok) g_my_serial = game::last_request_serial();
         g_called = true;
         // 누르면 이전 결과를 지운다 - 같은 문구가 반복돼도 시각이 다시 찍히게
         notice_clear(&g_notice);
         g_last_to_inventory = true;
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_same_line(150.0f);
 
     ImGui::BeginDisabled(blocked != nullptr || blocked_spawn != nullptr ||
                          (!have_pos && !g_let_game_pick_pos));
@@ -536,12 +533,14 @@ void draw_grant_panel(bool* open) {
         // 게임 스레드가 집어 간다.
         g_call_ok = game::request_spawn(
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
+        if (g_call_ok) g_my_serial = game::last_request_serial();
         g_called = true;
         notice_clear(&g_notice);
         g_last_to_inventory = false;
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_same_line(text_width("위치를 게임에 맡기기") + ImGui::GetFrameHeight() +
+                   ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::Checkbox("위치를 게임에 맡기기", &g_let_game_pick_pos);
     if (g_let_game_pick_pos) {
         ImGui::TextDisabled("(0,0,0) 을 넘깁니다 - 게임이 발밑을 잡아 주는지 시험");
@@ -563,7 +562,11 @@ void draw_grant_panel(bool* open) {
         NoticeLevel lv = NoticeLevel::Info;
         const char* text = nullptr;
         char buf[96];
-        if (game::spawn_pending(game::DriveLane::Item)) {
+        if (g_call_ok && !game::outcome_is_mine(g_outcome, g_my_serial)) {
+            // 보관함 일괄 지급 같은 다른 창의 요청이 결과 칸을 갈아 끼웠다. 이 창
+            // 요청은 이미 끝난 것이라 남의 결과를 내 것처럼 읽지 않는다.
+            text = "다른 창의 지급 결과입니다 - 이 창 요청은 끝났습니다";
+        } else if (game::spawn_pending(game::DriveLane::Item)) {
             text = "게임 스레드를 기다리는 중...";
         } else if (!g_call_ok) {
             // 2초 쿨다운이 아니라 게이트가 물린 것일 수 있다. 게이트를
@@ -607,9 +610,36 @@ void draw_grant_panel(bool* open) {
             g_hand_session = 0;
         }
         if (ImGui::BeginTable("sessions", 3,
-                              ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_SizingFixedFit)) {
-            for (int i = 0; i < n; ++i) {
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit |
+                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_Sortable |
+                                  ImGuiTableFlags_SortTristate)) {
+            ImGui::TableSetupColumn("주소");
+            // 기본은 호출 많은 순 - 게임이 쉬지 않고 부르는 세션이 살아 있는 것이다.
+            ImGui::TableSetupColumn("횟수", ImGuiTableColumnFlags_DefaultSort |
+                                                ImGuiTableColumnFlags_PreferSortDescending);
+            ImGui::TableSetupColumn("클래스");
+            ImGui::TableHeadersRow();
+            static SortSpec sort;
+            table_sort_pull(&sort);
+            // seen/hits 는 배열이라 색인 벡터를 정렬한다.
+            const auto cls = [](int i) {
+                char b[64];
+                game::short_class_name(game::session_class(i), b, sizeof(b));
+                return std::string(b);
+            };
+            std::vector<int> order(static_cast<std::size_t>(n));
+            for (int i = 0; i < n; ++i) order[static_cast<std::size_t>(i)] = i;
+            sort_view(order, sort, [&](int a, int b, int col) {
+                switch (col) {
+                    case 0: return cmp3(static_cast<long long>(seen[a]),
+                                        static_cast<long long>(seen[b]));
+                    case 1: return cmp3(static_cast<long long>(hits[a]),
+                                        static_cast<long long>(hits[b]));
+                    default: return cmp3(cls(a), cls(b));
+                }
+            });
+            for (int oi = 0; oi < n; ++oi) {
+                const int i = order[static_cast<std::size_t>(oi)];
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 char id[32];
@@ -620,17 +650,16 @@ void draw_grant_panel(bool* open) {
                     g_hand_session = seen[i];
                 }
                 ImGui::SameLine();
-                ImGui::Text("0x%llX",
-                            static_cast<unsigned long long>(seen[i]));
+                ImGui::Text("0x%llX", static_cast<unsigned long long>(seen[i]));
                 ImGui::TableNextColumn();
                 ImGui::Text("%u회", hits[i]);
                 ImGui::TableNextColumn();
+                char cb[64];
+                game::short_class_name(game::session_class(i), cb, sizeof(cb));
                 if (server[i]) {
-                    ImGui::TextColored(col::kOk, "%s",
-                                       short_class(game::session_class(i)));
+                    ImGui::TextColored(col::kOk, "%s", cb);
                 } else {
-                    ImGui::TextDisabled("%s",
-                                        short_class(game::session_class(i)));
+                    ImGui::TextDisabled("%s", cb);
                 }
             }
             ImGui::EndTable();
