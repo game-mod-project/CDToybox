@@ -90,6 +90,19 @@ void sort_items(std::vector<const ItemCatalogEntry*>& items, ItemSort by,
         });
 }
 
+ItemSortChoice item_sort_from_specs(int count, int column, bool ascending) {
+    ItemSortChoice c;
+    if (count <= 0) return c;
+    switch (column) {
+        case 2: c.sort = ItemSort::Grade; break;
+        case 3: c.sort = ItemSort::Category; break;
+        case 4: c.sort = ItemSort::Name; break;
+        default: c.sort = ItemSort::Key; break;
+    }
+    c.ascending = ascending;
+    return c;
+}
+
 std::size_t page_count(std::size_t total, std::size_t per_page) {
     if (per_page == 0 || total == 0) return 1;
     return (total + per_page - 1) / per_page;

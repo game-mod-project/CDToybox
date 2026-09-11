@@ -55,6 +55,16 @@ std::vector<const ItemCatalogEntry*> filter_items(
 void sort_items(std::vector<const ItemCatalogEntry*>& items, ItemSort by,
                 bool ascending);
 
+struct ItemSortChoice {
+    ItemSort sort = ItemSort::Key;
+    bool ascending = true;
+};
+
+// 표 머리글 정렬 사양을 ItemSort 로 옮긴다. 0번 열은 별표(정렬 없음)라 1번이
+// 키, 2 등급, 3 분류, 4 이름이다. count 가 0(정렬 해제)이면 키 오름차순으로
+// 돌아간다 - 예전에는 해제를 무시해 마지막 정렬이 그대로 남았다.
+ItemSortChoice item_sort_from_specs(int count, int column, bool ascending);
+
 // 전체 쪽수. 빈 목록도 한 쪽으로 친다 - 0 이면 UI 가 0/0 을 낸다.
 std::size_t page_count(std::size_t total, std::size_t per_page);
 
