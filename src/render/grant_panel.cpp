@@ -105,7 +105,7 @@ void draw_sockets(const game::ItemCatalogEntry* item) {
     if (g_socket_open > cap) g_socket_open = cap;
     for (int i = cap; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
 
-    if (!ImGui::CollapsingHeader("소켓 (잠금 없이 열어서 준다)")) return;
+    if (!ImGui::CollapsingHeader("소켓 (잠금 없이 열어서 줍니다)")) return;
     ImGui::Indent();
 
     ImGui::TextUnformatted("열 칸 수");
@@ -562,12 +562,12 @@ void draw_grant_panel(bool* open) {
         NoticeLevel lv = NoticeLevel::Info;
         const char* text = nullptr;
         char buf[96];
-        if (g_call_ok && !game::outcome_is_mine(g_outcome, g_my_serial)) {
+        if (game::spawn_pending(game::DriveLane::Item)) {
+            text = "게임 스레드를 기다리는 중...";
+        } else if (g_call_ok && !game::outcome_is_mine(g_outcome, g_my_serial)) {
             // 보관함 일괄 지급 같은 다른 창의 요청이 결과 칸을 갈아 끼웠다. 이 창
             // 요청은 이미 끝난 것이라 남의 결과를 내 것처럼 읽지 않는다.
             text = "다른 창의 지급 결과입니다 - 이 창 요청은 끝났습니다";
-        } else if (game::spawn_pending(game::DriveLane::Item)) {
-            text = "게임 스레드를 기다리는 중...";
         } else if (!g_call_ok) {
             // 2초 쿨다운이 아니라 게이트가 물린 것일 수 있다. 게이트를
             // 이미 위에 냈으므로 여기서는 무엇 때문인지만 가른다.

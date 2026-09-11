@@ -108,6 +108,12 @@ TEST(view_cache_rebuilds_only_when_key_changes) {
     ViewKey k6 = k5;
     k6.type = 4;
     CHECK(cv.begin(k6));         // 타입 필터
+    ViewKey k7 = k6;
+    k7.query = "b";
+    CHECK(cv.begin(k7));         // 검색어 - 캐시의 존재 이유
+    ViewKey k8 = k7;
+    k8.generation = &cv;
+    CHECK(cv.begin(k8));         // 원본 판 교체
 }
 
 TEST(flag_bits_packs_in_order) {

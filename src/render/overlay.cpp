@@ -419,14 +419,22 @@ void draw_ui() {
         if (s.id == cdtb::render::Win::Main) continue;
         if ((n & 1) == 1) ImGui::SameLine(200.0f);
         ImGui::Checkbox(s.label, &shown(s.id));
-        // 게임 메모리에 쓰는 창은 목록에서 보이게 표시한다.
-        if (s.id == cdtb::render::Win::Roster || s.id == cdtb::render::Win::Equip ||
-            s.id == cdtb::render::Win::Player || s.id == cdtb::render::Win::Inventory) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(쓰기)");
+        // 게임 메모리에 쓰는 창은 표식을 단다. "(쓰기)" 는 200px 열을 넘어 옆 열과
+        // 겹쳤다 - 한 글자로 줄이고 뜻은 툴팁과 아래 범례가 말한다.
+        const bool writes = s.id == cdtb::render::Win::Roster ||
+                            s.id == cdtb::render::Win::Equip ||
+                            s.id == cdtb::render::Win::Player ||
+                            s.id == cdtb::render::Win::Inventory;
+        if (writes) {
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("이 창은 게임 메모리를 바꿉니다");
+            }
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::TextDisabled("*");
         }
         ++n;
     }
+    ImGui::TextDisabled("* 게임 메모리를 바꾸는 창");
 
     ImGui::Separator();
     // 안내는 설정값에서 만든다. 키를 옮기고 안내를 안 고쳐 거짓이 된 적이 있다.

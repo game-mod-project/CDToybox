@@ -400,7 +400,7 @@ void draw_companion_tab() {
 
 
 // 정의가 뒤에 있다 - 아이템 탭이 먼저 부른다.
-void draw_companion_drive_gate();
+void draw_companion_drive_gate(game::DriveLane lane);
 
 // 동반자를 주는 아이템을 지급한다. 지급은 이미 검증된 경로다.
 void draw_companion_item_tab() {
@@ -408,7 +408,7 @@ void draw_companion_item_tab() {
         "\"실측\"은 실제로 되는 것을 본 줄입니다. \"미확인\"은 이름만 보고 "
         "모은 것이라 동반자 아이템인지도 모릅니다 - 지급해서 확인해 "
         "보세요.");
-    draw_companion_drive_gate();
+    draw_companion_drive_gate(game::DriveLane::Item);
     notice_draw(g_item_notice);
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
@@ -492,14 +492,15 @@ void draw_companion_item_tab() {
     ImGui::EndTable();
 }
 
-// 동반자 레인의 구동 상태. 누른 자리에서 보여 줘야 오해가 없다.
-void draw_companion_drive_gate() {
+// 구동 레인의 상태. 누른 자리에서 보여 줘야 오해가 없다 - 아이템 탭은
+// Item 레인(지급), 근처 탭은 Companion 레인(획득·거두기)이다.
+void draw_companion_drive_gate(game::DriveLane lane) {
     if (game::drive_point_dead()) {
         ImGui::TextColored(col::kBad,
                            "구동 지점이 게임 안에서 멈췄습니다 - "
                            "게임을 다시 시작해야 지급·획득이 동작합니다");
     }
-    const game::DriveGate g = game::drive_gate_state(game::DriveLane::Companion);
+    const game::DriveGate g = game::drive_gate_state(lane);
     const ImVec4 warn = col::kWarn;
     const ImVec4 bad = col::kBad;
     const bool stuck = g.pending && g.pending_age_ms > 30000;
@@ -509,7 +510,8 @@ void draw_companion_drive_gate() {
     }
     if (g.pending) {
         ImGui::TextColored(stuck ? bad : warn,
-                           "동반자 구동 대기 중: %.1f초째 (월드가 돌고 있어야 실행됩니다)",
+                           "%s 구동 대기 중: %.1f초째 (월드가 돌고 있어야 실행됩니다)",
+                           lane == game::DriveLane::Item ? "아이템 지급" : "동반자",
                            g.pending_age_ms / 1000.0);
     }
     if (g.cooldown_left_ms > 0) {
@@ -935,7 +937,7 @@ void draw_nearby_tab() {
     // 구동 상태를 여기서 보여 준다. 예전에는 아이템 지급 패널에만 떴어
     // 획득을 눌렀는데 ‘아이템 지급’ 이 대기 중으로 보였다(사용자 지적
     // 2026-09-09). 이젠 레인이 나뉘어 있고, 여기는 동반자 레인만 본다.
-    draw_companion_drive_gate();
+    draw_companion_drive_gate(game::DriveLane::Companion);
 
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).

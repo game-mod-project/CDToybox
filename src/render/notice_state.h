@@ -24,7 +24,7 @@ NoticeAge notice_age(const Notice& n, double now, double fade_after = 10.0,
 
 void notice_clear(Notice* n);
 
-// 등급·시각을 찍고 본문을 담는다. 본문이 길면 끝을 자른다.
+// 등급·시각을 찍고 본문을 담는다. 본문이 길면 글자(UTF-8) 경계에서 끝을 자른다.
 void notice_put(Notice* n, NoticeLevel lv, double now, const char* text);
 
 }  // namespace cdtb::render

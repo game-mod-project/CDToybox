@@ -192,7 +192,7 @@ void draw_item_panel(bool* open) {
         // 눈에 안 띄는 기능이라 머리글이 뜻을 말해야 한다.
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
         for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) {
-            ImGui::TableSetColumnIndex(c);
+            if (!ImGui::TableSetColumnIndex(c)) continue;   // TableHeadersRow 처럼 숨은 열은 건너뛴다
             ImGui::PushID(c);   // TableHeadersRow 와 같게 - 이름 없는 칸이 생겨도 ID 가 안 겹친다
             ImGui::TableHeader(ImGui::TableGetColumnName(c));
             if (c == 0 && ImGui::IsItemHovered()) {
