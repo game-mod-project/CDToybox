@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #include "core/log.h"
@@ -368,15 +369,24 @@ void log_normal_stack() {
         }
     }
 }
+// 결과 칸. 게임 스레드가 쓰고 렌더·명령 스레드가 읽으므로 뮤텍스로 감싼다.
 SpawnOutcome g_outcome;
+std::mutex g_outcome_mutex;
+// 생산자(렌더 스레드·명령 파일 스레드)가 같은 레인을 동시에 채우지 않게 한다.
+std::mutex g_produce_mutex;
 
 std::atomic<std::uint32_t> g_request_serial{0};
+// 이 스레드가 마지막으로 매긴 번호. 스레드별이라 다른 생산자가 그 사이에 번호를
+// 올려도 내 것이 바뀌지 않는다(Codex 지적 2026-09-11).
+thread_local std::uint32_t t_last_serial = 0;
 
 // 요청마다 번호를 매기고 결과 칸을 비운다. 창은 자기 번호의 결과만 읽는다.
 void stamp_request(LaneSlot& lane) {
     const std::uint32_t s =
         g_request_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
     lane.req.serial = s;
+    t_last_serial = s;
+    std::lock_guard<std::mutex> lock(g_outcome_mutex);
     g_outcome = SpawnOutcome{};
     g_outcome.serial = s;
 }
@@ -496,34 +506,40 @@ bool run_one_picked() {
     if (picked >= 0) {
         ran = true;
         const Pending req = g_lane[picked].req;
+        // 지역 칸에 받아 한 번에 게시한다 - run_* 가 쓰는 도중에 창이 읽지 않게.
+        SpawnOutcome local;
         switch (req.kind) {
             case Kind::Inventory:
                 run_give(req.session, req.key, req.count, req.extras,
-                         &g_outcome);
+                         &local);
                 break;
             case Kind::Endurance:
-                run_endurance(req.session, req.a, req.b, &g_outcome);
+                run_endurance(req.session, req.a, req.b, &local);
                 break;
             case Kind::Ground:
-                run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+                run_spawn(req.session, req.key, req.count, req.pos, &local);
                 break;
             case Kind::HireSpecies:
                 run_hire_species(req.session,
                                  static_cast<std::uint16_t>(req.key),
-                                 &g_outcome);
+                                 &local);
                 break;
             case Kind::Message:
                 run_message(req.session, req.msg, req.wire, req.wire_len,
-                            &g_outcome);
+                            &local);
                 break;
         }
         // run_* 가 결과를 통째로 덮어 번호가 지워진다.
-        g_outcome.serial = req.serial;
+        local.serial = req.serial;
+        {
+            std::lock_guard<std::mutex> lock(g_outcome_mutex);
+            g_outcome = local;
+        }
         // 종류를 가리지 않는다. 게임 안에서 죽었다는 것은 우리가
         // 넘긴 세션이 이미 풀렸다는 뜻이고 - 실측 2026-09-06: 죽은
         // 자리가 `mov rax,[세션+0x88]` 이었다 - 같은 자리로 또 보내면
         // 또 죽는다. 그 반복이 클라이언트를 오류로 떨어뜨린다.
-        if (g_outcome.crashed && req.session != 0) {
+        if (local.crashed && req.session != 0) {
             g_drive_fault.store(req.session, std::memory_order_release);
             log::warnf("세션 0x{:X} 를 잠갔다 - 새 세션이 잡힐 때까지 구동하지 않는다",
                        req.session);
@@ -1301,6 +1317,7 @@ bool hire_species_ready() {
 }
 
 bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!hire_species_ready() || session == 0 || char_key == 0) return false;
     drop_stale_pending();
     LaneSlot& lane = lane_of(DriveLane::Companion);
@@ -1887,6 +1904,7 @@ bool endurance_ready() {
 
 bool request_endurance(std::uintptr_t session, std::uint16_t a,
                        std::uint16_t b) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!endurance_ready() || session == 0) return false;
     drop_stale_pending();
     LaneSlot& lane = lane_of(DriveLane::Item);
@@ -2057,6 +2075,7 @@ bool resolve_message(const mem::Rtti& rtti, const mem::Reader& reader,
 
 bool request_message(std::uintptr_t session, const MessageDesc& msg,
                      const std::uint8_t* wire, std::size_t len) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (session == 0 || msg.deser == 0 || wire == nullptr) return false;
     if (len < 5 || len > kMessageWireMax) return false;
     if (g_reader == nullptr) return false;
@@ -2084,6 +2103,7 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
 
 bool request_give(std::uintptr_t session, std::uint32_t item_key,
                   std::int64_t count, const GiveExtras& extras) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!give_ready()) return false;
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
@@ -2126,6 +2146,7 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
 
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!spawn_ready() || pos == nullptr || g_reader == nullptr) {
         return false;
     }
@@ -2163,11 +2184,12 @@ bool spawn_pending(DriveLane lane) {
     return lane_of(lane).has.load(std::memory_order_acquire);
 }
 
-const SpawnOutcome& last_outcome() { return g_outcome; }
-
-std::uint32_t last_request_serial() {
-    return g_request_serial.load(std::memory_order_acquire);
+SpawnOutcome last_outcome() {
+    std::lock_guard<std::mutex> lock(g_outcome_mutex);
+    return g_outcome;
 }
+
+std::uint32_t last_request_serial() { return t_last_serial; }
 
 void short_class_name(const char* mangled, char* out, std::size_t n) {
     if (n == 0) return;

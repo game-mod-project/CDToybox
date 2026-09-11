@@ -255,9 +255,9 @@ int species_cmp(const game::RosterEntry* a, const game::RosterEntry* b,
 }
 
 // 빈 표 한 줄. 검색어가 있으면 [지우기] 로 비운다.
-void roster_empty_row(int text_column) {
+void roster_empty_row() {
     const bool has_query = g_query[0] != 0;
-    if (table_empty_row(text_column,
+    if (table_empty_row(
                         has_query ? "검색어 때문에 비어 있습니다"
                                   : "조건에 맞는 항목이 없습니다",
                         has_query ? "지우기" : nullptr)) {
@@ -358,7 +358,7 @@ void draw_companion_tab() {
             }
             sort_view(cv.rows, sort, companion_cmp);
         }
-        if (cv.rows.empty()) roster_empty_row(1);
+        if (cv.rows.empty()) roster_empty_row();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(cv.rows.size()));
         while (clipper.Step()) {
@@ -451,7 +451,7 @@ void draw_companion_item_tab() {
             default: return 0;
         }
     });
-    if (order.empty()) roster_empty_row(0);
+    if (order.empty()) roster_empty_row();
     for (int i : order) {
         const CompanionItem& it = kCompanionItems[i];
         ImGui::TableNextRow();
@@ -593,7 +593,7 @@ void draw_species_popup() {
         g_species_hits = cv.rows.size();
         if (cv.rows.empty()) {
             const bool has_query = g_species_query[0] != 0;
-            if (table_empty_row(1,
+            if (table_empty_row(
                                 has_query ? "검색어 때문에 비어 있습니다"
                                           : "조건에 맞는 항목이 없습니다",
                                 has_query ? "지우기" : nullptr)) {
@@ -797,7 +797,7 @@ void draw_my_companions_tab() {
         }
         sort_view(cv.rows, sort, mine_cmp);
     }
-    if (cv.rows.empty()) roster_empty_row(1);
+    if (cv.rows.empty()) roster_empty_row();
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(cv.rows.size()));
     while (clipper.Step()) {
@@ -988,7 +988,10 @@ void draw_nearby_tab() {
         k.query = g_query;
         k.flags = flag_bits({g_near_companion_only});
         k.sort = sort;
-        k.generation = all.data();
+        // data() 대신 갱신 세대를 쓴다 - tick 이 갈아 끼운 뒤 같은 주소를 다시
+        // 받으면 키가 같아 옛 포인터를 쥔 채 그릴 수 있다.
+        k.generation = reinterpret_cast<const void*>(
+            static_cast<std::uintptr_t>(game::live_actors_generation()));
         k.count = all.size();
         k.stamp = g_near_last_refresh;   // 2초마다 같은 버퍼에 다시 채워진다
         if (cv.begin(k)) {
@@ -1009,7 +1012,7 @@ void draw_nearby_tab() {
             }
             sort_view(cv.rows, sort, nearby_cmp);
         }
-        if (cv.rows.empty()) roster_empty_row(2);
+        if (cv.rows.empty()) roster_empty_row();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(cv.rows.size()));
         while (clipper.Step()) {
@@ -1229,7 +1232,7 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
             return cmp3(a->display(), b->display());
         });
     }
-    if (v.rows.empty()) roster_empty_row(ncol - 1);
+    if (v.rows.empty()) roster_empty_row();
 
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(v.rows.size()));

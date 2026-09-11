@@ -470,10 +470,24 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
     const std::uint8_t buf[2] = {static_cast<std::uint8_t>(row & 0xFF),
                                  static_cast<std::uint8_t>(row >> 8)};
     // 클라·서버 양쪽에 써야 한다. 서버만 쓰면 게임이 보는 사본은 그대로다
-    // (실측 2026-09-09).
-    if (!mem::safe_write_bytes(t.server, buf, 2) ||
-        !mem::safe_write_bytes(t.client, buf, 2)) {
-        *msg = "쓰기 실패";
+    // (실측 2026-09-09). 둘째 쓰기가 실패하면 첫째를 되돌린다 - 한쪽만 바뀐 채
+    // 두면 두 사본이 어긋난다(Codex 지적 2026-09-11).
+    std::uint8_t old_server[2]{};
+    const bool have_old = reader.read(t.server, old_server, 2);
+    if (!mem::safe_write_bytes(t.server, buf, 2)) {
+        // 위의 감사 줄이 "바꿨다" 처럼 읽히지 않게 실패도 남긴다.
+        log::warnf("동반자 종 번호 {}: 서버 사본 쓰기 실패 - 아무것도 바뀌지 않았다",
+                   merc_no);
+        *msg = "쓰기 실패 (서버 사본) - 바뀐 것 없음";
+        return SpeciesApply::WriteFailed;
+    }
+    if (!mem::safe_write_bytes(t.client, buf, 2)) {
+        const bool rolled =
+            have_old && mem::safe_write_bytes(t.server, old_server, 2);
+        log::warnf("동반자 종 번호 {}: 클라 사본 쓰기 실패 - 서버 사본 {}", merc_no,
+                   rolled ? "되돌림" : "되돌리기 실패 (두 사본이 어긋남)");
+        *msg = rolled ? "쓰기 실패 (클라 사본) - 서버 사본은 되돌렸습니다"
+                      : "쓰기 실패 (클라 사본) - 서버 사본을 되돌리지 못했습니다";
         return SpeciesApply::WriteFailed;
     }
     SpeciesWriteTarget after;

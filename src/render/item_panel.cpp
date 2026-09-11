@@ -206,7 +206,7 @@ void draw_item_panel(bool* open) {
 
         if (g_view.empty()) {
             const bool has_query = g_bar.query[0] != 0;
-            if (table_empty_row(4,
+            if (table_empty_row(
                                 has_query ? "검색어 때문에 비어 있습니다"
                                           : "조건에 맞는 아이템이 없습니다",
                                 has_query ? "지우기" : nullptr)) {

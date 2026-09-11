@@ -1,6 +1,7 @@
 #include "render/gates.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>   // ImGuiTable: 표시 순서·안쪽 클립
 
 #include "render/colors.h"
 
@@ -24,13 +25,36 @@ bool loading_gate(bool ready, const char* what, std::size_t done,
     return false;
 }
 
-bool table_empty_row(int text_column, const char* text, const char* action) {
+bool table_empty_row(const char* text, const char* action) {
     ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(text_column);
+    ImGuiTable* table = ImGui::GetCurrentTable();
+    // 화면에 첫째로 보이는 열. 사용자가 열 순서를 바꿔 두면 0번 열이 첫째가 아니다.
+    int col = 0;
+    if (table != nullptr) {
+        for (int order = 0; order < table->ColumnsCount; ++order) {
+            const int idx = table->DisplayOrderToIndex[order];
+            if (table->Columns[idx].IsEnabled) {
+                col = idx;
+                break;
+            }
+        }
+    }
+    ImGui::TableSetColumnIndex(col);
+    // 열 폭에 잘리지 않게 표 안쪽 전체로 클립을 넓힌다 - 저장된 창 배치에서 열이
+    // 좁으면 한 열 안에서는 문구와 [지우기] 가 잘려 보이지 않았다(화면 검증
+    // 2026-09-11, 열 번호를 옮기는 것으로는 안 고쳐진다 - Codex 지적).
+    if (table != nullptr) {
+        ImGui::PushClipRect(table->InnerClipRect.Min, table->InnerClipRect.Max,
+                            false);
+    }
     ImGui::TextDisabled("%s", text);
-    if (action == nullptr) return false;
-    ImGui::SameLine();
-    return ImGui::SmallButton(action);
+    bool pressed = false;
+    if (action != nullptr) {
+        ImGui::SameLine();
+        pressed = ImGui::SmallButton(action);
+    }
+    if (table != nullptr) ImGui::PopClipRect();
+    return pressed;
 }
 
 }  // namespace cdtb::render

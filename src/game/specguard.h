@@ -18,8 +18,12 @@ namespace cdtb::game {
 // rtti 불필요(모듈 베이스+확정 RVA). 렌더 루프(overlay on_frame)에서 매
 // 프레임 불러 첫 프레임에 즉시 설치한다 - 분석 루프의 늦은 지점에서 설치하면
 // 그 전에 지급/가방을 열어 크래시가 났다(실측 2026-09-07).
+// 여러 스레드(렌더 루프·분석 루프)가 불러도 한 번만 설치한다. 설치가 끝나면 true.
 bool specguard_install(const mem::Reader& reader);
 bool specguard_installed();
-bool specguard_unsupported();   // AOB 미매칭 등으로 이 빌드에서 못 걺
+// 한 곳이라도 못 걸었다(전부 못 건 것 포함). 그 자리에서는 특수기능 아이템이
+// 원래대로 죽을 수 있으니 지급 창이 경고한다(Codex 지적 2026-09-11: 전에는
+// 0곳일 때만 알렸다).
+bool specguard_unsupported();
 
 }  // namespace cdtb::game

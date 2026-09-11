@@ -566,10 +566,13 @@ bool hire_species_ready();
 // 걸어 둔 요청이 처리됐는가. 아직이면 false.
 // 그 레인에 걸린 요청이 있는가.
 bool spawn_pending(DriveLane lane);
-const SpawnOutcome& last_outcome();
+// 마지막 결과의 복사본. 게임 스레드가 쓰는 중에 읽지 않도록 뮤텍스 아래에서
+// 복사한다(Codex 지적 2026-09-11).
+SpawnOutcome last_outcome();
 
-// 마지막으로 건 요청의 번호. 결과의 serial 과 같을 때만 "내 결과"다 - 지급
-// 창·보관함·로스터가 같은 결과 칸을 보므로, 남의 결과를 내 것처럼 읽지 않는다.
+// **이 스레드가** 마지막으로 건 요청의 번호(스레드별). 렌더 스레드와 명령 파일
+// 스레드가 서로의 번호를 읽지 않는다. 결과의 serial 과 같을 때만 "내 결과"다 -
+// 지급 창·보관함·로스터가 같은 결과 칸을 보므로, 남의 결과를 내 것처럼 읽지 않는다.
 std::uint32_t last_request_serial();
 inline bool outcome_is_mine(const SpawnOutcome& o, std::uint32_t my_serial) {
     return o.serial == my_serial;

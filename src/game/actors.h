@@ -126,8 +126,19 @@ bool actor_manager_ready();
 // "죽은 핸들" 을 판정해 지우므로, 모를 때는 건드리지 않는 쪽이 안전하다.
 bool actor_handle_alive(const mem::Reader& reader, std::uint32_t handle,
                         bool* known_out);
-// 지금 걷는다. 그리는 쪽이 버튼/주기로 부른다. 실패하면 false 이고 옛 판 유지.
+// 지금 걷는다. **그리는 스레드만** 부른다(버튼/주기/아래 tick). 실패하면 false
+// 이고 옛 판 유지. 다른 스레드가 갈아 끼우면 그리는 쪽이 쥔 원소 포인터가
+// 매달린다(Codex 지적 2026-09-11).
 bool refresh_live_actors(const mem::Reader& reader);
+// 그리는 스레드용 참조. 다음 refresh 까지만 유효하다.
 const std::vector<LiveActor>& live_actors();
+// 갱신 세대. refresh 가 성공할 때마다 1 오른다 - 뷰 캐시 키로 쓴다.
+std::uint64_t live_actors_generation();
+// 다른 스레드(명령 파일)는 직접 걷지 않고 갱신을 부탁한다. 렌더 스레드가 다음
+// 프레임의 live_actors_tick 에서 걷고 세대를 올린다.
+void live_actors_request_refresh();
+void live_actors_tick(const mem::Reader& reader);
+// 다른 스레드용 복사본(뮤텍스 아래에서 복사).
+std::vector<LiveActor> live_actors_copy();
 
 }  // namespace cdtb::game

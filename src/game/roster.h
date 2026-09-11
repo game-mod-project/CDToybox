@@ -131,26 +131,24 @@ struct RosterEntry {
 // 없는 키는 소환되지 않는다 - 어느 종이 되는지 하나씩 눌러 볼 필요가
 // 없다. 표를 통째로 읽어 카탈로그에 표시한다.
 //
-//   전역 RVA 0x6C29FF8 -> 표 포인터
+//   CharacterInfoManager 인스턴스(카탈로그를 만들 때 RTTI 로 찾는 그 객체) -> 표
 //     +0x68 u32 버킷 수      +0x6C u32 (0 이면 비어 있음)
 //     +0x78 버킷 배열        버킷 하나가 0x100 바이트
 //     버킷: [0] u32 항목 수, +8 부터 {u32 키, u32 색인} 쌍
 //
-// 하드코딩된 주소라 패치마다 어긋날 수 있다. 버킷 수·항목 수가
-// 말이 되는지 보고, 아니면 조용히 포기한다(표시만 비고 기능은 산다).
-// 1.0.0.2850: 데이터 전역이 +0x4150 밀렸다(소환 가드의 빈 레코드와 같은 폭). 2760 까지
-// 0x6C29FF8. 틀리면 아래 검증이 걸러 "소환 표를 못 읽었다" 만 남는다.
-// 2차 리뷰(2026-09-11): 이 주소는 초기화 함수 0x2C8E40 이 채우는 매니저 포인터 은행
-// 0x6C2E0D0~0x6C2E168 의 15번 칸(저장 1곳, 읽는 코드 0곳)이라 칸 하나 어긋남은 정적으로
-// 가릴 수 없다 - 런타임 `소환 표 N개` 줄이 유일한 확정. RTTI 로 찾는 CharacterInfoManager
-// 인스턴스와 같은 값이면 이 상수를 없앨 수 있다(후속).
-inline constexpr std::uint64_t kSpawnTableGlobalRva = 0x6C2E148;
+// 2760 까지는 고정 전역 0x6C29FF8 에서 이 포인터를 읽었다. 2850 갱신에서 +0x4150 으로
+// 옮긴 0x6C2E148 은 핸들 은행(0x0001000D 같은 값)이라 실패했고, 실제 전역은 0x6C2E288
+// (+0x4290 - 프로브로 [전역] == RTTI 인스턴스 0x49EDCED3340 확인, 2026-09-11)이었다.
+// 2차 리뷰가 경고한 대로 데이터 구간의 이동 폭은 고르지 않다. 그래서 상수를 없애고
+// 카탈로그를 만들 때 찾은 인스턴스에서 바로 읽는다 - 갱신에 안 밀린다. 버킷 수·항목
+// 수가 말이 되는지 보고, 아니면 조용히 포기한다(표시만 비고 기능은 산다).
 inline constexpr std::size_t kSpawnBucketStride = 0x100;
 inline constexpr std::uint32_t kSpawnBucketMaxEntries = 31;  // (0x100-8)/8
 inline constexpr std::uint32_t kSpawnMaxBuckets = 4096;
 
-// 소환 표의 키를 전부 읽는다. 정렬된 채로 돌려준다. 못 읽으면 false.
-bool read_spawn_table(const mem::Reader& reader,
+// 소환 표의 키를 전부 읽는다. manager 는 CharacterInfoManager 인스턴스. 정렬된
+// 채로 돌려준다. 못 읽으면 false.
+bool read_spawn_table(const mem::Reader& reader, std::uintptr_t manager,
                       std::vector<std::uint32_t>* out);
 
 // 캐릭터의 인게임 표시명이 든 현지화 필드.
@@ -231,9 +229,12 @@ bool build_catalog_from_manager(const mem::Reader& reader,
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
                           const char* manager_class,
                           std::vector<RosterEntry>* out);
+// manager_out 을 주면 찾은 매니저 인스턴스 주소를 넣어 준다(소환 표 읽기에 쓴다 -
+// 힙을 다시 훑지 않으려고).
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
                           const char* manager_class, RosterKind kind,
-                          std::vector<RosterEntry>* out);
+                          std::vector<RosterEntry>* out,
+                          std::uintptr_t* manager_out = nullptr);
 
 // 내부 이름 규칙 도우미. 포획 대상 판별에 쓴다
 // (specs/2026-09-05-catchable-companions.md "읽는 법").

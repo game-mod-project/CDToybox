@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "core/log.h"
@@ -44,8 +45,12 @@ constexpr DivSite kDivMem[] = {
 constexpr DivSite kDivReg[] = {
     {0xF01981B, 6}, {0x235003B, 5}, {0x2350454, 6}};
 
-std::atomic<bool> g_installed{false};
+// 0 안 함, 1 설치 중(다른 스레드는 손대지 않는다), 2 끝. 렌더 루프와 분석 루프가
+// 동시에 부를 수 있어 CAS 로 한 스레드만 들어간다(Codex 지적 2026-09-11).
+std::atomic<int> g_state{0};
 std::atomic<int> g_count{0};
+constexpr int kSiteTotal =
+    static_cast<int>(std::size(kDivMem) + std::size(kDivReg));
 
 void* alloc_near(std::uintptr_t target, std::size_t size) {
     SYSTEM_INFO si{};
@@ -244,9 +249,16 @@ bool install_regdiv(const mem::Reader& reader, std::uintptr_t site,
 }  // namespace
 
 bool specguard_install(const mem::Reader& reader) {
-    if (g_installed.load(std::memory_order_acquire)) return true;
+    int expected = 0;
+    if (!g_state.compare_exchange_strong(expected, 1,
+                                         std::memory_order_acq_rel)) {
+        return expected == 2;   // 다른 스레드가 설치 중이거나 이미 끝났다
+    }
     const std::uintptr_t base = reader.module_base();
-    if (base == 0) return false;
+    if (base == 0) {
+        g_state.store(0, std::memory_order_release);
+        return false;
+    }
 
     int n = 0;
     for (const auto& s : kDivMem) {
@@ -256,15 +268,23 @@ bool specguard_install(const mem::Reader& reader) {
         if (install_regdiv(reader, base + s.rva, s.patch_len)) ++n;
     }
     g_count.store(n, std::memory_order_release);
-    g_installed.store(true, std::memory_order_release);
-    log::infof("특수아이템 가드: {}개 사이트 설치 (base=0x{:X})", n, base);
+    g_state.store(2, std::memory_order_release);
+    if (n == kSiteTotal) {
+        log::infof("특수아이템 가드: {}개 사이트 설치 (base=0x{:X})", n, base);
+    } else {
+        log::warnf("특수아이템 가드: {}/{}개만 설치 (base=0x{:X}) - 빠진 자리에서는 "
+                   "특수기능 아이템이 원래대로 죽을 수 있다, 위 warn 줄을 볼 것",
+                   n, kSiteTotal, base);
+    }
     return true;
 }
 
-bool specguard_installed() { return g_installed.load(std::memory_order_acquire); }
+bool specguard_installed() {
+    return g_state.load(std::memory_order_acquire) == 2;
+}
 bool specguard_unsupported() {
-    return g_installed.load(std::memory_order_acquire) &&
-           g_count.load(std::memory_order_acquire) == 0;
+    return g_state.load(std::memory_order_acquire) == 2 &&
+           g_count.load(std::memory_order_acquire) < kSiteTotal;
 }
 
 }  // namespace cdtb::game

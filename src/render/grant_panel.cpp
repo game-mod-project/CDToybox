@@ -12,6 +12,7 @@
 
 #include "game/camera.h"
 #include "game/grant.h"
+#include "game/specguard.h"
 #include "game/items.h"
 #include "render/colors.h"
 #include "render/gates.h"
@@ -554,6 +555,13 @@ void draw_grant_panel(bool* open) {
 
     // 게이트는 눌렀든 안 눌렀든 낸다. 물려 있으면 다음에 눌러도 거부된다.
     const bool gate_held = draw_drive_gate();
+    // 특수기능 아이템 크래시 가드를 한 곳이라도 못 걸었으면 여기서 알린다 - 로그
+    // warn 만으로는 사용자에게 닿지 않는다(재리뷰 지적 2026-09-11).
+    if (game::specguard_unsupported()) {
+        ImGui::TextColored(col::kWarn,
+                           "특수기능 아이템 크래시 가드를 전부 걸지 못했습니다 - "
+                           "특수기능 아이템을 지급하면 게임이 죽을 수 있습니다");
+    }
 
     // 결과 줄. 상태는 매 프레임 계산하되 문구가 바뀔 때만 시각을 찍는다 -
     // 그래야 10분 전 "넣었습니다" 가 회색으로 바래 방금 것과 갈린다.

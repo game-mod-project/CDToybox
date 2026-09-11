@@ -17,7 +17,7 @@ struct ViewKey {
     int type = -1;                      // 타입 필터(-1 전체)
     unsigned flags = 0;                 // 체크박스 비트 (flag_bits)
     SortSpec sort;                      // 머리글 정렬
-    const void* generation = nullptr;   // 원본 벡터의 data()
+    const void* generation = nullptr;   // 원본의 세대(갱신 카운터) 또는 data()
     std::size_t count = 0;              // 원본 크기
     // 원본이 마지막으로 갱신된 시각. 같은 버퍼에 같은 크기로 다시 채워지는
     // 목록(근처·내 동반자, 2초 갱신)은 data()/size() 로 못 가린다.

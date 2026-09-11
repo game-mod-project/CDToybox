@@ -878,8 +878,14 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         // (실측 2026-09-07: 1703 -> 1704 -> 1703, 잡음과 구별 불가).
         if (!actor_manager_ready()) { say("액터 매니저 미확보"); return false; }
         if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
-        refresh_live_actors(*g_cmd_reader);
-        const std::vector<LiveActor>& live = live_actors();
+        // 명령 스레드는 직접 걷지 않는다 - 렌더 스레드에 부탁하고 다음 프레임을
+        // 기다린 뒤 복사본을 받는다(Codex 지적 2026-09-11: 직접 갈아 끼우면 그리는
+        // 쪽의 포인터가 매달린다).
+        live_actors_request_refresh();
+        const std::uint64_t gen0 = live_actors_generation();
+        for (int i = 0; i < 30 && live_actors_generation() == gen0; ++i) Sleep(50);
+        if (live_actors_generation() == gen0) say("갱신 대기 초과 - 이전 목록으로");
+        const std::vector<LiveActor> live = live_actors_copy();
 
         std::vector<std::uintptr_t> now;
         now.reserve(live.size());
@@ -1028,8 +1034,14 @@ bool companion_run_command(const std::string& line, std::string* reply) {
         // 소환한 개체가 실제로 생겼는지 화면을 보지 않고 확인한다.
         if (!actor_manager_ready()) { say("액터 매니저 미확보"); return false; }
         if (g_cmd_reader == nullptr) { say("리더 없음"); return false; }
-        refresh_live_actors(*g_cmd_reader);
-        const std::vector<LiveActor>& live = live_actors();
+        // 명령 스레드는 직접 걷지 않는다 - 렌더 스레드에 부탁하고 다음 프레임을
+        // 기다린 뒤 복사본을 받는다(Codex 지적 2026-09-11: 직접 갈아 끼우면 그리는
+        // 쪽의 포인터가 매달린다).
+        live_actors_request_refresh();
+        const std::uint64_t gen0 = live_actors_generation();
+        for (int i = 0; i < 30 && live_actors_generation() == gen0; ++i) Sleep(50);
+        if (live_actors_generation() == gen0) say("갱신 대기 초과 - 이전 목록으로");
+        const std::vector<LiveActor> live = live_actors_copy();
         const std::string frag = args.size() > 1 ? args[1] : std::string();
         const std::size_t limit =
             args.size() > 2 ? static_cast<std::size_t>(parse_u32(args[2], 30)) : 30;

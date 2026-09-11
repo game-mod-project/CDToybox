@@ -13,10 +13,11 @@ namespace cdtb::render {
 bool loading_gate(bool ready, const char* what, std::size_t done = 0,
                   std::size_t total = 0);
 
-// 표 안에 한 줄. text_column(가장 넓은 칸)에 text 를 회색으로 쓰고, action 이
-// 있으면 그 옆에 SmallButton 을 붙인다. 버튼이 눌리면 true.
+// 표 안에 한 줄. 화면에 첫째로 보이는 열에 text 를 회색으로 쓰되 클립을 표 안쪽
+// 전체로 넓혀 열 폭에 잘리지 않게 한다(사용자가 열을 좁히거나 순서를 바꿔 두면
+// 한 열 안에서는 문구와 버튼이 잘렸다 - 화면 검증 2026-09-11). action 이 있으면
+// 그 옆에 SmallButton 을 붙인다. 버튼이 눌리면 true.
 // BeginTable 안, TableHeadersRow 뒤에서 부른다.
-bool table_empty_row(int text_column, const char* text,
-                     const char* action = nullptr);
+bool table_empty_row(const char* text, const char* action = nullptr);
 
 }  // namespace cdtb::render
