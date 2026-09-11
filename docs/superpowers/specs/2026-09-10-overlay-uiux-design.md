@@ -309,8 +309,15 @@ void log_write(std::string_view what, std::uintptr_t target, std::string_view be
   표(탈것·용병 타입·캐릭터) 안내 어미 통일; `stash_panel` 의 리터럴 색 2곳; `Notice` 의
   UTF-8 경계 절단·시계 되감김; confirm 라벨 79바이트 초과 시 ID 불변식(`PushID` 방식으로).
 
+- **모든 표에 머리글 정렬(사용자 요청 2026-09-11)**: 아이템 목록·인벤토리처럼 나머지 표 9개 —
+  로스터 6개(동반자 · 근처 · 내 동반자 · 종 바꾸기 팝업 · 동반자 아이템 · 탈것/용병 타입/캐릭터 목록) ·
+  장비 창 착용 장비 · 지급 창 세션 표 · 인벤 소켓 상한 표 — 에 `Sortable | SortTristate` 를 걸고
+  `TableGetSortSpecs()` 로 뷰를 정렬한다. 공용 헬퍼 `render/table_sort.h`(ImGui 없음): 열 번호·방향과
+  열별 키 함수로 벡터를 정렬, 해제(`SpecsCount == 0`)면 원래 순서. 로스터는 위 뷰 캐시의 키에 정렬
+  열·방향을 넣어 매 프레임 재정렬하지 않는다. 보관함(줄 목록)은 대상이 아니다.
+
 **테스트** — `item_by_key` 조회·판 교체 · 뷰 캐시 키 비교 · `short_class` 자르기 ·
-`SpecsCount == 0` 복귀 · serial 일치 판정.
+`SpecsCount == 0` 복귀 · serial 일치 판정 · `table_sort` 열/방향/해제.
 
 ## 5. 3단계 — 보관함 저장 경로(T3)
 
