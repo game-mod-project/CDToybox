@@ -14,6 +14,7 @@ enum class Swallow {
 
 // raw_type: WM_INPUT 의 RAWINPUTHEADER::dwType. 0 마우스, 1 키보드, 2 HID, -1 모름.
 // msg 는 UINT 그대로.
+// 글자(WM_CHAR·WM_SYSCHAR·WM_UNICHAR)는 늘, IME 조합은 포커스 때만 막는다.
 Swallow swallow_message(unsigned msg, bool overlay_visible, bool want_keyboard,
                         int raw_type);
 

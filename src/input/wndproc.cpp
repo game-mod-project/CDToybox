@@ -2,6 +2,8 @@
 
 #include <imgui.h>
 
+#include <vector>
+
 #include "core/log.h"
 #include "input/filter.h"
 #include "render/overlay.h"
@@ -42,6 +44,14 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (::GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_HEADER,
                                   &h, &n, sizeof(RAWINPUTHEADER)) == sizeof(h)) {
                 raw_type = static_cast<int>(h.dwType);
+            } else {
+                // 못 읽으면 게임에 넘긴다(fail-open). 그것을 로그로 알 수 있어야
+                // 한다.
+                static unsigned s_fail = 0;
+                if ((s_fail++ % 1000) == 0) {
+                    log::warnf("raw input 헤더를 못 읽어 게임에 넘긴다 ({}회째)",
+                               s_fail);
+                }
             }
         }
         switch (swallow_message(msg, true,
@@ -65,6 +75,29 @@ void install(HWND hwnd) {
     g_original = reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(
         hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(proc)));
     log::infof("WndProc 서브클래싱 설치: hwnd={}", static_cast<void*>(hwnd));
+
+    // 게임이 raw input 을 어느 창으로 받는지 한 번 남긴다 - "오버레이를 켜도
+    // 시점이 돈다" 가 나면 대상 창이 우리가 서브클래싱한 창인지부터 갈라야 한다.
+    // flags 로 RIDEV_INPUTSINK(0x100)·RIDEV_NOLEGACY(0x30) 도 같이 드러난다.
+    UINT count = 0;
+    if (::GetRegisteredRawInputDevices(nullptr, &count,
+                                       sizeof(RAWINPUTDEVICE)) == 0 &&
+        count > 0) {
+        std::vector<RAWINPUTDEVICE> devs(count);
+        const UINT got = ::GetRegisteredRawInputDevices(devs.data(), &count,
+                                                        sizeof(RAWINPUTDEVICE));
+        if (got != static_cast<UINT>(-1)) {
+            for (UINT i = 0; i < got; ++i) {
+                log::infof(
+                    "raw input 등록: usage {:#x}/{:#x} flags {:#x} target {} ({})",
+                    devs[i].usUsagePage, devs[i].usUsage, devs[i].dwFlags,
+                    static_cast<void*>(devs[i].hwndTarget),
+                    devs[i].hwndTarget == nullptr ? "포커스 창"
+                    : devs[i].hwndTarget == hwnd  ? "우리 창"
+                                                  : "다른 창");
+            }
+        }
+    }
 }
 
 void remove() {

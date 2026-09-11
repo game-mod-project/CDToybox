@@ -23,6 +23,7 @@ GetAsyncKeyStateFn g_orig_async = nullptr;
 
 bool (*g_is_active)() = nullptr;
 bool g_installed = false;
+bool g_async_hooked = false;
 bool g_hidden_by_us = false;
 int g_saved_count = 0;
 int g_blocked = 0;
@@ -58,11 +59,15 @@ BOOL WINAPI det_clip_cursor(const RECT* rect) {
 // 있는 동안 마우스 버튼은 늘, 글자 입력칸에 포커스가 있으면 키보드도
 // 0 을 돌려준다 - 안 그러면 검색창에 타자를 치는 동안 캐릭터가 움직인다.
 SHORT WINAPI det_get_async_key_state(int vk) {
+    // 해체 중에 hook_remove 뒤 널이 될 수 있다 - 디투어 본문에 멈춰 있던 스레드가
+    // 깨어나 널을 부르지 않게 한 번만 읽는다.
+    const GetAsyncKeyStateFn orig = g_orig_async;
+    if (orig == nullptr) return 0;
     if (mask_key_state(vk, active(),
                        g_want_keyboard.load(std::memory_order_relaxed))) {
         return 0;
     }
-    return g_orig_async(vk);
+    return orig(vk);
 }
 
 // 지금 카운터를 읽는다. ShowCursor 는 바꾼 뒤의 값을 돌려주므로
@@ -116,20 +121,26 @@ bool cursor_guard_install(bool (*is_active)()) {
                                      reinterpret_cast<void**>(&g_orig_set_pos));
     const bool b = mem::hook_install(clip, &det_clip_cursor,
                                      reinterpret_cast<void**>(&g_orig_clip));
-    const bool c = mem::hook_install(async, &det_get_async_key_state,
-                                     reinterpret_cast<void**>(&g_orig_async));
-    if (!a || !b || !c) {
+    if (!a || !b) {
         if (a) mem::hook_remove(set_pos);
         if (b) mem::hook_remove(clip);
-        if (c) mem::hook_remove(async);
         g_is_active = nullptr;
-        log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={} "
-                   "GetAsyncKeyState={})", a, b, c);
+        log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={})", a, b);
         return false;
     }
+    // 세 번째는 선택이다. 이것만 실패해도 커서 가드는 그대로 산다 - 못 걸면
+    // 오버레이를 켠 채 타자를 칠 때 캐릭터가 움직이는 것만 남는다. 실패해도
+    // 다시 시도하지 않는다(installed 가 true 라 overlay 가 재호출하지 않는다).
+    g_async_hooked = mem::hook_install(async, &det_get_async_key_state,
+                                       reinterpret_cast<void**>(&g_orig_async));
+    if (!g_async_hooked) {
+        g_orig_async = nullptr;
+        log::warnf("커서 가드: GetAsyncKeyState 훅 실패 - 오버레이를 켠 채 "
+                   "타자를 치면 캐릭터가 움직일 수 있다");
+    }
     g_installed = true;
-    log::infof(
-        "커서 가드 설치 완료 (SetCursorPos·ClipCursor·GetAsyncKeyState)");
+    log::infof("커서 가드 설치 완료 (SetCursorPos·ClipCursor{})",
+               g_async_hooked ? "·GetAsyncKeyState" : "");
     return true;
 }
 
@@ -142,9 +153,12 @@ void cursor_guard_remove() {
             reinterpret_cast<void*>(::GetProcAddress(user32, "SetCursorPos")));
         mem::hook_remove(
             reinterpret_cast<void*>(::GetProcAddress(user32, "ClipCursor")));
-        mem::hook_remove(reinterpret_cast<void*>(
-            ::GetProcAddress(user32, "GetAsyncKeyState")));
+        if (g_async_hooked) {
+            mem::hook_remove(reinterpret_cast<void*>(
+                ::GetProcAddress(user32, "GetAsyncKeyState")));
+        }
     }
+    g_async_hooked = false;
     g_orig_set_pos = nullptr;
     g_orig_clip = nullptr;
     g_orig_show = nullptr;
@@ -187,6 +201,8 @@ void cursor_guard_sync(bool overlay_visible) {
         drive_to(g_saved_count);
         g_hidden_by_us = false;
         g_limit_logged = false;
+        // 렌더가 멎은 채 켜져 있어도 키보드가 통째로 안 막히게
+        g_want_keyboard.store(false, std::memory_order_relaxed);
     }
 }
 
