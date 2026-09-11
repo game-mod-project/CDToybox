@@ -248,6 +248,8 @@ TEST(roster_name_suffix_rejects_an_overlong_run) {
 
 TEST(apply_species_without_rtti_reports_not_ready) {
     // RTTI 가 없는 프로세스에서는 자리를 찾기 전에 돌아온다 - 아무것도 안 쓴다
+    // 이 실행 파일은 camera.cpp 를 링크하지 않아 discover_clan 이 불리지 않는다 -
+    // g_rtti 는 늘 nullptr 이다.
     cdtb::tests::FakeMemory mem;
     std::string msg;
     const auto r = cdtb::game::apply_species(mem, 1, 2, &msg);

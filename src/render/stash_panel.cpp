@@ -186,12 +186,7 @@ void draw_stash_panel(bool* open) {
             // 거절한다 - 그러면 큐가 그 자리에서 영영 멈춘다. 파일에
             // 큰 값이 있으면 깎아서 보낸다.
             std::uint32_t cap = 0;
-            for (const auto& c : game::item_catalog()) {
-                if (c.key == e.key) {
-                    cap = c.max_temper;
-                    break;
-                }
-            }
+            if (const auto* c = game::item_by_key(e.key)) cap = c->max_temper;
             // 소켓 상한은 한 곳에서만 판단한다(장비 여부·겹침·표 상한).
             // request_give 가 같은 값으로 한 번 더 자른다.
             const std::uint32_t socket_cap = game::socket_room_for(e.key);
@@ -339,7 +334,7 @@ void draw_stash_panel(bool* open) {
                     // 키만 담으면 꺼낼 때 맨 아이템이 나온다. 지급
                     // 칸에서 고른 담금질도 함께 담는다. 소켓은 지급
                     // 경로로 못 넣으므로 담지 않는다(인벤토리에서
-                    // "보관함에" 로 담으면 원본 소켓은 기록된다).
+                    // "보관" 으로 담으면 원본 소켓은 기록된다).
                     game::StashEntry e{k, grant_item_count()};
                     e.temper = grant_temper();
                     e.sharpness = grant_sharpness();

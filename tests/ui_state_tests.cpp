@@ -1,4 +1,5 @@
 #include <cstring>
+#include <string>
 
 #include "harness.h"
 #include "render/confirm_state.h"
@@ -32,8 +33,9 @@ TEST(notice_age_thresholds) {
     CHECK(cdtb::render::notice_age(n, 20.0) == NoticeAge::Faded);
     CHECK(cdtb::render::notice_age(n, 69.9) == NoticeAge::Faded);
     CHECK(cdtb::render::notice_age(n, 70.0) == NoticeAge::Gone);
-    // 시계가 뒤로 가도(타이머 리셋) 방금 것으로 본다
-    CHECK(cdtb::render::notice_age(n, 5.0) == NoticeAge::Fresh);
+    // 시계가 뒤로 갔으면(오버레이 재초기화로 타이머 리셋) 옛 시계의 결과다 -
+    // 방금 것으로 보면 at 초가 지날 때까지 새것처럼 남았다
+    CHECK(cdtb::render::notice_age(n, 5.0) == NoticeAge::Gone);
     // 문턱을 바꿔 부를 수 있다
     CHECK(cdtb::render::notice_age(n, 12.0, 1.0, 3.0) == NoticeAge::Faded);
     CHECK(cdtb::render::notice_age(n, 13.0, 1.0, 3.0) == NoticeAge::Gone);
@@ -46,6 +48,36 @@ TEST(notice_put_truncates_long_text) {
     longtext[sizeof(longtext) - 1] = 0;
     cdtb::render::notice_put(&n, NoticeLevel::Info, 1.0, longtext);
     CHECK_EQ(std::strlen(n.text), sizeof(n.text) - 1);
+}
+
+TEST(notice_put_cuts_on_utf8_boundary) {
+    // 199바이트 자리에서 한글(3바이트)이 걸리면 그 글자를 통째로 버린다
+    std::string s;
+    for (int i = 0; i < 70; ++i) s += "가";   // 210바이트
+    Notice n;
+    cdtb::render::notice_put(&n, NoticeLevel::Info, 1.0, s.c_str());
+    std::size_t len = std::strlen(n.text);
+    CHECK_EQ(len, static_cast<std::size_t>(198));   // 66글자
+    // 끝이 온전한 한 글자다 - 마지막 세 바이트가 한글 한 자(1110xxxx 로 시작).
+    // 마지막 바이트로는 못 본다 - 온전해도 이어지는 바이트(0x80)로 끝난다.
+    CHECK((static_cast<unsigned char>(n.text[len - 3]) & 0xF0) == 0xE0);
+
+    // 셋 중 둘이 들어온 경우(195 + "ab" + 가 = 200바이트)
+    std::string t;
+    for (int i = 0; i < 65; ++i) t += "가";
+    t += "ab";
+    t += "가";
+    cdtb::render::notice_put(&n, NoticeLevel::Info, 1.0, t.c_str());
+    len = std::strlen(n.text);
+    CHECK_EQ(len, static_cast<std::size_t>(197));
+    CHECK_EQ(n.text[len - 1], 'b');
+
+    // ASCII 로 끝나면 199바이트 그대로
+    std::string u;
+    for (int i = 0; i < 66; ++i) u += "가";
+    u += "ab";
+    cdtb::render::notice_put(&n, NoticeLevel::Info, 1.0, u.c_str());
+    CHECK_EQ(std::strlen(n.text), static_cast<std::size_t>(199));
 }
 
 TEST(notice_clear_makes_it_gone) {

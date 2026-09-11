@@ -74,7 +74,7 @@ const CompanionItem kCompanionItems[] = {
 Notice g_item_notice;   // 동반자 아이템 탭의 지급 결과
 // 탭. 값은 탭 선언 순서와 무관하다 - switch 로만 쓴다.
 enum class RosterTab { Companion, Nearby, Vehicle, MercType, Character, Items, Mine };
-RosterTab g_tab = RosterTab::Companion;
+RosterTab g_tab = RosterTab::Mine;
 bool g_near_companion_only = true;
 // 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
 // 대부분 NPC·몬스터·시체라 고를 이유가 없다.
@@ -326,8 +326,8 @@ void draw_companion_tab() {
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
-        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
-        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 44);
+        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 44);
         ImGui::TableHeadersRow();
         table_sort_pull(&sort);
         ViewKey k;
@@ -972,8 +972,8 @@ void draw_nearby_tab() {
                                             ImGuiTableColumnFlags_DefaultSort);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
-        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
-        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 44);
+        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 44);
         ImGui::TableSetupColumn("소유", ImGuiTableColumnFlags_WidthFixed, 56);
         ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed |
                                             ImGuiTableColumnFlags_NoSort, 52);

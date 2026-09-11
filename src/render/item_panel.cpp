@@ -191,12 +191,14 @@ void draw_item_panel(bool* open) {
         // 머리글을 직접 그린다 - ★ 칸에 툴팁을 달기 위해서다. 6,810줄에서 가장
         // 눈에 안 띄는 기능이라 머리글이 뜻을 말해야 한다.
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-        for (int c = 0; c < 5; ++c) {
+        for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) {
             ImGui::TableSetColumnIndex(c);
+            ImGui::PushID(c);   // TableHeadersRow 와 같게 - 이름 없는 칸이 생겨도 ID 가 안 겹친다
             ImGui::TableHeader(ImGui::TableGetColumnName(c));
             if (c == 0 && ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("★ 는 보관함 즐겨찾기입니다 - 보관함 창에 모입니다");
             }
+            ImGui::PopID();
         }
 
         apply_sort_specs();

@@ -24,6 +24,7 @@
 #include "render/notice.h"
 #include "render/overlay.h"
 #include "render/stash_panel.h"
+#include "render/table_sort_imgui.h"
 #include "render/item_style.h"
 #include "render/filter_bar.h"
 
@@ -259,8 +260,8 @@ void apply_sort() {
 
 namespace {
 
-// 마지막 결과를 화면에 남긴다. 표 6813개를 훑는 일이라 눌렀는지
-// 아닌지가 안 보이면 사람이 두 번 누른다.
+// 마지막 결과를 잠깐 남긴다(Notice 는 10초에 회색, 60초에 사라진다).
+// 표 6813개를 훑는 일이라 눌렀는지 아닌지가 안 보이면 사람이 두 번 누른다.
 Notice g_cap_notice;   // 걸기·되돌리기·저장 결과
 
 // 부위 목록과 사람이 정한 칸 수. 목록은 카탈로그 판이 갈리면 다시 만든다.
@@ -368,20 +369,49 @@ void draw_socket_cap() {
     const ImVec2 outer(0.0f, 220.0f);
     if (ImGui::BeginTable("socketcap", 5,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY,
+                              ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_Sortable |
+                              ImGuiTableFlags_SortTristate,
                           outer)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthStretch |
+                                          ImGuiTableColumnFlags_DefaultSort);
         ImGui::TableSetupColumn("종수", ImGuiTableColumnFlags_WidthFixed, 46.0f);
         ImGui::TableSetupColumn("소켓있음", ImGuiTableColumnFlags_WidthFixed,
                                 62.0f);
         ImGui::TableSetupColumn("원래", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-        ImGui::TableSetupColumn("설정", ImGuiTableColumnFlags_WidthFixed, 92.0f);
+        ImGui::TableSetupColumn("설정",
+                                ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_NoSort,
+                                92.0f);
         ImGui::TableHeadersRow();
 
+        static SortSpec sort;
+        table_sort_pull(&sort);
+        std::vector<int> order;
+        order.reserve(g_parts.size());
         for (std::size_t i = 0; i < g_parts.size(); ++i) {
+            if (g_parts_only_socketed && g_parts[i].with_socket == 0) continue;
+            order.push_back(static_cast<int>(i));
+        }
+        sort_view(order, sort, [&ambiguous](int a, int b, int col) {
+            const auto& x = g_parts[static_cast<std::size_t>(a)];
+            const auto& y = g_parts[static_cast<std::size_t>(b)];
+            switch (col) {
+                case 0: return cmp3(part_label(x, ambiguous(x.part.category)),
+                                    part_label(y, ambiguous(y.part.category)));
+                case 1: return cmp3(static_cast<long long>(x.count),
+                                    static_cast<long long>(y.count));
+                case 2: return cmp3(static_cast<long long>(x.with_socket),
+                                    static_cast<long long>(y.with_socket));
+                case 3: return cmp3(static_cast<long long>(x.table_cap),
+                                    static_cast<long long>(y.table_cap));
+                default: return 0;
+            }
+        });
+        for (int oi : order) {
+            const std::size_t i = static_cast<std::size_t>(oi);
             const auto& info = g_parts[i];
-            if (g_parts_only_socketed && info.with_socket == 0) continue;
             ImGui::TableNextRow();
             ImGui::PushID(static_cast<int>(i));
 

@@ -419,6 +419,12 @@ void draw_ui() {
         if (s.id == cdtb::render::Win::Main) continue;
         if ((n & 1) == 1) ImGui::SameLine(200.0f);
         ImGui::Checkbox(s.label, &shown(s.id));
+        // 게임 메모리에 쓰는 창은 목록에서 보이게 표시한다.
+        if (s.id == cdtb::render::Win::Roster || s.id == cdtb::render::Win::Equip ||
+            s.id == cdtb::render::Win::Player || s.id == cdtb::render::Win::Inventory) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(쓰기)");
+        }
         ++n;
     }
 

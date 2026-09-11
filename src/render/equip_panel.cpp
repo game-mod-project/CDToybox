@@ -294,7 +294,7 @@ void draw_equip_panel(bool* open) {
         }
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(잠긴 칸까지 연다)");
+    ImGui::TextDisabled("(잠긴 칸까지 엽니다)");
 
     notice_draw(g_notice);
 

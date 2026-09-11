@@ -186,6 +186,7 @@ const mem::Rtti* clan_rtti();
 
 // 종을 바꿔 쓴다(클라·서버 양쪽). 주소는 그 자리에서 다시 찾는다 - 들고 있다가
 // 쓰면 안 된다(2026-09-09 사고). 쓰기 로그는 여기서 남긴다. msg 에 화면 문구.
+// msg 는 널이면 안 된다.
 enum class SpeciesApply { Ok, NoRtti, NoTarget, WriteFailed, VerifyMismatch };
 SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
                            std::uint16_t row, std::string* msg);

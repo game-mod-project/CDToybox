@@ -985,6 +985,8 @@ TEST(outcome_is_mine_compares_serial) {
     CHECK(cdtb::game::outcome_is_mine(o, 7));
     CHECK(!cdtb::game::outcome_is_mine(o, 6));
     // 요청을 걸 수 없는 테스트 환경에서는 번호가 0 이고 결과도 비어 있다
+    // 스위트 어디에서도 request_* 가 성공(번호 매김)하지 않는다는 전제다 -
+    // 성공 경로 테스트를 더하면 이 단언을 옮길 것.
     CHECK_EQ(cdtb::game::last_request_serial(), 0u);
     CHECK_EQ(cdtb::game::last_outcome().serial, 0u);
 }
