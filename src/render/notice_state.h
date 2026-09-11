@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstddef>
-
 // 창의 결과 줄 상태. ImGui 없이 쓸 수 있어 테스트한다.
 //
 // 결과 문자열이 창마다 전역 char 배열(g_msg 등)로 흩어져 있었고, 한 번 찍히면

@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cstdio>
-#include <cstring>
 #include <map>
 #include <utility>
 #include <vector>
@@ -12,7 +11,6 @@
 #include "game/equip.h"
 #include "game/items.h"
 #include "mem/reader.h"
-#include "render/colors.h"
 #include "render/confirm.h"
 #include "render/gem_picker.h"
 #include "render/layout.h"

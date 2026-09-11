@@ -1,6 +1,7 @@
 #include "core/file_version.h"
 
 #include <windows.h>
+#include <winver.h>   // GetFileVersionInfo* - windows.h 가 늘 끌어오지는 않는다
 
 #include <cstdio>
 #include <vector>

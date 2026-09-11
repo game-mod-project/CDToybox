@@ -554,6 +554,9 @@ void draw_inventory_panel(bool* open) {
         ImGui::GetTextLineHeightWithSpacing() *
             (stash_open_set() < 0 ? 3.0f : 2.0f) +
         ImGui::GetStyle().ItemSpacing.y;
+    // 표를 그리는 중에 g_rows 를 재구축하면 r 이 죽은 원소를 가리킨다 -
+    // 표를 닫은 뒤 읽는다.
+    bool need_refresh = false;
     if (ImGui::BeginTable("inv", 8,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
@@ -585,7 +588,13 @@ void draw_inventory_panel(bool* open) {
                 continue;
             }
 
-            ImGui::PushID(static_cast<int>(i));
+            // ID 는 레코드 주소 - 3초 안에 정렬을 바꿔도 무장이 다른
+            // 아이템으로 안 넘어간다. 레코드가 없는 줄(장비 아님)은 전부
+            // 0 이라 겹치므로 그때만 행 번호로 떨어뜨린다.
+            ImGui::PushID(r.record != 0
+                              ? reinterpret_cast<const void*>(r.record)
+                              : reinterpret_cast<const void*>(
+                                    static_cast<std::uintptr_t>(0x10000 + i)));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextColored(grade_color(r.grade), "%s", r.name.c_str());
@@ -663,7 +672,7 @@ void draw_inventory_panel(bool* open) {
                     if (n > 0) {
                         notice_set(&g_notice, NoticeLevel::Ok,
                                    "소켓 {}칸을 열었습니다", n);
-                        refresh(rd);
+                        need_refresh = true;
                     } else {
                         notice_set(&g_notice, NoticeLevel::Bad,
                                    "소켓을 열지 못했습니다");
@@ -682,6 +691,10 @@ void draw_inventory_panel(bool* open) {
             ImGui::PopID();
         }
         ImGui::EndTable();
+        if (need_refresh) {
+            const mem::LocalReader rd2;
+            refresh(rd2);
+        }
     }
 
     if (stash_open_set() < 0) {

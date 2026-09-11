@@ -1,10 +1,12 @@
 # 게임을 포그라운드로 가져오지 않고 오버레이를 캡처·클릭한다.
 #
 #   . .\scripts\overlay-check.ps1        # 함수와 [CDClick] 을 현재 세션에 싣는다
+#   . .\scripts\overlay-check.ps1 -OutDir C:\shots   # 캡처 폴더(기본 .\shots)
 #   Toggle                               # Insert 를 게임 창에 보낸다(오버레이 켜고 끄기)
 #   Cap "shot-01"                        # PrintWindow 캡처 -> .\shots\shot-01.png
 #   ClickAt 1118 680                     # 클라이언트 좌표 클릭(700ms 대기)
 #   [CDClick]::Cursor()                  # 실제 커서 위치와 그 아래 hwnd
+#     Cursor() 가 내는 것은 화면 좌표다 - 전체화면 창이면 클라이언트 좌표와 같다.
 #
 # 왜 이렇게 하나:
 # - PrintWindow(hwnd, hdc, 2) 는 DWM 이 합성한 내용이라 창이 가려져 있어도 찍힌다.
@@ -35,16 +37,22 @@ public static class CDClick {
 '@
 if (-not ("CDClick" -as [type])) { Add-Type -TypeDefinition $src }
 Add-Type -AssemblyName System.Drawing
+# 창 핸들부터 확인한다 - 게임이 없는데 폴더만 만들어 두면 뒤에서
+# 빈 핸들로 PostMessage 가 조용히 실패한다.
+$proc = Get-Process CrimsonDesert -ErrorAction SilentlyContinue
+if ($null -eq $proc) { throw "게임(CrimsonDesert)을 먼저 실행하십시오" }
+$script:h = $proc.MainWindowHandle
+if ($script:h -eq [IntPtr]::Zero) { throw "게임 창 핸들이 아직 없습니다 - 잠시 뒤 다시" }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $script:dir = $OutDir
-$script:h = (Get-Process CrimsonDesert -ErrorAction Stop).MainWindowHandle
 function Cap($name) {
   $bmp = New-Object System.Drawing.Bitmap 1920, 1080
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $hdc = $g.GetHdc(); [CDClick]::PrintWindow($script:h, $hdc, 2) | Out-Null; $g.ReleaseHdc($hdc)
+  $hdc = $g.GetHdc(); $ok = [CDClick]::PrintWindow($script:h, $hdc, 2); $g.ReleaseHdc($hdc)
+  if (-not $ok) { $g.Dispose(); $bmp.Dispose(); throw "PrintWindow 실패: $name" }
   $bmp.Save((Join-Path $script:dir "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
   $g.Dispose(); $bmp.Dispose(); "$name saved"
 }
 function ClickAt($x, $y, $ms = 700) { [CDClick]::ClickOverlap($script:h, $x, $y); Start-Sleep -Milliseconds $ms }
-function Toggle() { [CDClick]::Key($script:h, 0x2D); Start-Sleep -Milliseconds 1200 }
+function Toggle() { [CDClick]::Key($script:h, 0x2D); Start-Sleep -Milliseconds 1200 }   # 0x2D = 기본 toggle_key(Insert). CDToybox.ini 에서 바꿨으면 여기도
 "game hwnd=$script:h  shots -> $script:dir"

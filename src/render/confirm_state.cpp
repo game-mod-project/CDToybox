@@ -3,9 +3,12 @@
 namespace cdtb::render {
 namespace {
 
+// 오버레이를 껐다 켜면 ImGui 컨텍스트가 다시 만들어져 GetTime 이 0 부터
+// 시작한다. 그때 예전 무장이 살아남으면 2단 확인이 우회되므로 시계가
+// 되감기면 만료로 본다.
 bool armed_now(const ConfirmState& s, unsigned id, double now, double window) {
     return s.id == id && s.id != 0 && s.armed_at >= 0.0 &&
-           now - s.armed_at < window;
+           now >= s.armed_at && now - s.armed_at < window;
 }
 
 void disarm(ConfirmState* s) {

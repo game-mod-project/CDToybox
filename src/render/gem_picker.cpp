@@ -57,7 +57,9 @@ bool gem_picker_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out) {
                 p->pick = static_cast<int>(i);
                 picked = &e;
             }
-            if (e.key == o.selected_key) {
+            // 고른 것이 없으면 selected_key 가 0 이다 - 키 0 인 줄에
+            // "(지금)" 이 붙는 것을 막는다.
+            if (o.selected_key != 0 && e.key == o.selected_key) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(지금)");
             }

@@ -10,6 +10,7 @@
 #include "game/actors.h"
 #include "core/log.h"
 #include "core/slowlog.h"
+#include "core/write_log.h"
 #include "game/clan.h"
 #include "mem/safe_read.h"
 #include "game/camera.h"
@@ -124,9 +125,11 @@ bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
     // 바꿨는지 로그로 알 수가 없었다(2026-09-09). 쓰기는 남기고 본다.
     const game::RosterEntry* from = game::character_by_row(t.server_row);
     const game::RosterEntry* to = game::character_by_row(row);
-    log::infof("종 바꾸기: 번호 {} 행 {}({}) -> 행 {}({})", merc_no,
-               t.server_row, from != nullptr ? from->name : std::string("?"),
-               row, to != nullptr ? to->name : std::string("?"));
+    log_write("동반자 종 번호 " + std::to_string(merc_no), t.server,
+              "행 " + std::to_string(t.server_row) + "(" +
+                  (from != nullptr ? from->name : std::string("?")) + ")",
+              "행 " + std::to_string(row) + "(" +
+                  (to != nullptr ? to->name : std::string("?")) + ")");
 
     const std::uint8_t buf[2] = {static_cast<std::uint8_t>(row & 0xFF),
                                  static_cast<std::uint8_t>(row >> 8)};
@@ -463,7 +466,6 @@ void draw_species_popup() {
                              sizeof(g_species_query));
     ImGui::SameLine();
     ImGui::TextDisabled("후보 %zu개", g_species_hits);
-    notice_draw(g_species_notice);
     const ImGuiTableFlags f = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_BordersInnerV;
     if (ImGui::BeginTable("species_pick", 5, f, ImVec2(620, 320))) {
@@ -560,6 +562,8 @@ void draw_species_popup() {
                           "저장·리로드에 남습니다.\n"
                           "되돌리려면 원래 종으로 다시 바꾸세요.");
     }
+    // 결과는 누른 버튼 바로 아래에 - 팝업 머리에 두면 표에 가려 안 보였다.
+    notice_draw(g_species_notice);
     ImGui::EndPopup();
 }
 
@@ -978,11 +982,17 @@ void draw_nearby_tab() {
                     }
                 }
                 ImGui::EndDisabled();
-                if (ImGui::IsItemHovered() && can_catch) {
-                    ImGui::SetTooltip(
-                        "알에서 깬 개체를 거두는 경로입니다(2386).\n"
-                        "야생 개체에게는 아무 일도 일어나지 않습니다 - "
-                        "획득은 왼쪽 칸을 쓰세요.");
+                // 비활성일 때도 이유를 낸다 - 회색 버튼만 보면 왜 못
+                // 누르는지 알 수 없다.
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    if (can_catch) {
+                        ImGui::SetTooltip(
+                            "알에서 깬 개체를 거두는 경로입니다(2386).\n"
+                            "야생 개체에게는 아무 일도 일어나지 않습니다 - "
+                            "획득은 왼쪽 칸을 쓰세요.");
+                    } else {
+                        ImGui::SetTooltip("알에서 깬 개체만 거둘 수 있습니다.");
+                    }
                 }
                 ImGui::PopID();
             }

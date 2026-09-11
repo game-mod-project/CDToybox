@@ -5,6 +5,7 @@
 namespace cdtb {
 
 const char* vk_name(int vk, char* buf, std::size_t n) {
+    if (buf == nullptr || n == 0) return "?";
     switch (vk) {
         case 0x08: return "Backspace";
         case 0x09: return "Tab";
@@ -46,7 +47,7 @@ const char* vk_name(int vk, char* buf, std::size_t n) {
     if (vk >= 0x41 && vk <= 0x5A) return kLetters[vk - 0x41];
     if (vk >= 0x60 && vk <= 0x69) return kNum[vk - 0x60];
     if (vk >= 0x70 && vk <= 0x87) return kFn[vk - 0x70];
-    std::snprintf(buf, n, "0x%02X", vk);
+    std::snprintf(buf, n, "0x%02X", static_cast<unsigned>(vk));
     return buf;
 }
 

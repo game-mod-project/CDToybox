@@ -12,15 +12,20 @@ namespace {
 
 bool is_dotted_quad(const std::string& s) {
     int dots = 0;
+    int digits = 0;   // 이번 구간의 숫자 개수. 안 세면 "..." 도 통과한다
     if (s.empty()) return false;
     for (const char c : s) {
         if (c == '.') {
+            if (digits == 0) return false;
             ++dots;
+            digits = 0;
         } else if (!std::isdigit(static_cast<unsigned char>(c))) {
             return false;
+        } else {
+            ++digits;
         }
     }
-    return dots == 3;
+    return dots == 3 && digits > 0;
 }
 
 }  // namespace

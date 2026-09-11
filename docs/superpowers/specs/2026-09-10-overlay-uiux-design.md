@@ -149,6 +149,7 @@ bool begin_window(Win w, bool* open);
 
 불변식(테스트): 기본 열림 4창 + 본창은 서로 안 겹친다 · 닫힘 4창은 본창을 안 덮고 서로
 안 겹친다 · 전부 1920×1080 안 · title 은 유일하고 본창을 뺀 창의 label 이 비지 않는다.
+label 도 본창을 뺀 창끼리 유일하다.
 
 `overlay.cpp` 의 `WindowFlags g_show` 는 `bool g_show[Win::Count]` 가 되고 초기값은
 `default_open`. `overlay::show_window(Win)` 을 노출한다(아이템 목록이 지급 창을 열 때).
@@ -303,6 +304,10 @@ void log_write(std::string_view what, std::uintptr_t target, std::string_view be
 - **색·문구**: 남은 리터럴 색 전부 `col::`. 어미 통일. 장비 창 `(순번 %u)` → `(카탈로그
   순번 %u)`.
 - **본창**: 쓰기 창(로스터·장비·플레이어) 라벨 옆 `TextDisabled("(쓰기)")`.
+- **1단계 최종 리뷰 이월**: 인벤 소켓 상한의 `g_cap_note` → Notice; 근처 탭 획득 성공을
+  Ok 로; `apply_species` 를 `game::` 로 옮겨 명령 파일 경로도 같은 로그; 로스터 데이터
+  표(탈것·용병 타입·캐릭터) 안내 어미 통일; `stash_panel` 의 리터럴 색 2곳; `Notice` 의
+  UTF-8 경계 절단·시계 되감김; confirm 라벨 79바이트 초과 시 ID 불변식(`PushID` 방식으로).
 
 **테스트** — `item_by_key` 조회·판 교체 · 뷰 캐시 키 비교 · `short_class` 자르기 ·
 `SpecsCount == 0` 복귀 · serial 일치 판정.

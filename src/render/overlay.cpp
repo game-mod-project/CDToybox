@@ -394,7 +394,10 @@ void draw_windows() {
 const std::string& game_version_line() {
     static std::string line = [] {
         wchar_t path[MAX_PATH]{};
-        ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+        // 실패하거나 잘리면 경로가 온전하지 않다. 빈 경로로 두면 아래가
+        // 실패해 "(버전 확인 불가)" 로 떨어진다.
+        const DWORD n = ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) path[0] = 0;
         std::string v;
         return cdtb::file_version_string(path, &v)
                    ? "Crimson Desert " + v

@@ -1,8 +1,11 @@
 #include <cstring>
 
 #include "harness.h"
+#include "render/confirm_state.h"
 #include "render/notice_state.h"
 
+using cdtb::render::ConfirmState;
+using cdtb::render::ConfirmStep;
 using cdtb::render::Notice;
 using cdtb::render::NoticeAge;
 using cdtb::render::NoticeLevel;
@@ -53,11 +56,6 @@ TEST(notice_clear_makes_it_gone) {
     CHECK_EQ(n.text[0], '\0');
 }
 
-#include "render/confirm_state.h"
-
-using cdtb::render::ConfirmState;
-using cdtb::render::ConfirmStep;
-
 // ---------------------------------------------------------------- 2단 확인
 TEST(confirm_idle_without_click) {
     ConfirmState s;
@@ -103,4 +101,12 @@ TEST(confirm_left_counts_down) {
     CHECK_EQ(cdtb::render::confirm_left(s, 7, 3.5), 0.5);
     CHECK_EQ(cdtb::render::confirm_left(s, 7, 9.0), 0.0);
     CHECK_EQ(cdtb::render::confirm_left(s, 8, 1.0), 0.0);
+}
+
+TEST(confirm_clock_rewind_disarms) {
+    ConfirmState s;
+    cdtb::render::confirm_step(&s, 7, true, 137.4);
+    // ImGui 컨텍스트 재생성으로 GetTime 이 0 부터 다시 - 무장은 풀려야 한다
+    CHECK(cdtb::render::confirm_step(&s, 7, true, 0.2) == ConfirmStep::Armed);
+    CHECK_EQ(cdtb::render::confirm_left(s, 7, 0.2), 3.0);
 }

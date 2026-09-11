@@ -11,10 +11,10 @@ namespace {
 
 ConfirmState g_confirm;   // 한 번에 하나만 무장하므로 전역 하나로 족하다
 
-bool draw(const char* label, bool small, ImVec2 size) {
+bool draw(const char* label, bool is_small, ImVec2 size) {
     if (!guard::is_safe_to_modify()) {
         ImGui::BeginDisabled();
-        if (small) {
+        if (is_small) {
             ImGui::SmallButton(label);
         } else {
             ImGui::Button(label, size);
@@ -39,8 +39,8 @@ bool draw(const char* label, bool small, ImVec2 size) {
     } else {
         std::snprintf(shown, sizeof(shown), "%s###%s", label, label);
     }
-    const bool clicked = small ? ImGui::SmallButton(shown)
-                               : ImGui::Button(shown, size);
+    const bool clicked = is_small ? ImGui::SmallButton(shown)
+                                  : ImGui::Button(shown, size);
     if (left > 0.0) ImGui::PopStyleColor();
 
     return confirm_step(&g_confirm, id, clicked, now) == ConfirmStep::Fired;
