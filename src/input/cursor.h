@@ -23,4 +23,10 @@ bool cursor_guard_installed();
 // 지금 카운터를 기억해 두고 숨기며, 닫힐 때 기억한 값으로 되돌린다.
 void cursor_guard_sync(bool overlay_visible);
 
+// 게임이 GetAsyncKeyState 로 직접 읽는 키 상태를 오버레이가 켜져 있는
+// 동안 걸러 준다. 마우스 버튼은 늘 0, 키보드는 글자 입력칸에 포커스가
+// 있을 때만 0. 포커스 여부는 렌더 스레드가 프레임마다 넣어 준다(게임은
+// 다른 스레드에서 읽는다).
+void cursor_guard_set_want_keyboard(bool want);
+
 }  // namespace cdtb::input

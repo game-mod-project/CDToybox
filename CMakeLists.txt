@@ -102,6 +102,7 @@ add_library(cdtoybox SHARED
     src/game/spec_heal.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
+    src/input/filter.cpp
     src/proxy/exports.def
 )
 set_target_properties(cdtoybox PROPERTIES
@@ -139,7 +140,9 @@ add_executable(cdtb_tests
     tests/layout_tests.cpp
     tests/core_helpers_tests.cpp
     tests/table_sort_tests.cpp
+    tests/input_filter_tests.cpp
     src/input/cursor.cpp
+    src/input/filter.cpp
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/localization.cpp

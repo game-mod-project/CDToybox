@@ -551,13 +551,14 @@ src/render/   D3D12 훅 · 오버레이 · 진단 · 아이콘 아틀라스 · �
               layout 창 배치 표 · table_sort 표 정렬 · view_cache 뷰 캐시)
               패널 8개: 아이템 목록 · 지급 · 보관함 · 인벤토리 ·
               탈것/용병/캐릭터 · 장비 소켓·연마 · 플레이어 치트 · 스캔(+카메라)
-src/input/    WndProc 서브클래싱 · 커서 가드
+src/input/    WndProc 서브클래싱 · 입력 걸러내기(filter: raw input·마우스·
+              키 상태) · 커서 가드
 src/proxy/    xinput1_4 프록시
 tools/probe/  외부 분석 도구, 명령 55개 (items · loc · inv* · equip · player ·
               clan · roster · setspecies · aob · heapfind · dumpimage …)
 tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
               fields = 게임이 알려 주는 필드 이름)
-tests/        424개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-11)
+tests/        429개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-11)
 scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 ```
 

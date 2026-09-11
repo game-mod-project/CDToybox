@@ -2,7 +2,10 @@
 
 #include <windows.h>
 
+#include <atomic>
+
 #include "core/log.h"
+#include "input/filter.h"
 #include "mem/hook.h"
 
 namespace cdtb::input {
@@ -11,16 +14,23 @@ namespace {
 using SetCursorPosFn = BOOL(WINAPI*)(int, int);
 using ClipCursorFn = BOOL(WINAPI*)(const RECT*);
 using ShowCursorFn = int(WINAPI*)(BOOL);
+using GetAsyncKeyStateFn = SHORT(WINAPI*)(int);
 
 SetCursorPosFn g_orig_set_pos = nullptr;
 ClipCursorFn g_orig_clip = nullptr;
 ShowCursorFn g_orig_show = nullptr;
+GetAsyncKeyStateFn g_orig_async = nullptr;
 
 bool (*g_is_active)() = nullptr;
 bool g_installed = false;
 bool g_hidden_by_us = false;
 int g_saved_count = 0;
 int g_blocked = 0;
+bool g_limit_logged = false;
+
+// 게임은 다른 스레드에서 키 상태를 읽고 렌더 스레드가 프레임마다
+// 값을 넣으므로 원자로 둔다.
+std::atomic<bool> g_want_keyboard{false};
 
 // 한 프레임에 이만큼까지만 막는다.
 constexpr int kBlockLimit = 500;
@@ -42,6 +52,17 @@ BOOL WINAPI det_clip_cursor(const RECT* rect) {
         return g_orig_clip(nullptr);
     }
     return g_orig_clip(rect);
+}
+
+// 게임은 키 상태를 GetAsyncKeyState 로 직접 읽는다. 오버레이가 켜져
+// 있는 동안 마우스 버튼은 늘, 글자 입력칸에 포커스가 있으면 키보드도
+// 0 을 돌려준다 - 안 그러면 검색창에 타자를 치는 동안 캐릭터가 움직인다.
+SHORT WINAPI det_get_async_key_state(int vk) {
+    if (mask_key_state(vk, active(),
+                       g_want_keyboard.load(std::memory_order_relaxed))) {
+        return 0;
+    }
+    return g_orig_async(vk);
 }
 
 // 지금 카운터를 읽는다. ShowCursor 는 바꾼 뒤의 값을 돌려주므로
@@ -77,13 +98,16 @@ bool cursor_guard_install(bool (*is_active)()) {
         ::GetProcAddress(user32, "SetCursorPos"));
     void* clip = reinterpret_cast<void*>(
         ::GetProcAddress(user32, "ClipCursor"));
+    void* async = reinterpret_cast<void*>(
+        ::GetProcAddress(user32, "GetAsyncKeyState"));
     // ShowCursor 는 후킹하지 않는다. 게임은 커서를 켤 때
     // `while (ShowCursor(TRUE) < 0);` 를 쓴다. 훅이 고정된 값을
     // 돌려주면 그 루프가 끝나지 않아 게임이 멎는다 - 실제로 멎었다.
     // 원본만 잡아 두고 우리가 필요할 때 직접 부른다.
     g_orig_show = reinterpret_cast<ShowCursorFn>(
         ::GetProcAddress(user32, "ShowCursor"));
-    if (set_pos == nullptr || clip == nullptr || g_orig_show == nullptr) {
+    if (set_pos == nullptr || clip == nullptr || async == nullptr ||
+        g_orig_show == nullptr) {
         return false;
     }
 
@@ -92,15 +116,20 @@ bool cursor_guard_install(bool (*is_active)()) {
                                      reinterpret_cast<void**>(&g_orig_set_pos));
     const bool b = mem::hook_install(clip, &det_clip_cursor,
                                      reinterpret_cast<void**>(&g_orig_clip));
-    if (!a || !b) {
+    const bool c = mem::hook_install(async, &det_get_async_key_state,
+                                     reinterpret_cast<void**>(&g_orig_async));
+    if (!a || !b || !c) {
         if (a) mem::hook_remove(set_pos);
         if (b) mem::hook_remove(clip);
+        if (c) mem::hook_remove(async);
         g_is_active = nullptr;
-        log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={})", a, b);
+        log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={} "
+                   "GetAsyncKeyState={})", a, b, c);
         return false;
     }
     g_installed = true;
-    log::infof("커서 가드 설치 완료");
+    log::infof(
+        "커서 가드 설치 완료 (SetCursorPos·ClipCursor·GetAsyncKeyState)");
     return true;
 }
 
@@ -113,10 +142,13 @@ void cursor_guard_remove() {
             reinterpret_cast<void*>(::GetProcAddress(user32, "SetCursorPos")));
         mem::hook_remove(
             reinterpret_cast<void*>(::GetProcAddress(user32, "ClipCursor")));
+        mem::hook_remove(reinterpret_cast<void*>(
+            ::GetProcAddress(user32, "GetAsyncKeyState")));
     }
     g_orig_set_pos = nullptr;
     g_orig_clip = nullptr;
     g_orig_show = nullptr;
+    g_orig_async = nullptr;
     g_is_active = nullptr;
     g_installed = false;
     log::infof("커서 가드 원복");
@@ -124,8 +156,22 @@ void cursor_guard_remove() {
 
 bool cursor_guard_installed() { return g_installed; }
 
+void cursor_guard_set_want_keyboard(bool want) {
+    g_want_keyboard.store(want, std::memory_order_relaxed);
+}
+
 void cursor_guard_sync(bool overlay_visible) {
     if (!g_installed) return;
+    // 상한을 넘겨 통과시킨 프레임이 있으면 한 번 남긴다 - 게임이 "될 때까지
+    // 다시 부르는" 꼴인지 로그로 가려야 한다(커서가 튀거나 붙박이는 증상의
+    // 후보).
+    if (g_blocked > kBlockLimit && !g_limit_logged) {
+        log::warnf(
+            "커서 가드: 한 프레임에 SetCursorPos/ClipCursor {}회 - 상한 {} 을 "
+            "넘어 통과시켰다",
+            g_blocked, kBlockLimit);
+        g_limit_logged = true;
+    }
     g_blocked = 0;      // 예산은 프레임마다 되돌린다
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
@@ -140,6 +186,7 @@ void cursor_guard_sync(bool overlay_visible) {
     } else {
         drive_to(g_saved_count);
         g_hidden_by_us = false;
+        g_limit_logged = false;
     }
 }
 

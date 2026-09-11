@@ -681,6 +681,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
+    // 게임의 키 상태 조회를 거를지 - 글자 입력칸에 포커스가 있을 때만.
+    input::cursor_guard_set_want_keyboard(ImGui::GetIO().WantCaptureKeyboard);
+
     g_frame_stage = kStageDrawUi;
     draw_ui();
 

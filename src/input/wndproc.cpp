@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include "core/log.h"
+#include "input/filter.h"
 #include "render/overlay.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT,
@@ -21,24 +22,36 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
 
-    // 오버레이 위에서는 OS 커서를 끈다. ImGui 가 자기 것을 그리므로
-    // 그냥 두면 두 개로 보인다. ShowCursor 와 달리 SetCursor 는
-    // "될 때까지 다시 부르는" 관용구가 없어 게임을 가두지 않는다.
-    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT &&
-        overlay::is_visible() && ImGui::GetIO().WantCaptureMouse) {
+    const bool visible = overlay::is_visible();
+
+    // 오버레이 위에서는 OS 커서를 끈다. ImGui 가 자기 것을 그리므로 그냥 두면
+    // 두 개로 보인다. 마우스를 전부 오버레이가 가지므로 클라이언트 영역
+    // 어디서나 끈다.
+    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT && visible) {
         ::SetCursor(nullptr);
         return TRUE;
     }
 
-    // 오버레이가 열려 있을 때만 입력을 게임에 넘기지 않는다.
-    // 항상 소비하면 게임 조작이 막힌다.
-    if (overlay::is_visible()) {
-        const ImGuiIO& io = ImGui::GetIO();
-        const bool mouse_msg = (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST);
-        const bool key_msg = (msg >= WM_KEYFIRST && msg <= WM_KEYLAST);
-        if ((mouse_msg && io.WantCaptureMouse) ||
-            (key_msg && io.WantCaptureKeyboard) || msg == WM_CHAR) {
-            return 0;
+    if (visible) {
+        // raw input 은 장치 종류를 보고 가른다 - 마우스는 늘, 키보드는 입력칸에
+        // 포커스가 있을 때만 막는다(오버레이를 켠 채 걷는 것은 되어야 한다).
+        int raw_type = -1;
+        if (msg == WM_INPUT) {
+            RAWINPUTHEADER h{};
+            UINT n = sizeof(h);
+            if (::GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_HEADER,
+                                  &h, &n, sizeof(RAWINPUTHEADER)) == sizeof(h)) {
+                raw_type = static_cast<int>(h.dwType);
+            }
+        }
+        switch (swallow_message(msg, true,
+                                ImGui::GetIO().WantCaptureKeyboard,
+                                raw_type)) {
+            case Swallow::Zero: return 0;
+            // WM_INPUT 은 DefWindowProc 이 버퍼를 정리한다 - 그냥 0 을
+            // 돌려주면 샌다.
+            case Swallow::DefWindow: return ::DefWindowProcW(hwnd, msg, wp, lp);
+            case Swallow::No: break;
         }
     }
     return ::CallWindowProcW(g_original, hwnd, msg, wp, lp);
