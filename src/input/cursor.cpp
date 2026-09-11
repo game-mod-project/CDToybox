@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <mutex>
 
 #include "core/log.h"
 #include "input/filter.h"
@@ -26,10 +27,15 @@ bool g_installed = false;
 bool g_async_hooked = false;
 bool g_hidden_by_us = false;
 int g_saved_count = 0;
-// 열 때의 커서 가두기. 닫을 때 되돌린다 - 안 그러면 게임이 다시 가둘 때까지
-// 커서가 창 밖으로 빠진다(Codex 지적 2026-09-11).
-RECT g_saved_clip{};
-bool g_saved_clip_valid = false;
+// 열려 있는 동안 게임이 마지막으로 원한 가두기(막은 요청). 게임 스레드가 쓰고
+// 렌더 스레드가 닫을 때 읽으므로 뮤텍스로 감싼다. 닫을 때 이것을 되돌린다 -
+// 열기 전 상태를 되돌리면 그 사이 인벤 같은 커서 UI 를 연 경우 마우스룩의 중앙
+// 가두기가 되살아나 커서가 굳었다(사용자 보고 2026-09-12).
+std::mutex g_clip_mutex;
+bool g_game_clip_seen = false;
+bool g_game_clip_null = true;
+RECT g_game_clip{};
+unsigned long long g_game_clip_ms = 0;
 int g_blocked = 0;
 bool g_limit_logged = false;
 
@@ -60,6 +66,14 @@ BOOL WINAPI det_clip_cursor(const RECT* rect) {
     const ClipCursorFn orig = g_orig_clip;
     if (orig == nullptr) return TRUE;
     if (active() && cursor_should_block(g_blocked++, kBlockLimit)) {
+        // 게임이 원한 것을 기억해 둔다 - 닫을 때 그대로 돌려준다.
+        {
+            std::lock_guard<std::mutex> lock(g_clip_mutex);
+            g_game_clip_seen = true;
+            g_game_clip_null = (rect == nullptr);
+            if (rect != nullptr) g_game_clip = *rect;
+            g_game_clip_ms = ::GetTickCount64();
+        }
         return orig(nullptr);
     }
     return orig(rect);
@@ -96,6 +110,18 @@ void drive_to(int target) {
 }  // namespace
 
 int cursor_show_delta(int current, int target) { return target - current; }
+
+ClipRestore cursor_clip_restore(bool seen, unsigned long long last_ms,
+                                unsigned long long now_ms,
+                                unsigned long long fresh_ms) {
+    if (!seen || now_ms < last_ms) return ClipRestore::Release;
+    return (now_ms - last_ms <= fresh_ms) ? ClipRestore::Reapply
+                                          : ClipRestore::Release;
+}
+
+int cursor_restore_count(int saved, int current_since_zero) {
+    return saved + current_since_zero;
+}
 
 bool cursor_should_block(int consecutive, int limit) {
     return consecutive < limit;
@@ -198,7 +224,10 @@ void cursor_guard_sync(bool overlay_visible) {
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
         g_saved_count = probe_count();
-        g_saved_clip_valid = ::GetClipCursor(&g_saved_clip) != 0;
+        {
+            std::lock_guard<std::mutex> lock(g_clip_mutex);
+            g_game_clip_seen = false;
+        }
         g_orig_clip(nullptr);      // 게임이 걸어 둔 가두기를 푼다
         // OS 커서를 확실히 띄우고 그걸 쓴다. 숨겨 놓고 ImGui가
         // 따로 그리게 했더니 게임이 다시 띄워 둘로 보였다.
@@ -207,11 +236,29 @@ void cursor_guard_sync(bool overlay_visible) {
         drive_to(0);
         g_hidden_by_us = true;
     } else {
-        drive_to(g_saved_count);
-        // 열 때 풀어 둔 가두기를 되돌린다. 게임은 어차피 매 프레임 다시 가두지만,
-        // 그 사이에 커서가 창 밖으로 나가지 않게.
-        if (g_saved_clip_valid) g_orig_clip(&g_saved_clip);
-        g_saved_clip_valid = false;
+        // 그 사이 게임이 바꾼 만큼(인벤을 열며 +1 등)을 얹어 되돌린다.
+        drive_to(cursor_restore_count(g_saved_count, probe_count()));
+        // 가두기는 게임의 마지막 요청대로. 마우스룩이면 방금(500ms 안)도 가두려 했을
+        // 테니 그것을 다시 걸고, 커서 UI 로 넘어가 요청이 끊겼으면 푼다.
+        {
+            bool seen = false, is_null = true;
+            RECT rect{};
+            unsigned long long at = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_clip_mutex);
+                seen = g_game_clip_seen;
+                is_null = g_game_clip_null;
+                rect = g_game_clip;
+                at = g_game_clip_ms;
+            }
+            const ClipRestore how =
+                cursor_clip_restore(seen, at, ::GetTickCount64());
+            if (how == ClipRestore::Reapply && !is_null) {
+                g_orig_clip(&rect);
+            } else {
+                g_orig_clip(nullptr);
+            }
+        }
         g_hidden_by_us = false;
         g_limit_logged = false;
         // 렌더가 멎은 채 켜져 있어도 키보드가 통째로 안 막히게
