@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -19,15 +20,23 @@
 #include "render/icon_atlas.h"
 #include "render/item_style.h"
 #include "render/layout.h"
+#include "render/notice.h"
+#include "render/stash_queue.h"
 
 namespace cdtb::render {
 namespace {
 
 game::Stash g_stash;
 bool g_loaded = false;
-bool g_dirty = false;
-int g_open_set = -1;
+// 마지막 변경 시각(초). 음수면 저장할 것이 없다. 1초 뒤 stash_tick 이 저장한다 -
+// 저장 버튼은 없다(★ 을 누르고 창을 안 열면 조용히 유실되던 것).
+double g_dirty_at = -1.0;
+char g_saved_clock[16] = "";        // 마지막 저장 HH:MM:SS. 비면 아직 없음
+// 펼쳐 둔 세트. 번호로 들면 세트를 지운 뒤 엉뚱한 세트에 담긴다 - 이름으로 든다.
+std::string g_open_set_name;
+bool g_drawn_this_frame = false;    // draw_stash_panel 이 본문을 그렸는가
 char g_new_name[64] = "";
+Notice g_notice;
 
 // 일괄 지급은 쿨다운(2초) 때문에 한 번에 다 못 보낸다. 큐에 넣고
 // 한 개씩 흘려보낸다.
@@ -35,6 +44,17 @@ std::vector<game::StashEntry> g_queue;
 std::size_t g_queue_at = 0;
 
 constexpr float kIconSize = 22.0f;
+
+void mark_dirty() { g_dirty_at = ImGui::GetTime(); }
+
+void stamp_saved_clock() {
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    if (localtime_s(&tm, &t) == 0) {
+        std::snprintf(g_saved_clock, sizeof(g_saved_clock), "%02d:%02d:%02d",
+                      tm.tm_hour, tm.tm_min, tm.tm_sec);
+    }
+}
 
 // DLL 옆에 둔다. 아이콘 아틀라스와 같은 자리다.
 std::wstring stash_path() {
@@ -82,21 +102,34 @@ void load() {
     }
 }
 
-void save() {
+bool save() {
     const std::wstring p = stash_path();
-    if (p.empty()) return;
+    if (p.empty()) return false;
     const std::string text = g_stash.serialize();
     HANDLE h = ::CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr,
                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
-        log::warnf("보관함을 저장하지 못했다");
-        return;
+        log::warnf("보관함을 저장하지 못했다 (열기 실패 {})", ::GetLastError());
+        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보세요");
+        // 1초마다 다시 실패하며 알림을 새로 찍지 않게 10초 뒤에 다시 본다.
+        g_dirty_at = ImGui::GetTime() + 9.0;
+        return false;
     }
     DWORD wrote = 0;
-    ::WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &wrote,
-                nullptr);
+    const BOOL ok = ::WriteFile(h, text.data(), static_cast<DWORD>(text.size()),
+                                &wrote, nullptr);
     ::CloseHandle(h);
-    g_dirty = false;
+    if (!ok || wrote != text.size()) {
+        log::warnf("보관함을 저장하지 못했다 (쓰기 {}/{} 바이트)", wrote, text.size());
+        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보세요");
+        g_dirty_at = ImGui::GetTime() + 9.0;
+        return false;
+    }
+    g_dirty_at = -1.0;
+    stamp_saved_clock();
+    log::infof("보관함 저장: 즐겨찾기 {}개, 세트 {}개", g_stash.favorites().size(),
+               g_stash.set_count());
+    return true;
 }
 
 const game::ItemCatalogEntry* find_item(std::uint32_t key) {
@@ -136,8 +169,7 @@ std::uint32_t max_stack_of(std::uint32_t key) {
 
 int stash_open_set() {
     if (!g_loaded) load();
-    return (g_open_set >= 0 && g_open_set < g_stash.set_count()) ? g_open_set
-                                                                 : -1;
+    return g_stash.find_set(g_open_set_name);
 }
 
 const char* stash_open_set_name() {
@@ -153,19 +185,29 @@ bool stash_add_entry(int set, const game::StashEntry& entry) {
     game::StashSet* s = g_stash.set_at(set);
     if (s == nullptr) return false;
     s->items.push_back(entry);
-    g_dirty = true;
+    mark_dirty();
     return true;
 }
 
 void stash_toggle_favorite(unsigned int key) {
     if (!g_loaded) load();
     g_stash.toggle_favorite(key);
-    g_dirty = true;
+    mark_dirty();
 }
 
 bool stash_is_favorite(unsigned int key) {
     if (!g_loaded) load();
     return g_stash.is_favorite(key);
+}
+
+void stash_tick() {
+    if (!g_loaded) load();
+    const double now = ImGui::GetTime();
+    if (stash_autosave_due(g_dirty_at, now)) save();
+    // 지난 프레임에 창 본문을 안 그렸으면 펼쳐 둔 세트를 잊는다 - 닫힌 창의
+    // 세트에 인벤 '보관' 이 담기지 않게. 한 프레임 늦는 것은 무해하다.
+    if (!g_drawn_this_frame) g_open_set_name.clear();
+    g_drawn_this_frame = false;
 }
 
 void draw_stash_panel(bool* open) {
@@ -250,8 +292,10 @@ void draw_stash_panel(bool* open) {
         ImGui::End();
         return;
     }
+    g_drawn_this_frame = true;
 
     ImGui::TextDisabled("게임 밖에 두는 목록입니다. 슬롯 제한과 무관합니다.");
+    notice_draw(g_notice);
     if (g_queue_at < g_queue.size()) {
         ImGui::TextColored(col::kBusy, "지급 중 %zu / %zu (2초 간격)",
                            g_queue_at, g_queue.size());
@@ -280,7 +324,7 @@ void draw_stash_panel(bool* open) {
             ImGui::PushID(static_cast<int>(key));
             if (ImGui::SmallButton("빼기")) {
                 g_stash.toggle_favorite(key);
-                g_dirty = true;
+                mark_dirty();
             }
             ImGui::SameLine();
             if (ImGui::SmallButton("지급")) {
@@ -301,9 +345,10 @@ void draw_stash_panel(bool* open) {
                              sizeof(g_new_name));
     ImGui::SameLine();
     if (ImGui::Button("세트 만들기") && g_new_name[0] != 0) {
-        g_open_set = g_stash.add_set(g_new_name);
+        g_stash.add_set(g_new_name);
+        g_open_set_name = g_new_name;
         g_new_name[0] = 0;
-        g_dirty = true;
+        mark_dirty();
     }
 
     for (int i = 0; i < g_stash.set_count(); ++i) {
@@ -314,7 +359,7 @@ void draw_stash_panel(bool* open) {
                       set->items.size());
         if (ImGui::CollapsingHeader(label)) {
             // 인벤토리 창이 "어디에 담을지" 를 이걸로 안다.
-            g_open_set = i;
+            g_open_set_name = set->name;
             if (ImGui::SmallButton("전부 지급")) {
                 g_queue = set->items;
                 g_queue_at = 0;
@@ -322,7 +367,7 @@ void draw_stash_panel(bool* open) {
             ImGui::SameLine();
             if (ImGui::SmallButton("세트 지우기")) {
                 g_stash.remove_set(i);
-                g_dirty = true;
+                mark_dirty();
                 ImGui::PopID();
                 break;
             }
@@ -339,7 +384,7 @@ void draw_stash_panel(bool* open) {
                     e.temper = grant_temper();
                     e.sharpness = grant_sharpness();
                     set->items.push_back(std::move(e));
-                    g_dirty = true;
+                    mark_dirty();
                 }
             }
             for (std::size_t j = 0; j < set->items.size(); ++j) {
@@ -347,7 +392,7 @@ void draw_stash_panel(bool* open) {
                 if (ImGui::SmallButton("빼기")) {
                     set->items.erase(set->items.begin() +
                                      static_cast<std::ptrdiff_t>(j));
-                    g_dirty = true;
+                    mark_dirty();
                     ImGui::PopID();
                     break;
                 }
@@ -376,7 +421,7 @@ void draw_stash_panel(bool* open) {
                         n = game::clamp_count_to_stack(n, cap);
                         if (n != item.count) {
                             item.count = n;
-                            g_dirty = true;
+                            mark_dirty();
                         }
                     }
                     ImGui::SameLine();
@@ -392,21 +437,21 @@ void draw_stash_panel(bool* open) {
     }
 
     ImGui::Separator();
-    if (g_dirty) {
-        if (ImGui::Button("저장")) save();
+    ImGui::TextDisabled("cdtoybox_stash.txt 에 자동 저장 · 마지막 %s",
+                        g_saved_clock[0] != 0 ? g_saved_clock : "없음");
+    if (g_dirty_at >= 0.0) {
         ImGui::SameLine();
-        ImGui::TextColored(col::kWarn, "저장하지 않은 변경");
-    } else {
-        ImGui::TextDisabled("cdtoybox_stash.txt 에 저장됩니다");
+        ImGui::TextColored(col::kBusy, "(저장 대기)");
     }
-    // 파일을 손으로 고친 뒤 게임을 다시 켜지 않고 반영한다. 저장하지
-    // 않은 변경은 버려진다 - 파일이 진실이다.
     ImGui::SameLine();
     if (ImGui::SmallButton("다시 읽기")) {
         g_stash = game::Stash{};
-        g_open_set = -1;
-        g_dirty = false;
+        g_open_set_name.clear();
+        g_dirty_at = -1.0;
         load();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("파일로 되돌립니다 (아직 저장되지 않은 1초 안의 변경은 버립니다)");
     }
     ImGui::End();
 }

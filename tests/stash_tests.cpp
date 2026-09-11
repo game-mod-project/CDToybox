@@ -348,3 +348,28 @@ TEST(stash_reads_every_token_together) {
     CHECK_EQ(e.sharpness, std::uint32_t{100});
     CHECK_EQ(e.sockets.size(), std::size_t{1});
 }
+
+TEST(find_set_returns_the_index_of_the_named_set) {
+    Stash s;
+    s.add_set("무기");
+    s.add_set("방어구");
+    CHECK_EQ(s.find_set("방어구"), 1);
+    CHECK_EQ(s.find_set("무기"), 0);
+}
+
+TEST(find_set_gives_minus_one_when_absent_or_empty) {
+    Stash s;
+    s.add_set("무기");
+    CHECK_EQ(s.find_set("없는 세트"), -1);
+    CHECK_EQ(s.find_set(""), -1);
+}
+
+// 세트를 지우면 옛 번호는 뜻이 없다 - 이름으로 다시 찾으면 -1 이거나 옮겨진 번호다.
+TEST(find_set_follows_removal) {
+    Stash s;
+    s.add_set("무기");
+    s.add_set("방어구");
+    s.remove_set(0);
+    CHECK_EQ(s.find_set("무기"), -1);
+    CHECK_EQ(s.find_set("방어구"), 0);
+}

@@ -62,6 +62,10 @@ public:
     int add_set(const std::string& name);   // 만든 자리 번호
     void remove_set(int i);
 
+    // 이름이 같은 첫 세트의 번호. 없거나 이름이 비면 -1. 세트가 지워지면 번호가
+    // 밀리므로 "펼쳐 둔 세트" 는 번호가 아니라 이름으로 들고 여기로 푼다.
+    int find_set(const std::string& name) const;
+
     // --- 저장 ---
     //
     // 사람이 읽고 고칠 수 있는 형식으로 쓴다. 깨져도 손으로 고칠 수

@@ -379,6 +379,8 @@ void init_show_flags() {
 // 다음 프레임부터 안 그린다.
 void draw_windows() {
     using cdtb::render::Win;
+    // 창이 닫혀 있어도 보관함 자동 저장·일괄 지급 큐는 돈다.
+    cdtb::render::stash_tick();
     if (shown(Win::Items)) cdtb::render::draw_item_panel(&shown(Win::Items));
     if (shown(Win::Grant)) cdtb::render::draw_grant_panel(&shown(Win::Grant));
     if (shown(Win::Stash)) cdtb::render::draw_stash_panel(&shown(Win::Stash));

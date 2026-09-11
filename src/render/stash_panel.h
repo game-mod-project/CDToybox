@@ -8,6 +8,11 @@ namespace cdtb::render {
 // 지급한다. DLL 옆 cdtoybox_stash.txt 에 저장된다.
 void draw_stash_panel(bool* open);
 
+// overlay::draw_windows() 가 매 프레임, 창을 그리기 전에 부른다. 창이 닫혀 있어도
+// 자동 저장(변경 1초 뒤)과 일괄 지급 큐가 여기서 돈다. 창이 안 그려진 프레임에는
+// "펼쳐 둔 세트" 를 비워 인벤 '보관' 이 닫힌 창의 세트에 담지 않게 한다.
+void stash_tick();
+
 // 아이템 목록의 별표에서 부른다.
 void stash_toggle_favorite(unsigned int key);
 bool stash_is_favorite(unsigned int key);

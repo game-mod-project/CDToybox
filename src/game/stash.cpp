@@ -135,6 +135,14 @@ void Stash::remove_set(int i) {
     sets_.erase(sets_.begin() + i);
 }
 
+int Stash::find_set(const std::string& name) const {
+    if (name.empty()) return -1;
+    for (std::size_t i = 0; i < sets_.size(); ++i) {
+        if (sets_[i].name == name) return static_cast<int>(i);
+    }
+    return -1;
+}
+
 std::string Stash::serialize() const {
     std::string out = "# CDToybox 보관함\n";
     for (const auto k : favs_) {
