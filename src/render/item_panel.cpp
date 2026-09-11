@@ -6,14 +6,15 @@
 
 #include <imgui.h>
 
-#include <cfloat>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
 #include "game/item_view.h"
 #include "render/filter_bar.h"
+#include "render/gates.h"
 #include "render/icon_atlas.h"
+#include "render/layout.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -136,12 +137,7 @@ void apply_sort_specs() {
 }  // namespace
 
 void draw_item_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(400, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
-    // 너무 좁히면 표가 읽히지 않는다. 아래로는 못 내려가게 막는다.
-    ImGui::SetNextWindowSizeConstraints(ImVec2(430.0f, 240.0f),
-                                        ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("아이템 목록", open)) {
+    if (!begin_window(Win::Items, open)) {
         ImGui::End();
         return;
     }
@@ -150,23 +146,9 @@ void draw_item_panel(bool* open) {
     // 뒤에야(월드 진입 후 보통 5~10초, 더 걸리기도) 채워지므로, 그 전에
     // 목록을 열면 비어 보인다. 진행 수(N/M)를 함께 내 느린 로드인지
     // 멈춘 것인지 사람이 가릴 수 있게 한다.
-    if (!game::items_ready() || !game::items_named()) {
-        char dots[5] = {0};
-        const int nd = 1 + (static_cast<int>(ImGui::GetTime() * 3.0) % 3);
-        for (int i = 0; i < nd; ++i) dots[i] = '.';
-        if (!game::items_ready()) {
-            ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1),
-                               "아이템 표를 읽는 중%s", dots);
-        } else {
-            ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1),
-                               "이름 불러오는 중%s  (%zu / %zu)", dots,
-                               game::items_named_count(),
-                               game::items_total_count());
-        }
-        ImGui::TextWrapped(
-            "월드 진입 후 현지화가 올라오면 이름이 자동으로 채워집니다 "
-            "(보통 5~10초, 상황에 따라 더 걸릴 수 있습니다). 이 표시가 "
-            "사라지지 않고 계속 남아 있으면 로드 실패입니다.");
+    if (!loading_gate(game::items_ready(), "아이템 표") ||
+        !loading_gate(game::items_named(), "이름", game::items_named_count(),
+                      game::items_total_count())) {
         ImGui::End();
         return;
     }

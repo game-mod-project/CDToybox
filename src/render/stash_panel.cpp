@@ -16,6 +16,7 @@
 #include "render/grant_panel.h"
 #include "render/icon_atlas.h"
 #include "render/item_style.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 namespace {
@@ -248,9 +249,7 @@ void draw_stash_panel(bool* open) {
         }
     }
 
-    ImGui::SetNextWindowPos(ImVec2(1180, 340), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 400.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("보관함", open)) {
+    if (!begin_window(Win::Stash, open)) {
         ImGui::End();
         return;
     }

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/config.h"
+#include "render/layout_table.h"
 
 namespace cdtb::overlay {
 
@@ -19,6 +20,9 @@ std::vector<Config::SocketCapPart> socket_cap_setting();
 // 부위별 소켓 상한 설정을 바꾸고 ini 에 저장한다. 저장에 성공하면 true.
 // **거는 것은 부르는 쪽 일이다** - 여기서는 설정만 만진다.
 bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts);
+
+// 창을 켠다. 아이템 목록이 줄 클릭 때 지급 창을 띄우는 데 쓴다.
+void show_window(cdtb::render::Win w);
 
 bool is_visible();
 void toggle();

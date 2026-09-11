@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <mutex>
 
 #include "core/log.h"
+#include "core/write_log.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -911,8 +913,9 @@ SocketCapResult socket_cap_apply(const mem::Reader& reader,
     g_cap_on.store(true, std::memory_order_release);
     republish_caps(caps);
     r.ok = true;
-    log::infof("소켓 상한: 부위 규칙 {}개로 아이템 {}개를 올렸다 (대상 아님 {})",
-               rules.size(), r.changed, r.skipped);
+    log_write("소켓 상한", 0, "-",
+              std::format("부위 규칙 {}개, 아이템 {}개 올림 (대상 아님 {})",
+                          rules.size(), r.changed, r.skipped));
     return r;
 }
 

@@ -48,9 +48,11 @@ add_library(cdtb_core STATIC
     src/core/crashlog.cpp
     src/core/config.cpp
     src/core/guard.cpp
+    src/core/vk_name.cpp
+    src/core/file_version.cpp
 )
 target_include_directories(cdtb_core PUBLIC src)
-target_link_libraries(cdtb_core PUBLIC minhook)
+target_link_libraries(cdtb_core PUBLIC minhook version)
 
 # -------------------------------------------------------------------- DLL
 add_library(cdtoybox SHARED
@@ -71,6 +73,13 @@ add_library(cdtoybox SHARED
     src/render/roster_panel.cpp
     src/render/equip_panel.cpp
     src/render/player_panel.cpp
+    src/render/notice_state.cpp
+    src/render/notice.cpp
+    src/render/confirm_state.cpp
+    src/render/confirm.cpp
+    src/render/gates.cpp
+    src/render/layout_table.cpp
+    src/render/layout.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -126,6 +135,9 @@ add_executable(cdtb_tests
     tests/companion_tests.cpp
     tests/actors_tests.cpp
     tests/image_dump_tests.cpp
+    tests/ui_state_tests.cpp
+    tests/layout_tests.cpp
+    tests/core_helpers_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp
@@ -138,6 +150,9 @@ add_executable(cdtb_tests
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/render/notice_state.cpp
+    src/render/confirm_state.cpp
+    src/render/layout_table.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)

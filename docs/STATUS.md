@@ -546,7 +546,8 @@ src/game/     20개 모듈
                 specguard     특수기능 div0 가드 · spec_heal 표시 보정
                 spawnguard    종 바꾼 동반자 소환 널 가드 (1.10)
 src/render/   D3D12 훅 · 오버레이 · 진단 · 아이콘 아틀라스 · 등급 색 ·
-              공통 위젯(filter_bar 필터바 · gem_picker 보석 고르기)
+              공통 위젯(filter_bar 필터바 · gem_picker 보석 고르기 · colors 상태 색 ·
+              notice 결과 줄 · confirm 2단 확인 · gates 로딩/빈 줄 · layout 창 배치 표)
               패널 8개: 아이템 목록 · 지급 · 보관함 · 인벤토리 ·
               탈것/용병/캐릭터 · 장비 소켓·연마 · 플레이어 치트 · 스캔(+카메라)
 src/input/    WndProc 서브클래싱 · 커서 가드
@@ -555,8 +556,8 @@ tools/probe/  외부 분석 도구, 명령 55개 (items · loc · inv* · equip 
               clan · roster · setspecies · aob · heapfind · dumpimage …)
 tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
               fields = 게임이 알려 주는 필드 이름)
-tests/        387개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-10)
-scripts/      build.ps1 · deploy.ps1
+tests/        408개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-11)
+scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 ```
 
 `deploy.ps1` 은 출력이 소스보다 낡았거나, 없거나, 게임이 실행 중이면
@@ -578,6 +579,8 @@ scripts/      build.ps1 · deploy.ps1
 | 아이템 목록 | 6810개, 이름·등급·분류·아이콘·검색·정렬·페이징 |
 | 보관함 | 즐겨찾기·세트, `cdtoybox_stash.txt` 에 저장 |
 | 창 위치·크기 기억 | `cdtoybox_ui.ini` |
+
+창 위치·크기는 ini 가 우선입니다 - 새 기본 배치를 보려면 ini 를 지우고 한 번 실행하십시오. 창 최소 크기는 ini 와 무관하게 바로 적용됩니다.
 
 ### 치트를 부를 때 반드시 지킬 것
 

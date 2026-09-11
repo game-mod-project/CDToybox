@@ -15,12 +15,15 @@ namespace cdtb::render {
 struct GemPicker {
     bool open_requested = false;
     char search[64] = "";
+    int pick = -1;   // 고른 카탈로그 색인. -1 없음, -2 "(빈 칸으로 열기)"
 };
 
 // 고른 것. 두 창이 원하는 값이 다르다 - 장비 창은 카탈로그 순번을 쓰고
 // (eq_write_socket), 지급 창은 키를 쓴다(g_socket_keys). 같은 카탈로그를
 // 보므로 둘을 함께 준다. allow_empty 로 "(빈 칸으로 열기)" 를 고르면
 // entry 가 nullptr 이다.
+//
+// 줄 클릭은 고르기만 하고 [적용] 을 눌러야 true 다 - 장비 창에서는 곧 게임 메모리 쓰기라서.
 struct GemChoice {
     const game::ItemCatalogEntry* entry = nullptr;
     std::size_t index = 0;

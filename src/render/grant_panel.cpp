@@ -11,9 +11,12 @@
 #include "game/camera.h"
 #include "game/grant.h"
 #include "game/items.h"
+#include "render/colors.h"
 #include "render/icon_atlas.h"
 #include "render/gem_picker.h"
 #include "render/item_style.h"
+#include "render/layout.h"
+#include "render/notice.h"
 
 namespace cdtb::render {
 namespace {
@@ -31,7 +34,7 @@ bool g_let_game_pick_pos = false;
 bool g_called = false;
 bool g_call_ok = false;
 bool g_last_to_inventory = true;
-const char* g_last_what = "";
+Notice g_notice;            // 결과 줄. 문구가 바뀔 때만 시각을 찍는다
 
 // 담금질과 장비 연마. 아이템을 바꾸면 상한에 맞춰 잘린다.
 int g_temper = 0;
@@ -185,11 +188,11 @@ bool draw_drive_gate() {
 
     const bool stuck = (g.running && g.running_age_ms > kGateStuckMs) ||
                        (g.pending && g.pending_age_ms > kGateStuckMs);
-    const ImVec4 warn(0.9f, 0.6f, 0.3f, 1.0f);
-    const ImVec4 bad(0.95f, 0.35f, 0.35f, 1.0f);
+    const ImVec4 warn = col::kWarn;
+    const ImVec4 bad = col::kBad;
 
     if (game::drive_point_dead()) {
-        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+        ImGui::TextColored(bad,
                            "구동 지점이 게임 안에서 멈췄습니다 - "
                            "게임을 다시 시작해야 지급·획득이 동작합니다");
     }
@@ -298,11 +301,19 @@ void draw_selected(const game::ItemCatalogEntry* item) {
     } else {
         ImGui::TextColored(grade_color(item->grade), "%s", item->name.c_str());
     }
-    ImGui::SameLine();
     const char* cat = category_name(item->category);
-    ImGui::TextDisabled("· %s%s%s", game::grade_label(item->grade),
-                        (cat != nullptr && cat[0] != 0) ? " · " : "",
-                        (cat != nullptr) ? cat : "");
+    // 등급이 없으면 "-" 를 찍지 않는다 - "화살 · - · 탄환" 으로 보였다.
+    const char* gl = game::grade_label(item->grade);
+    const bool has_grade = gl != nullptr && gl[0] != 0 && std::strcmp(gl, "-") != 0;
+    const bool has_cat = cat != nullptr && cat[0] != 0;
+    // SameLine 은 진짜 찍을 때만 - 둘 다 없으면 다음 줄이 이름 옆에 붙었다.
+    if (has_grade && has_cat) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("· %s · %s", gl, cat);
+    } else if (has_grade || has_cat) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("· %s", has_grade ? gl : cat);
+    }
 }
 
 }  // namespace
@@ -316,6 +327,7 @@ void reset_sockets() {
 void set_grant_item_key(unsigned int key) {
     g_item_key = static_cast<int>(key);
     g_called = false;      // 새 아이템을 고르면 이전 결과는 지운다
+    notice_clear(&g_notice);
     reset_sockets();
 }
 
@@ -345,9 +357,7 @@ unsigned int grant_sharpness() {
 }
 
 void draw_grant_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(1180, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(440.0f, 260.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("아이템 지급", open)) {
+    if (!begin_window(Win::Grant, open)) {
         ImGui::End();
         return;
     }
@@ -450,15 +460,28 @@ void draw_grant_panel(bool* open) {
                                     g_count)) {
         blocked = "키는 0이 아니어야 하고 개수는 1 이상이어야 합니다";
     }
+    // 훅이 안 선 것도 이유다. 예전엔 '넣기' 가 이유 없이 회색이었고 '떨구기' 는
+    // 눌린 뒤 "2초" 라는 거짓 진단을 냈다.
+    const char* blocked_give =
+        game::give_ready() ? nullptr : "지급 경로(후킹)가 아직 준비되지 않았습니다";
+    const char* blocked_spawn =
+        game::spawn_ready() ? nullptr : "바닥 스폰 경로가 아직 준비되지 않았습니다";
     if (blocked != nullptr) {
-        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f), "%s", blocked);
+        ImGui::TextColored(col::kWarn, "%s", blocked);
+    } else {
+        if (blocked_give != nullptr) {
+            ImGui::TextColored(col::kWarn, "%s", blocked_give);
+        }
+        if (blocked_spawn != nullptr) {
+            ImGui::TextColored(col::kWarn, "%s", blocked_spawn);
+        }
     }
 
     // --- 버튼 -------------------------------------------------------
     float pos[3]{};
     const bool have_pos = camera_position(pos);
 
-    ImGui::BeginDisabled(blocked != nullptr || !game::give_ready());
+    ImGui::BeginDisabled(blocked != nullptr || blocked_give != nullptr);
     if (ImGui::Button("인벤토리에 넣기", ImVec2(150.0f, 0.0f))) {
         const auto key = static_cast<std::uint32_t>(g_item_key);
         game::GiveExtras extras;
@@ -494,13 +517,14 @@ void draw_grant_panel(bool* open) {
         }
         g_call_ok = game::request_give(seen[g_pick], key, g_count, extras);
         g_called = true;
+        // 누르면 이전 결과를 지운다 - 같은 문구가 반복돼도 시각이 다시 찍히게
+        notice_clear(&g_notice);
         g_last_to_inventory = true;
-        g_last_what = "";
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
 
-    ImGui::BeginDisabled(blocked != nullptr ||
+    ImGui::BeginDisabled(blocked != nullptr || blocked_spawn != nullptr ||
                          (!have_pos && !g_let_game_pick_pos));
     if (ImGui::Button("조준한 곳에 떨구기", ImVec2(150.0f, 0.0f))) {
         if (g_let_game_pick_pos) {
@@ -513,8 +537,8 @@ void draw_grant_panel(bool* open) {
         g_call_ok = game::request_spawn(
             seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
         g_called = true;
+        notice_clear(&g_notice);
         g_last_to_inventory = false;
-        g_last_what = "";
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -532,33 +556,41 @@ void draw_grant_panel(bool* open) {
     // 게이트는 눌렀든 안 눌렀든 낸다. 물려 있으면 다음에 눌러도 거부된다.
     const bool gate_held = draw_drive_gate();
 
+    // 결과 줄. 상태는 매 프레임 계산하되 문구가 바뀔 때만 시각을 찍는다 -
+    // 그래야 10분 전 "넣었습니다" 가 회색으로 바래 방금 것과 갈린다.
     if (g_called) {
         g_outcome = game::last_outcome();
+        NoticeLevel lv = NoticeLevel::Info;
+        const char* text = nullptr;
+        char buf[96];
         if (game::spawn_pending(game::DriveLane::Item)) {
-            ImGui::TextDisabled("게임 스레드를 기다리는 중...");
+            text = "게임 스레드를 기다리는 중...";
         } else if (!g_call_ok) {
             // 2초 쿨다운이 아니라 게이트가 물린 것일 수 있다. 게이트를
             // 이미 위에 냈으므로 여기서는 무엇 때문인지만 가른다.
-            ImGui::TextDisabled(gate_held
-                                    ? "구동 게이트가 물려 요청이 거부됐습니다"
-                                    : "연달아 누르면 잠시 막힙니다 (2초)");
+            lv = NoticeLevel::Warn;
+            text = gate_held ? "구동 게이트가 물려 요청이 거부됐습니다"
+                             : "연달아 누르면 잠시 막힙니다 (2초)";
         } else if (g_outcome.no_actor) {
-            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.0f),
-                               "그 세션에서 액터가 안 나왔습니다");
+            lv = NoticeLevel::Warn;
+            text = "그 세션에서 액터가 안 나왔습니다";
         } else if (g_outcome.crashed) {
-            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
-                               "게임 안에서 죽었습니다 0x%X", g_outcome.seh);
-        } else if (g_last_what[0] != 0) {
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
-                               g_last_what);
+            lv = NoticeLevel::Bad;
+            std::snprintf(buf, sizeof(buf), "게임 안에서 죽었습니다 0x%X",
+                          g_outcome.seh);
+            text = buf;
         } else if (g_last_to_inventory) {
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
-                               "인벤토리에 넣었습니다");
+            lv = NoticeLevel::Ok;
+            text = "인벤토리에 넣었습니다";
         } else {
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f),
-                               "조준한 곳에 떨궜습니다");
+            lv = NoticeLevel::Ok;
+            text = "조준한 곳에 떨궜습니다";
+        }
+        if (std::strcmp(text, g_notice.text) != 0) {
+            notice_set(&g_notice, lv, "{}", text);
         }
     }
+    notice_draw(g_notice);
 
     ImGui::Separator();
 
@@ -594,7 +626,7 @@ void draw_grant_panel(bool* open) {
                 ImGui::Text("%u회", hits[i]);
                 ImGui::TableNextColumn();
                 if (server[i]) {
-                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s",
+                    ImGui::TextColored(col::kOk, "%s",
                                        short_class(game::session_class(i)));
                 } else {
                     ImGui::TextDisabled("%s",
