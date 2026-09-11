@@ -18,6 +18,7 @@
 #include "game/stash.h"
 #include "render/colors.h"
 #include "render/confirm.h"
+#include "render/gates.h"
 #include "render/grant_panel.h"
 #include "render/layout.h"
 #include "render/notice.h"
@@ -109,28 +110,21 @@ void refresh(const mem::Reader& reader) {
         return;
     }
 
-    // 순번->키, 키->엔트리를 해시맵으로 한 번만 만든다. 예전엔 칸마다
+    // 순번->키를 해시맵으로 한 번만 만든다. 예전엔 칸마다
     // 선형탐색(6,810 x 500 x 2)이라 "다시 읽기" 가 느렸다. O(1) 조회로 바꾼다.
+    // 키->엔트리는 game::item_by_key 가 같은 일을 한다.
     std::unordered_map<std::uint32_t, std::uint32_t> id2key;
-    std::unordered_map<std::uint32_t, const game::ItemCatalogEntry*> key2ent;
     if (game::items_ready()) {
         const auto& cat = game::item_catalog();
         id2key.reserve(cat.size());
-        key2ent.reserve(cat.size());
         for (const auto& e : cat) {
             const std::uint32_t id = game::item_id_for_key(e.key);
             if (id != game::kNoItemId) id2key.emplace(id, e.key);
-            key2ent.emplace(e.key, &e);
         }
     }
     const auto key_for = [&](std::uint32_t index) -> std::uint32_t {
         const auto it = id2key.find(index);
         return it != id2key.end() ? it->second : 0;
-    };
-    const auto ent_for =
-        [&](std::uint32_t key) -> const game::ItemCatalogEntry* {
-        const auto it = key2ent.find(key);
-        return it != key2ent.end() ? it->second : nullptr;
     };
 
     int containers = 0;
@@ -152,7 +146,7 @@ void refresh(const mem::Reader& reader) {
             r.record = rec.address;
             r.open_sockets = rec.open_sockets;
 
-            if (const auto* e = ent_for(r.key)) {
+            if (const auto* e = game::item_by_key(r.key)) {
                 r.name = e->name;
                 r.grade = e->grade;
                 r.category = e->category;
@@ -174,7 +168,7 @@ void refresh(const mem::Reader& reader) {
                     ++filled;
                     const std::uint32_t gk = key_for(s.index);
                     r.gem_keys.push_back(gk);
-                    const auto* ge = ent_for(gk);
+                    const auto* ge = game::item_by_key(gk);
                     gems.push_back((ge != nullptr && !ge->name.empty())
                                        ? ge->name
                                        : std::string("?"));
@@ -267,7 +261,7 @@ namespace {
 
 // 마지막 결과를 화면에 남긴다. 표 6813개를 훑는 일이라 눌렀는지
 // 아닌지가 안 보이면 사람이 두 번 누른다.
-std::string g_cap_note;
+Notice g_cap_notice;   // 걸기·되돌리기·저장 결과
 
 // 부위 목록과 사람이 정한 칸 수. 목록은 카탈로그 판이 갈리면 다시 만든다.
 std::vector<game::SocketPartInfo> g_parts;
@@ -425,26 +419,34 @@ void draw_socket_cap() {
     }
     ImGui::TextDisabled("설정 0 = 그 부위는 안 건드립니다. 낮추지는 못합니다.");
 
+    const auto rules = rules_from_ui();
+    ImGui::BeginDisabled(rules.empty());
     if (ImGui::Button("걸기", ImVec2(90.0f, 0.0f))) {
         const mem::LocalReader reader;
-        const auto rules = rules_from_ui();
         const auto res = game::socket_cap_apply(reader, rules);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf),
-                      res.ok ? "부위 %zu개 / 아이템 %d개를 올렸습니다"
-                             : "걸지 못했습니다 (부위 %zu개, %d)",
-                      rules.size(), res.changed);
-        g_cap_note = buf;
+        if (res.ok) {
+            notice_set(&g_cap_notice, NoticeLevel::Ok,
+                       "부위 {}개 / 아이템 {}개를 올렸습니다", rules.size(),
+                       res.changed);
+        } else {
+            notice_set(&g_cap_notice, NoticeLevel::Bad,
+                       "걸지 못했습니다 (부위 {}개, {})", rules.size(),
+                       res.changed);
+        }
+    }
+    ImGui::EndDisabled();
+    if (rules.empty() &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("설정이 전부 0 이라 걸 것이 없습니다");
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!game::socket_cap_active());
     if (ImGui::Button("되돌리기", ImVec2(90.0f, 0.0f))) {
         const mem::LocalReader reader;
         const auto res = game::socket_cap_restore(reader);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "%d개 되돌렸습니다 (실패 %d)",
-                      res.changed, res.skipped);
-        g_cap_note = buf;
+        notice_set(&g_cap_notice,
+                   res.ok ? NoticeLevel::Ok : NoticeLevel::Bad,
+                   "{}개 되돌렸습니다 (실패 {})", res.changed, res.skipped);
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -457,15 +459,23 @@ void draw_socket_cap() {
                 static_cast<int>(g_parts[i].part.equip_type), g_part_want[i]});
         }
         const bool ok = overlay::set_socket_cap_setting(save);
-        g_cap_note = ok ? "설정에 저장했습니다 - 다음 실행부터 저절로 걸립니다"
-                        : "설정을 저장하지 못했습니다";
+        if (ok) {
+            notice_set(&g_cap_notice, NoticeLevel::Ok,
+                       "설정에 저장했습니다 - 다음 실행부터 저절로 걸립니다");
+        } else {
+            notice_set(&g_cap_notice, NoticeLevel::Bad,
+                       "설정을 저장하지 못했습니다");
+        }
     }
 
-    if (!g_cap_note.empty()) ImGui::TextDisabled("%s", g_cap_note.c_str());
+    notice_draw(g_cap_notice);
 
     ImGui::TextWrapped(
         "원래 소켓이 없는 부위(망토·귀걸이·목걸이·반지)에도 달 수 있습니다 "
         "- 레코드에 5칸 벡터가 이미 있어서, 표 상한만 올리면 생깁니다.");
+    ImGui::TextWrapped(
+        "이미 갖고 있는 아이템은 표 아래 줄의 '소켓 5칸' 으로 레코드도 함께 "
+        "열어야 합니다.");
     ImGui::TextWrapped(
         "늘어난 칸은 지급이나 장비 소켓 편집으로 채웁니다. 상한은 세이브에 안 "
         "남아 세션마다 다시 걸리지만, 이것이 정하는 것은 툴팁 목록뿐입니다 - "
@@ -560,10 +570,10 @@ void draw_inventory_panel(bool* open) {
     if (ImGui::BeginTable("inv", 8,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
-                              ImGuiTableFlags_Sortable |
-                              ImGuiTableFlags_SortMulti,
+                              ImGuiTableFlags_Sortable,
                           ImVec2(0.0f, -inv_footer_h))) {
-        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch,
+                                2.0f);
         ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,
                                 120.0f);
         ImGui::TableSetupColumn("개수", ImGuiTableColumnFlags_WidthFixed, 60.0f);
@@ -576,17 +586,19 @@ void draw_inventory_panel(bool* open) {
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
                                         ImGuiTableColumnFlags_NoSort,
-                                190.0f);
+                                160.0f);
         // 헤더 행을 고정한다 - 스크롤해도 열 이름이 위에 남는다.
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         apply_sort();
 
+        std::size_t shown = 0;
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
             if (!game::passes(filter, r.name, r.grade, r.category, r.key)) {
                 continue;
             }
+            ++shown;
 
             // ID 는 레코드 주소 - 3초 안에 정렬을 바꿔도 무장이 다른
             // 아이템으로 안 넘어간다. 레코드가 없는 줄(장비 아님)은 전부
@@ -624,11 +636,14 @@ void draw_inventory_panel(bool* open) {
             // 제자리 수정은 게임이 되쓴다. 대신 값을 지급 칸에 채워
             // 주고, 고쳐서 새로 지급하게 한다.
             ImGui::BeginDisabled(r.key == 0);
-            if (ImGui::SmallButton("지급 칸으로")) {
+            if (ImGui::SmallButton("지급")) {
                 // 소켓은 옮기지 않는다 - 지급 경로로는 못 넣는다.
                 set_grant_item(r.key, r.count, r.temper, r.sharpness);
             }
             ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("지급 칸으로 옮깁니다 (소켓은 안 옮깁니다)");
+            }
 
             // 보관함으로 담기. 어디에 담을지는 보관함에서 펼쳐 둔
             // 세트로 정한다 - 인벤토리 창에 세트 고르기를 또 두면
@@ -636,7 +651,7 @@ void draw_inventory_panel(bool* open) {
             ImGui::SameLine();
             const int set = stash_open_set();
             ImGui::BeginDisabled(r.key == 0 || set < 0);
-            if (ImGui::SmallButton("보관함에")) {
+            if (ImGui::SmallButton("보관")) {
                 game::StashEntry e;
                 e.key = r.key;
                 e.count = r.count;
@@ -653,9 +668,20 @@ void draw_inventory_panel(bool* open) {
                     game::socket_bytes_for_key(ss.key, ss.raw);
                     e.sockets.push_back(ss);
                 }
-                stash_add_entry(set, e);
+                if (stash_add_entry(set, e)) {
+                    notice_set(&g_notice, NoticeLevel::Ok, "'{}' 을 {} 에 담았습니다",
+                               r.name, stash_open_set_name());
+                } else {
+                    notice_set(&g_notice, NoticeLevel::Bad,
+                               "담지 못했습니다 (세트 번호 밖)");
+                }
             }
             ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                if (set < 0) ImGui::SetTooltip("보관함 창에서 세트를 펼쳐 두면 거기에 담습니다");
+                else ImGui::SetTooltip("보관함의 '%s' 에 담습니다",
+                                       stash_open_set_name());
+            }
 
             // 제자리 소켓 열기. 인벤토리 레코드는 그 자체가 authoritative
             // 라 단일 쓰기로 저장까지 살아남는다(both-realms 불필요) -
@@ -689,6 +715,17 @@ void draw_inventory_panel(bool* open) {
                 }
             }
             ImGui::PopID();
+        }
+
+        if (shown == 0) {
+            const bool has_query = g_bar.query[0] != 0;
+            if (table_empty_row(0,
+                                g_rows.empty() ? "인벤토리가 비어 있습니다"
+                                : has_query    ? "검색어 때문에 비어 있습니다"
+                                               : "걸러진 결과가 없습니다",
+                                has_query ? "지우기" : nullptr)) {
+                g_bar.query[0] = 0;
+            }
         }
         ImGui::EndTable();
         if (need_refresh) {

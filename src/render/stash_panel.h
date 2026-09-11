@@ -19,6 +19,7 @@ bool stash_is_favorite(unsigned int key);
 int stash_open_set();
 
 // 펼쳐 둔 세트의 이름. 없으면 "". 인벤 '보관' 버튼 툴팁·결과 줄에 쓴다.
+// 다음 세트 변경(추가·삭제·다시 읽기)까지만 유효하다 - 보관하지 말고 그 자리에서 쓴다.
 const char* stash_open_set_name();
 
 // 그 세트에 한 줄을 넣는다. 번호가 범위 밖이면 false.
