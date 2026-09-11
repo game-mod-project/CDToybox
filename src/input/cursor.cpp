@@ -143,7 +143,8 @@ bool cursor_guard_install(bool (*is_active)()) {
     g_async_hooked = mem::hook_install(async, &det_get_async_key_state,
                                        reinterpret_cast<void**>(&g_orig_async));
     if (!g_async_hooked) {
-        g_orig_async = nullptr;
+        // 첫 설치 실패면 애초에 널이고, 재설치(끈 훅을 다시 켜기) 실패면 유효한
+        // 트램폴린을 쥐고 있는 것이라 널로 만들지 않는다(재리뷰 관찰).
         log::warnf("커서 가드: GetAsyncKeyState 훅 실패 - 오버레이를 켠 채 "
                    "타자를 치면 캐릭터가 움직일 수 있다");
     }

@@ -68,7 +68,8 @@ Hook::Hook(void* target, void* detour, void** original) : target_(target) {
 }
 
 Hook::~Hook() {
-    if (installed_) hook_remove(target_);
+    // 해제가 아니라 끄기 - 디투어에 남은 스레드가 트램폴린을 부를 수 있다.
+    if (installed_) hook_disable(target_);
 }
 
 }  // namespace cdtb::mem

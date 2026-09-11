@@ -475,7 +475,10 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
     std::uint8_t old_server[2]{};
     const bool have_old = reader.read(t.server, old_server, 2);
     if (!mem::safe_write_bytes(t.server, buf, 2)) {
-        *msg = "쓰기 실패 (서버 사본)";
+        // 위의 감사 줄이 "바꿨다" 처럼 읽히지 않게 실패도 남긴다.
+        log::warnf("동반자 종 번호 {}: 서버 사본 쓰기 실패 - 아무것도 바뀌지 않았다",
+                   merc_no);
+        *msg = "쓰기 실패 (서버 사본) - 바뀐 것 없음";
         return SpeciesApply::WriteFailed;
     }
     if (!mem::safe_write_bytes(t.client, buf, 2)) {

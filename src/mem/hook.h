@@ -19,7 +19,7 @@ bool hook_remove(void* target);
 // 원본으로 빠져나간다. hook_install 로 다시 켤 수 있다.
 bool hook_disable(void* target);
 
-// 스코프를 벗어나면 해제하는 RAII 래퍼.
+// 스코프를 벗어나면 끄는(hook_disable) RAII 래퍼. 트램폴린은 남긴다.
 class Hook {
 public:
     Hook(void* target, void* detour, void** original);

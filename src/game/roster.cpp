@@ -351,20 +351,19 @@ bool read_spawn_table(const mem::Reader& reader, std::uintptr_t manager,
     if (out == nullptr) return false;
     out->clear();
     if (manager == 0) return false;
-    const std::uint64_t table = manager;
     std::uint32_t nonzero = 0, buckets = 0;
     std::uint64_t arr = 0;
-    if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x6C,
+    if (!reader.read_value(manager + 0x6C,
                            &nonzero) ||
         nonzero == 0) {
         return false;
     }
-    if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x68,
+    if (!reader.read_value(manager + 0x68,
                            &buckets) ||
         buckets == 0 || buckets > kSpawnMaxBuckets) {
         return false;
     }
-    if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x78, &arr) ||
+    if (!reader.read_value(manager + 0x78, &arr) ||
         arr == 0) {
         return false;
     }
