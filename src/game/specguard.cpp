@@ -21,6 +21,9 @@ namespace {
 // 베이스 + 이 빌드의 확정 RVA 로 바로 가서 예상 opcode 를 확인한 뒤 패치한다.
 //
 // 빌드 2.00.01(2658) 실측 div-by-special-state 지점들. {RVA, 패치길이}.
+// 1.0.0.2850(2026-09-11) 갱신: 같은 명령 바이트열(div + 꼬리)로 새 exe 를 찾아
+// 7곳 전부 유일하게 다시 잡았다(+0xAC0 / +0x1570 / +0x15A0 / -0x4B640). 아래
+// 주석의 옛 RVA 는 2760 까지의 값이다. specs/2026-09-11-game-update-2850.md.
 // 패치길이 = div 바이트 + (div<5 일 때) 5바이트를 채우려고 함께 옮기는 꼬리
 // 명령. 꼬리는 위치 독립 명령이어야 한다(rel jmp/call 금지).
 //  - 0xEB1BF4  div [rbp+0xf0] (7)                 가방 렌더
@@ -31,13 +34,13 @@ namespace {
 struct DivSite { std::uint64_t rva; int patch_len; };
 // div qword ptr [mem] 지점(가방 렌더 3 + 착용 1).
 constexpr DivSite kDivMem[] = {
-    {0xEB1BF4, 7}, {0xEA874F, 5}, {0x21DA368, 7}, {0x234EC7D, 6}};
+    {0xEB26B4, 7}, {0xEA920F, 5}, {0x21DB8D8, 7}, {0x235021D, 6}};
 // div <reg> 지점. 분모가 레지스터. patch_len = div(3) + 위치독립 꼬리.
 //  - 0xF064E5B  div r8  + cmp eax,[rdi+4](3) = 6      가방 렌더
 //  - 0x234EA9B  div r14 + mov ecx,edi(2)     = 5      착용/특수능력 영역
 //  - 0x234EEB4  div r9  + mov ecx,r8d(3)      = 6      특수능력 사용
 constexpr DivSite kDivReg[] = {
-    {0xF064E5B, 6}, {0x234EA9B, 5}, {0x234EEB4, 6}};
+    {0xF01981B, 6}, {0x235003B, 5}, {0x2350454, 6}};
 
 std::atomic<bool> g_installed{false};
 std::atomic<int> g_count{0};

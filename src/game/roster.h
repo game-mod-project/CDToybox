@@ -138,7 +138,9 @@ struct RosterEntry {
 //
 // 하드코딩된 주소라 패치마다 어긋날 수 있다. 버킷 수·항목 수가
 // 말이 되는지 보고, 아니면 조용히 포기한다(표시만 비고 기능은 산다).
-inline constexpr std::uint64_t kSpawnTableGlobalRva = 0x6C29FF8;
+// 1.0.0.2850: 데이터 전역이 +0x4150 밀렸다(소환 가드의 빈 레코드와 같은 폭). 2760 까지
+// 0x6C29FF8. 틀리면 아래 검증이 걸러 "소환 표를 못 읽었다" 만 남는다.
+inline constexpr std::uint64_t kSpawnTableGlobalRva = 0x6C2E148;
 inline constexpr std::size_t kSpawnBucketStride = 0x100;
 inline constexpr std::uint32_t kSpawnBucketMaxEntries = 31;  // (0x100-8)/8
 inline constexpr std::uint32_t kSpawnMaxBuckets = 4096;
@@ -303,8 +305,9 @@ CompanionGroup companion_group_of_row(std::uint16_t merc_row);
 //  2) 바꿔 탈 수 있는 나머지는 `_mercenaryType == 1`(Mercenary_Main)이다.
 //     지금 6행: 데미안(3)·웅카(5)·얀(6·7)·나이라(8)·마녀(9). 이름을
 //     박지 않으므로 DLC·모드로 늘어도 따라간다.
-inline constexpr std::uint64_t kSessionGlobalRvaA = 0x6C29AF8;
-inline constexpr std::uint64_t kSessionGlobalRvaB = 0x6C29B00;
+// 1.0.0.2850: +0x4150 (2760 까지 0x6C29AF8 / 0x6C29B00). 행이 표 밖이면 무시된다.
+inline constexpr std::uint64_t kSessionGlobalRvaA = 0x6C2DC48;
+inline constexpr std::uint64_t kSessionGlobalRvaB = 0x6C2DC50;
 inline constexpr std::size_t kSessionCharRowOff = 0x100;
 
 // 지금 조종 중인 캐릭터의 행. 못 읽으면 0xFFFF.

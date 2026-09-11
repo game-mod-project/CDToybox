@@ -11,10 +11,13 @@
 namespace cdtb::game {
 namespace {
 
-// 이 빌드의 확정 RVA (실측 2026-09-09, 빌드 2.00.01).
-constexpr std::uint64_t kCallSiteRva = 0x2AD51F8;   // call 0x208F5C0
-constexpr std::uint64_t kLookupRva = 0x208F5C0;     // 번호 -> 레코드 조회
-constexpr std::uint64_t kEmptyRecordRva = 0x6BB3F70;
+// 이 빌드의 확정 RVA. 1.0.0.2850(2026-09-11) 갱신에서 다시 뽑았다 - 조회 함수는
+// `call X ; lea reg,[빈 레코드]` 짝 37곳으로, 자리는 옛 자리 +0x2040(형제 자리
+// 0x2ABD8EB → 0x2ABF92B 도 같은 폭), 빈 레코드는 데이터 +0x4150. 2760 까지는
+// 0x2AD51F8 / 0x208F5C0 / 0x6BB3F70 (실측 2026-09-09). specs/2026-09-11-game-update-2850.md.
+constexpr std::uint64_t kCallSiteRva = 0x2AD7238;   // call 0x2090A50
+constexpr std::uint64_t kLookupRva = 0x2090A50;     // 번호 -> 레코드 조회
+constexpr std::uint64_t kEmptyRecordRva = 0x6BB80C0;
 
 // 빈 레코드의 표식. 게임이 "없음"을 이 두 값으로 나타낸다.
 constexpr std::size_t kRecNoOff = 0x28;    // u64, 없으면 -1

@@ -286,7 +286,10 @@ std::uintptr_t g_normal_outer[kNormalTraces]{};
 // 그래서 확인된 자리에서만 구동한다. 모르는 자리면 이번은
 // 건너뛰고 요청은 그대로 둔다 - 다음에 안전한 자리가 오면 돌아간다.
 // 새 자리를 더 모으려면 건너륐 자리를 로그에서 보고 여기 넣는다.
-constexpr std::uint64_t kGoodDriveSites[] = {0x2A0263D};
+// 1.0.0.2850(2026-09-11): 옛 자리 0x2A0263D 가 +0x1740 밀렸다(역직렬화들과 같은
+// 폭). 새 exe 에서 액터 조회(0x2074BA0)를 부르는 반환 주소 중 정확히 그 자리다.
+// 틀리면 요청이 전부 건너뛰어지고 "구동 자리" 로그에 실제 자리가 찍힌다.
+constexpr std::uint64_t kGoodDriveSites[] = {0x2A03D7D};
 
 // 부르는 자리(모듈 안 첫 프레임)를 낸다. 모르면 0.
 std::uint64_t drive_site_rva() {
