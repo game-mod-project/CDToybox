@@ -419,13 +419,13 @@ SpawnWorkResult g_last_spawn;
 // 둘 다 실제로 소환됐고 탑승까지 됐다. 그 값은 게임 안 121곳이 쓰는
 // 범용 코드(전역 RVA 0x6BB7EB8)라 판정에 쓸 수 없다. 그래서 코드를
 // 16진수로 그대로 남기고 뜻을 붙이지 않는다.
-void* __fastcall det_spawn_work(void* gate, std::uint32_t* result,
+void* __fastcall det_spawn_work(void* clan, std::uint32_t* result,
                                 std::uint64_t merc_no, float* pos) {
     // 이 호출이 안 돌아오는 것이 지금 쫓는 문제다(2026-09-09: 종을 바꾼
     // 까마귀를 소환하니 예외도 없이 여기서 멈췄다). 감시에 걸어 두면
     // 12초 뒤 모든 스레드의 스택이 CDToybox.crash.txt 에 남는다.
     crashlog::watch_begin("소환작업", merc_no);
-    void* r = g_orig_spawn_work(gate, result, merc_no, pos);
+    void* r = g_orig_spawn_work(clan, result, merc_no, pos);
     crashlog::watch_end();
     if (g_spawn_logs.load(std::memory_order_relaxed) < kSpawnLogMax) {
         g_spawn_logs.fetch_add(1, std::memory_order_relaxed);

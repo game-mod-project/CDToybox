@@ -990,3 +990,41 @@ TEST(outcome_is_mine_compares_serial) {
     CHECK_EQ(cdtb::game::last_request_serial(), 0u);
     CHECK_EQ(cdtb::game::last_outcome().serial, 0u);
 }
+
+// 종 등록 검사 자리는 본체로 가는 jmp 썽크다. 2850 실측 바이트로 판정 함수를 본다.
+TEST(hire_check_jmp_target_follows_rel32) {
+    // 0x20991F0: E9 FB B2 03 0C -> 0x20991F5 + 0x0C03B2FB = 0xE0D44F0
+    const std::uint8_t thunk[] = {0xE9, 0xFB, 0xB2, 0x03, 0x0C};
+    const std::uintptr_t base = 0x140000000ull;
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, sizeof(thunk),
+                                               base + 0x20991F0),
+             base + 0xE0D44F0);
+}
+
+TEST(hire_check_jmp_target_rejects_non_jmp_or_short) {
+    // 2760 자리 0x2097BC0 이 2850 에서 갖는 바이트 - lea ecx,[rbp+0x48] 한복판.
+    const std::uint8_t mid[] = {0x8D, 0x4D, 0x48, 0xE8, 0x58};
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(mid, sizeof(mid), 0x142097BC0ull), 0u);
+    const std::uint8_t thunk[] = {0xE9, 0xFB, 0xB2, 0x03, 0x0C};
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, 4, 0x1420991F0ull), 0u);
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(nullptr, 5, 0x1420991F0ull), 0u);
+}
+
+TEST(hire_check_body_ok_accepts_the_2850_prologue) {
+    // 0xE0D44F0: mov rax,rsp / mov [rax+8],rbx / mov [rax+0x20],r9d / mov [rax+0x18],r8w
+    const std::uint8_t body[] = {0x48, 0x89, 0xE0, 0x48, 0x89, 0x58, 0x08, 0x44,
+                                 0x89, 0x48, 0x20, 0x66, 0x44, 0x89, 0x40, 0x18};
+    CHECK(cdtb::game::hire_check_body_ok(body, sizeof(body)));
+    CHECK(cdtb::game::hire_check_body_ok(body, 11));
+}
+
+TEST(hire_check_body_ok_rejects_short_or_different) {
+    const std::uint8_t body[] = {0x48, 0x89, 0xE0, 0x48, 0x89, 0x58,
+                                 0x08, 0x44, 0x89, 0x48, 0x20};
+    CHECK(!cdtb::game::hire_check_body_ok(body, sizeof(body) - 1));
+    CHECK(!cdtb::game::hire_check_body_ok(nullptr, sizeof(body)));
+    std::uint8_t other[sizeof(body)];
+    std::memcpy(other, body, sizeof(body));
+    other[10] = 0x18;  // mov [rax+0x18],r9d - 같은 꼴의 다른 함수
+    CHECK(!cdtb::game::hire_check_body_ok(other, sizeof(other)));
+}

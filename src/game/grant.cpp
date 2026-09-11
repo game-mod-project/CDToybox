@@ -1717,6 +1717,40 @@ struct CharTrace {
     int ordinal = -1;             // record 의 u16 순번 (0xFFFF 면 없음)
 };
 
+// 검사 자리를 부르기 전에 썽크와 본체 프롤로그를 읽어 본다. 읽기 실패와
+// 불일치를 로그에서 구분한다(리뷰 관찰 2026-09-11).
+static bool hire_check_site_ok(const mem::Reader& reader) {
+    const std::uintptr_t base = reader.module_base();
+    const std::uintptr_t site = base + kHireCheckRva;
+    std::uint8_t thunk[5]{};
+    if (!reader.read(site, thunk, sizeof(thunk))) {
+        log::warnf("종 등록 검사: RVA 0x{:X} 를 읽지 못했다 - 부르지 않는다",
+                   kHireCheckRva);
+        return false;
+    }
+    const std::uintptr_t body = hire_check_jmp_target(thunk, sizeof(thunk), site);
+    if (body == 0) {
+        log::warnf("종 등록 검사: RVA 0x{:X} 첫 바이트 {:02X} 가 jmp(E9) 가 아니다 - "
+                   "게임 갱신으로 밀린 자리라 부르지 않는다",
+                   kHireCheckRva, thunk[0]);
+        return false;
+    }
+    const std::uintptr_t body_rva = body >= base ? body - base : body;
+    std::uint8_t head[sizeof(kHireCheckBodyPrologue)]{};
+    if (!reader.read(body, head, sizeof(head))) {
+        log::warnf("종 등록 검사: 썽크 대상 RVA 0x{:X} 를 읽지 못했다 - 부르지 않는다",
+                   body_rva);
+        return false;
+    }
+    if (!hire_check_body_ok(head, sizeof(head))) {
+        log::warnf("종 등록 검사: 썽크 대상 RVA 0x{:X} 프롤로그가 다르다 ({:02X} {:02X} "
+                   "{:02X} {:02X} {:02X}) - 다른 함수의 썽크다, 부르지 않는다",
+                   body_rva, head[0], head[1], head[2], head[3], head[4]);
+        return false;
+    }
+    return true;
+}
+
 void run_hire_species(std::uintptr_t session, std::uint16_t key,
                       SpawnOutcome* out) {
     SpawnOutcome o;
@@ -1734,14 +1768,10 @@ void run_hire_species(std::uintptr_t session, std::uint16_t key,
     auto fn = reinterpret_cast<HireSpeciesFn>(g_reader->module_base() +
                                               kHireCheckRva);
     // 고정 RVA 라 게임이 갱신되면 엉뚱한 자리를 부른다. 그 자리는 본체로 가는
-    // jmp 썽크(E9)다 - 첫 바이트가 다르면 부르지 않는다(2026-09-11 2850 갱신 때
-    // 옛 자리가 함수 한복판이었다).
-    std::uint8_t head = 0;
-    if (!g_reader->read(reinterpret_cast<std::uintptr_t>(fn), &head, 1) ||
-        head != 0xE9) {
-        log::warnf("종 등록 검사: RVA 0x{:X} 첫 바이트 {:02X} 가 jmp(E9) 가 아니다 - "
-                   "게임 갱신으로 밀린 자리라 부르지 않는다",
-                   kHireCheckRva, head);
+    // jmp 썽크(E9)다 - 썽크를 따라가 본체 프롤로그까지 맞아야 부른다(2026-09-11
+    // 2850 갱신 때 옛 자리가 함수 한복판이었다. E9 한 바이트만 보면 주변 E9 가
+    // 4.7% 라 다른 함수의 썽크에 떨어질 수 있다 - 리뷰 관찰).
+    if (!hire_check_site_ok(*g_reader)) {
         if (out != nullptr) *out = o;
         return;
     }
@@ -1834,6 +1864,20 @@ void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
 }
 
 }  // namespace
+
+std::uintptr_t hire_check_jmp_target(const std::uint8_t* thunk, std::size_t n,
+                                     std::uintptr_t thunk_addr) {
+    if (thunk == nullptr || n < 5 || thunk[0] != 0xE9) return 0;
+    std::int32_t rel = 0;
+    std::memcpy(&rel, thunk + 1, sizeof(rel));
+    return thunk_addr + 5 + static_cast<std::intptr_t>(rel);
+}
+
+bool hire_check_body_ok(const std::uint8_t* body, std::size_t n) {
+    return body != nullptr && n >= sizeof(kHireCheckBodyPrologue) &&
+           std::memcmp(body, kHireCheckBodyPrologue,
+                       sizeof(kHireCheckBodyPrologue)) == 0;
+}
 
 bool endurance_ready() {
     return g_endur_msg.handler != 0 && g_reader != nullptr;
