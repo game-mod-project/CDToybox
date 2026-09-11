@@ -85,3 +85,19 @@ TEST(stash_autosave_is_due_one_second_after_the_change) {
     CHECK(!stash_autosave_due(10.0, 10.9, 1.0));
     CHECK(stash_autosave_due(10.0, 15.0, 5.0));
 }
+
+// save() 실패 백오프는 dirty_at 을 미래로 둔다 - 그동안은 저장하지 않는다.
+TEST(stash_autosave_is_not_due_while_dirty_at_is_in_the_future) {
+    CHECK(!stash_autosave_due(20.0, 11.0));
+    CHECK(!stash_autosave_due(20.0, 20.5));
+    CHECK(stash_autosave_due(20.0, 21.0));
+}
+
+// 다 보낸 큐는 세션이 없어도 Done 이다(순서: 빈 큐 → 끝 → 세션 → 간격).
+TEST(stash_queue_reports_done_even_without_a_session) {
+    StashQueue q = two_items();
+    stash_queue_sent(&q, 0.0);
+    stash_queue_sent(&q, 2.0);
+    CHECK(stash_queue_step(&q, false, 4.0) == QueueStep::Done);
+    CHECK(q.items.empty());
+}

@@ -35,7 +35,10 @@ double g_dirty_at = -1.0;
 char g_saved_clock[16] = "";        // 마지막 저장 HH:MM:SS. 비면 아직 없음
 // 펼쳐 둔 세트. 번호로 들면 세트를 지운 뒤 엉뚱한 세트에 담긴다 - 이름으로 든다.
 std::string g_open_set_name;
+std::string g_open_new_set;         // 방금 만든 세트 - 다음 프레임에 머리글을 펼친다
+std::uint64_t g_sets_generation = 0;   // 세트 추가·삭제·읽기마다 1 오른다(stash_open_set 캐시 키)
 bool g_drawn_this_frame = false;    // draw_stash_panel 이 본문을 그렸는가
+bool g_drawn_last_frame = false;    // 지난 프레임의 그 값 - 본창이 대신 그릴지 정한다
 char g_new_name[64] = "";
 Notice g_notice;
 
@@ -104,6 +107,15 @@ void load() {
     ::CloseHandle(h);
     if (!text.empty()) {
         g_stash.parse(text);
+        // 옛 빌드·손 편집 파일의 같은 이름 세트는 담기 목적지(find_set)를 엉뚱하게
+        // 푼다 - 읽을 때 뒤엣것의 이름을 바꾸고 파일에도 되쓴다(최종 리뷰 I-1).
+        const int renamed = g_stash.dedupe_set_names();
+        if (renamed > 0) {
+            log::warnf("보관함: 이름이 겹치는 세트 {}개의 이름을 \" (2)\" 꼴로 바꿨다",
+                       renamed);
+            mark_dirty();
+        }
+        ++g_sets_generation;
         log::infof("보관함 읽음: 즐겨찾기 {}개, 세트 {}개",
                    g_stash.favorites().size(), g_stash.set_count());
     }
@@ -112,7 +124,9 @@ void load() {
 bool save() {
     const std::wstring p = stash_path();
     if (p.empty()) {
-        // 다른 실패 갈래처럼 10초 뒤에 다시 본다 - 매 프레임 재시도하지 않게.
+        // 다른 실패 갈래처럼 알리고 10초 뒤에 다시 본다 - 매 프레임 재시도하지 않게.
+        log::warnf("보관함을 저장하지 못했다 (DLL 경로를 못 얻었다)");
+        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보십시오");
         g_dirty_at = stash_clock() + 9.0;
         return false;
     }
@@ -121,7 +135,7 @@ bool save() {
                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
         log::warnf("보관함을 저장하지 못했다 (열기 실패 {})", ::GetLastError());
-        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보세요");
+        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보십시오");
         // 1초마다 다시 실패하며 알림을 새로 찍지 않게 10초 뒤에 다시 본다.
         g_dirty_at = stash_clock() + 9.0;
         return false;
@@ -132,7 +146,7 @@ bool save() {
     ::CloseHandle(h);
     if (!ok || wrote != text.size()) {
         log::warnf("보관함을 저장하지 못했다 (쓰기 {}/{} 바이트)", wrote, text.size());
-        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보세요");
+        notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보십시오");
         g_dirty_at = stash_clock() + 9.0;
         return false;
     }
@@ -224,6 +238,18 @@ void run_queue(double now) {
 }
 
 void queue_start(std::vector<game::StashEntry> items, const char* what) {
+    if (items.empty()) {
+        notice_set(&g_notice, NoticeLevel::Info, "세트가 비어 있습니다");
+        return;
+    }
+    // 도는 큐를 새 지급으로 갈아 끼우면 남은 것이 조용히 사라진다 - 알리고 남긴다
+    // (최종 리뷰 I-2).
+    const std::size_t left = stash_queue_remaining(g_queue);
+    if (left > 0) {
+        log::infof("보관함 지급 중단: {}개 남김 (새 지급으로 교체)", left);
+        notice_set(&g_notice, NoticeLevel::Warn, "앞의 지급 {}개를 접고 새로 시작합니다",
+                   left);
+    }
     stash_queue_clear(&g_queue);
     g_queue.items = std::move(items);
     g_queue_total = g_queue.items.size();
@@ -294,7 +320,16 @@ std::uint32_t max_stack_of(std::uint32_t key) {
 
 int stash_open_set() {
     if (!g_loaded) load();
-    return g_stash.find_set(g_open_set_name);
+    // 인벤 표가 행마다 부르므로 이름 탐색은 세트 판·이름이 바뀔 때만 한다(최종 리뷰 M-9).
+    static std::uint64_t cached_gen = ~0ULL;
+    static std::string cached_name;
+    static int cached = -1;
+    if (cached_gen != g_sets_generation || cached_name != g_open_set_name) {
+        cached_gen = g_sets_generation;
+        cached_name = g_open_set_name;
+        cached = g_stash.find_set(g_open_set_name);
+    }
+    return cached;
 }
 
 const char* stash_open_set_name() {
@@ -334,8 +369,11 @@ void stash_tick() {
     // 지난 프레임에 창 본문을 안 그렸으면 펼쳐 둔 세트를 잊는다 - 닫힌 창의
     // 세트에 인벤 '보관' 이 담기지 않게. 한 프레임 늦는 것은 무해하다.
     if (!g_drawn_this_frame) g_open_set_name.clear();
+    g_drawn_last_frame = g_drawn_this_frame;
     g_drawn_this_frame = false;
 }
+
+bool stash_body_visible() { return g_drawn_last_frame; }
 
 void stash_flush() {
     if (g_loaded && g_dirty_at >= 0.0) save();
@@ -390,9 +428,9 @@ void draw_stash_panel(bool* open) {
     if (ImGui::CollapsingHeader(fav_hdr, ImGuiTreeNodeFlags_DefaultOpen)) {
         // 즐겨찾기가 많아도 세트를 스크롤 밖으로 밀어내지 않게 창 높이의 45% 까지만.
         const float row_h = kIconSize + ImGui::GetStyle().ItemSpacing.y;
+        // 테두리 없는 자식은 안쪽 여백이 0 이라 줄 높이만 센다.
         const float want = favs.empty() ? ImGui::GetTextLineHeightWithSpacing()
-                                        : row_h * static_cast<float>(favs.size()) +
-                                              ImGui::GetStyle().WindowPadding.y;
+                                        : row_h * static_cast<float>(favs.size());
         const float cap = ImGui::GetWindowHeight() * 0.45f;
         ImGui::BeginChild("favs_body", ImVec2(0, want < cap ? want : cap), ImGuiChildFlags_None,
                           ImGuiWindowFlags_None);
@@ -434,7 +472,8 @@ void draw_stash_panel(bool* open) {
                        "같은 이름의 세트가 이미 있습니다: {}", g_new_name);
         } else {
             g_stash.add_set(g_new_name);
-            g_open_set_name = g_new_name;
+            ++g_sets_generation;
+            g_open_new_set = g_new_name;   // 다음 프레임에 머리글을 펼쳐 목적지가 된다
             log::infof("보관함: 세트 '{}' 만듦", g_new_name);
             g_new_name[0] = 0;
             mark_dirty();
@@ -442,15 +481,22 @@ void draw_stash_panel(bool* open) {
     }
     ImGui::EndDisabled();
 
+    // 펼쳐진 세트가 담기 목적지다. 머리글을 접으면 목적지도 풀린다(최종 리뷰 M-4).
+    std::string open_name;
     for (int i = 0; i < g_stash.set_count(); ++i) {
         game::StashSet* set = g_stash.set_at(i);
         ImGui::PushID(1000 + i);
-        char label[96];
-        std::snprintf(label, sizeof(label), "%s (%zu개)", set->name.c_str(),
-                      set->items.size());
+        // ID 는 이름으로 고정한다 - "(N개)" 가 바뀔 때 머리글이 접히지 않게.
+        char label[256];
+        std::snprintf(label, sizeof(label), "%s (%zu개)###set:%s", set->name.c_str(),
+                      set->items.size(), set->name.c_str());
+        if (!g_open_new_set.empty() && g_open_new_set == set->name) {
+            ImGui::SetNextItemOpen(true, ImGuiCond_Always);   // 방금 만든 세트를 펼친다
+            g_open_new_set.clear();
+        }
         if (ImGui::CollapsingHeader(label)) {
             // 인벤토리 창이 "어디에 담을지" 를 이걸로 안다.
-            g_open_set_name = set->name;
+            open_name = set->name;
             if (ImGui::SmallButton("전부 지급")) {
                 queue_start(set->items, set->name.c_str());
             }
@@ -458,6 +504,7 @@ void draw_stash_panel(bool* open) {
             if (confirm_small_button("세트 지우기", false)) {
                 log::infof("보관함: 세트 '{}' 지움 ({}개 항목)", set->name, set->items.size());
                 g_stash.remove_set(i);
+                ++g_sets_generation;
                 mark_dirty();
                 ImGui::PopID();
                 break;
@@ -530,6 +577,7 @@ void draw_stash_panel(bool* open) {
         }
         ImGui::PopID();
     }
+    g_open_set_name = open_name;
 
     ImGui::Separator();
     ImGui::TextDisabled("cdtoybox_stash.txt 에 자동 저장 · 마지막 %s",
@@ -542,6 +590,7 @@ void draw_stash_panel(bool* open) {
     if (ImGui::SmallButton("다시 읽기")) {
         g_stash = game::Stash{};
         g_open_set_name.clear();
+        g_open_new_set.clear();
         g_dirty_at = -1.0;
         load();
     }

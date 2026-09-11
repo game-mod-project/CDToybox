@@ -440,15 +440,15 @@ void draw_ui() {
 
     // 보관함 창을 닫아도 일괄 지급은 stash_tick 이 이어 간다 - 진행을 여기서 보인다.
     std::size_t q_done = 0, q_total = 0;
-    if (!shown(cdtb::render::Win::Stash) &&
+    if (!cdtb::render::stash_body_visible() &&
         cdtb::render::stash_queue_progress(&q_done, &q_total)) {
         ImGui::TextColored(cdtb::render::col::kBusy, "보관함 지급 중 %zu / %zu",
                            q_done, q_total);
         ImGui::SameLine();
         if (ImGui::SmallButton("중단")) cdtb::render::stash_queue_cancel();
     }
-    // 창이 닫혀 있으면 완료·세션 없음·중단 알림도 여기서만 볼 수 있다.
-    if (!shown(cdtb::render::Win::Stash)) {
+    // 창이 닫혀 있거나 접혀 있으면 완료·세션 없음·중단 알림도 여기서만 볼 수 있다.
+    if (!cdtb::render::stash_body_visible()) {
         cdtb::render::notice_draw(cdtb::render::stash_notice());
     }
 
@@ -594,6 +594,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_visible = false;
         // 훅을 떼기 전에 OS 커서를 원래 상태로 돌린다. 순서가 바뀌면
         // 되돌릴 원본 함수가 없다.
+        // 해체 뒤 다시 켤 때 옛 큐가 그 자리에서 이어지지 않게 접는다(로그 한 줄).
+        if (cdtb::render::stash_queue_progress(nullptr, nullptr)) {
+            cdtb::render::stash_queue_cancel();
+        }
         cdtb::render::stash_flush();   // 해체 전에 저장 대기 중인 보관함 변경을 쓴다
         input::cursor_guard_sync(false);
         input::cursor_guard_remove();
@@ -633,15 +637,16 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::player_apply(reader);
         // 명령 파일 스레드가 부탁한 근처 액터 갱신은 여기(렌더 스레드)서 한다.
         cdtb::game::live_actors_tick(reader);
-        // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
-        // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
-        // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
-        // 중 큐·저장이 멈췄다.
-        cdtb::render::stash_tick();
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
         cdtb::game::spawnguard_install(reader);
+        // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
+        // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
+        // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
+        // 중 큐·저장이 멈췄다. 가드 설치 뒤에 둔다 - 큐의 지급이 가드보다 먼저 돌지
+        // 않게(위 주석의 규약).
+        cdtb::render::stash_tick();
 
         // 획득 뒤처리. 2338 은 명부 레코드에 그 순간의 야생 액터
         // 핸들을 박아 두는데, 그 액터가 사라져도 값은 남아 게임이

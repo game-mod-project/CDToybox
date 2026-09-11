@@ -373,3 +373,25 @@ TEST(find_set_follows_removal) {
     CHECK_EQ(s.find_set("무기"), -1);
     CHECK_EQ(s.find_set("방어구"), 0);
 }
+
+// 같은 이름이 둘이면 find_set 은 첫 번째다 - 그래서 읽을 때 뒤엣것의 이름을 바꾼다.
+TEST(find_set_returns_the_first_of_duplicate_names) {
+    Stash s;
+    s.add_set("무기");
+    s.add_set("무기");
+    CHECK_EQ(s.find_set("무기"), 0);
+}
+
+TEST(dedupe_set_names_renames_later_duplicates) {
+    Stash s;
+    s.add_set("무기");
+    s.add_set("무기");
+    s.add_set("방어구");
+    s.add_set("무기");
+    CHECK_EQ(s.dedupe_set_names(), 2);
+    CHECK_EQ(s.set_at(1)->name, std::string("무기 (2)"));
+    CHECK_EQ(s.set_at(3)->name, std::string("무기 (3)"));
+    CHECK_EQ(s.set_at(2)->name, std::string("방어구"));
+    CHECK_EQ(s.dedupe_set_names(), 0);   // 두 번째는 할 일이 없다
+    CHECK_EQ(s.find_set("무기 (2)"), 1);
+}
