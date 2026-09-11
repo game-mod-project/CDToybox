@@ -27,7 +27,10 @@ void draw_camera_panel(bool* open) {
     ImGui::TextDisabled("개발 진단용입니다 - 평소에는 열 필요 없습니다.");
 
     if (!game::discovered()) {
-        ImGui::TextColored(col::kBusy, "분석 중... (%.0f초)", ImGui::GetTime());
+        // GetTime 은 오버레이가 뜬 뒤의 누적 시간이다. 분석 시작 시각은 안 잡으므로
+        // 무엇을 센 숫자인지 문구에 적는다 - 멈춘 건지 가리는 용도로는 충분하다.
+        ImGui::TextColored(col::kBusy, "분석 중... (오버레이 켜진 뒤 %.0f초)",
+                           ImGui::GetTime());
         ImGui::TextWrapped(
             "월드에 진입하면 자동으로 카메라를 찾습니다. "
             "따로 하실 일은 없습니다. 결과는 bin64\\CDToybox.log 에 "
@@ -81,7 +84,7 @@ void draw_camera_panel(bool* open) {
     if (fc.deferred) {
         ImGui::TextDisabled("프리카메라: 보류 - 렌더가 읽는 값을 아직 못 찾았습니다");
     } else if (!fc.hooked) {
-        ImGui::TextDisabled("프리카메라: 훅 대기 중");
+        ImGui::TextDisabled("프리카메라: 훅을 기다리는 중입니다");
     } else {
         ImGui::TextColored(fc.active ? col::kOk : ImVec4(0.7f, 0.7f, 0.7f, 1),
                            "프리카메라: %s", fc.active ? "켜짐" : "꺼짐");

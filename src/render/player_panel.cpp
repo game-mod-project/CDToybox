@@ -28,7 +28,7 @@ void draw_player_panel(bool* open) {
         ImGui::Text("생명 %d / %d", v.hp_cur, v.hp_max);
         ImGui::Text("스태미나 %d / %d", v.sta_cur, v.sta_max);
         ImGui::Text("정신력 %d / %d", v.spi_cur, v.spi_max);
-        ImGui::TextDisabled("(내부 수치. 화면 표기와 배율이 다를 수 있음)");
+        ImGui::TextDisabled("(내부 수치입니다. 화면 표기와 배율이 다를 수 있습니다)");
     } else {
         // 못 읽는 건 고장이 아니라 전환 중이라는 뜻이다. 빈 화면 대신 이유를 말한다.
         ImGui::TextDisabled(
@@ -49,13 +49,13 @@ void draw_player_panel(bool* open) {
         bool nf = game::nofall_enabled();
         if (ImGui::Checkbox("낙사 방지", &nf)) game::nofall_set(nf);
         ImGui::SameLine();
-        ImGui::TextDisabled("(첫 낙하 한 번은 피해를 받습니다 - 그때 대상을 학습)");
+        ImGui::TextDisabled("(첫 낙하 한 번은 피해를 받습니다 - 그때 대상을 학습합니다)");
     } else if (game::nofall_unsupported()) {
         ImGui::TextDisabled(
             "낙사 방지: 이 게임 빌드에서 훅 지점을 못 찾았습니다"
             " (모드 업데이트가 필요합니다)");
     } else {
-        ImGui::TextDisabled("낙사 방지: 훅 준비 중...");
+        ImGui::TextDisabled("낙사 방지: 훅을 준비하는 중입니다...");
     }
 
     ImGui::Separator();
