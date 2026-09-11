@@ -48,7 +48,6 @@ std::atomic<unsigned> g_n_block_clip{0};
 std::atomic<unsigned> g_n_pass_pos{0};
 std::atomic<unsigned> g_n_pass_clip{0};
 unsigned long long g_open_frame = 0;   // 연 프레임 번호(렌더 스레드만)
-bool g_hidden_logged = false;          // 열린 동안 게임이 숨긴 것을 한 번만 남긴다
 int g_blocked = 0;
 bool g_limit_logged = false;
 
@@ -250,22 +249,10 @@ void cursor_guard_sync(bool overlay_visible) {
     g_blocked = 0;      // 예산은 프레임마다 되돌린다
     const unsigned long long frame =
         g_frame_seq.fetch_add(1, std::memory_order_relaxed) + 1;
-    // 열려 있는 동안 게임이 커서를 숨기면(오버레이를 연 채 인벤을 닫으면 게임이
-    // ShowCursor(FALSE) 를 0 아래로 내린다) 다시 띄운다 - 열린 동안은 OS 커서를
-    // 쓰기로 했고, 닫을 때는 상대 복원이라 게임의 순변화가 그대로 살아남는다
-    // (사용자 보고 2026-09-12: 오버레이 창에서 마우스가 굳음).
-    if (overlay_visible && g_hidden_by_us) {
-        const int c = probe_count();
-        if (c < 0) {
-            drive_to(0);
-            if (!g_hidden_logged) {
-                log::infof("커서 가드: 열린 동안 게임이 커서를 숨겼다 (카운터 {}, 열린 지 "
-                           "{} 프레임) - 다시 띄운다",
-                           c, frame - g_open_frame);
-                g_hidden_logged = true;
-            }
-        }
-    }
+    // 열려 있는 동안 카운터를 다시 올리지 않는다. 창 안에서 보이는 포인터는 ImGui
+    // 소프트 커서라 OS 카운터와 무관하고, 게임의 "숨겨라"(while ShowCursor(FALSE) >= 0)
+    // 는 절대 목표라 되돌리면 닫을 때의 상대 복원과 어긋난다 - 열기 전 카운터가 0
+    // 이상이면(인벤을 먼저 연 채 열기) 닫은 뒤 커서가 안 숨겨진다(리뷰 F-1·F-2).
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
         g_saved_count = probe_count();
@@ -274,14 +261,14 @@ void cursor_guard_sync(bool overlay_visible) {
             g_game_clip_seen = false;
         }
         g_orig_clip(nullptr);      // 게임이 걸어 둔 가두기를 푼다
-        // OS 커서를 확실히 띄우고 그걸 쓴다. 숨겨 놓고 ImGui가
-        // 따로 그리게 했더니 게임이 다시 띄워 둘로 보였다.
-        // ShowCursor 는 후킹할 수 없으므로(게임이 멎는다) 게임과
-        // 다투는 대신 하나로 합친다.
+        // 카운터를 0 으로 맞춘다. 창 안에서 보이는 포인터는 ImGui 소프트 커서다
+        // (overlay.cpp 가 MouseDrawCursor 를 켜고 wndproc 이 WM_SETCURSOR 에서 OS
+        // 커서를 끈다) - 이 값은 포인터가 창 밖으로 나갔을 때 보이게 하는 것이고,
+        // 닫을 때의 상대 복원(saved + 게임 순변화)이 여기서 기록한 saved 와 짝이다.
+        // ShowCursor 는 후킹할 수 없으므로(게임이 멎는다) 게임과 다투지 않는다.
         drive_to(0);
         g_hidden_by_us = true;
         g_open_frame = frame;
-        g_hidden_logged = false;
         g_n_block_pos.store(0, std::memory_order_relaxed);
         g_n_block_clip.store(0, std::memory_order_relaxed);
         g_n_pass_pos.store(0, std::memory_order_relaxed);
@@ -317,7 +304,7 @@ void cursor_guard_sync(bool overlay_visible) {
         // 통과한 것이 있는지, 카운터를 어디로 옮겼는지).
         log::infof("커서 가드 닫기: 카운터 {} → {} (열 때 {}), 가두기 {} (요청 {} 널 {} "
                    "사각형 {},{},{},{} 프레임 {}/{}), 막음 SetCursorPos {} ClipCursor {}, "
-                   "통과 {} {}, 열린 프레임 {}",
+                   "통과 SetCursorPos {} ClipCursor {}, 열린 프레임 {}",
                    now, target, g_saved_count,
                    how == ClipRestore::Reapply ? "다시 걺" : "풂", seen, was_null,
                    rect.left, rect.top, rect.right, rect.bottom, at, frame,

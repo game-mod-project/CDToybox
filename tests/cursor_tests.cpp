@@ -75,6 +75,9 @@ TEST(cursor_restore_count_keeps_the_games_change) {
     CHECK_EQ(cursor_restore_count(-1, 0), -1);   // 게임이 안 건드림 → 열기 전으로
     CHECK_EQ(cursor_restore_count(-1, 1), 0);    // 인벤을 열며 +1 → 보인 채로
     CHECK_EQ(cursor_restore_count(0, -2), -2);
+    // 인벤을 먼저 연 채(0) 열고, 연 채 인벤을 닫아 게임이 -1 로 내림 → 숨김. 열린 동안
+    // 카운터를 0 으로 되돌리면 이 값이 0 이 되어 닫은 뒤 커서가 남는다(리뷰 F-1).
+    CHECK_EQ(cursor_restore_count(0, -1), -1);
 }
 
 }  // namespace
