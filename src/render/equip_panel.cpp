@@ -67,6 +67,11 @@ void draw_socket_popup(const mem::Reader& reader,
         ImGui::EndPopup();
         return;
     }
+    // 확인 버튼의 무장 상태는 ImGui ID 로 키잉된다 - 대상(장비·칸)마다 ID 를
+    // 밀어야 A 장비에서 무장한 3초가 B 장비로 넘어가지 않는다(1단계와 같은 격리).
+    ImGui::PushID(reinterpret_cast<const void*>(
+        static_cast<std::uintptr_t>(w->instance)));
+    ImGui::PushID(g_sock_k);
     const char* nm = name_of_sunbeon(w->key);
     ImGui::Text("%s 소켓 %d", nm != nullptr ? nm : "(이름 없음)", g_sock_k);
     ImGui::Separator();
@@ -138,6 +143,8 @@ void draw_socket_popup(const mem::Reader& reader,
         }
     }
     notice_draw(g_notice);
+    ImGui::PopID();
+    ImGui::PopID();
     ImGui::EndPopup();
 }
 
@@ -411,7 +418,8 @@ void draw_equip_panel(bool* open) {
                     std::snprintf(lb, sizeof(lb), "%d 잠김##s%d", k, k);
                 } else if (s.filled()) {
                     const char* gn = name_of_sunbeon(s.gem);
-                    std::snprintf(lb, sizeof(lb), "%d %s##s%d", k,
+                    // 이름은 60바이트까지만 - 라벨이 잘려도 ID 접미사 ##s%d 는 남아야 한다.
+                    std::snprintf(lb, sizeof(lb), "%d %.60s##s%d", k,
                                   gn != nullptr ? gn : "(보석)", k);
                 } else {
                     std::snprintf(lb, sizeof(lb), "%d 비어 있음##s%d", k, k);
