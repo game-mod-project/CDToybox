@@ -35,9 +35,17 @@ struct GemPickerOpts {
     std::uint32_t selected_key = 0;   // 현재 값. 목록에서 강조한다
 };
 
+// 검색어·선택을 비운다. open 이 이것을 부른다. 장비 창의 소켓 팝업은 자기가
+// 팝업을 열므로 이것만 쓴다.
+void gem_picker_reset(GemPicker* p);
+
 // 다음 gem_picker_draw 에서 팝업을 연다. 버튼이 PushID 안에 있어도
 // 된다 - 여는 것은 draw 가 자기 ID 범위에서 한다.
 void gem_picker_open(GemPicker* p);
+
+// 팝업 없이 목록만 - 제목·검색·목록·"선택:"·[적용]. 장비 창의 칸 팝업이 안에
+// 넣어 쓴다. [적용] 이 눌리면 out 을 채우고 true.
+bool gem_list_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out);
 
 // 팝업을 그린다. 창의 최상위 ID 범위에서 매 프레임 부른다. 골랐으면
 // true 를 내고 팝업을 닫는다.

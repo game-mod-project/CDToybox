@@ -127,8 +127,10 @@ const char* const kGradeLabels = "전체\0" "등급 없음\0" "T1\0" "T2\0"
 float text_width(const char* s) { return ImGui::CalcTextSize(s).x; }
 
 void flow_same_line(float next_width) {
-    const float right = ImGui::GetWindowPos().x +
-                        ImGui::GetWindowContentRegionMax().x;
+    // 오른쪽 끝은 창이 아니라 지금 그리는 영역(표 칸이면 그 칸)으로 잰다 -
+    // 장비 창 소켓 칸이 버튼 다섯을 칸 안에서 흘린다.
+    const float right = ImGui::GetCursorScreenPos().x +
+                        ImGui::GetContentRegionAvail().x;
     const float end = ImGui::GetItemRectMax().x +
                       ImGui::GetStyle().ItemSpacing.x + next_width;
     if (end < right) ImGui::SameLine();
