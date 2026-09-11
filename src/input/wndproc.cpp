@@ -2,7 +2,10 @@
 
 #include <imgui.h>
 
+#include <vector>
+
 #include "core/log.h"
+#include "input/filter.h"
 #include "render/overlay.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT,
@@ -21,24 +24,44 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
 
-    // 오버레이 위에서는 OS 커서를 끈다. ImGui 가 자기 것을 그리므로
-    // 그냥 두면 두 개로 보인다. ShowCursor 와 달리 SetCursor 는
-    // "될 때까지 다시 부르는" 관용구가 없어 게임을 가두지 않는다.
-    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT &&
-        overlay::is_visible() && ImGui::GetIO().WantCaptureMouse) {
+    const bool visible = overlay::is_visible();
+
+    // 오버레이 위에서는 OS 커서를 끈다. ImGui 가 자기 것을 그리므로 그냥 두면
+    // 두 개로 보인다. 마우스를 전부 오버레이가 가지므로 클라이언트 영역
+    // 어디서나 끈다.
+    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT && visible) {
         ::SetCursor(nullptr);
         return TRUE;
     }
 
-    // 오버레이가 열려 있을 때만 입력을 게임에 넘기지 않는다.
-    // 항상 소비하면 게임 조작이 막힌다.
-    if (overlay::is_visible()) {
-        const ImGuiIO& io = ImGui::GetIO();
-        const bool mouse_msg = (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST);
-        const bool key_msg = (msg >= WM_KEYFIRST && msg <= WM_KEYLAST);
-        if ((mouse_msg && io.WantCaptureMouse) ||
-            (key_msg && io.WantCaptureKeyboard) || msg == WM_CHAR) {
-            return 0;
+    if (visible) {
+        // raw input 은 장치 종류를 보고 가른다 - 마우스는 늘, 키보드는 입력칸에
+        // 포커스가 있을 때만 막는다(오버레이를 켠 채 걷는 것은 되어야 한다).
+        int raw_type = -1;
+        if (msg == WM_INPUT) {
+            RAWINPUTHEADER h{};
+            UINT n = sizeof(h);
+            if (::GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_HEADER,
+                                  &h, &n, sizeof(RAWINPUTHEADER)) == sizeof(h)) {
+                raw_type = static_cast<int>(h.dwType);
+            } else {
+                // 못 읽으면 게임에 넘긴다(fail-open). 그것을 로그로 알 수 있어야
+                // 한다.
+                static unsigned s_fail = 0;
+                if ((s_fail++ % 1000) == 0) {
+                    log::warnf("raw input 헤더를 못 읽어 게임에 넘긴다 ({}회째)",
+                               s_fail);
+                }
+            }
+        }
+        switch (swallow_message(msg, true,
+                                ImGui::GetIO().WantCaptureKeyboard,
+                                raw_type)) {
+            case Swallow::Zero: return 0;
+            // WM_INPUT 은 DefWindowProc 이 버퍼를 정리한다 - 그냥 0 을
+            // 돌려주면 샌다.
+            case Swallow::DefWindow: return ::DefWindowProcW(hwnd, msg, wp, lp);
+            case Swallow::No: break;
         }
     }
     return ::CallWindowProcW(g_original, hwnd, msg, wp, lp);
@@ -52,6 +75,29 @@ void install(HWND hwnd) {
     g_original = reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(
         hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(proc)));
     log::infof("WndProc 서브클래싱 설치: hwnd={}", static_cast<void*>(hwnd));
+
+    // 게임이 raw input 을 어느 창으로 받는지 한 번 남긴다 - "오버레이를 켜도
+    // 시점이 돈다" 가 나면 대상 창이 우리가 서브클래싱한 창인지부터 갈라야 한다.
+    // flags 로 RIDEV_INPUTSINK(0x100)·RIDEV_NOLEGACY(0x30) 도 같이 드러난다.
+    UINT count = 0;
+    if (::GetRegisteredRawInputDevices(nullptr, &count,
+                                       sizeof(RAWINPUTDEVICE)) == 0 &&
+        count > 0) {
+        std::vector<RAWINPUTDEVICE> devs(count);
+        const UINT got = ::GetRegisteredRawInputDevices(devs.data(), &count,
+                                                        sizeof(RAWINPUTDEVICE));
+        if (got != static_cast<UINT>(-1)) {
+            for (UINT i = 0; i < got; ++i) {
+                log::infof(
+                    "raw input 등록: usage {:#x}/{:#x} flags {:#x} target {} ({})",
+                    devs[i].usUsagePage, devs[i].usUsage, devs[i].dwFlags,
+                    static_cast<void*>(devs[i].hwndTarget),
+                    devs[i].hwndTarget == nullptr ? "포커스 창"
+                    : devs[i].hwndTarget == hwnd  ? "우리 창"
+                                                  : "다른 창");
+            }
+        }
+    }
 }
 
 void remove() {
