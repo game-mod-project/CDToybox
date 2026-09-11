@@ -427,7 +427,11 @@ void draw_stash_panel(bool* open) {
     std::snprintf(fav_hdr, sizeof(fav_hdr), "즐겨찾기 (%zu)###favs", favs.size());
     if (ImGui::CollapsingHeader(fav_hdr, ImGuiTreeNodeFlags_DefaultOpen)) {
         // 즐겨찾기가 많아도 세트를 스크롤 밖으로 밀어내지 않게 창 높이의 45% 까지만.
-        const float row_h = kIconSize + ImGui::GetStyle().ItemSpacing.y;
+        // 줄 높이는 아이콘(22)이 아니라 AlignTextToFramePadding 이 정한다(폰트 18 → 24).
+        // 아이콘으로 세면 3개부터 스크롤바가 선다(wave 2 재리뷰).
+        const float frame_h = ImGui::GetFrameHeight();
+        const float row_h = (kIconSize > frame_h ? kIconSize : frame_h) +
+                            ImGui::GetStyle().ItemSpacing.y;
         // 테두리 없는 자식은 안쪽 여백이 0 이라 줄 높이만 센다.
         const float want = favs.empty() ? ImGui::GetTextLineHeightWithSpacing()
                                         : row_h * static_cast<float>(favs.size());
