@@ -609,10 +609,15 @@ void draw_grant_panel(bool* open) {
         if (g_hand_session != 0 && ImGui::SmallButton("자동으로 다시 고르기")) {
             g_hand_session = 0;
         }
+        // ScrollX/ScrollY 표는 자식 창이라 높이를 안 주면 창 바닥까지 늘어난다 -
+        // 머리글 + 8줄로 못박고, 세션이 그보다 많으면(최대 16) 세로로 스크롤한다.
+        const ImVec2 sessions_size(0.0f, ImGui::GetTextLineHeightWithSpacing() * 9.0f);
         if (ImGui::BeginTable("sessions", 3,
                               ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit |
-                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_Sortable |
-                                  ImGuiTableFlags_SortTristate)) {
+                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate,
+                              sessions_size)) {
+            ImGui::TableSetupScrollFreeze(0, 1);   // 스크롤해도 머리글은 남는다
             ImGui::TableSetupColumn("주소");
             // 기본은 호출 많은 순 - 게임이 쉬지 않고 부르는 세션이 살아 있는 것이다.
             ImGui::TableSetupColumn("횟수", ImGuiTableColumnFlags_DefaultSort |
