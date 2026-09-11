@@ -493,7 +493,10 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
     std::string after;
     if (op == 0) after = "칸 " + std::to_string(a) + " 보석 순번 " + std::to_string(b);
     else if (op == 1) after = "연마 " + std::to_string(b);
-    else if (op == 2) after = "zone 레코드 " + std::to_string(a);
+    else if (op == 2) after = "zone 레코드 " + std::to_string(a) + " -> " +
+                              std::to_string(static_cast<int>(b)) + "," +
+                              std::to_string(static_cast<int>(g)) + "," +
+                              std::to_string(static_cast<int>(bl));
     else after = "소켓 " + std::to_string(a) + "칸";
     after += " (" + std::to_string(wrote) + " realm)";
     log_write(kWhat[op], static_cast<std::uintptr_t>(instance), "-", after);
@@ -527,7 +530,11 @@ int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,
     const int opened = socket_unlock_entry(reader, record, want);
     if (opened > 0) {
         log_write("인벤 소켓 열기", record, std::to_string(before) + "칸",
-                  std::to_string(before + opened) + "칸");
+                  std::to_string(before + opened) + "칸 (연 칸 " +
+                      std::to_string(opened) + ")");
+    } else {
+        log_write("인벤 소켓 열기", record, std::to_string(before) + "칸",
+                  "못 열음");
     }
     return opened;
 }
