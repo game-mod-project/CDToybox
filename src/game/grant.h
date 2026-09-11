@@ -169,6 +169,11 @@ int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
 // freshness 도 통과했다(표 전체가 똑같이 오래되면 '가장 최근 것 대비'
 // 비교가 무의미해진다). 게이트만은 정확히 닫혔다.
 std::uintptr_t pick_drive_session(const mem::Reader& reader);
+// 용병단(MercenaryClanActorComponent) 컴포넌트. 준 세션의 [+0x68]+0x110, 없으면 본
+// 세션 전부를 같은 사슬로 훑는다(세션 0 을 주면 곧장 전부). 세션 이름표가 필요 없어
+// 명부 탐색의 값싼 길이다(RTTI 스캔 10~17초 대신 읽기 두 번).
+bool clan_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out);
 
 // 세션마다 게임이 돌려준 액터와 그 클래스. 프레임마다 RTTI 를 푸는
 // 것은 비싸므로 분석 스레드가 한 번 붙여 준다.
