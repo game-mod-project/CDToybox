@@ -40,10 +40,14 @@ Swallow swallow_message(unsigned msg, bool overlay_visible, bool want_keyboard,
     if (msg == kWmChar || msg == kWmSysChar || msg == kWmUniChar) {
         return Swallow::Zero;
     }
-    // IME 조합(한글)은 입력칸에 포커스가 있을 때만 - 오버레이 검색창에 한글을
-    // 치면 게임 쪽 채팅이 조합 문자열을 받지 않게.
-    const bool ime = (msg >= kWmImeStart && msg <= kWmImeComp) || msg == kWmImeChar;
-    if (ime) return want_keyboard ? Swallow::Zero : Swallow::No;
+    // IME 조합(한글)은 입력칸에 포커스가 있을 때만 게임에 안 넘긴다. WM_IME_CHAR 와
+    // 조합 시작·끝은 DefWindowProc 이 WM_CHAR 를 만들고 조합 창을 띄워야 ImGui 가
+    // 글자를 받으므로 기본 처리는 시킨다(DefWindow). WM_IME_COMPOSITION 은 백엔드가
+    // 이미 DefWindowProcW 를 부르니 삼키기만 한다(둘이 부르면 글자가 겹친다).
+    if (msg == kWmImeChar || msg == kWmImeStart || msg == kWmImeEnd) {
+        return want_keyboard ? Swallow::DefWindow : Swallow::No;
+    }
+    if (msg == kWmImeComp) return want_keyboard ? Swallow::Zero : Swallow::No;
     // 나머지 키도 입력칸에 포커스가 있을 때만 - 오버레이를 켠 채 걷는 것은
     // 되어야 한다.
     if (msg >= kWmKeyFirst && msg <= kWmKeyLast) {

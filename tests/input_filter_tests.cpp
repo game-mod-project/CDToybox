@@ -59,10 +59,12 @@ TEST(input_filter_key_state_mask) {
 }
 
 TEST(input_filter_ime_and_unichar) {
-    CHECK(swallow_message(0x0109, true, false, -1) == Swallow::Zero);   // WM_UNICHAR 는 글자
-    CHECK(swallow_message(0x010F, true, true, -1) == Swallow::Zero);    // WM_IME_COMPOSITION
-    CHECK(swallow_message(0x010D, true, true, -1) == Swallow::Zero);    // WM_IME_STARTCOMPOSITION
-    CHECK(swallow_message(0x0286, true, true, -1) == Swallow::Zero);    // WM_IME_CHAR
-    CHECK(swallow_message(0x010F, true, false, -1) == Swallow::No);     // 포커스 없으면 통과
+    CHECK(swallow_message(0x0109, true, false, -1) == Swallow::Zero);       // WM_UNICHAR 는 글자
+    CHECK(swallow_message(0x010F, true, true, -1) == Swallow::Zero);        // WM_IME_COMPOSITION - 백엔드가 DefWindowProc 을 부른다
+    CHECK(swallow_message(0x010D, true, true, -1) == Swallow::DefWindow);   // WM_IME_STARTCOMPOSITION - 조합 창
+    CHECK(swallow_message(0x010E, true, true, -1) == Swallow::DefWindow);   // WM_IME_ENDCOMPOSITION
+    CHECK(swallow_message(0x0286, true, true, -1) == Swallow::DefWindow);   // WM_IME_CHAR - WM_CHAR 를 만들어야 ImGui 가 받는다
+    CHECK(swallow_message(0x010F, true, false, -1) == Swallow::No);         // 포커스 없으면 통과
+    CHECK(swallow_message(0x0286, true, false, -1) == Swallow::No);
     CHECK(swallow_message(0x010F, false, true, -1) == Swallow::No);
 }

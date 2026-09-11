@@ -9,7 +9,7 @@ enum class Swallow {
     No,          // 게임에 넘긴다
     Zero,        // 삼킨다 (return 0)
     DefWindow,   // 삼키되 DefWindowProc 에 넘겨 정리만 시킨다
-                 // (WM_INPUT 은 버퍼 정리가 필요)
+                 // (WM_INPUT 은 버퍼 정리, WM_IME_CHAR 는 WM_CHAR 생성이 필요)
 };
 
 // raw_type: WM_INPUT 의 RAWINPUTHEADER::dwType. 0 마우스, 1 키보드, 2 HID, -1 모름.
