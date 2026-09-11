@@ -517,14 +517,31 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
 //   행 3551(양) -> 0x00000000 통과
 // 통과해도 명부에는 아무것도 안 들어간다 - 검사이기 때문이다.
 //
-// 본체 0xE13BA40 은 행으로 캐릭터 레코드를 찾아 +0xBE(_mercenaryInfo)를
-// 읽고, 용병단의 타입별 한도 목록(+0xF8 배열 · +0x100 개수)과 대조한다.
+// 본체 0xE0D44F0(2850; 2760 은 0xE13BA40)은 행으로 캐릭터 레코드를 찾아
+// +0xBE(_mercenaryInfo)를 읽고, 용병단의 타입별 한도 목록과 대조한다. 한도
+// 목록 오프셋(+0xF8 배열 · +0x100 개수)은 2760 실측이고 2850 본체에서는 다시
+// 확인하지 않았다(리뷰 관찰 2026-09-11: 2850 은 용병단 +0x18 을 0x20910C0 에
+// 넘겨 {배열, 개수} 를 돌려받는 형태로 보인다).
 //
 // 남겨 두는 이유: 어떤 종이 등록 자격이 있는지 게임에게 직접 물어볼 수
 // 있다. 목록 표시에 쓸 수 있다.
-// 2850 빌드. 2760 까지 0x2097BC0. 고용 작업 +0x3F3 의 call 대상이고 본체로 가는
-// jmp 썽크(E9)다 - run_hire_species 가 부르기 전에 그 바이트를 확인한다.
+// 2850 빌드. 2760 까지 0x2097BC0(+0x1630 - 작업 함수들의 +0x2040 과 다르다,
+// 영역이 다르다). 고용 작업 +0x3F3 의 call 대상이고 2454 작업 +0x36A 도 같은
+// 자리를 부른다. 본체로 가는 jmp 썽크(E9)다 - run_hire_species 가 부르기 전에
+// 썽크를 따라가 본체 프롤로그까지 확인한다(아래 두 함수).
 inline constexpr std::uint64_t kHireCheckRva = 0x20991F0;
+
+// 썽크 n바이트가 `jmp rel32`(E9) 면 그 대상 절대 주소, 아니면 0. thunk_addr 는
+// 썽크의 절대 주소다(rel32 는 다음 명령 기준). 읽기는 호출자가 한다.
+std::uintptr_t hire_check_jmp_target(const std::uint8_t* thunk, std::size_t n,
+                                     std::uintptr_t thunk_addr);
+
+// 본체 프롤로그. 2850 의 0xE0D44F0: mov rax,rsp / mov [rax+8],rbx /
+// mov [rax+0x20],r9d. 썽크 주변 ±0x200 에 E9 바이트가 43개 있어도 이 프롤로그로
+// 가는 것은 하나뿐이라(실측 2026-09-11) 첫 바이트만 보던 가드보다 훨씬 좁다.
+inline constexpr std::uint8_t kHireCheckBodyPrologue[] = {
+    0x48, 0x89, 0xE0, 0x48, 0x89, 0x58, 0x08, 0x44, 0x89, 0x48, 0x20};
+bool hire_check_body_ok(const std::uint8_t* body, std::size_t n);
 
 // 그 행이 등록 가능한지 게임에게 묻는다. 게임 스레드에서 실행한다.
 bool request_hire_species(std::uintptr_t session, std::uint16_t char_row);
