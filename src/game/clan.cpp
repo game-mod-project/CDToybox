@@ -106,7 +106,10 @@ std::atomic<std::uintptr_t> g_clan{0};
 // 화면은 옛 목록을 그대로 쓴다 - 멈추는 것보다 낫다.
 std::atomic<bool> g_bg_rescan{false};      // DLL 만 켠다(probe 는 그냥 훑는다)
 std::atomic<bool> g_rescan_busy{false};
-const mem::Reader* g_rescan_reader = nullptr;
+// 워커는 자기 리더를 쓴다. 호출자의 리더(렌더 프레임의 스택 지역)를 들고 있으면
+// 프레임이 끝난 뒤 사라진 스택으로 가상 호출을 한다(재리뷰 N4). LocalReader 는
+// 상태가 없어 어느 스레드에서 써도 같다.
+mem::LocalReader g_worker_reader;
 const mem::Rtti* g_rescan_rtti = nullptr;
 std::atomic<bool> g_rescan_want[2]{};      // [0] 서버 [1] 클라이언트
 // discover_clan 이 쓴 RTTI(clan_rtti 로 공개). 배경 워커가 먼저 찾은 경우에도 채운다 -
@@ -129,7 +132,7 @@ void store_component(bool client, std::uintptr_t found) {
 DWORD WINAPI rescan_worker(LPVOID) {
     for (int k = 0; k < 2; ++k) {
         if (!g_rescan_want[k].exchange(false)) continue;
-        const mem::Reader* r = g_rescan_reader;
+        const mem::Reader* r = &g_worker_reader;
         const mem::Rtti* t = g_rescan_rtti;
         if (r == nullptr || t == nullptr) continue;
         const std::uint64_t t0 = GetTickCount64();
@@ -155,7 +158,7 @@ DWORD WINAPI rescan_worker(LPVOID) {
 
 void request_rescan(const mem::Reader& reader, const mem::Rtti& rtti,
                     bool client) {
-    g_rescan_reader = &reader;
+    (void)reader;   // 워커는 g_worker_reader 를 쓴다 - 호출자 리더의 수명을 믿지 않는다
     g_rescan_rtti = &rtti;
     g_rescan_want[client ? 1 : 0].store(true, std::memory_order_release);
     bool expected = false;
@@ -164,8 +167,8 @@ void request_rescan(const mem::Reader& reader, const mem::Rtti& rtti,
                                     nullptr);
     if (h != nullptr) {
         ::CloseHandle(h);
-        log::infof("명부 컴포넌트 캐시가 상했다 - 배경에서 다시 찾는다"
-                   " (10초쯤 걸린다, 화면은 멈추지 않는다)");
+        log::infof("명부 컴포넌트를 배경에서 찾는다 (RTTI 스캔 10초쯤, 화면은 멈추지 "
+                   "않는다)");
     } else {
         g_rescan_busy.store(false, std::memory_order_release);
     }
@@ -343,15 +346,23 @@ std::vector<ClanEntry> g_roster;
 }  // namespace
 
 bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_clan.load(std::memory_order_acquire) != 0) return true;
+    // RTTI 를 먼저 게시한다 - 다시 찾기(버튼)가 먼저 성공했더라도 뒤늦게 채우고(재리뷰
+    // N1), 값싼 길에서도 g_rtti 가 g_clan 보다 먼저 보이게(R3).
     g_discovery_rtti.store(&rtti, std::memory_order_release);
+    if (g_clan.load(std::memory_order_acquire) != 0) {
+        const mem::Rtti* expected = nullptr;
+        g_rtti.compare_exchange_strong(expected, &rtti);
+        return true;
+    }
     // 1) 값싼 길: 세션 표에 잡힌 세션의 [+0x68]+0x110 - 고용 경로(2338)가 쓰는 바로 그
     //    용병단 컴포넌트다. 읽기 두 번이라 매 바퀴 불러도 되고 세션 이름표도 필요
-    //    없다(리뷰 O2). 월드에 들어가 세션이 잡히면 곧 잡힌다.
+    //    없다(리뷰 O2). 클라 쪽 컴포넌트도 레코드 머리가 같으므로 클래스 이름까지
+    //    본다(재리뷰 N2 - 클라를 잡으면 종 바꾸기·소환 판정이 서버에 안 닿는다).
     std::uintptr_t c = 0;
-    if (clan_object(reader, 0, &c) && looks_like_clan_component(reader, c)) {
-        store_component(false, c);
+    if (clan_object(reader, 0, &c) && looks_like_clan_component(reader, c) &&
+        rtti.class_of_object(c) == kClanClass) {
         g_rtti.store(&rtti, std::memory_order_release);
+        store_component(false, c);
         log::infof("동반자 명부: 세션 사슬로 잡았다 0x{:X}", c);
         return true;
     }
@@ -366,8 +377,8 @@ bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
         log::infof("동반자 명부: 월드 안인데 RTTI 스캔으로도 못 찾았다 - 30초 뒤 다시");
         return false;
     }
+    g_rtti.store(&rtti, std::memory_order_release);   // g_clan 보다 먼저(R3)
     store_component(false, c);
-    g_rtti.store(&rtti, std::memory_order_release);
     // 클라이언트 쪽도 **여기서** 미리 잡아 둔다. RTTI 인스턴스 스캔은
     // 실측 30초가 넘는다(probe 로 재 보니 두 번에 1분 8초). 그리는
     // 스레드가 그것을 돌면 게임이 그만큼 멈춘다 - 사용자가 종 바꾸기에서
@@ -384,19 +395,21 @@ bool clan_ready() { return g_clan.load(std::memory_order_acquire) != 0; }
 
 bool clan_request_discovery(const mem::Reader& reader) {
     if (clan_ready()) return true;
+    // 분석이 아직 RTTI 를 넘기지 않았으면 아무것도 하지 않는다 - 값싼 길도 서버/클라를
+    // 가르려면 RTTI 가 필요하고, RTTI 없이 g_clan 만 채우면 복구가 없다(재리뷰 N1·N2).
     const mem::Rtti* t = g_discovery_rtti.load(std::memory_order_acquire);
-    // 값싼 길부터 - 그리는 스레드에서도 읽기 두 번이라 괜찮다.
+    if (t == nullptr) return false;
+    // 값싼 길부터 - 그리는 스레드에서도 읽기 두 번 + 클래스 조회라 괜찮다.
     std::uintptr_t c = 0;
-    if (clan_object(reader, 0, &c) && looks_like_clan_component(reader, c)) {
+    if (clan_object(reader, 0, &c) && looks_like_clan_component(reader, c) &&
+        t->class_of_object(c) == kClanClass) {
+        const mem::Rtti* expected = nullptr;
+        g_rtti.compare_exchange_strong(expected, t);
         store_component(false, c);
-        if (t != nullptr) {
-            const mem::Rtti* expected = nullptr;
-            g_rtti.compare_exchange_strong(expected, t);
-        }
         log::infof("동반자 명부: 다시 찾기 - 세션 사슬로 잡았다 0x{:X}", c);
         return true;
     }
-    if (t == nullptr || !g_bg_rescan.load(std::memory_order_acquire)) return false;
+    if (!g_bg_rescan.load(std::memory_order_acquire)) return false;
     request_rescan(reader, *t, false);   // RTTI 스캔은 배경 워커에서
     return true;
 }
