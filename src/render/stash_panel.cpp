@@ -13,6 +13,8 @@
 #include "game/grant.h"
 #include "game/items.h"
 #include "game/stash.h"
+#include "render/colors.h"
+#include "render/gates.h"
 #include "render/grant_panel.h"
 #include "render/icon_atlas.h"
 #include "render/item_style.h"
@@ -98,11 +100,7 @@ void save() {
 }
 
 const game::ItemCatalogEntry* find_item(std::uint32_t key) {
-    if (!game::items_ready()) return nullptr;
-    for (const auto& e : game::item_catalog()) {
-        if (e.key == key) return &e;
-    }
-    return nullptr;
+    return game::item_by_key(key);
 }
 
 // 아이콘 + 이름을 한 줄로. 목록과 같은 색을 쓴다.
@@ -130,11 +128,8 @@ namespace {
 // 이 아이템이 한 칸에 몇 개까지 쌓이는가. 표에 없으면 0 - 그때는
 // 개수를 고칠 근거가 없으므로 손대지 않는다.
 std::uint32_t max_stack_of(std::uint32_t key) {
-    if (!game::items_ready()) return 0;
-    for (const auto& c : game::item_catalog()) {
-        if (c.key == key) return c.max_stack;
-    }
-    return 0;
+    const game::ItemCatalogEntry* c = game::item_by_key(key);
+    return c != nullptr ? c->max_stack : 0;
 }
 
 }  // namespace
@@ -143,6 +138,13 @@ int stash_open_set() {
     if (!g_loaded) load();
     return (g_open_set >= 0 && g_open_set < g_stash.set_count()) ? g_open_set
                                                                  : -1;
+}
+
+const char* stash_open_set_name() {
+    const int i = stash_open_set();
+    if (i < 0) return "";
+    const game::StashSet* s = g_stash.set_at(i);
+    return s != nullptr ? s->name.c_str() : "";
 }
 
 bool stash_add_entry(int set, const game::StashEntry& entry) {
@@ -256,14 +258,20 @@ void draw_stash_panel(bool* open) {
 
     ImGui::TextDisabled("게임 밖에 두는 목록입니다. 슬롯 제한과 무관합니다.");
     if (g_queue_at < g_queue.size()) {
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f),
-                           "지급 중 %zu / %zu (2초 간격)", g_queue_at,
-                           g_queue.size());
+        ImGui::TextColored(col::kBusy, "지급 중 %zu / %zu (2초 간격)",
+                           g_queue_at, g_queue.size());
         ImGui::SameLine();
         if (ImGui::SmallButton("중단")) {
             g_queue.clear();
             g_queue_at = 0;
         }
+    }
+
+    // 이름이 풀리기 전엔 항목이 전부 "키 12345" 로 나온다 - 다른 창처럼 알린다.
+    if (!loading_gate(game::items_named(), "아이템 이름", game::items_named_count(),
+                      game::items_total_count())) {
+        ImGui::End();
+        return;
     }
     ImGui::Separator();
 
@@ -392,7 +400,7 @@ void draw_stash_panel(bool* open) {
     if (g_dirty) {
         if (ImGui::Button("저장")) save();
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "저장하지 않은 변경");
+        ImGui::TextColored(col::kWarn, "저장하지 않은 변경");
     } else {
         ImGui::TextDisabled("cdtoybox_stash.txt 에 저장됩니다");
     }

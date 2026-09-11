@@ -18,6 +18,9 @@ bool stash_is_favorite(unsigned int key);
 // 화면에서 마지막으로 그린 것이 잡힌다 - 아래에 있는 것이다.
 int stash_open_set();
 
+// 펼쳐 둔 세트의 이름. 없으면 "". 인벤 '보관' 버튼 툴팁·결과 줄에 쓴다.
+const char* stash_open_set_name();
+
 // 그 세트에 한 줄을 넣는다. 번호가 범위 밖이면 false.
 // 넣으면 파일을 저장할 것이 있다고 표시한다.
 bool stash_add_entry(int set, const game::StashEntry& entry);
