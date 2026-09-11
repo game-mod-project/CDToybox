@@ -333,8 +333,11 @@ std::vector<ClanEntry> g_roster;
 
 }  // namespace
 
+const mem::Rtti* g_discovery_rtti = nullptr;   // 실패해도 남긴다 - 배경 재탐색용
+
 bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_clan.load(std::memory_order_acquire) != 0) return true;
+    g_discovery_rtti = &rtti;
     std::uintptr_t c = 0;
     if (!find_clan_component(reader, rtti, &c)) return false;
     store_component(false, c);
@@ -352,6 +355,16 @@ bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
 }
 
 bool clan_ready() { return g_clan.load(std::memory_order_acquire) != 0; }
+
+bool clan_request_discovery(const mem::Reader& reader) {
+    if (clan_ready()) return true;
+    if (g_discovery_rtti == nullptr ||
+        !g_bg_rescan.load(std::memory_order_acquire)) {
+        return false;
+    }
+    request_rescan(reader, *g_discovery_rtti, false);
+    return true;
+}
 
 void enable_background_clan_rescan() {
     g_bg_rescan.store(true, std::memory_order_release);

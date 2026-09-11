@@ -692,7 +692,16 @@ void draw_species_popup() {
 void draw_my_companions_tab() {
     log::Slow slow_tab("내 동반자 탭", 8.0);
     if (!game::clan_ready()) {
-        ImGui::TextDisabled("용병단 컴포넌트를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
+        ImGui::TextDisabled("용병단 컴포넌트를 아직 못 찾았습니다. 월드에 들어간 뒤 잠시 "
+                            "기다리십시오 (배경에서 다시 찾습니다).");
+        if (ImGui::SmallButton("다시 찾기")) {
+            if (!game::clan_request_discovery(g_near_reader)) {
+                log::warnf("명부 다시 찾기: 분석이 아직 RTTI 를 넘기지 않아 못 한다");
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("배경 스레드에서 10초쯤 훑습니다. 화면은 멈추지 않습니다.");
+        }
         return;
     }
     const double now = ImGui::GetTime();
