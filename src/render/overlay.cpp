@@ -614,6 +614,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_frame_stage = kStageInitialize;
         if (!initialize(sc, queue)) {
             log::errorf("오버레이 초기화 실패 - 만든 것만 해체하고 중단한다");
+            // 커서 가드가 "열림" 에 갇히지 않게 - 이 반환은 아래 cursor_guard_sync 에
+            // 못 미치므로, 열려 있던 가드는 여기서 닫는다(리뷰 H4). is_visible 은
+            // g_ready 가 꺼져 이미 false 라 디투어는 통과 중이다.
+            input::cursor_guard_sync(false);
             teardown(queue);
             g_frame_stage = kStageIdle;
             return;
@@ -720,6 +724,50 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 
     // 게임의 키 상태 조회를 거를지 - 글자 입력칸에 포커스가 있을 때만.
     input::cursor_guard_set_want_keyboard(ImGui::GetIO().WantCaptureKeyboard);
+
+    // 진단(굳음 보고 2026-09-12, 리뷰 H1): 열린 동안 OS 포인터는 창 안에서 움직이는데
+    // ImGui 좌표가 멎으면 한 번 남긴다 - 소프트 커서가 굳어 보이는 원인 후보(포커스
+    // 창이 바뀌어 백엔드의 GetCursorPos 대체 경로가 안 돌거나, 추적 영역이 꺼짐).
+    // 2초마다 견주고, 1초 넘게 안 그린 뒤(닫혔다 다시 열림)엔 기준을 새로 잡는다.
+    {
+        static POINT s_os{};
+        static ImVec2 s_im{};
+        static ULONGLONG s_frame_ms = 0, s_cmp_ms = 0;
+        static bool s_logged = false;
+        const ULONGLONG now = ::GetTickCount64();
+        const ImGuiIO& io = ImGui::GetIO();
+        if (now - s_frame_ms > 1000) {
+            s_logged = false;
+            s_cmp_ms = now;
+            ::GetCursorPos(&s_os);
+            s_im = io.MousePos;
+        }
+        s_frame_ms = now;
+        if (now - s_cmp_ms >= 2000) {
+            POINT os{};
+            ::GetCursorPos(&os);
+            const ImVec2 im = io.MousePos;
+            const HWND hwnd =
+                static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw);
+            POINT client = os;
+            RECT rc{};
+            const bool inside = hwnd != nullptr && ::ScreenToClient(hwnd, &client) &&
+                                ::GetClientRect(hwnd, &rc) && ::PtInRect(&rc, client);
+            const bool os_moved = os.x != s_os.x || os.y != s_os.y;
+            const bool im_moved = im.x != s_im.x || im.y != s_im.y;
+            if (!s_logged && inside && os_moved && !im_moved) {
+                log::warnf("오버레이 포인터 진단: OS 커서는 창 안에서 움직였는데 ImGui 좌표가 "
+                           "멎었다 (ImGui {},{} / OS 클라 {},{} / 포그라운드 {} / "
+                           "WantCaptureMouse {})",
+                           im.x, im.y, client.x, client.y,
+                           ::GetForegroundWindow() == hwnd, io.WantCaptureMouse);
+                s_logged = true;
+            }
+            s_os = os;
+            s_im = im;
+            s_cmp_ms = now;
+        }
+    }
 
     g_frame_stage = kStageDrawUi;
     draw_ui();
