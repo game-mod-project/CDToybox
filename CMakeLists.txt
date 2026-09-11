@@ -131,6 +131,7 @@ add_executable(cdtb_tests
     tests/icon_map_tests.cpp
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
+    tests/specguard_tests.cpp
     tests/stash_tests.cpp
     tests/roster_tests.cpp
     tests/companion_tests.cpp

@@ -1,4 +1,5 @@
 #include "game/specguard.h"
+#include "game/specguard_tail.h"
 
 #include <windows.h>
 
@@ -25,7 +26,8 @@ namespace {
 // 7곳 전부 유일하게 다시 잡았다(+0xAC0 / +0x1570 / +0x15A0 / -0x4B640). 아래
 // 주석의 옛 RVA 는 2760 까지의 값이다. specs/2026-09-11-game-update-2850.md.
 // 패치길이 = div 바이트 + (div<5 일 때) 5바이트를 채우려고 함께 옮기는 꼬리
-// 명령. 꼬리는 위치 독립 명령이어야 한다(rel jmp/call 금지).
+// 명령. 꼬리는 위치 독립 명령이어야 한다(rel jmp/call·RIP 상대 금지) -
+// specguard_tail_is_safe 가 설치 전에 확인하고 아니면 warn 후 건너뛴다.
 //  - 0xEB1BF4  div [rbp+0xf0] (7)                 가방 렌더
 //  - 0xEA874F  div [rsp+0x38] (5)                 가방 렌더
 //  - 0x21DA368 div [rbp-0x38] (4) + lea(3)=7      가방 렌더
@@ -124,6 +126,18 @@ bool install_divguard(const mem::Reader& reader, std::uintptr_t site,
         log::warnf("특수아이템 가드: patch_len<divlen @0x{:X}", site);
         return false;
     }
+    // div 자신이 [rip+disp32] 면 케이브로 옮기는 순간 딴 곳을 나눈다.
+    if ((o[2] >> 6) == 0 && (o[2] & 7) == 5) {
+        log::warnf("특수아이템 가드: div 가 RIP 상대라 옮길 수 없다 @0x{:X} - 건너뜀",
+                   site);
+        return false;
+    }
+    if (!specguard_tail_is_safe(o + dl, static_cast<std::size_t>(tail_len))) {
+        log::warnf("특수아이템 가드: 꼬리가 위치 독립이 아니다 @0x{:X} ({:02X} {:02X} "
+                   "{:02X}) - 건너뜀, patch_len 을 다시 잡을 것",
+                   site, o[dl], o[dl + 1], o[dl + 2]);
+        return false;
+    }
     void* cave = alloc_near(site, 96);
     if (cave == nullptr) return false;
     const std::uintptr_t ca = reinterpret_cast<std::uintptr_t>(cave);
@@ -185,6 +199,12 @@ bool install_regdiv(const mem::Reader& reader, std::uintptr_t site,
         static_cast<std::uint8_t>(0xC0 | (N << 3) | N);
     const int tail_len = patch_len - 3;
     if (tail_len < 0) return false;
+    if (!specguard_tail_is_safe(o + 3, static_cast<std::size_t>(tail_len))) {
+        log::warnf("특수아이템 가드[reg]: 꼬리가 위치 독립이 아니다 @0x{:X} ({:02X} {:02X} "
+                   "{:02X}) - 건너뜀, patch_len 을 다시 잡을 것",
+                   site, o[3], o[4], o[5]);
+        return false;
+    }
 
     void* cave = alloc_near(site, 96);
     if (cave == nullptr) return false;

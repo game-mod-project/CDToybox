@@ -25,6 +25,10 @@ constexpr std::size_t kRecRowOff = 0x20;   // u16, 없으면 0xFFFF
 
 std::atomic<bool> g_installed{false};
 std::atomic<bool> g_unsupported{false};
+// 빈 레코드 표식을 이만큼(매 프레임 호출, 60fps 에서 10초) 기다려도 안 보이면
+// 한 번 값을 남긴다 - 주소가 낡았을 때 유일한 단서다(2차 리뷰 관찰 2026-09-11).
+constexpr int kEmptyWaitLogAt = 600;
+std::atomic<int> g_empty_waits{0};
 
 void* alloc_near(std::uintptr_t target, std::size_t size) {
     SYSTEM_INFO si{};
@@ -86,7 +90,15 @@ bool spawnguard_install(const mem::Reader& reader) {
     if (!reader.read_value(empty + kRecNoOff, &no)) return false;
     if (!reader.read_value(empty + kRecRowOff, &row)) return false;
     if (no != ~0ULL || row != 0xFFFF) {
-        return false;   // 아직 초기화 전. 조용히 재시도한다.
+        // 아직 초기화 전이면 조용히 재시도한다. 빈 레코드 주소가 낡아도 여기로
+        // 오므로 한참 지나면 값을 한 번 남긴다.
+        if (g_empty_waits.fetch_add(1, std::memory_order_relaxed) + 1 ==
+            kEmptyWaitLogAt) {
+            log::warnf("소환 가드: 빈 레코드 RVA 0x{:X} 가 {}프레임째 표식이 아니다 "
+                       "(no=0x{:X} row=0x{:X}) - 주소가 낡았을 수 있다, 계속 기다린다",
+                       kEmptyRecordRva, kEmptyWaitLogAt, no, row);
+        }
+        return false;
     }
 
     // 3) 썽크: 원래 조회를 부르고, 널이면 빈 레코드를 돌려준다.

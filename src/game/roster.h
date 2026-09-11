@@ -140,6 +140,10 @@ struct RosterEntry {
 // 말이 되는지 보고, 아니면 조용히 포기한다(표시만 비고 기능은 산다).
 // 1.0.0.2850: 데이터 전역이 +0x4150 밀렸다(소환 가드의 빈 레코드와 같은 폭). 2760 까지
 // 0x6C29FF8. 틀리면 아래 검증이 걸러 "소환 표를 못 읽었다" 만 남는다.
+// 2차 리뷰(2026-09-11): 이 주소는 초기화 함수 0x2C8E40 이 채우는 매니저 포인터 은행
+// 0x6C2E0D0~0x6C2E168 의 15번 칸(저장 1곳, 읽는 코드 0곳)이라 칸 하나 어긋남은 정적으로
+// 가릴 수 없다 - 런타임 `소환 표 N개` 줄이 유일한 확정. RTTI 로 찾는 CharacterInfoManager
+// 인스턴스와 같은 값이면 이 상수를 없앨 수 있다(후속).
 inline constexpr std::uint64_t kSpawnTableGlobalRva = 0x6C2E148;
 inline constexpr std::size_t kSpawnBucketStride = 0x100;
 inline constexpr std::uint32_t kSpawnBucketMaxEntries = 31;  // (0x100-8)/8

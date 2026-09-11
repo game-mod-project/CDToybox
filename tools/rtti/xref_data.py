@@ -45,9 +45,15 @@ def scan(img, lo_rva, hi_rva):
                 disp = struct.unpack_from('<i', img.data, off + dpos)[0]
                 tgt = here + ilen + disp
                 if lo_rva <= tgt < hi_rva:
-                    hits.append((here, tag, tgt))
-    hits.sort()
-    return hits
+                    hits.append((here, tag, tgt, ilen))
+    # REX 형(7바이트)에 걸린 명령은 접두 없는 형(6바이트)에도 한 칸 뒤에서
+    # 걸린다 - 같은 대상이면 한 명령이다. 두 번 세지 않는다(2차 리뷰 2026-09-11:
+    # 0x6C2E148 "2곳" 이 실은 1곳, 세션 전역 "21/6곳" 이 실은 11/3곳이었다).
+    rex = {(h, t) for h, _, t, l in hits if l == 7}
+    out = [(h, tag, t) for h, tag, t, l in hits
+           if not (l == 6 and (h - 1, t) in rex)]
+    out.sort()
+    return out
 
 
 def main():
