@@ -439,6 +439,16 @@ void draw_ui() {
     }
     ImGui::TextDisabled("* 게임 메모리를 바꾸는 창");
 
+    // 보관함 창을 닫아도 일괄 지급은 stash_tick 이 이어 간다 - 진행을 여기서 보인다.
+    std::size_t q_done = 0, q_total = 0;
+    if (!shown(cdtb::render::Win::Stash) &&
+        cdtb::render::stash_queue_progress(&q_done, &q_total)) {
+        ImGui::TextColored(cdtb::render::col::kBusy, "보관함 지급 중 %zu / %zu",
+                           q_done, q_total);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("중단")) cdtb::render::stash_queue_cancel();
+    }
+
     ImGui::Separator();
     // 안내는 설정값에서 만든다. 키를 옮기고 안내를 안 고쳐 거짓이 된 적이 있다.
     char kb1[16], kb2[16];

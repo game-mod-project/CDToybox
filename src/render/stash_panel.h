@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 #include "game/stash.h"
 
 namespace cdtb::render {
@@ -12,6 +14,11 @@ void draw_stash_panel(bool* open);
 // 자동 저장(변경 1초 뒤)과 일괄 지급 큐가 여기서 돈다. 창이 안 그려진 프레임에는
 // "펼쳐 둔 세트" 를 비워 인벤 '보관' 이 닫힌 창의 세트에 담지 않게 한다.
 void stash_tick();
+
+// 일괄 지급 진행. 돌고 있으면 true 와 보낸 개수/전체를 준다 - 본창이 보관함 창이
+// 닫혀 있을 때 진행 줄을 그린다.
+bool stash_queue_progress(std::size_t* done, std::size_t* total);
+void stash_queue_cancel();
 
 // 아이템 목록의 별표에서 부른다.
 void stash_toggle_favorite(unsigned int key);
