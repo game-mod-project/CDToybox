@@ -1730,6 +1730,18 @@ void run_hire_species(std::uintptr_t session, std::uint16_t key,
 
     auto fn = reinterpret_cast<HireSpeciesFn>(g_reader->module_base() +
                                               kHireCheckRva);
+    // 고정 RVA 라 게임이 갱신되면 엉뚱한 자리를 부른다. 그 자리는 본체로 가는
+    // jmp 썽크(E9)다 - 첫 바이트가 다르면 부르지 않는다(2026-09-11 2850 갱신 때
+    // 옛 자리가 함수 한복판이었다).
+    std::uint8_t head = 0;
+    if (!g_reader->read(reinterpret_cast<std::uintptr_t>(fn), &head, 1) ||
+        head != 0xE9) {
+        log::warnf("종 등록 검사: RVA 0x{:X} 첫 바이트 {:02X} 가 jmp(E9) 가 아니다 - "
+                   "게임 갱신으로 밀린 자리라 부르지 않는다",
+                   kHireCheckRva, head);
+        if (out != nullptr) *out = o;
+        return;
+    }
     std::uint32_t result = 0xFFFFFFFFu;
     o.called = true;
     o.crashed = !call_hire_species_guarded(fn, reinterpret_cast<void*>(clan),

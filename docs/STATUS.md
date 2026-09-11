@@ -1,7 +1,8 @@
 # CDToybox 현황
 
-**갱신:** 2026-09-10
-**대상:** Crimson Desert Enhanced (Steam AppID 3321460)
+**갱신:** 2026-09-11
+**대상:** Crimson Desert Enhanced (Steam AppID 3321460) — exe 1.0.0.2850
+(2026-09-11 갱신, buildid 25246367). 갱신 대조는 `specs/2026-09-11-game-update-2850.md`.
 
 > ✅ **되는 것:** 인벤토리 즉시 로드(ItemInfoManager+0x68)·목록·
 > 필터·헤더고정, 지급(담금질·연마·내구도·**소켓**), 로스터. 이름은 현지화가
