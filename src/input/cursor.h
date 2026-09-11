@@ -43,8 +43,10 @@ void cursor_guard_remove();
 bool cursor_guard_installed();
 
 // 오버레이가 열리고 닫히는 순간에 OS 커서 상태를 맞춘다. 열릴 때 지금 카운터를
-// 기억해 두고 커서를 띄우며, 닫힐 때 기억한 값에 그 사이 게임이 바꾼 만큼을 얹어
-// 되돌리고, 가두기는 게임의 마지막 요청(cursor_clip_restore)대로 한다.
+// 기억해 두고 커서를 띄우며, 열려 있는 동안 게임이 숨기면(인벤을 닫을 때) 다시
+// 띄우고, 닫힐 때 기억한 값에 그 사이 게임이 바꾼 만큼을 얹어 되돌리고, 가두기는
+// 게임의 마지막 요청(cursor_clip_restore)대로 한다. 열고 닫을 때 한 줄씩 진단을
+// 남긴다(카운터·가두기 판정·막은 호출 수).
 void cursor_guard_sync(bool overlay_visible);
 
 // 게임이 GetAsyncKeyState 로 직접 읽는 키 상태를 오버레이가 켜져 있는
