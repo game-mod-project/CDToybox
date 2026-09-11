@@ -1516,8 +1516,12 @@ bool clan_object(const mem::Reader& reader, std::uintptr_t session,
         const std::uintptr_t s = g_sess[i];
         if (s == 0 || s == session) continue;
         if (clan_from_session(reader, s, out)) {
-            log::infof("용병단은 세션 0x{:X} 에 있다 (고른 세션 0x{:X} 에는 없다)",
-                       s, session);
+            // 세션 0 으로 부른 명부 탐색(값싼 길)은 매 바퀴 오므로 조용히 간다 -
+            // 찾은 쪽(discover_clan)이 한 번 남긴다.
+            if (session != 0) {
+                log::infof("용병단은 세션 0x{:X} 에 있다 (고른 세션 0x{:X} 에는 없다)",
+                           s, session);
+            }
             return true;
         }
     }
