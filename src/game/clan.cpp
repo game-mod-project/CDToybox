@@ -1,12 +1,14 @@
 #include "game/clan.h"
 
 #include <atomic>
+#include <string>
 #include <windows.h>
 #include <utility>
 
 #include "game/actors.h"
 #include "game/companion.h"
 #include "core/log.h"
+#include "core/write_log.h"
 #include "mem/safe_read.h"
 #include "game/roster.h"
 
@@ -440,6 +442,48 @@ void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
         }
     }
     if (cleared > 0) refresh_clan_roster(reader);
+}
+
+SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
+                           std::uint16_t row, std::string* msg) {
+    const mem::Rtti* rtti = clan_rtti();
+    if (rtti == nullptr) {
+        *msg = "RTTI 준비 전입니다";
+        return SpeciesApply::NoRtti;
+    }
+    SpeciesWriteTarget t;
+    if (!resolve_species_write(*rtti, reader, merc_no, &t)) {
+        *msg = "자리를 못 찾았습니다 - 월드 안인지 보세요";
+        return SpeciesApply::NoTarget;
+    }
+    // 게임 상태를 바꾸는 일은 **반드시 로그에 남긴다.** 이것이 없어서 사용자가
+    // "바꾸기 뒤 팅겼다" 고 했을 때 무엇을 무엇으로 바꿨는지 알 수 없었다
+    // (2026-09-09).
+    const RosterEntry* from = character_by_row(t.server_row);
+    const RosterEntry* to = character_by_row(row);
+    log_write("동반자 종 번호 " + std::to_string(merc_no), t.server,
+              "행 " + std::to_string(t.server_row) + "(" +
+                  (from != nullptr ? from->name : std::string("?")) + ")",
+              "행 " + std::to_string(row) + "(" +
+                  (to != nullptr ? to->name : std::string("?")) + ")");
+
+    const std::uint8_t buf[2] = {static_cast<std::uint8_t>(row & 0xFF),
+                                 static_cast<std::uint8_t>(row >> 8)};
+    // 클라·서버 양쪽에 써야 한다. 서버만 쓰면 게임이 보는 사본은 그대로다
+    // (실측 2026-09-09).
+    if (!mem::safe_write_bytes(t.server, buf, 2) ||
+        !mem::safe_write_bytes(t.client, buf, 2)) {
+        *msg = "쓰기 실패";
+        return SpeciesApply::WriteFailed;
+    }
+    SpeciesWriteTarget after;
+    if (resolve_species_write(*rtti, reader, merc_no, &after) &&
+        after.server_row == row && after.client_row == row) {
+        *msg = "바꿨습니다 (행 " + std::to_string(row) + ")";
+        return SpeciesApply::Ok;
+    }
+    *msg = "쓴 뒤 확인이 어긋났습니다 - 다시 보세요";
+    return SpeciesApply::VerifyMismatch;
 }
 
 }  // namespace cdtb::game
