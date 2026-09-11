@@ -468,3 +468,46 @@ ID, 최종 wave) + 플랜 정정 3건, 커밋 17개. 태스크마다 opus 구현
 (인벤 빈 상태 줄 - 열 번호가 아니라 저장된 배치의 열 폭 문제 → `table_empty_row` 가 표 폭으로 클립을 넓힘)은
 `specs/2026-09-11-game-update-2850.md` 3차 절의 처리표에 있다. 보류 1건(스레드 정지 없는 코드 패치)은 별도 설계.
 opus 재리뷰 승인 뒤 develop@07f4b1e(시험 438/0)로 머지했다. 워크스트림 C 2단계는 여기서 끝난다.
+
+## 10. 결과 — 3단계 (2026-09-11)
+
+브랜치 `feat/uiux-p3`(develop@a560e4b 에서) — 태스크 4개 + 최종 수정 wave 2회 + 마무리 1회, 커밋 9개.
+태스크마다 opus 구현자·리뷰어(전부 승인, Task 4 만 브리프 결함 D1), 브랜치 전체 최종 리뷰
+("수정 후 머지": Important 2·Minor 13 → 수정 wave 2 → 범위 재리뷰 "전부 해결", 새 결함 2건은 마무리
+커밋에서). 테스트 **438 → 452**(전부 통과). 스펙 §5 요구 10항목과 §0 T3 6건 전부 해소(최종 리뷰 대조표).
+
+### 새 조각·구조
+- `render/stash_queue.{h,cpp}` — `StashQueue`·`QueueStep`·`stash_queue_step/sent/clear/remaining`,
+  `stash_autosave_due`(ImGui 없음, 시험 9개). `game::Stash::find_set`·`dedupe_set_names`(시험 5개).
+- `stash_tick()` 은 `overlay::on_frame()` 의 **가시성 무관 블록**(가드 설치 뒤)에서 매 Present 돈다 -
+  오버레이를 숨겨도, 창을 닫아도 자동 저장·큐가 이어진다. 그래서 보관함의 시각은 ImGui 시계가
+  아니라 단조 시계(`stash_clock` = GetTickCount64)다(알림만 ImGui 시계). 해체 경로는 큐를 접고
+  `stash_flush()` 한다.
+- 담기 목적지는 **펼쳐진 세트의 이름**(`g_open_set_name`, 루프 끝에 대입, 창을 안 그린 프레임엔 비움)이고
+  머리글 ID 는 `###set:이름` 으로 고정된다. 같은 이름 세트는 만들 때 거절하고 파일에서 오면 읽을 때
+  `" (2)"` 로 바꾼다. `stash_open_set()` 은 세트 세대·이름으로 캐시한다.
+- 본창은 보관함 창 본문이 안 그려지는 동안(`stash_body_visible()` 거짓 - 닫힘·접힘) 진행 줄·`중단`·
+  알림을 대신 그린다. `confirm_small_button(label, needs_write_guard=false)` 변형(세트 지우기).
+
+### 판정 목록 (원장 `.superpowers/sdd/2026-09-11-uiux-p3/progress.md` 의 `Ruling:` 전부)
+1. `stash_queue_step` 의 `interval` 을 `stash_queue_sent` 로 옮김(step 안에서 미사용). (서명)
+2. 실행 방식은 서브에이전트 구동(opus) — 1·2단계와 같은 선택. (비용)
+3. `GetWindowContentRegionMax`(폐기 예정) 대신 커서 기준 계산. (수 px)
+4. Task 2·3 를 Task 1·2 리뷰와 병행 dispatch — 전사 태스크라 API 가 플랜에 고정. (순서)
+5. 숨김 중 tick 정지 → tick 을 가시성 무관 블록으로 **옮기되 시계를 단조 시계로**(Task 3 리뷰가
+   ImGui 시계가 NewFrame 밖에서 얼어붙음을 잡음). Task 2 리뷰의 시계 리셋 가드는 이로써 불필요. (설계)
+6. 세트 지우기의 쓰기 잠금 게이트는 본체가 아니라 인자 변형으로 해제(다른 호출부 5곳은 게임 메모리 쓰기). (한 줄)
+7. 이름 자르기 폭은 `draw_item_line` 안에서 아이콘 폭을 뺌(세트 줄 150 유지). (수치)
+8. 최종 리뷰 I-1·I-2·M-1·M-3~M-9·M-11·M-12 는 수정 wave 2 로, M-2(세션 없음 때 본창 문구)·M-10(자르기
+   성능)·M-13(STATUS 목록)은 기록만. (범위)
+9. 재리뷰의 새 결함 2(즐겨찾기 줄 높이 `max(아이콘, 프레임 높이)`, `notice_put_now` 컨텍스트 널 가드)는
+   마무리 커밋에서 재리뷰 없이. (한 줄씩)
+
+### 알려진 것 (고치지 않음)
+- 세션이 없어 멈춘 큐는 본창에 `보관함 지급 중 0 / N` 으로만 남고, 이유 알림은 60초 뒤 사라진다(M-2).
+- `draw_name_clipped` 는 글자 하나씩 떼며 `CalcTextSize` 를 반복한다(M-10, 이름 30자 수준).
+- 게임이 그냥 종료되면 마지막 1초 안의 변경은 유실된다(`DLL_PROCESS_DETACH` 에서 파일 IO 를 하지 않는다).
+- 스펙 §5 문구 "N개 지급 완료" 는 "-습니다" 체 규칙에 따라 "N개 지급했습니다" 로 냈다.
+
+### 화면 검증
+(배포 뒤 기록)

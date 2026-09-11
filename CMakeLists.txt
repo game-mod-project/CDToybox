@@ -69,6 +69,7 @@ add_library(cdtoybox SHARED
     src/render/filter_bar.cpp
     src/render/gem_picker.cpp
     src/render/stash_panel.cpp
+    src/render/stash_queue.cpp
     src/render/inventory_panel.cpp
     src/render/roster_panel.cpp
     src/render/equip_panel.cpp
@@ -133,6 +134,7 @@ add_executable(cdtb_tests
     tests/grant_tests.cpp
     tests/specguard_tests.cpp
     tests/stash_tests.cpp
+    tests/stash_queue_tests.cpp
     tests/roster_tests.cpp
     tests/companion_tests.cpp
     tests/actors_tests.cpp
@@ -156,6 +158,7 @@ add_executable(cdtb_tests
     src/game/actors.cpp
     src/game/clan.cpp
     src/render/notice_state.cpp
+    src/render/stash_queue.cpp
     src/render/confirm_state.cpp
     src/render/layout_table.cpp
 )

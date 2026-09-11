@@ -27,6 +27,9 @@ void notice_draw(const Notice& n) {
 }
 
 void notice_put_now(Notice* n, NoticeLevel lv, const char* text) {
+    // 해체 경로(보관함 큐 접기·flush 실패)가 컨텍스트가 파괴된 뒤에 올 수 있다 -
+    // GetTime 은 널 검사가 없다. 그때의 알림은 어차피 다음 컨텍스트에서 Gone 이다.
+    if (ImGui::GetCurrentContext() == nullptr) return;
     notice_put(n, lv, ImGui::GetTime(), text);
 }
 

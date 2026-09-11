@@ -562,7 +562,7 @@ tools/probe/  외부 분석 도구, 명령 55개 (items · loc · inv* · equip 
               clan · roster · setspecies · aob · heapfind · dumpimage …)
 tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
               fields = 게임이 알려 주는 필드 이름)
-tests/        438개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-11)
+tests/        448개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-11)
 scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 ```
 
@@ -583,7 +583,7 @@ scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 | 인벤토리에 지급 | `CreateItemFromTrItemValueCheatReq` (ID 2944) |
 | 조준한 곳에 떨구기 | `SpawnItemToGroundByCheatReq` (ID 3013) |
 | 아이템 목록 | 6810개, 이름·등급·분류·아이콘·검색·정렬·페이징 |
-| 보관함 | 즐겨찾기·세트, `cdtoybox_stash.txt` 에 저장 |
+| 보관함 | 즐겨찾기·세트, `cdtoybox_stash.txt` 에 변경 1초 뒤 자동 저장. 일괄 지급 큐는 창을 닫아도 돌고 세션이 없으면 남는다(본창 진행 줄) |
 | 창 위치·크기 기억 | `cdtoybox_ui.ini` |
 
 창 위치·크기는 ini 가 우선입니다 - 새 기본 배치를 보려면 ini 를 지우고 한 번 실행하십시오. 창 최소 크기는 ini 와 무관하게 바로 적용됩니다.
