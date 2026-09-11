@@ -205,8 +205,10 @@ bool build_catalog_from_manager(const mem::Reader& reader,
 
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
                           const char* manager_class, RosterKind kind,
-                          std::vector<RosterEntry>* out) {
+                          std::vector<RosterEntry>* out,
+                          std::uintptr_t* manager_out) {
     if (out == nullptr || manager_class == nullptr) return false;
+    if (manager_out != nullptr) *manager_out = 0;
     std::uintptr_t manager = 0;
     if (kind == RosterKind::Mercenary) {
         for (const auto addr : rtti.instances_of_class(manager_class, 32)) {
@@ -219,6 +221,7 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
     } else if (!find_static_manager(reader, rtti, manager_class, &manager)) {
         return false;
     }
+    if (manager_out != nullptr) *manager_out = manager;
     return build_catalog_from_manager(reader, manager, kind, out);
 }
 
@@ -343,16 +346,12 @@ std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
     return named;
 }
 
-bool read_spawn_table(const mem::Reader& reader,
+bool read_spawn_table(const mem::Reader& reader, std::uintptr_t manager,
                       std::vector<std::uint32_t>* out) {
     if (out == nullptr) return false;
     out->clear();
-    std::uint64_t table = 0;
-    if (!reader.read_value(reader.module_base() + kSpawnTableGlobalRva,
-                           &table) ||
-        table == 0) {
-        return false;
-    }
+    if (manager == 0) return false;
+    const std::uint64_t table = manager;
     std::uint32_t nonzero = 0, buckets = 0;
     std::uint64_t arr = 0;
     if (!reader.read_value(static_cast<std::uintptr_t>(table) + 0x6C,
@@ -395,8 +394,10 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<RosterEntry> v, m, c;
     const bool ok_v = build_static_catalog(reader, rtti, kVehicleClass,
                                            RosterKind::Vehicle, &v);
+    std::uintptr_t char_manager = 0;
     const bool ok_c = build_static_catalog(reader, rtti, kCharacterClass,
-                                           RosterKind::Character, &c);
+                                           RosterKind::Character, &c,
+                                           &char_manager);
     if (!ok_v || !ok_c) return false;
     // 용병 표는 느슨한 판정이라 못 찾아도 준비로 친다. 없으면 동반자
     // 탭의 타입 이름만 비고 목록은 그려진다.
@@ -415,7 +416,7 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 소환 표를 읽어 캐릭터마다 표시한다. 못 읽어도 목록은 그대로 산다.
     std::vector<std::uint32_t> spawnable;
     std::size_t spawn_marked = 0;
-    if (read_spawn_table(reader, &spawnable)) {
+    if (read_spawn_table(reader, char_manager, &spawnable)) {
         for (auto& e : c) {
             if (std::binary_search(spawnable.begin(), spawnable.end(), e.key)) {
                 e.spawnable = true;
@@ -425,8 +426,9 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
         log::infof("소환 표 {}개 - 캐릭터 {}행이 소환 가능", spawnable.size(),
                    spawn_marked);
     } else {
-        log::warnf("소환 표를 못 읽었다 (RVA 0x{:X}) - 소환 가능 표시가 빈다",
-                   kSpawnTableGlobalRva);
+        log::warnf("소환 표를 못 읽었다 (CharacterInfoManager 0x{:X}) - 소환 가능 "
+                   "표시가 빈다",
+                   char_manager);
     }
 
     const std::size_t vn = v.size(), cn = c.size(), mn = m.size();

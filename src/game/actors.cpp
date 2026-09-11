@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <utility>
 
 #include "core/log.h"
@@ -251,10 +252,14 @@ std::atomic<std::uintptr_t> g_manager{0};
 const mem::Rtti* g_rtti = nullptr;
 // 살아 있는 월드에서 이보다 적으면 매니저를 잘못 잡은 것으로 본다.
 constexpr std::size_t kMinPlausibleActors = 8;
-// 목록은 그리는 스레드만 만들고 읽는다(패널이 버튼/주기로 refresh 를
-// 부르고 같은 프레임에서 그린다). 다른 스레드가 읽지 않으므로 판을
-// 겹쳐 둘 필요가 없다.
+// 목록은 그리는 스레드만 만들고 참조로 읽는다(패널이 버튼/주기로 refresh 를
+// 부르고 같은 프레임에서 그린다). 명령 파일 스레드는 갈아 끼우지 않고 부탁만
+// 하며(g_refresh_requested), 읽을 때는 뮤텍스 아래에서 복사한다 - 갈아 끼우는
+// 순간과 복사가 겹치지 않으면 된다.
 std::vector<LiveActor> g_live;
+std::mutex g_live_mutex;
+std::atomic<bool> g_refresh_requested{false};
+std::atomic<std::uint64_t> g_live_generation{0};
 
 }  // namespace
 
@@ -310,10 +315,35 @@ bool refresh_live_actors(const mem::Reader& reader) {
         }
     }
 
-    g_live.swap(list);
+    {
+        std::lock_guard<std::mutex> lock(g_live_mutex);
+        g_live.swap(list);
+    }
+    g_live_generation.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 
 const std::vector<LiveActor>& live_actors() { return g_live; }
+
+std::uint64_t live_actors_generation() {
+    return g_live_generation.load(std::memory_order_acquire);
+}
+
+void live_actors_request_refresh() {
+    g_refresh_requested.store(true, std::memory_order_release);
+}
+
+void live_actors_tick(const mem::Reader& reader) {
+    if (!g_refresh_requested.exchange(false, std::memory_order_acq_rel)) return;
+    if (!refresh_live_actors(reader)) {
+        // 실패해도 세대를 올려 기다리는 쪽이 깨어나게 한다(옛 판을 받는다).
+        g_live_generation.fetch_add(1, std::memory_order_acq_rel);
+    }
+}
+
+std::vector<LiveActor> live_actors_copy() {
+    std::lock_guard<std::mutex> lock(g_live_mutex);
+    return g_live;
+}
 
 }  // namespace cdtb::game

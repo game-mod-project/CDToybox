@@ -31,6 +31,7 @@
 #include "render/player_panel.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
+#include "game/actors.h"
 #include "game/clan.h"
 #include "game/freecam.h"
 #include "game/items.h"
@@ -614,6 +615,8 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     {
         const mem::LocalReader reader;
         cdtb::game::player_apply(reader);
+        // 명령 파일 스레드가 부탁한 근처 액터 갱신은 여기(렌더 스레드)서 한다.
+        cdtb::game::live_actors_tick(reader);
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);

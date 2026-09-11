@@ -26,6 +26,10 @@ bool g_installed = false;
 bool g_async_hooked = false;
 bool g_hidden_by_us = false;
 int g_saved_count = 0;
+// 열 때의 커서 가두기. 닫을 때 되돌린다 - 안 그러면 게임이 다시 가둘 때까지
+// 커서가 창 밖으로 빠진다(Codex 지적 2026-09-11).
+RECT g_saved_clip{};
+bool g_saved_clip_valid = false;
 int g_blocked = 0;
 bool g_limit_logged = false;
 
@@ -43,24 +47,29 @@ bool active() { return g_is_active != nullptr && g_is_active(); }
 // 움직이는 것처럼 보인다. 실제로 그 증상이 났다 - 처음 열 때는
 // 멀쩡하다가 한 번 닫고 게임을 조작한 뒤 다시 열면 굳어 있었다.
 BOOL WINAPI det_set_cursor_pos(int x, int y) {
+    // 원본 포인터는 한 번만 읽는다. 훅을 끈 뒤에도 트램폴린은 남겨 두므로
+    // (hook_disable) 여기 멈춰 있던 스레드가 깨어나도 안전하다.
+    const SetCursorPosFn orig = g_orig_set_pos;
+    if (orig == nullptr) return TRUE;
     if (active() && cursor_should_block(g_blocked++, kBlockLimit)) return TRUE;
-    return g_orig_set_pos(x, y);
+    return orig(x, y);
 }
 
 // 같은 이유로 커서를 한 구역에 가두는 것도 막는다.
 BOOL WINAPI det_clip_cursor(const RECT* rect) {
+    const ClipCursorFn orig = g_orig_clip;
+    if (orig == nullptr) return TRUE;
     if (active() && cursor_should_block(g_blocked++, kBlockLimit)) {
-        return g_orig_clip(nullptr);
+        return orig(nullptr);
     }
-    return g_orig_clip(rect);
+    return orig(rect);
 }
 
 // 게임은 키 상태를 GetAsyncKeyState 로 직접 읽는다. 오버레이가 켜져
 // 있는 동안 마우스 버튼은 늘, 글자 입력칸에 포커스가 있으면 키보드도
 // 0 을 돌려준다 - 안 그러면 검색창에 타자를 치는 동안 캐릭터가 움직인다.
 SHORT WINAPI det_get_async_key_state(int vk) {
-    // 해체 중에 hook_remove 뒤 널이 될 수 있다 - 디투어 본문에 멈춰 있던 스레드가
-    // 깨어나 널을 부르지 않게 한 번만 읽는다.
+    // 원본 포인터는 한 번만 읽는다(위와 같은 이유).
     const GetAsyncKeyStateFn orig = g_orig_async;
     if (orig == nullptr) return 0;
     if (mask_key_state(vk, active(),
@@ -122,8 +131,8 @@ bool cursor_guard_install(bool (*is_active)()) {
     const bool b = mem::hook_install(clip, &det_clip_cursor,
                                      reinterpret_cast<void**>(&g_orig_clip));
     if (!a || !b) {
-        if (a) mem::hook_remove(set_pos);
-        if (b) mem::hook_remove(clip);
+        if (a) mem::hook_disable(set_pos);
+        if (b) mem::hook_disable(clip);
         g_is_active = nullptr;
         log::infof("커서 가드 설치 실패 (SetCursorPos={} ClipCursor={})", a, b);
         return false;
@@ -147,25 +156,23 @@ bool cursor_guard_install(bool (*is_active)()) {
 void cursor_guard_remove() {
     if (!g_installed) return;
     cursor_guard_sync(false);
+    // 훅은 **끄기만** 한다. 게임 스레드가 디투어 본문에 멈춰 있다가 깨어나
+    // 트램폴린을 부를 수 있으므로 트램폴린과 원본 포인터·g_is_active 는 프로세스가
+    // 사는 동안 그대로 둔다(Codex 지적 2026-09-11). 다시 켤 때는 hook_install 이
+    // 같은 훅을 켜기만 하고 포인터는 그대로다.
     HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
     if (user32 != nullptr) {
-        mem::hook_remove(
+        mem::hook_disable(
             reinterpret_cast<void*>(::GetProcAddress(user32, "SetCursorPos")));
-        mem::hook_remove(
+        mem::hook_disable(
             reinterpret_cast<void*>(::GetProcAddress(user32, "ClipCursor")));
         if (g_async_hooked) {
-            mem::hook_remove(reinterpret_cast<void*>(
+            mem::hook_disable(reinterpret_cast<void*>(
                 ::GetProcAddress(user32, "GetAsyncKeyState")));
         }
     }
-    g_async_hooked = false;
-    g_orig_set_pos = nullptr;
-    g_orig_clip = nullptr;
-    g_orig_show = nullptr;
-    g_orig_async = nullptr;
-    g_is_active = nullptr;
     g_installed = false;
-    log::infof("커서 가드 원복");
+    log::infof("커서 가드 원복 (훅은 끄기만, 트램폴린은 남긴다)");
 }
 
 bool cursor_guard_installed() { return g_installed; }
@@ -190,6 +197,7 @@ void cursor_guard_sync(bool overlay_visible) {
     if (overlay_visible == g_hidden_by_us) return;
     if (overlay_visible) {
         g_saved_count = probe_count();
+        g_saved_clip_valid = ::GetClipCursor(&g_saved_clip) != 0;
         g_orig_clip(nullptr);      // 게임이 걸어 둔 가두기를 푼다
         // OS 커서를 확실히 띄우고 그걸 쓴다. 숨겨 놓고 ImGui가
         // 따로 그리게 했더니 게임이 다시 띄워 둘로 보였다.
@@ -199,6 +207,10 @@ void cursor_guard_sync(bool overlay_visible) {
         g_hidden_by_us = true;
     } else {
         drive_to(g_saved_count);
+        // 열 때 풀어 둔 가두기를 되돌린다. 게임은 어차피 매 프레임 다시 가두지만,
+        // 그 사이에 커서가 창 밖으로 나가지 않게.
+        if (g_saved_clip_valid) g_orig_clip(&g_saved_clip);
+        g_saved_clip_valid = false;
         g_hidden_by_us = false;
         g_limit_logged = false;
         // 렌더가 멎은 채 켜져 있어도 키보드가 통째로 안 막히게

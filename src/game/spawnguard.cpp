@@ -25,6 +25,12 @@ constexpr std::size_t kRecRowOff = 0x20;   // u16, 없으면 0xFFFF
 
 std::atomic<bool> g_installed{false};
 std::atomic<bool> g_unsupported{false};
+// 렌더 루프가 매 프레임 부르지만 다른 스레드가 겹쳐 부를 수도 있다 - 한 번에
+// 하나만 들어간다(Codex 지적 2026-09-11).
+std::atomic<bool> g_busy{false};
+struct BusyGuard {
+    ~BusyGuard() { g_busy.store(false, std::memory_order_release); }
+};
 // 빈 레코드 표식을 이만큼(매 프레임 호출, 60fps 에서 10초) 기다려도 안 보이면
 // 한 번 값을 남긴다 - 주소가 낡았을 때 유일한 단서다(2차 리뷰 관찰 2026-09-11).
 constexpr int kEmptyWaitLogAt = 600;
@@ -57,6 +63,8 @@ void put8(std::vector<std::uint8_t>& b, std::uint64_t v) {
 bool spawnguard_install(const mem::Reader& reader) {
     if (g_installed.load(std::memory_order_acquire)) return true;
     if (g_unsupported.load(std::memory_order_acquire)) return false;
+    if (g_busy.exchange(true, std::memory_order_acq_rel)) return false;
+    BusyGuard busy;
 
     const std::uintptr_t base = reader.module_base();
     if (base == 0) return false;

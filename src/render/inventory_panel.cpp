@@ -749,9 +749,9 @@ void draw_inventory_panel(bool* open) {
 
         if (shown == 0) {
             const bool has_query = g_bar.query[0] != 0;
-            // 1번 열(이름, stretch)에 쓴다 - 0번(분류 120px)에 쓰면 문구가 잘리고
-            // [지우기] 가 밀려 안 보였다(화면 검증 2026-09-11).
-            if (table_empty_row(1,
+            // 문구는 열 폭에 매이지 않는다(table_empty_row 가 표 폭으로 클립을
+            // 넓힌다) - 저장된 배치에서 이름 열이 좁아 잘렸던 것(화면 검증 2026-09-11).
+            if (table_empty_row(
                                 g_rows.empty() ? "인벤토리가 비어 있습니다"
                                 : has_query    ? "검색어 때문에 비어 있습니다"
                                                : "걸러진 결과가 없습니다",
