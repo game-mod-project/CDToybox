@@ -42,24 +42,31 @@ TEST(cursor_guard_is_not_installed_before_install) {
     CHECK(!cdtb::input::cursor_guard_installed());
 }
 
-}  // namespace
+// 닫을 때 가두기: 게임이 이번·직전 프레임에도 가두려 했으면(마우스룩) 그것을 다시
+// 걸고, 그보다 오래됐거나 없거나 풀기였으면 푼다 - 오버레이를 연 채 인벤을 열면 게임이
+// 가두기를 그만두므로(또는 nullptr 로 풀므로) 풀려야 한다. 시계가 아니라 프레임 번호라
+// "인벤 열기 → 오버레이 닫기" 두 키 입력 사이에 옛 사각형이 다시 걸릴 창이 없다.
+using cdtb::input::ClipRestore;
+using cdtb::input::cursor_clip_restore;
 
-// 닫을 때 가두기: 게임이 방금(500ms 안)도 가두려 했으면 그것을 다시 걸고, 오래됐거나
-// 없으면 푼다 - 오버레이를 연 채 인벤을 열면 게임이 가두기를 그만두므로 풀려야 한다.
-TEST(cursor_clip_restore_reapplies_a_fresh_request) {
-    using cdtb::input::ClipRestore;
-    using cdtb::input::cursor_clip_restore;
-    CHECK(cursor_clip_restore(true, 1000, 1200) == ClipRestore::Reapply);
-    CHECK(cursor_clip_restore(true, 1000, 1500) == ClipRestore::Reapply);   // 딱 500
+TEST(cursor_clip_restore_reapplies_a_request_from_this_or_last_frame) {
+    CHECK(cursor_clip_restore(true, false, 10, 10) == ClipRestore::Reapply);
+    CHECK(cursor_clip_restore(true, false, 10, 11) == ClipRestore::Reapply);   // 직전 프레임
+    CHECK(cursor_clip_restore(true, false, 10, 12, 2) == ClipRestore::Reapply);
 }
 
 TEST(cursor_clip_restore_releases_when_stale_or_absent) {
-    using cdtb::input::ClipRestore;
-    using cdtb::input::cursor_clip_restore;
-    CHECK(cursor_clip_restore(false, 0, 1000) == ClipRestore::Release);
-    CHECK(cursor_clip_restore(true, 1000, 1501) == ClipRestore::Release);
-    CHECK(cursor_clip_restore(true, 2000, 1000) == ClipRestore::Release);   // 시계 되감김
-    CHECK(cursor_clip_restore(true, 1000, 1200, 100) == ClipRestore::Release);
+    CHECK(cursor_clip_restore(false, false, 0, 10) == ClipRestore::Release);
+    CHECK(cursor_clip_restore(true, false, 10, 12) == ClipRestore::Release);   // 두 프레임 전
+    CHECK(cursor_clip_restore(true, false, 10, 500) == ClipRestore::Release);
+    CHECK(cursor_clip_restore(true, false, 12, 10) == ClipRestore::Release);   // 번호 되감김
+    CHECK(cursor_clip_restore(true, false, 10, 13, 2) == ClipRestore::Release);
+}
+
+// 인벤이 ClipCursor(nullptr) 로 풀었으면 아무리 방금이라도 다시 걸지 않는다.
+TEST(cursor_clip_restore_releases_when_the_last_request_was_null) {
+    CHECK(cursor_clip_restore(true, true, 10, 10) == ClipRestore::Release);
+    CHECK(cursor_clip_restore(true, true, 10, 11) == ClipRestore::Release);
 }
 
 // 닫을 때 카운터: 열 때 기억한 값에 그 사이 게임이 바꾼 만큼을 얹는다.
@@ -69,3 +76,5 @@ TEST(cursor_restore_count_keeps_the_games_change) {
     CHECK_EQ(cursor_restore_count(-1, 1), 0);    // 인벤을 열며 +1 → 보인 채로
     CHECK_EQ(cursor_restore_count(0, -2), -2);
 }
+
+}  // namespace
