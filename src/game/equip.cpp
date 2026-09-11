@@ -4,7 +4,9 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 
+#include "core/write_log.h"
 #include "game/items.h"
 #include "game/player.h"
 
@@ -485,6 +487,16 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         else if (op == 3) ok = socket_unlock_entry(reader, e, a) > 0;
         if (ok) ++wrote;
     }
+    // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
+    static const char* const kWhat[4] = {"장비 소켓", "장비 연마", "장비 염색",
+                                         "장비 소켓 열기"};
+    std::string after;
+    if (op == 0) after = "칸 " + std::to_string(a) + " 보석 순번 " + std::to_string(b);
+    else if (op == 1) after = "연마 " + std::to_string(b);
+    else if (op == 2) after = "zone 레코드 " + std::to_string(a);
+    else after = "소켓 " + std::to_string(a) + "칸";
+    after += " (" + std::to_string(wrote) + " realm)";
+    log_write(kWhat[op], static_cast<std::uintptr_t>(instance), "-", after);
     return wrote;
 }
 
@@ -511,7 +523,13 @@ int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
 int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,
                          int want) {
     if (record == 0) return 0;
-    return socket_unlock_entry(reader, record, want);
+    const int before = static_cast<int>(rd8(reader, record + 0x70));
+    const int opened = socket_unlock_entry(reader, record, want);
+    if (opened > 0) {
+        log_write("인벤 소켓 열기", record, std::to_string(before) + "칸",
+                  std::to_string(before + opened) + "칸");
+    }
+    return opened;
 }
 
 }  // namespace cdtb::game

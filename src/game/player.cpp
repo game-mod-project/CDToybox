@@ -6,6 +6,7 @@
 #include <mutex>
 #include <vector>
 
+#include "core/write_log.h"
 #include "game/equip.h"
 
 namespace cdtb::game {
@@ -147,9 +148,18 @@ PlayerVitals player_vitals(const mem::Reader& reader) {
     return v;
 }
 
-void player_set_godmode(bool on) { g_god.store(on, std::memory_order_release); }
-void player_set_inf_stamina(bool on) { g_sta.store(on, std::memory_order_release); }
-void player_set_inf_spirit(bool on) { g_spi.store(on, std::memory_order_release); }
+void player_set_godmode(bool on) {
+    log_write("플레이어 무적", 0, g_god.load() ? "on" : "off", on ? "on" : "off");
+    g_god.store(on, std::memory_order_release);
+}
+void player_set_inf_stamina(bool on) {
+    log_write("플레이어 무한 스태미나", 0, g_sta.load() ? "on" : "off", on ? "on" : "off");
+    g_sta.store(on, std::memory_order_release);
+}
+void player_set_inf_spirit(bool on) {
+    log_write("플레이어 무한 정신력", 0, g_spi.load() ? "on" : "off", on ? "on" : "off");
+    g_spi.store(on, std::memory_order_release);
+}
 bool player_godmode() { return g_god.load(std::memory_order_acquire); }
 bool player_inf_stamina() { return g_sta.load(std::memory_order_acquire); }
 bool player_inf_spirit() { return g_spi.load(std::memory_order_acquire); }

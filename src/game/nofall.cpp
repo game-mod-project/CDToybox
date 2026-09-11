@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "core/write_log.h"
 #include "game/player.h"
 #include "mem/scanner.h"
 
@@ -167,6 +168,7 @@ bool nofall_unsupported() {
 }
 
 void nofall_set(bool on) {
+    log_write("낙사 방지", g_vars, g_enabled.load() ? "on" : "off", on ? "on" : "off");
     g_enabled.store(on, std::memory_order_release);
     if (!on && g_vars != 0) {
         // 학습된 플레이어를 지운다 -> 케이브의 cmp 가 절대 안 맞아 정상 낙사.
