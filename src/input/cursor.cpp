@@ -246,8 +246,10 @@ void cursor_guard_sync(bool overlay_visible) {
         drive_to(0);
         g_hidden_by_us = true;
     } else {
-        // 그 사이 게임이 바꾼 만큼(인벤을 열며 +1 등)을 얹어 되돌린다. 한 번만 재서
-        // 목표와 델타를 함께 구한다(닫는 순간의 깜빡임을 줄인다 - 리뷰 관찰 5).
+        // 그 사이 게임이 바꾼 만큼(인벤을 열며 +1 등)을 얹어 되돌린다. 목표가
+        // saved + now 라 델타는 now 와 무관하게 늘 g_saved_count 다(대수적으로 상쇄,
+        // 재리뷰 관찰 2) - 그래도 시험이 지키는 함수를 생산 경로가 그대로 지나가게
+        // 한 번 잰다.
         {
             const int now = probe_count();
             drive_by(cursor_show_delta(now, cursor_restore_count(g_saved_count, now)));

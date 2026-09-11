@@ -5,9 +5,9 @@ namespace {
 
 using cdtb::input::cursor_show_delta;
 
-// ShowCursor 는 카운터다. 0 이상이면 커서가 보인다. 게임이 매 프레임
-// ShowCursor(FALSE) 를 부르는 동안 우리가 원하는 상태로 맞추려면 몇 번
-// 불러야 하는지 계산해야 한다.
+// ShowCursor 는 카운터다. 0 이상이면 커서가 보인다. 게임이 옮겨 둔 값에서 우리가
+// 원하는 상태로 맞추려면 몇 번 불러야 하는지 계산해야 한다(게임은 오버레이가 열린
+// 동안 ShowCursor(FALSE) 를 연타하지 않는다 - OS 커서가 멀쩡히 보인다, cursor.h).
 
 TEST(cursor_delta_is_zero_when_already_at_target) {
     CHECK_EQ(cursor_show_delta(0, 0), 0);
@@ -48,6 +48,7 @@ TEST(cursor_guard_is_not_installed_before_install) {
 // "인벤 열기 → 오버레이 닫기" 두 키 입력 사이에 옛 사각형이 다시 걸릴 창이 없다.
 using cdtb::input::ClipRestore;
 using cdtb::input::cursor_clip_restore;
+using cdtb::input::cursor_restore_count;
 
 TEST(cursor_clip_restore_reapplies_a_request_from_this_or_last_frame) {
     CHECK(cursor_clip_restore(true, false, 10, 10) == ClipRestore::Reapply);
@@ -71,7 +72,6 @@ TEST(cursor_clip_restore_releases_when_the_last_request_was_null) {
 
 // 닫을 때 카운터: 열 때 기억한 값에 그 사이 게임이 바꾼 만큼을 얹는다.
 TEST(cursor_restore_count_keeps_the_games_change) {
-    using cdtb::input::cursor_restore_count;
     CHECK_EQ(cursor_restore_count(-1, 0), -1);   // 게임이 안 건드림 → 열기 전으로
     CHECK_EQ(cursor_restore_count(-1, 1), 0);    // 인벤을 열며 +1 → 보인 채로
     CHECK_EQ(cursor_restore_count(0, -2), -2);
