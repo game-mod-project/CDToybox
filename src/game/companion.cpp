@@ -380,7 +380,8 @@ bool companion_hire_trace_install(const mem::Reader& reader) {
     if (!mem::hook_init()) return false;
     const std::uintptr_t fn = reader.module_base() + kHireWorkRva;
     // 프롤로그가 기대와 다르면(패치로 밀렸으면) 걸지 않는다.
-    // 0x2ADE280: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi / mov [rsp+0x20],rdi
+    // 0x2AE02C0(2850): mov [rsp+0x10],rbx / mov [rsp+0x18],r8 ... - 2760 의
+    // 0x2ADE280 은 rsi/rdi 를 저장했다. 첫 다섯 바이트는 같다.
     std::uint8_t head[8]{};
     if (!reader.read(fn, head, sizeof(head))) return false;
     if (!(head[0] == 0x48 && head[1] == 0x89 && head[2] == 0x5C &&
@@ -460,7 +461,8 @@ bool companion_spawn_trace_install(const mem::Reader& reader) {
     if (!mem::hook_init()) return false;
     const std::uintptr_t fn = reader.module_base() + kSpawnWorkRva;
     // 프롤로그가 기대와 다르면 걸지 않는다.
-    // 0x2ACF600: mov rax,rsp / mov [rax+0x20],r9 / mov [rax+0x18],r8
+    // 0x2AD1640(2850; 2760 은 0x2ACF600): mov rax,rsp / mov [rax+0x20],r9 /
+    // mov [rax+0x18],r8
     std::uint8_t head[8]{};
     if (!reader.read(fn, head, sizeof(head))) return false;
     if (!(head[0] == 0x48 && head[1] == 0x8B && head[2] == 0xC4 &&

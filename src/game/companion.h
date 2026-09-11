@@ -46,9 +46,11 @@ bool companion_capture_install(const mem::Rtti& rtti,
 // 고용 작업 함수 추적 (진단).
 //
 // `TrocTrHireMercenaryToTargetReq`(2338) 역직렬화는 게이트를 지난 뒤
-// **RVA 0x2ADE280** 을 부르고, 그 함수가 낸 u32 코드가 0 이면 성공,
+// **RVA 0x2AE02C0** 을 부르고, 그 함수가 낸 u32 코드가 0 이면 성공,
 // 아니면 그 코드를 0x3f5 태그로 클라이언트에 오류 알림으로 보낸다
-// (역직렬화 0x2960CA0 실측, 2026-09-06).
+// (역직렬화 0x2960CA0 실측, 2026-09-06. 1.0.0.2850 갱신(2026-09-11)에서
+// 역직렬화 0x29623E0 의 +0x180 호출로 다시 뽑았다 - 동반자 작업 셋이 전부
+// +0x2040 밀렸다. specs/2026-09-11-game-update-2850.md).
 //
 //   rcx = MercenaryClanActorComponent ([[세션액터+0x68]+0x110])
 //   rdx = &결과 u32      r8 = &핸들 u32      r9d = 0
@@ -56,10 +58,12 @@ bool companion_capture_install(const mem::Rtti& rtti,
 //
 // 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
 // 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
-inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
+inline constexpr std::uint64_t kHireWorkRva = 0x2AE02C0;   // 2760 까지 0x2ADE280
 
-// 소환 작업 함수. 2894 처리기(RVA 0x29621E0)가 관문을 통과한 뒤
-// 이것을 부른다 - 정상 소환에서 실제로 일하는 자리다.
+// 소환 작업 함수. 2894 처리기(RVA 0x29621E0; 2850 빌드는 역직렬화 0x2963920 →
+// 0x2B7B130 의 +0x155)가 관문을 통과한 뒤 이것을 부른다 - 정상 소환에서
+// 실제로 일하는 자리다. 프롤로그(mov rax,rsp / [rax+0x20],r9 / [rax+0x18],r8)는
+// 2850 에서도 그대로다.
 //
 //   f(문객체, u32* 결과, u64 용병번호, float* 좌표)
 //
@@ -67,7 +71,7 @@ inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
 // 2894 를 아예 안 보낸다(실측 2026-09-06). 그래서 이 함수가 불리기는
 // 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
 // 알 수 있다. 읽고 찍기만 한다.
-inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2AD1640;   // 2760 까지 0x2ACF600
 // 마지막 소환 결과. 코드 0 이 성공이다.
 //
 // 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).

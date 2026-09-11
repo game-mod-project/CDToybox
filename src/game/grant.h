@@ -502,7 +502,8 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
 // ----------------------------------------------------------------------
 // 동반자 등록 가능 여부 검사 (등록 자체가 아니다)
 //
-// 획득 2338 의 작업(0x2ADE280)과 소지품 고용 2454 의 작업(0x2AD1FC0)이
+// 획득 2338 의 작업(0x2AE02C0)과 소지품 고용 2454 의 작업(0x2AD4000)이
+// (2850 빌드; 2760 까지 0x2ADE280 / 0x2AD1FC0)
 // 공통으로 부르는 함수다. 처음에 이것을 "등록의 실체"로 단정했는데
 // **틀렸다** - 검사일 뿐이고, 0 을 돌려주면 각 경로가 그 뒤에 자기
 // 방식으로 등록한다(2338 은 0x26B4FD0, 2454 는 다른 것 - 공통이 없다).
@@ -521,7 +522,9 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
 //
 // 남겨 두는 이유: 어떤 종이 등록 자격이 있는지 게임에게 직접 물어볼 수
 // 있다. 목록 표시에 쓸 수 있다.
-inline constexpr std::uint64_t kHireCheckRva = 0x2097BC0;
+// 2850 빌드. 2760 까지 0x2097BC0. 고용 작업 +0x3F3 의 call 대상이고 본체로 가는
+// jmp 썽크(E9)다 - run_hire_species 가 부르기 전에 그 바이트를 확인한다.
+inline constexpr std::uint64_t kHireCheckRva = 0x20991F0;
 
 // 그 행이 등록 가능한지 게임에게 묻는다. 게임 스레드에서 실행한다.
 bool request_hire_species(std::uintptr_t session, std::uint16_t char_row);
