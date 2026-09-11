@@ -29,6 +29,7 @@
 #include "render/roster_panel.h"
 #include "render/equip_panel.h"
 #include "render/player_panel.h"
+#include "render/notice.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
 #include "game/actors.h"
@@ -379,8 +380,6 @@ void init_show_flags() {
 // 다음 프레임부터 안 그린다.
 void draw_windows() {
     using cdtb::render::Win;
-    // 창이 닫혀 있어도 보관함 자동 저장·일괄 지급 큐는 돈다.
-    cdtb::render::stash_tick();
     if (shown(Win::Items)) cdtb::render::draw_item_panel(&shown(Win::Items));
     if (shown(Win::Grant)) cdtb::render::draw_grant_panel(&shown(Win::Grant));
     if (shown(Win::Stash)) cdtb::render::draw_stash_panel(&shown(Win::Stash));
@@ -447,6 +446,10 @@ void draw_ui() {
                            q_done, q_total);
         ImGui::SameLine();
         if (ImGui::SmallButton("중단")) cdtb::render::stash_queue_cancel();
+    }
+    // 창이 닫혀 있으면 완료·세션 없음·중단 알림도 여기서만 볼 수 있다.
+    if (!shown(cdtb::render::Win::Stash)) {
+        cdtb::render::notice_draw(cdtb::render::stash_notice());
     }
 
     ImGui::Separator();
@@ -591,6 +594,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_visible = false;
         // 훅을 떼기 전에 OS 커서를 원래 상태로 돌린다. 순서가 바뀌면
         // 되돌릴 원본 함수가 없다.
+        cdtb::render::stash_flush();   // 해체 전에 저장 대기 중인 보관함 변경을 쓴다
         input::cursor_guard_sync(false);
         input::cursor_guard_remove();
         teardown(queue);
@@ -629,6 +633,11 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::player_apply(reader);
         // 명령 파일 스레드가 부탁한 근처 액터 갱신은 여기(렌더 스레드)서 한다.
         cdtb::game::live_actors_tick(reader);
+        // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
+        // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
+        // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
+        // 중 큐·저장이 멈췄다.
+        cdtb::render::stash_tick();
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);

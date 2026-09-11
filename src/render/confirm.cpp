@@ -11,8 +11,9 @@ namespace {
 
 ConfirmState g_confirm;   // 한 번에 하나만 무장하므로 전역 하나로 족하다
 
-bool draw(const char* label, bool is_small, ImVec2 size) {
-    if (!guard::is_safe_to_modify()) {
+bool draw(const char* label, bool is_small, ImVec2 size,
+          bool needs_write_guard) {
+    if (needs_write_guard && !guard::is_safe_to_modify()) {
         ImGui::BeginDisabled();
         if (is_small) {
             ImGui::SmallButton(label);
@@ -53,11 +54,11 @@ bool draw(const char* label, bool is_small, ImVec2 size) {
 }  // namespace
 
 bool confirm_button(const char* label, ImVec2 size) {
-    return draw(label, false, size);
+    return draw(label, false, size, true);
 }
 
-bool confirm_small_button(const char* label) {
-    return draw(label, true, ImVec2(0, 0));
+bool confirm_small_button(const char* label, bool needs_write_guard) {
+    return draw(label, true, ImVec2(0, 0), needs_write_guard);
 }
 
 }  // namespace cdtb::render

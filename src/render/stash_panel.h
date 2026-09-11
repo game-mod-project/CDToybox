@@ -3,6 +3,7 @@
 #include <cstddef>
 
 #include "game/stash.h"
+#include "render/notice_state.h"
 
 namespace cdtb::render {
 
@@ -14,6 +15,10 @@ void draw_stash_panel(bool* open);
 // 자동 저장(변경 1초 뒤)과 일괄 지급 큐가 여기서 돈다. 창이 안 그려진 프레임에는
 // "펼쳐 둔 세트" 를 비워 인벤 '보관' 이 닫힌 창의 세트에 담지 않게 한다.
 void stash_tick();
+// 저장 대기 중인 변경이 있으면 지금 쓴다. 해체(언로드) 직전에 렌더 스레드가 부른다.
+void stash_flush();
+// 보관함의 알림 칸. 창이 닫혀 있을 때 본창이 대신 그린다.
+const Notice& stash_notice();
 
 // 일괄 지급 진행. 돌고 있으면 true 와 보낸 개수/전체를 준다 - 본창이 보관함 창이
 // 닫혀 있을 때 진행 줄을 그린다.

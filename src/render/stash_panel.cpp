@@ -46,7 +46,13 @@ std::size_t g_queue_total = 0;   // 시작할 때의 개수. 진행 줄·완료 
 
 constexpr float kIconSize = 22.0f;
 
-void mark_dirty() { g_dirty_at = ImGui::GetTime(); }
+// 보관함의 시계. ImGui::GetTime() 은 NewFrame 안에서만 흐르므로 오버레이를 숨기면
+// 멈춘다 - 숨긴 채로도 저장·큐가 돌아야 하니 단조 시계(GetTickCount64, 리셋 없음)를
+// 쓴다. g_dirty_at·큐의 next_at·stash_tick 의 now 는 전부 이 시계다. 알림 시각만
+// ImGui 시계다(notice_draw 가 그 시계로 나이를 잰다 - 숨긴 동안 찍힌 알림은 다시
+// 켜는 순간부터 나이를 먹는다).
+double stash_clock() { return static_cast<double>(::GetTickCount64()) / 1000.0; }
+void mark_dirty() { g_dirty_at = stash_clock(); }
 
 void stamp_saved_clock() {
     const std::time_t t = std::time(nullptr);
@@ -105,7 +111,11 @@ void load() {
 
 bool save() {
     const std::wstring p = stash_path();
-    if (p.empty()) return false;
+    if (p.empty()) {
+        // 다른 실패 갈래처럼 10초 뒤에 다시 본다 - 매 프레임 재시도하지 않게.
+        g_dirty_at = stash_clock() + 9.0;
+        return false;
+    }
     const std::string text = g_stash.serialize();
     HANDLE h = ::CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr,
                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -113,7 +123,7 @@ bool save() {
         log::warnf("보관함을 저장하지 못했다 (열기 실패 {})", ::GetLastError());
         notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보세요");
         // 1초마다 다시 실패하며 알림을 새로 찍지 않게 10초 뒤에 다시 본다.
-        g_dirty_at = ImGui::GetTime() + 9.0;
+        g_dirty_at = stash_clock() + 9.0;
         return false;
     }
     DWORD wrote = 0;
@@ -123,7 +133,7 @@ bool save() {
     if (!ok || wrote != text.size()) {
         log::warnf("보관함을 저장하지 못했다 (쓰기 {}/{} 바이트)", wrote, text.size());
         notice_set(&g_notice, NoticeLevel::Bad, "저장 실패 - 파일이 잠겼는지 보세요");
-        g_dirty_at = ImGui::GetTime() + 9.0;
+        g_dirty_at = stash_clock() + 9.0;
         return false;
     }
     g_dirty_at = -1.0;
@@ -199,7 +209,7 @@ void run_queue(double now) {
             return;
         }
         case QueueStep::Done:
-            notice_set(&g_notice, NoticeLevel::Ok, "{}개 지급 완료", g_queue_total);
+            notice_set(&g_notice, NoticeLevel::Ok, "{}개 지급했습니다", g_queue_total);
             log::infof("보관함 지급 완료: {}개", g_queue_total);
             return;
         case QueueStep::Send:
@@ -234,17 +244,22 @@ void draw_name_clipped(const char* name, ImVec4 color, float max_w) {
     std::string cut(name);
     while (!cut.empty() &&
            ImGui::CalcTextSize((cut + "…").c_str()).x > max_w) {
-        cut.pop_back();
-        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) {
+        // 글자 하나를 뗀다: 뒤의 연속 바이트(10xxxxxx)를 다 걷어내고 선행 바이트
+        // 하나. 선행 바이트를 남기면 깨진 글자가 남아 디코더가 "…" 까지 먹는다
+        // (Task 4 리뷰 D1).
+        while (!cut.empty() &&
+               (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) {
             cut.pop_back();
         }
+        if (!cut.empty()) cut.pop_back();
     }
     ImGui::TextColored(color, "%s…", cut.c_str());
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name);
 }
 
-// 아이콘 + 이름을 한 줄로. 목록과 같은 색을 쓴다.
-void draw_item_line(std::uint32_t key, float name_w) {
+// 아이콘 + 이름을 한 줄로. 목록과 같은 색을 쓴다. line_w 는 이 줄이 쓸 수 있는
+// 폭(아이콘 포함) - 이름은 아이콘과 간격을 뺀 나머지에 맞춰 자른다.
+void draw_item_line(std::uint32_t key, float line_w) {
     const IconRef ico = icon_for(key);
     if (ico.valid) {
         ImGui::Image(ico.tex, ImVec2(kIconSize, kIconSize), ico.uv0, ico.uv1);
@@ -257,7 +272,10 @@ void draw_item_line(std::uint32_t key, float name_w) {
     if (it == nullptr || it->name.empty()) {
         ImGui::TextDisabled("키 %u", key);
     } else {
-        draw_name_clipped(it->name.c_str(), grade_color(it->grade), name_w);
+        const float text_w =
+            line_w - (kIconSize + ImGui::GetStyle().ItemSpacing.x);
+        draw_name_clipped(it->name.c_str(), grade_color(it->grade),
+                          text_w > 0.0f ? text_w : 0.0f);
     }
 }
 
@@ -310,7 +328,7 @@ bool stash_is_favorite(unsigned int key) {
 
 void stash_tick() {
     if (!g_loaded) load();
-    const double now = ImGui::GetTime();
+    const double now = stash_clock();
     if (stash_autosave_due(g_dirty_at, now)) save();
     run_queue(now);
     // 지난 프레임에 창 본문을 안 그렸으면 펼쳐 둔 세트를 잊는다 - 닫힌 창의
@@ -318,6 +336,12 @@ void stash_tick() {
     if (!g_drawn_this_frame) g_open_set_name.clear();
     g_drawn_this_frame = false;
 }
+
+void stash_flush() {
+    if (g_loaded && g_dirty_at >= 0.0) save();
+}
+
+const Notice& stash_notice() { return g_notice; }
 
 bool stash_queue_progress(std::size_t* done, std::size_t* total) {
     if (g_queue.items.empty()) return false;
@@ -370,10 +394,10 @@ void draw_stash_panel(bool* open) {
                                         : row_h * static_cast<float>(favs.size()) +
                                               ImGui::GetStyle().WindowPadding.y;
         const float cap = ImGui::GetWindowHeight() * 0.45f;
-        ImGui::BeginChild("favs", ImVec2(0, want < cap ? want : cap), ImGuiChildFlags_None,
+        ImGui::BeginChild("favs_body", ImVec2(0, want < cap ? want : cap), ImGuiChildFlags_None,
                           ImGuiWindowFlags_None);
         if (favs.empty()) {
-            ImGui::TextDisabled("아이템 목록에서 별표를 눌러 담으세요");
+            ImGui::TextDisabled("아이템 목록에서 별표를 누르면 여기에 담깁니다");
         }
         for (const auto key : favs) {
             ImGui::PushID(static_cast<int>(key));
@@ -403,11 +427,18 @@ void draw_stash_panel(bool* open) {
     ImGui::SameLine();
     ImGui::BeginDisabled(g_new_name[0] == 0);
     if (ImGui::Button("세트 만들기")) {
-        g_stash.add_set(g_new_name);
-        g_open_set_name = g_new_name;
-        log::infof("보관함: 세트 '{}' 만듦", g_new_name);
-        g_new_name[0] = 0;
-        mark_dirty();
+        // 펼쳐 둔 세트를 이름으로 찾으므로 같은 이름이 둘이면 위의 것만 잡힌다 -
+        // 만들 때 막는다(Task 2 리뷰).
+        if (g_stash.find_set(g_new_name) >= 0) {
+            notice_set(&g_notice, NoticeLevel::Warn,
+                       "같은 이름의 세트가 이미 있습니다: {}", g_new_name);
+        } else {
+            g_stash.add_set(g_new_name);
+            g_open_set_name = g_new_name;
+            log::infof("보관함: 세트 '{}' 만듦", g_new_name);
+            g_new_name[0] = 0;
+            mark_dirty();
+        }
     }
     ImGui::EndDisabled();
 
@@ -424,7 +455,7 @@ void draw_stash_panel(bool* open) {
                 queue_start(set->items, set->name.c_str());
             }
             ImGui::SameLine();
-            if (confirm_small_button("세트 지우기")) {
+            if (confirm_small_button("세트 지우기", false)) {
                 log::infof("보관함: 세트 '{}' 지움 ({}개 항목)", set->name, set->items.size());
                 g_stash.remove_set(i);
                 mark_dirty();
