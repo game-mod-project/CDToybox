@@ -526,3 +526,33 @@ TEST(is_socket_gem_needs_category_74_and_a_name) {
     e.category = 56;
     CHECK(!cdtb::game::is_socket_gem(e));
 }
+
+TEST(item_key_index_first_wins_and_finds) {
+    std::vector<cdtb::game::ItemCatalogEntry> cat(3);
+    cat[0].key = 50001; cat[0].name = "화살";
+    cat[1].key = 2200;  cat[1].name = "편전";
+    cat[2].key = 50001; cat[2].name = "중복";
+    cdtb::game::ItemKeyIndex idx;
+    CHECK(idx.find(cat, 50001) == &cat[0]);   // 먼저 온 것이 이긴다
+    CHECK(idx.find(cat, 2200) == &cat[1]);
+    CHECK(idx.find(cat, 7) == nullptr);
+    CHECK_EQ(idx.map.size(), static_cast<std::size_t>(2));
+}
+
+TEST(item_key_index_rebuilds_when_catalog_swaps) {
+    std::vector<cdtb::game::ItemCatalogEntry> a(1), b(2);
+    a[0].key = 5; a[0].name = "옛것";
+    b[0].key = 5; b[0].name = "새것";
+    b[1].key = 6;
+    cdtb::game::ItemKeyIndex idx;
+    CHECK(idx.find(a, 5) == &a[0]);
+    CHECK(idx.find(a, 6) == nullptr);
+    CHECK(idx.find(b, 5) == &b[0]);   // 판이 바뀌면 색인을 다시 만든다
+    CHECK(idx.find(b, 6) == &b[1]);
+}
+
+TEST(item_by_key_without_catalog_is_null) {
+    // 표가 안 올라온 테스트 프로세스에서는 늘 nullptr 이다
+    CHECK(cdtb::game::item_by_key(50001) == nullptr);
+    CHECK(cdtb::game::item_by_key(0) == nullptr);
+}

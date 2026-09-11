@@ -4,6 +4,8 @@
 
 #include <string>
 
+#include "render/item_style.h"
+
 namespace cdtb::render {
 namespace {
 
@@ -11,19 +13,17 @@ constexpr const char* kPopupId = "보석 고르기##gem_picker";
 
 }  // namespace
 
-void gem_picker_open(GemPicker* p) {
-    p->open_requested = true;
+void gem_picker_reset(GemPicker* p) {
     p->search[0] = '\0';
     p->pick = -1;
 }
 
-bool gem_picker_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out) {
-    if (p->open_requested) {
-        ImGui::OpenPopup(kPopupId);
-        p->open_requested = false;
-    }
-    if (!ImGui::BeginPopup(kPopupId)) return false;
+void gem_picker_open(GemPicker* p) {
+    p->open_requested = true;
+    gem_picker_reset(p);
+}
 
+bool gem_list_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out) {
     bool chosen = false;
     ImGui::TextUnformatted(o.title);
     // 열리자마자 타자를 칠 수 있게 검색창에 포커스를 준다.
@@ -53,7 +53,10 @@ bool gem_picker_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out) {
             const bool selected = p->pick == static_cast<int>(i);
             if (selected) picked = &e;
             ImGui::PushID(static_cast<int>(i));
-            if (ImGui::Selectable(e.name.c_str(), selected)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, grade_color(e.grade));
+            const bool clicked = ImGui::Selectable(e.name.c_str(), selected);
+            ImGui::PopStyleColor();
+            if (clicked) {
                 p->pick = static_cast<int>(i);
                 picked = &e;
             }
@@ -86,7 +89,16 @@ bool gem_picker_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out) {
         chosen = true;
     }
     ImGui::EndDisabled();
+    return chosen;
+}
 
+bool gem_picker_draw(GemPicker* p, const GemPickerOpts& o, GemChoice* out) {
+    if (p->open_requested) {
+        ImGui::OpenPopup(kPopupId);
+        p->open_requested = false;
+    }
+    if (!ImGui::BeginPopup(kPopupId)) return false;
+    const bool chosen = gem_list_draw(p, o, out);
     if (chosen) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
     return chosen;

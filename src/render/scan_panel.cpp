@@ -86,7 +86,8 @@ void draw_camera_panel(bool* open) {
     } else if (!fc.hooked) {
         ImGui::TextDisabled("프리카메라: 훅을 기다리는 중입니다");
     } else {
-        ImGui::TextColored(fc.active ? col::kOk : ImVec4(0.7f, 0.7f, 0.7f, 1),
+        ImGui::TextColored(fc.active ? col::kOk
+                                     : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
                            "프리카메라: %s", fc.active ? "켜짐" : "꺼짐");
         ImGui::Text("  갱신 함수 0x%llX",
                     static_cast<unsigned long long>(fc.update_fn));

@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -10,16 +11,17 @@
 #include "game/actors.h"
 #include "core/log.h"
 #include "core/slowlog.h"
-#include "core/write_log.h"
 #include "game/clan.h"
-#include "mem/safe_read.h"
 #include "game/camera.h"
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/roster.h"
 #include "render/colors.h"
+#include "render/gates.h"
 #include "render/layout.h"
 #include "render/notice.h"
+#include "render/table_sort_imgui.h"
+#include "render/view_cache.h"
 
 namespace cdtb::render {
 namespace {
@@ -60,9 +62,9 @@ const CompanionItem kCompanionItems[] = {
      true},
     {1003921, "피닉스 동행의 부적", "부적", "인벤토리에서 사용", true},
     {1004389, "와이번의 알", "알", "둥지에 올리고 5분 뒤 부화", true},
-    {1004388, "쿠쿠새의 알", "알", "절차 미상 - 알아봐야 한다", false},
-    {1000146, "오래된 쿠쿠새의 알", "알", "절차 미상 - 알아봐야 한다", false},
-    {1001252, "황금 거위 알", "알", "절차 미상 - 알아봐야 한다", false},
+    {1004388, "쿠쿠새의 알", "알", "절차 미상 - 알아봐야 합니다", false},
+    {1000146, "오래된 쿠쿠새의 알", "알", "절차 미상 - 알아봐야 합니다", false},
+    {1001252, "황금 거위 알", "알", "절차 미상 - 알아봐야 합니다", false},
     {1004574, "돌 둥지 솟대", "설치물", "와이번 알을 올린 그 둥지인지 미확인",
      false},
     {1004660, "제작법 : 돌 둥지 솟대", "제작법", "위 설치물의 제작법", false},
@@ -72,7 +74,7 @@ const CompanionItem kCompanionItems[] = {
 Notice g_item_notice;   // 동반자 아이템 탭의 지급 결과
 // 탭. 값은 탭 선언 순서와 무관하다 - switch 로만 쓴다.
 enum class RosterTab { Companion, Nearby, Vehicle, MercType, Character, Items, Mine };
-RosterTab g_tab = RosterTab::Companion;
+RosterTab g_tab = RosterTab::Mine;
 bool g_near_companion_only = true;
 // 캐릭터 탭에서 등록 가능한 종만 보인다. 표 전체는 7250행이고
 // 대부분 NPC·몬스터·시체라 고를 이유가 없다.
@@ -104,53 +106,8 @@ bool g_species_same_type = false;
 Notice g_species_notice;   // 종 바꾸기 팝업의 결과
 int g_species_pick = -1;   // 팝업에서 고른 행. 음수면 없음
 std::size_t g_species_hits = 0;
+float g_roster_w = 560.0f;   // 로스터 창 폭 - 팝업 표 폭의 상한
 
-// 종을 바꿔 쓴다. 주소는 그 자리에서 다시 찾는다 - 들고 있다가 쓰면
-// 안 된다(2026-09-09 사고, game/clan.h 설명).
-bool apply_species(std::uint64_t merc_no, std::uint16_t row) {
-    const mem::Rtti* rtti = game::clan_rtti();
-    if (rtti == nullptr) {
-        notice_set(&g_species_notice, NoticeLevel::Bad, "RTTI 준비 전입니다");
-        return false;
-    }
-    game::SpeciesWriteTarget t;
-    if (!game::resolve_species_write(*rtti, g_near_reader, merc_no, &t)) {
-        notice_set(&g_species_notice, NoticeLevel::Bad,
-                   "자리를 못 찾았습니다 - 월드 안인지 보세요");
-        return false;
-    }
-    // 게임 상태를 바꾸는 일은 **반드시 로그에 남긴다.**
-    //
-    // 이것이 없어서 사용자가 "바꾸기 뒤 팅겼다" 고 했을 때 무엇을 무엇으로
-    // 바꿨는지 로그로 알 수가 없었다(2026-09-09). 쓰기는 남기고 본다.
-    const game::RosterEntry* from = game::character_by_row(t.server_row);
-    const game::RosterEntry* to = game::character_by_row(row);
-    log_write("동반자 종 번호 " + std::to_string(merc_no), t.server,
-              "행 " + std::to_string(t.server_row) + "(" +
-                  (from != nullptr ? from->name : std::string("?")) + ")",
-              "행 " + std::to_string(row) + "(" +
-                  (to != nullptr ? to->name : std::string("?")) + ")");
-
-    const std::uint8_t buf[2] = {static_cast<std::uint8_t>(row & 0xFF),
-                                 static_cast<std::uint8_t>(row >> 8)};
-    // 클라·서버 양쪽에 써야 한다. 서버만 쓰면 게임이 보는 사본은
-    // 그대로다(실측 2026-09-09).
-    if (!mem::safe_write_bytes(t.server, buf, 2) ||
-        !mem::safe_write_bytes(t.client, buf, 2)) {
-        notice_set(&g_species_notice, NoticeLevel::Bad, "쓰기 실패");
-        return false;
-    }
-    game::SpeciesWriteTarget after;
-    if (game::resolve_species_write(*rtti, g_near_reader, merc_no, &after) &&
-        after.server_row == row && after.client_row == row) {
-        notice_set(&g_species_notice, NoticeLevel::Ok, "바꿨습니다 (행 {})", row);
-        g_clan_needs_refresh = true;   // 그리는 루프 밖에서 읽는다
-        return true;
-    }
-    notice_set(&g_species_notice, NoticeLevel::Bad,
-               "쓴 뒤 확인이 어긋났습니다 - 다시 보세요");
-    return false;
-}
 std::uint32_t g_selected_key = 0;   // 마지막으로 누른 줄의 키
 char g_selected_name[128] = "";
 
@@ -231,6 +188,83 @@ const char* type_label(std::uint16_t row, const std::string& internal) {
     return internal.c_str();
 }
 
+// 열 번호는 표의 TableSetupColumn 순서다.
+int companion_cmp(const game::RosterEntry* a, const game::RosterEntry* b,
+                  int col) {
+    switch (col) {
+        case 0: return cmp3(static_cast<long long>(a->key),
+                            static_cast<long long>(b->key));
+        case 1: return cmp3(a->label, b->label);
+        case 2: return cmp3(a->name, b->name);
+        case 3: return cmp3(static_cast<long long>(a->merc_row),
+                            static_cast<long long>(b->merc_row));
+        case 4: return cmp3(static_cast<long long>(game::roster_is_wild(a->name)),
+                            static_cast<long long>(game::roster_is_wild(b->name)));
+        default: return cmp3(static_cast<long long>(a->hirable),
+                             static_cast<long long>(b->hirable));
+    }
+}
+
+int nearby_cmp(const game::LiveActor* a, const game::LiveActor* b, int col) {
+    switch (col) {
+        case 2: return cmp3(a->label, b->label);
+        case 3: return cmp3(a->name, b->name);
+        case 4: return cmp3(static_cast<long long>(a->merc_row),
+                            static_cast<long long>(b->merc_row));
+        case 5: return cmp3(static_cast<long long>(game::roster_is_wild(a->name)),
+                            static_cast<long long>(game::roster_is_wild(b->name)));
+        case 6: return cmp3(static_cast<long long>(a->hirable),
+                            static_cast<long long>(b->hirable));
+        case 7: return cmp3(static_cast<long long>(a->owned()),
+                            static_cast<long long>(b->owned()));
+        default: return 0;   // 액터·핸들·획득·거두기는 NoSort
+    }
+}
+
+int mine_cmp(const game::ClanEntry* a, const game::ClanEntry* b, int col) {
+    switch (col) {
+        case 0: return cmp3(static_cast<long long>(a->merc_no),
+                            static_cast<long long>(b->merc_no));
+        case 1: return cmp3(a->label, b->label);
+        case 2: return cmp3(a->name, b->name);
+        case 3: return cmp3(static_cast<long long>(a->merc_row),
+                            static_cast<long long>(b->merc_row));
+        case 4: return cmp3(static_cast<long long>(a->row),
+                            static_cast<long long>(b->row));
+        case 5: return cmp3(static_cast<long long>(a->key),
+                            static_cast<long long>(b->key));
+        case 6: return cmp3(a->owner_name, b->owner_name);   // 빈 이름(용병대)이 앞
+        case 7: return cmp3(static_cast<long long>(a->spawned()),
+                            static_cast<long long>(b->spawned()));
+        default: return 0;   // 종(버튼)
+    }
+}
+
+int species_cmp(const game::RosterEntry* a, const game::RosterEntry* b,
+                int col) {
+    switch (col) {
+        case 0: return cmp3(static_cast<long long>(a->row),
+                            static_cast<long long>(b->row));
+        case 1: return cmp3(a->label, b->label);
+        case 2: return cmp3(a->name, b->name);
+        case 3: return cmp3(static_cast<long long>(a->merc_row),
+                            static_cast<long long>(b->merc_row));
+        default: return cmp3(static_cast<long long>(a->equip_info != 0xFFFF),
+                             static_cast<long long>(b->equip_info != 0xFFFF));
+    }
+}
+
+// 빈 표 한 줄. 검색어가 있으면 [지우기] 로 비운다.
+void roster_empty_row(int text_column) {
+    const bool has_query = g_query[0] != 0;
+    if (table_empty_row(text_column,
+                        has_query ? "검색어 때문에 비어 있습니다"
+                                  : "조건에 맞는 항목이 없습니다",
+                        has_query ? "지우기" : nullptr)) {
+        g_query[0] = 0;
+    }
+}
+
 // --- 동반자 탭 ---------------------------------------------------------
 //
 // 캐릭터 표에서 용병 타입(_mercenaryInfo)이 탈것·마차·펫·가축인 것만
@@ -270,26 +304,9 @@ void draw_companion_tab() {
         ImGui::TextDisabled("용병 타입 표를 못 찾아 타입 이름 대신 행 번호를 씁니다.");
     }
 
-    static std::vector<const game::RosterEntry*> view;
-    view.clear();
-    std::size_t companions = 0;
-    for (const auto& e : chars) {
-        if (!e.is_companion()) continue;
-        // 용병 표가 있으면 타입으로 거르고, 없으면 행 번호 범위로 추정
-        // (실측: 행 1~13 이 탈것·마차·펫·가축·어류·곤충).
-        const std::uint8_t mt = game::mercenary_type_of_row(e.merc_row);
-        const bool companion_type =
-            types.empty() ? (e.merc_row >= 1 && e.merc_row <= 13)
-                          : game::is_companion_merc_type(mt);
-        if (!companion_type) continue;
-        ++companions;
-        if (g_comp_type >= 0 && e.merc_row != g_comp_type) continue;
-        if (g_comp_wild_only && !game::roster_is_wild(e.name)) continue;
-        if (g_comp_hirable_only && !e.hirable) continue;
-        if (!matches_query(e)) continue;
-        view.push_back(&e);
-    }
-    ImGui::Text("%zu / %zu", view.size(), companions);
+    static CachedView<game::RosterEntry> cv;
+    static SortSpec sort;
+    ImGui::Text("%zu / %zu", cv.rows.size(), cv.total);
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 키가 복사됩니다");
     if (g_selected_key != 0) {
@@ -300,21 +317,54 @@ void draw_companion_tab() {
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_ScrollY |
-                                  ImGuiTableFlags_Resizable;
+                                  ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_Sortable |
+                                  ImGuiTableFlags_SortTristate;
     if (ImGui::BeginTable("companions", 6, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
-        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
-        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 44);
+        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 44);
         ImGui::TableHeadersRow();
+        table_sort_pull(&sort);
+        ViewKey k;
+        k.tab = static_cast<int>(RosterTab::Companion);
+        k.query = g_query;
+        k.type = g_comp_type;
+        k.flags = flag_bits({g_comp_wild_only, g_comp_hirable_only,
+                             types.empty()});
+        k.sort = sort;
+        k.generation = chars.data();
+        k.count = chars.size();
+        if (cv.begin(k)) {
+            for (const auto& e : chars) {
+                if (!e.is_companion()) continue;
+                // 용병 표가 있으면 타입으로 거르고, 없으면 행 번호 범위로 추정
+                // (실측: 행 1~13 이 탈것·마차·펫·가축·어류·곤충).
+                const std::uint8_t mt = game::mercenary_type_of_row(e.merc_row);
+                const bool companion_type =
+                    types.empty() ? (e.merc_row >= 1 && e.merc_row <= 13)
+                                  : game::is_companion_merc_type(mt);
+                if (!companion_type) continue;
+                ++cv.total;
+                if (g_comp_type >= 0 && e.merc_row != g_comp_type) continue;
+                if (g_comp_wild_only && !game::roster_is_wild(e.name)) continue;
+                if (g_comp_hirable_only && !e.hirable) continue;
+                if (!matches_query(e)) continue;
+                cv.rows.push_back(&e);
+            }
+            sort_view(cv.rows, sort, companion_cmp);
+        }
+        if (cv.rows.empty()) roster_empty_row(1);
         ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(view.size()));
+        clipper.Begin(static_cast<int>(cv.rows.size()));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const game::RosterEntry* e = view[static_cast<std::size_t>(i)];
+                const game::RosterEntry* e =
+                    cv.rows[static_cast<std::size_t>(i)];
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 char label[32];
@@ -349,34 +399,61 @@ void draw_companion_tab() {
 }
 
 
-// --- 근처 탭 -----------------------------------------------------------
-//
-// 살아 있는 액터를 걷어 캐릭터 이름을 붙인다(game/actors.h). 게임
-// 메모리를 읽는 것은 여기서 2초에 한 번 또는 버튼을 눌렀을 때뿐이다.
+// 정의가 뒤에 있다 - 아이템 탭이 먼저 부른다.
+void draw_companion_drive_gate(game::DriveLane lane);
+
 // 동반자를 주는 아이템을 지급한다. 지급은 이미 검증된 경로다.
 void draw_companion_item_tab() {
     ImGui::TextDisabled(
         "\"실측\"은 실제로 되는 것을 본 줄입니다. \"미확인\"은 이름만 보고 "
         "모은 것이라 동반자 아이템인지도 모릅니다 - 지급해서 확인해 "
         "보세요.");
+    draw_companion_drive_gate(game::DriveLane::Item);
     notice_draw(g_item_notice);
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_BordersInnerV |
-                                  ImGuiTableFlags_ScrollY;
+                                  ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_Sortable |
+                                  ImGuiTableFlags_SortTristate;
     if (!ImGui::BeginTable("companion_items", 6, flags)) return;
     ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch |
+                                        ImGuiTableColumnFlags_DefaultSort);
     ImGui::TableSetupColumn("종류", ImGuiTableColumnFlags_WidthFixed, 60);
     ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 72);
-    ImGui::TableSetupColumn("쓰는 법", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("쓰는 법", ImGuiTableColumnFlags_WidthStretch |
+                                          ImGuiTableColumnFlags_NoSort);
     ImGui::TableSetupColumn("확인", ImGuiTableColumnFlags_WidthFixed, 56);
-    ImGui::TableSetupColumn("지급", ImGuiTableColumnFlags_WidthFixed, 52);
+    ImGui::TableSetupColumn("지급", ImGuiTableColumnFlags_WidthFixed |
+                                        ImGuiTableColumnFlags_NoSort, 52);
     ImGui::TableHeadersRow();
+    static SortSpec sort;
+    table_sort_pull(&sort);
     const int n = static_cast<int>(sizeof(kCompanionItems) /
                                    sizeof(kCompanionItems[0]));
+    std::vector<int> order;
+    order.reserve(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i) {
+        if (g_query[0] != 0 &&
+            !contains_ci(kCompanionItems[i].name, g_query)) continue;
+        order.push_back(i);
+    }
+    sort_view(order, sort, [](int a, int b, int col) {
+        const CompanionItem& x = kCompanionItems[a];
+        const CompanionItem& y = kCompanionItems[b];
+        switch (col) {
+            case 0: return cmp3(std::string(x.name), std::string(y.name));
+            case 1: return cmp3(std::string(x.kind), std::string(y.kind));
+            case 2: return cmp3(static_cast<long long>(x.key),
+                                static_cast<long long>(y.key));
+            case 4: return cmp3(static_cast<long long>(x.verified),
+                                static_cast<long long>(y.verified));
+            default: return 0;
+        }
+    });
+    if (order.empty()) roster_empty_row(0);
+    for (int i : order) {
         const CompanionItem& it = kCompanionItems[i];
-        if (g_query[0] != 0 && !contains_ci(it.name, g_query)) continue;
         ImGui::TableNextRow();
         ImGui::PushID(i);
         ImGui::TableSetColumnIndex(0);
@@ -415,14 +492,15 @@ void draw_companion_item_tab() {
     ImGui::EndTable();
 }
 
-// 동반자 레인의 구동 상태. 누른 자리에서 보여 줘야 오해가 없다.
-void draw_companion_drive_gate() {
+// 구동 레인의 상태. 누른 자리에서 보여 줘야 오해가 없다 - 아이템 탭은
+// Item 레인(지급), 근처 탭은 Companion 레인(획득·거두기)이다.
+void draw_companion_drive_gate(game::DriveLane lane) {
     if (game::drive_point_dead()) {
         ImGui::TextColored(col::kBad,
                            "구동 지점이 게임 안에서 멈췄습니다 - "
                            "게임을 다시 시작해야 지급·획득이 동작합니다");
     }
-    const game::DriveGate g = game::drive_gate_state(game::DriveLane::Companion);
+    const game::DriveGate g = game::drive_gate_state(lane);
     const ImVec4 warn = col::kWarn;
     const ImVec4 bad = col::kBad;
     const bool stuck = g.pending && g.pending_age_ms > 30000;
@@ -432,7 +510,8 @@ void draw_companion_drive_gate() {
     }
     if (g.pending) {
         ImGui::TextColored(stuck ? bad : warn,
-                           "동반자 구동 대기 중: %.1f초째 (월드가 돌고 있어야 실행됩니다)",
+                           "%s 구동 대기 중: %.1f초째 (월드가 돌고 있어야 실행됩니다)",
+                           lane == game::DriveLane::Item ? "아이템 지급" : "동반자",
                            g.pending_age_ms / 1000.0);
     }
     if (g.cooldown_left_ms > 0) {
@@ -467,8 +546,14 @@ void draw_species_popup() {
     ImGui::SameLine();
     ImGui::TextDisabled("후보 %zu개", g_species_hits);
     const ImGuiTableFlags f = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-                              ImGuiTableFlags_BordersInnerV;
-    if (ImGui::BeginTable("species_pick", 5, f, ImVec2(620, 320))) {
+                              ImGuiTableFlags_BordersInnerV |
+                              ImGuiTableFlags_Sortable |
+                              ImGuiTableFlags_SortTristate;
+    if (ImGui::BeginTable("species_pick", 5, f,
+                          ImVec2((std::max)(160.0f,
+                                            (std::min)(620.0f,
+                                                       g_roster_w - 40.0f)),
+                                 320))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -477,33 +562,55 @@ void draw_species_popup() {
         ImGui::TableSetupColumn("탑승", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableHeadersRow();
         const auto& cat = game::character_catalog();
-        static std::vector<const game::RosterEntry*> hits;
-        hits.clear();
-        for (const auto& c : cat) {
-            // 걸러내는 것은 동반자 타입 하나다 - 낙타·성체 와이번이
-            // 게임에 안 뜬 이유가 타입행 6(Vehicle) 이었다. 예전에
-            // 함께 걸던 _equipInfo 조건은 근거가 없어 뺐다(roster.h).
-            if (!c.listable()) continue;
-            if (!game::is_listed_companion_row(c.merc_row)) continue;
-            if (g_species_same_type && c.merc_row != g_species_type) continue;
-            if (g_species_query[0] != 0 &&
-                !(contains_ci(c.name, g_species_query) ||
-                  contains_ci(c.label, g_species_query))) {
-                continue;
+        static CachedView<game::RosterEntry> cv;
+        static SortSpec sort;
+        table_sort_pull(&sort);
+        ViewKey k;
+        k.tab = -1;   // 팝업
+        k.query = g_species_query;
+        k.type = g_species_type;
+        k.flags = flag_bits({g_species_same_type});
+        k.sort = sort;
+        k.generation = cat.data();
+        k.count = cat.size();
+        if (cv.begin(k)) {
+            for (const auto& c : cat) {
+                // 걸러내는 것은 동반자 타입 하나다 - 낙타·성체 와이번이 게임에
+                // 안 뜬 이유가 타입행 6(Vehicle) 이었다. 예전에 함께 걸던
+                // _equipInfo 조건은 근거가 없어 뺐다(roster.h).
+                if (!c.listable()) continue;
+                if (!game::is_listed_companion_row(c.merc_row)) continue;
+                if (g_species_same_type && c.merc_row != g_species_type) continue;
+                if (g_species_query[0] != 0 &&
+                    !(contains_ci(c.name, g_species_query) ||
+                      contains_ci(c.label, g_species_query))) {
+                    continue;
+                }
+                cv.rows.push_back(&c);
             }
-            hits.push_back(&c);
+            sort_view(cv.rows, sort, species_cmp);
         }
-        g_species_hits = hits.size();
+        g_species_hits = cv.rows.size();
+        if (cv.rows.empty()) {
+            const bool has_query = g_species_query[0] != 0;
+            if (table_empty_row(1,
+                                has_query ? "검색어 때문에 비어 있습니다"
+                                          : "조건에 맞는 항목이 없습니다",
+                                has_query ? "지우기" : nullptr)) {
+                g_species_query[0] = 0;
+            }
+        }
         ImGuiListClipper cl;
-        cl.Begin(static_cast<int>(hits.size()));
+        cl.Begin(static_cast<int>(cv.rows.size()));
         while (cl.Step()) {
-            for (int k = cl.DisplayStart; k < cl.DisplayEnd; ++k) {
-                const game::RosterEntry* c = hits[static_cast<std::size_t>(k)];
+            for (int i = cl.DisplayStart; i < cl.DisplayEnd; ++i) {
+                const game::RosterEntry* c =
+                    cv.rows[static_cast<std::size_t>(i)];
                 ImGui::TableNextRow();
-                ImGui::PushID(k);
+                ImGui::PushID(i);
                 ImGui::TableSetColumnIndex(0);
                 char rl[32];
-                std::snprintf(rl, sizeof(rl), "%u##pick%d", c->row, k);
+                std::snprintf(rl, sizeof(rl), "%u##pick%d", c->row, i);
                 // 줄 클릭은 고르기만 한다. 수천 줄에서 오클릭 한 번이 곧
                 // 게임 메모리 쓰기였다 - 적용은 아래 버튼이 한다.
                 if (ImGui::Selectable(rl, static_cast<int>(c->row) == g_species_pick,
@@ -554,7 +661,17 @@ void draw_species_popup() {
     ImGui::SameLine();
     ImGui::BeginDisabled(pick == nullptr);
     if (ImGui::Button("바꾸기 적용")) {
-        apply_species(g_species_no, static_cast<std::uint16_t>(g_species_pick));
+        std::string msg;
+        const game::SpeciesApply r =
+            game::apply_species(g_near_reader, g_species_no,
+                                static_cast<std::uint16_t>(g_species_pick),
+                                &msg);
+        notice_set(&g_species_notice,
+                   r == game::SpeciesApply::Ok ? NoticeLevel::Ok
+                                               : NoticeLevel::Bad,
+                   "{}", msg);
+        // 그리는 루프 밖에서 읽는다
+        if (r == game::SpeciesApply::Ok) g_clan_needs_refresh = true;
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -582,6 +699,8 @@ void draw_my_companions_tab() {
     bool refresh = g_clan_needs_refresh;
     g_clan_needs_refresh = false;
     if (ImGui::SmallButton("새로고침")) refresh = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("자동 2초");
     if (now - g_clan_last_refresh > 2.0) refresh = true;
     if (refresh) {
         log::Slow slow_r("명부 갱신", 4.0);
@@ -623,36 +742,16 @@ void draw_my_companions_tab() {
     ImGui::SameLine();
     ImGui::Checkbox("탈것·특수·반려동물만", &g_clan_listed_only);
 
-    static std::vector<const game::ClanEntry*> view;
-    view.clear();
-    std::size_t spawned = 0;
-    for (const auto& e : all) {
-        if (e.spawned()) ++spawned;
-        switch (game::companion_group_of_row(e.merc_row)) {
-            case game::CompanionGroup::People: if (!show_people) continue; break;
-            case game::CompanionGroup::Mount:  if (!show_mount) continue; break;
-            case game::CompanionGroup::System: if (!show_system) continue; break;
-            default: break;   // 미상은 숨기지 않는다 - 놓치면 안 된다
-        }
-        if (g_clan_listed_only && !game::is_listed_companion_row(e.merc_row)) {
-            continue;
-        }
-        if (g_query[0] != 0) {
-            char keybuf[16];
-            std::snprintf(keybuf, sizeof(keybuf), "%u", e.key);
-            if (!(contains_ci(e.name, g_query) || contains_ci(e.label, g_query) ||
-                  std::strstr(keybuf, g_query))) {
-                continue;
-            }
-        }
-        view.push_back(&e);
-    }
-    ImGui::Text("%zu / %zu 명, 그중 월드에 %zu명", view.size(), all.size(), spawned);
+    static CachedView<game::ClanEntry> cv;
+    static SortSpec sort;
+    ImGui::Text("%zu / %zu 개체, 그중 월드에 %zu", cv.rows.size(), all.size(),
+                cv.total);
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 레코드 주소가 복사됩니다");
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (!ImGui::BeginTable("my_companions", 9, flags)) return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 74);
@@ -663,15 +762,49 @@ void draw_my_companions_tab() {
     ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 56);
     ImGui::TableSetupColumn("소유자", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("월드", ImGuiTableColumnFlags_WidthFixed, 44);
-    ImGui::TableSetupColumn("종", ImGuiTableColumnFlags_WidthFixed, 74);
+    ImGui::TableSetupColumn("종", ImGuiTableColumnFlags_WidthFixed |
+                                      ImGuiTableColumnFlags_NoSort, 74);
     ImGui::TableHeadersRow();
+    table_sort_pull(&sort);
+    ViewKey k;
+    k.tab = static_cast<int>(RosterTab::Mine);
+    k.query = g_query;
+    k.flags = flag_bits({show_people, show_mount, show_system,
+                         g_clan_listed_only});
+    k.sort = sort;
+    k.generation = all.data();
+    k.count = all.size();
+    k.stamp = g_clan_last_refresh;
+    if (cv.begin(k)) {
+        for (const auto& e : all) {
+            if (e.spawned()) ++cv.total;
+            switch (game::companion_group_of_row(e.merc_row)) {
+                case game::CompanionGroup::People: if (!show_people) continue; break;
+                case game::CompanionGroup::Mount:  if (!show_mount) continue; break;
+                case game::CompanionGroup::System: if (!show_system) continue; break;
+                default: break;   // 미상은 숨기지 않는다 - 놓치면 안 된다
+            }
+            if (g_clan_listed_only && !game::is_listed_companion_row(e.merc_row)) continue;
+            if (g_query[0] != 0) {
+                char keybuf[16];
+                std::snprintf(keybuf, sizeof(keybuf), "%u", e.key);
+                if (!(contains_ci(e.name, g_query) || contains_ci(e.label, g_query) ||
+                      std::strstr(keybuf, g_query))) {
+                    continue;
+                }
+            }
+            cv.rows.push_back(&e);
+        }
+        sort_view(cv.rows, sort, mine_cmp);
+    }
+    if (cv.rows.empty()) roster_empty_row(1);
     ImGuiListClipper clipper;
-    clipper.Begin(static_cast<int>(view.size()));
+    clipper.Begin(static_cast<int>(cv.rows.size()));
     while (clipper.Step()) {
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const game::ClanEntry* e = view[static_cast<std::size_t>(i)];
+            const game::ClanEntry* e = cv.rows[static_cast<std::size_t>(i)];
             ImGui::TableNextRow();
-            ImGui::PushID(i);
+            ImGui::PushID(reinterpret_cast<const void*>(e->record));
             ImGui::TableSetColumnIndex(0);
             char label[64];
             std::snprintf(label, sizeof(label), "%llu##clan%d",
@@ -754,6 +887,10 @@ void draw_my_companions_tab() {
     ImGui::EndTable();
 }
 
+// --- 근처 탭 -----------------------------------------------------------
+//
+// 살아 있는 액터를 걷어 캐릭터 이름을 붙인다(game/actors.h). 게임
+// 메모리를 읽는 것은 여기서 2초에 한 번 또는 버튼을 눌렀을 때뿐이다.
 void draw_nearby_tab() {
     if (!game::actor_manager_ready()) {
         ImGui::TextDisabled("액터 매니저를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
@@ -763,6 +900,8 @@ void draw_nearby_tab() {
     bool refresh = false;
     if (ImGui::SmallButton("새로고침")) refresh = true;
     ImGui::SameLine();
+    ImGui::TextDisabled("자동 2초");
+    ImGui::SameLine();
     ImGui::Checkbox("탈것·특수·반려동물만", &g_near_companion_only);
     if (now - g_near_last_refresh > 2.0) refresh = true;
     if (refresh) {
@@ -770,24 +909,9 @@ void draw_nearby_tab() {
         g_near_last_refresh = now;
     }
     const auto& all = game::live_actors();
-    static std::vector<const game::LiveActor*> view;
-    view.clear();
-    for (const auto& a : all) {
-        // 게임이 목록으로 보여 주는 세 갈래만 보인다(roster.h 설명).
-        if (g_near_companion_only && !game::is_listed_companion_row(a.merc_row)) {
-            continue;
-        }
-        if (g_query[0] != 0) {
-            char keybuf[16];
-            std::snprintf(keybuf, sizeof(keybuf), "%u", a.key);
-            if (!(contains_ci(a.name, g_query) || contains_ci(a.label, g_query) ||
-                  std::strstr(keybuf, g_query))) {
-                continue;
-            }
-        }
-        view.push_back(&a);
-    }
-    ImGui::Text("%zu / %zu 액터", view.size(), all.size());
+    static CachedView<game::LiveActor> cv;
+    static SortSpec sort;
+    ImGui::Text("%zu / %zu 액터", cv.rows.size(), all.size());
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 액터 주소가 복사됩니다");
     // 획득한 개체가 소환이 안 되는 것은 우리 결함이 아니라 게임의
@@ -813,7 +937,7 @@ void draw_nearby_tab() {
     // 구동 상태를 여기서 보여 준다. 예전에는 아이템 지급 패널에만 떴어
     // 획득을 눌렀는데 ‘아이템 지급’ 이 대기 중으로 보였다(사용자 지적
     // 2026-09-09). 이젠 레인이 나뉘어 있고, 여기는 동반자 레인만 본다.
-    draw_companion_drive_gate();
+    draw_companion_drive_gate(game::DriveLane::Companion);
 
     // 눌렀는데 대기열이 차 있으면 요청은 버려진다. 그것을 화면에 알린다
     // (실측 2026-09-06: 빠르게 여러 번 누르면 조용히 사라졌다).
@@ -838,25 +962,59 @@ void draw_nearby_tab() {
     }
 
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (ImGui::BeginTable("nearby", 10, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed, 104);
-        ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed, 82);
-        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed |
+                                            ImGuiTableColumnFlags_NoSort, 104);
+        ImGui::TableSetupColumn("핸들", ImGuiTableColumnFlags_WidthFixed |
+                                            ImGuiTableColumnFlags_NoSort, 82);
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch |
+                                            ImGuiTableColumnFlags_DefaultSort);
         ImGui::TableSetupColumn("내부 이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 84);
-        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 34);
-        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 34);
+        ImGui::TableSetupColumn("야생", ImGuiTableColumnFlags_WidthFixed, 44);
+        ImGui::TableSetupColumn("고용", ImGuiTableColumnFlags_WidthFixed, 44);
         ImGui::TableSetupColumn("소유", ImGuiTableColumnFlags_WidthFixed, 56);
-        ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed, 52);
-        ImGui::TableSetupColumn("거두기", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("획득", ImGuiTableColumnFlags_WidthFixed |
+                                            ImGuiTableColumnFlags_NoSort, 52);
+        ImGui::TableSetupColumn("거두기", ImGuiTableColumnFlags_WidthFixed |
+                                              ImGuiTableColumnFlags_NoSort, 60);
         ImGui::TableHeadersRow();
+        table_sort_pull(&sort);
+        ViewKey k;
+        k.tab = static_cast<int>(RosterTab::Nearby);
+        k.query = g_query;
+        k.flags = flag_bits({g_near_companion_only});
+        k.sort = sort;
+        k.generation = all.data();
+        k.count = all.size();
+        k.stamp = g_near_last_refresh;   // 2초마다 같은 버퍼에 다시 채워진다
+        if (cv.begin(k)) {
+            for (const auto& a : all) {
+                // 게임이 목록으로 보여 주는 세 갈래만 보인다(roster.h 설명).
+                if (g_near_companion_only && !game::is_listed_companion_row(a.merc_row)) {
+                    continue;
+                }
+                if (g_query[0] != 0) {
+                    char keybuf[16];
+                    std::snprintf(keybuf, sizeof(keybuf), "%u", a.key);
+                    if (!(contains_ci(a.name, g_query) || contains_ci(a.label, g_query) ||
+                          std::strstr(keybuf, g_query))) {
+                        continue;
+                    }
+                }
+                cv.rows.push_back(&a);
+            }
+            sort_view(cv.rows, sort, nearby_cmp);
+        }
+        if (cv.rows.empty()) roster_empty_row(2);
         ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(view.size()));
+        clipper.Begin(static_cast<int>(cv.rows.size()));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const game::LiveActor* a = view[static_cast<std::size_t>(i)];
+                const game::LiveActor* a = cv.rows[static_cast<std::size_t>(i)];
                 ImGui::TableNextRow();
                 // 줄마다 ID 를 분리한다. 라벨의 "##" 뒤가 ID 이므로 그것도
                 // 줄마다 다르게 준다 - 둘 중 하나만으로는 ImGui 가 같은 ID 를
@@ -1003,15 +1161,32 @@ void draw_nearby_tab() {
 }
 
 // --- 단순 목록 탭 (탈것·용병 타입·캐릭터) ------------------------------
+// 표마다 ID 와 캐시가 따로다 - 열 수가 다르고, 정렬 상태를 나눠 쓰면 탭을
+// 바꿀 때 서로 덮어쓴다.
+int list_slot() {
+    switch (g_tab) {
+        case RosterTab::Vehicle: return 0;
+        case RosterTab::MercType: return 1;
+        default: return 2;
+    }
+}
+const char* list_table_id() {
+    switch (g_tab) {
+        case RosterTab::Vehicle: return "roster_vehicles";
+        case RosterTab::MercType: return "roster_merc_types";
+        default: return "roster_characters";
+    }
+}
+
 void draw_list_tab(const std::vector<game::RosterEntry>& all,
                    bool show_merc_type) {
-    static std::vector<const game::RosterEntry*> view;
-    view.clear();
-    view.reserve(all.size());
-    for (const auto& e : all) {
-        if (matches_query(e)) view.push_back(&e);
-    }
-    ImGui::Text("%zu / %zu", view.size(), all.size());
+    static CachedView<game::RosterEntry> cv[3];
+    static SortSpec sort[3];
+    const int slot = list_slot();
+    CachedView<game::RosterEntry>& v = cv[slot];
+    SortSpec& s = sort[slot];
+
+    ImGui::Text("%zu / %zu", v.rows.size(), all.size());
     ImGui::SameLine();
     ImGui::TextDisabled("줄을 누르면 키가 복사됩니다");
     if (g_selected_key != 0) {
@@ -1020,37 +1195,74 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
     }
     ImGui::Separator();
 
-    if (ImGui::BeginChild("roster_list")) {
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(view.size()));
-        while (clipper.Step()) {
-            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const game::RosterEntry* e = view[static_cast<std::size_t>(i)];
-                char line[256];
-                if (show_merc_type) {
-                    std::snprintf(line, sizeof(line), "%-4u  type %u  %s##r%d",
-                                  e->key, e->merc_type,
-                                  e->display().empty() ? "(이름 없음)"
-                                                       : e->display().c_str(),
-                                  i);
-                } else if (e->label.empty()) {
-                    std::snprintf(line, sizeof(line), "%-10u  %s##r%d", e->key,
-                                  e->name.empty() ? "(이름 없음)" : e->name.c_str(),
-                                  i);
-                } else {
-                    // 표시명을 앞에 두되 내부 이름을 지우지는 않는다.
-                    // 키를 찾는 작업에는 내부 이름이 있어야 한다.
-                    std::snprintf(line, sizeof(line), "%-10u  %s  (%s)##r%d",
-                                  e->key, e->label.c_str(),
-                                  e->name.empty() ? "?" : e->name.c_str(), i);
-                }
-                const bool sel = (e->key == g_selected_key);
-                if (ImGui::Selectable(line, sel)) select(*e);
+    const int ncol = show_merc_type ? 3 : 2;
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
+    if (!ImGui::BeginTable(list_table_id(), ncol, flags)) return;
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 90);
+    if (show_merc_type) ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 60);
+    ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableHeadersRow();
+    table_sort_pull(&s);
+
+    ViewKey k;
+    k.tab = static_cast<int>(g_tab);
+    k.query = g_query;
+    k.sort = s;
+    k.generation = all.data();
+    k.count = all.size();
+    if (v.begin(k)) {
+        for (const auto& e : all) {
+            if (matches_query(e)) v.rows.push_back(&e);
+        }
+        sort_view(v.rows, s, [show_merc_type](const game::RosterEntry* a,
+                                              const game::RosterEntry* b, int col) {
+            // 열: 키 · (타입) · 이름. 타입 열이 없는 표는 1번이 이름이다.
+            if (col == 0) return cmp3(static_cast<long long>(a->key),
+                                      static_cast<long long>(b->key));
+            if (show_merc_type && col == 1) {
+                return cmp3(static_cast<long long>(a->merc_type),
+                            static_cast<long long>(b->merc_type));
+            }
+            return cmp3(a->display(), b->display());
+        });
+    }
+    if (v.rows.empty()) roster_empty_row(ncol - 1);
+
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(v.rows.size()));
+    while (clipper.Step()) {
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const game::RosterEntry* e = v.rows[static_cast<std::size_t>(i)];
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            char kl[32];
+            std::snprintf(kl, sizeof(kl), "%u##r%d", e->key, i);
+            if (ImGui::Selectable(kl, e->key == g_selected_key,
+                                  ImGuiSelectableFlags_SpanAllColumns)) {
+                select(*e);
+            }
+            int c = 1;
+            if (show_merc_type) {
+                ImGui::TableSetColumnIndex(c++);
+                ImGui::Text("%u", e->merc_type);
+            }
+            ImGui::TableSetColumnIndex(c);
+            if (e->label.empty()) {
+                ImGui::TextUnformatted(e->name.empty() ? "(이름 없음)"
+                                                       : e->name.c_str());
+            } else {
+                // 표시명을 앞에 두되 내부 이름을 지우지는 않는다. 키를 찾는
+                // 작업에는 내부 이름이 있어야 한다.
+                ImGui::Text("%s  (%s)", e->label.c_str(),
+                            e->name.empty() ? "?" : e->name.c_str());
             }
         }
-        clipper.End();
     }
-    ImGui::EndChild();
+    clipper.End();
+    ImGui::EndTable();
 }
 
 }  // namespace
@@ -1060,6 +1272,7 @@ void draw_roster_panel(bool* open) {
         ImGui::End();
         return;
     }
+    g_roster_w = ImGui::GetWindowSize().x;
 
     if (!game::roster_ready()) {
         ImGui::TextDisabled("표를 아직 못 찾았습니다. 월드 진입 후 잠시 기다리세요.");
@@ -1068,16 +1281,24 @@ void draw_roster_panel(bool* open) {
     }
     ImGui::TextDisabled(
         "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
+    ImGui::TextDisabled("키=캐릭터 키 · 행=표 행 · 번호=명부 번호 · 핸들=액터");
 
     if (ImGui::BeginTabBar("roster_tabs")) {
-        if (ImGui::BeginTabItem("동반자")) { g_tab = RosterTab::Companion; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("근처")) { g_tab = RosterTab::Nearby; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("탈것")) { g_tab = RosterTab::Vehicle; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("용병 타입")) { g_tab = RosterTab::MercType; ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("캐릭터")) { g_tab = RosterTab::Character; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("내 동반자")) { g_tab = RosterTab::Mine; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("근처")) { g_tab = RosterTab::Nearby; ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("동반자 아이템")) { g_tab = RosterTab::Items; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("포획 가능 종")) { g_tab = RosterTab::Companion; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("탈것")) { g_tab = RosterTab::Vehicle; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("캐릭터")) { g_tab = RosterTab::Character; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("용병 타입")) { g_tab = RosterTab::MercType; ImGui::EndTabItem(); }
         ImGui::EndTabBar();
+    }
+
+    // 탭마다 뜻이 다른 검색어가 넘어가면 표가 비어 보인다.
+    static RosterTab prev_tab = g_tab;
+    if (g_tab != prev_tab) {
+        g_query[0] = 0;
+        prev_tab = g_tab;
     }
 
     ImGui::SetNextItemWidth(-1);

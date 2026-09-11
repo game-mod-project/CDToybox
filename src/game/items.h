@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "game/localization.h"
@@ -439,5 +440,22 @@ bool items_ready();
 
 // 준비되기 전에 부르면 빈 목록이다.
 const std::vector<ItemCatalogEntry>& item_catalog();
+
+// 키 -> 엔트리 색인. 어느 판(벡터)으로 만들었는지 기억해 판이 바뀌면 다시
+// 만든다. 순수 클래스라 표 없이 시험한다. 첫 번째 것이 이긴다(키가 겹치는
+// 행이 있다).
+struct ItemKeyIndex {
+    const void* built_data = nullptr;
+    std::size_t built_size = 0;
+    std::unordered_map<std::uint32_t, const ItemCatalogEntry*> map;
+
+    const ItemCatalogEntry* find(const std::vector<ItemCatalogEntry>& cat,
+                                 std::uint32_t key);
+};
+
+// 키로 아이템을 찾는다. 표가 안 올라왔거나(items_ready 전) 없으면 nullptr.
+// 지급·보관함·인벤이 저마다 6,810개를 선형 탐색하거나 자기 맵을 만들던 것을
+// 대신한다.
+const ItemCatalogEntry* item_by_key(std::uint32_t key);
 
 }  // namespace cdtb::game

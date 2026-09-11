@@ -297,6 +297,31 @@ const std::vector<ItemCatalogEntry>& item_catalog() {
     return *g_catalog.load(std::memory_order_acquire);
 }
 
+const ItemCatalogEntry* ItemKeyIndex::find(
+    const std::vector<ItemCatalogEntry>& cat, std::uint32_t key) {
+    if (built_data != cat.data() || built_size != cat.size()) {
+        map.clear();
+        map.reserve(cat.size());
+        for (const auto& e : cat) map.emplace(e.key, &e);   // 먼저 온 것이 남는다
+        built_data = cat.data();
+        built_size = cat.size();
+    }
+    const auto it = map.find(key);
+    return it == map.end() ? nullptr : it->second;
+}
+
+namespace {
+// 화면 스레드와 명령 파일 스레드가 같이 부를 수 있어 잠근다.
+std::mutex g_key_index_mutex;
+ItemKeyIndex g_key_index;
+}  // namespace
+
+const ItemCatalogEntry* item_by_key(std::uint32_t key) {
+    if (key == 0 || !items_ready()) return nullptr;
+    std::lock_guard<std::mutex> lk(g_key_index_mutex);
+    return g_key_index.find(item_catalog(), key);
+}
+
 // ------------------------------------- 아이템 키 <-> 짧은 식별자 대응표
 
 namespace {

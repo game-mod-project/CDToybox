@@ -28,7 +28,11 @@ void draw_player_panel(bool* open) {
         ImGui::Text("생명 %d / %d", v.hp_cur, v.hp_max);
         ImGui::Text("스태미나 %d / %d", v.sta_cur, v.sta_max);
         ImGui::Text("정신력 %d / %d", v.spi_cur, v.spi_max);
-        ImGui::TextDisabled("(내부 수치입니다. 화면 표기와 배율이 다를 수 있습니다)");
+        // 창 폭 320 에서 한 줄로는 잘린다. 회색은 그대로 두고 줄바꿈만 켠다.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("(내부 수치입니다. 화면 표기와 배율이 다를 수 있습니다)");
+        ImGui::PopStyleColor();
     } else {
         // 못 읽는 건 고장이 아니라 전환 중이라는 뜻이다. 빈 화면 대신 이유를 말한다.
         ImGui::TextDisabled(

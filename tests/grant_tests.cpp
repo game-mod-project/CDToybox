@@ -964,3 +964,29 @@ TEST(clamp_count_never_goes_below_one) {
     CHECK_EQ(cdtb::game::clamp_count_to_stack(0, 10), 1);
     CHECK_EQ(cdtb::game::clamp_count_to_stack(-494665728, 3800301568u), 1);
 }
+
+TEST(short_class_name_cuts_prefix_and_mangle_tail) {
+    char b[64];
+    cdtb::game::short_class_name(".?AVServerPlayerSession@pa@@", b, sizeof(b));
+    CHECK(std::strcmp(b, "ServerPlayerSession") == 0);
+    cdtb::game::short_class_name("Plain", b, sizeof(b));
+    CHECK(std::strcmp(b, "Plain") == 0);
+    cdtb::game::short_class_name("", b, sizeof(b));
+    CHECK(std::strcmp(b, "(확인 중)") == 0);
+    cdtb::game::short_class_name(nullptr, b, sizeof(b));
+    CHECK(std::strcmp(b, "(확인 중)") == 0);
+    cdtb::game::short_class_name(".?AVAbcdefghij@pa@@", b, 5);   // 잘려도 종료된다
+    CHECK(std::strcmp(b, "Abcd") == 0);
+}
+
+TEST(outcome_is_mine_compares_serial) {
+    cdtb::game::SpawnOutcome o;
+    o.serial = 7;
+    CHECK(cdtb::game::outcome_is_mine(o, 7));
+    CHECK(!cdtb::game::outcome_is_mine(o, 6));
+    // 요청을 걸 수 없는 테스트 환경에서는 번호가 0 이고 결과도 비어 있다
+    // 스위트 어디에서도 request_* 가 성공(번호 매김)하지 않는다는 전제다 -
+    // 성공 경로 테스트를 더하면 이 단언을 옮길 것.
+    CHECK_EQ(cdtb::game::last_request_serial(), 0u);
+    CHECK_EQ(cdtb::game::last_outcome().serial, 0u);
+}

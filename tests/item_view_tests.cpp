@@ -324,3 +324,23 @@ TEST(make_filter_negative_index_means_all) {
     CHECK_EQ(f.grade, -1);
     CHECK_EQ(f.category, -1);
 }
+
+TEST(item_sort_from_specs_maps_columns) {
+    auto c = cdtb::game::item_sort_from_specs(1, 4, false);
+    CHECK(c.sort == ItemSort::Name);
+    CHECK(!c.ascending);
+    c = cdtb::game::item_sort_from_specs(1, 2, true);
+    CHECK(c.sort == ItemSort::Grade);
+    c = cdtb::game::item_sort_from_specs(1, 3, true);
+    CHECK(c.sort == ItemSort::Category);
+    c = cdtb::game::item_sort_from_specs(1, 1, true);
+    CHECK(c.sort == ItemSort::Key);
+    CHECK(c.ascending);
+}
+
+TEST(item_sort_from_specs_cleared_returns_to_key_ascending) {
+    // 정렬 해제(사양 0개)는 마지막 정렬을 남기지 않고 키 오름차순으로 돌아간다
+    const auto c = cdtb::game::item_sort_from_specs(0, 4, false);
+    CHECK(c.sort == ItemSort::Key);
+    CHECK(c.ascending);
+}

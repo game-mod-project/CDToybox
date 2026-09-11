@@ -277,8 +277,10 @@ void log_write(std::string_view what, std::uintptr_t target, std::string_view be
   `table_empty_row` — 질의가 있으면 "검색어 때문에 비어 있습니다" + `[지우기]`(질의를
   비운다), 없으면 "조건에 맞는 항목이 없습니다".
 - **로딩 게이트 통일**: 지급(세션 0개)·보관함(`items_named` 전)·동반자 아이템 탭이
-  `loading_gate` 를 쓴다. 지급 창은 월드 밖에서도 고른 아이템·키·개수 칸은 그리고 버튼만
-  막는다. 동반자 아이템 탭에 `draw_companion_drive_gate()`.
+  `loading_gate` 를 쓴다. 지급 창은 월드 밖에서도 고른 아이템·키·개수·담금질·소켓 칸은
+  그리고, 그 아래(막힌 이유·버튼·고급)는 게이트 문구가 대신한다(구현 판정 — 죽은 버튼과
+  게이트가 중복). 동반자 아이템 탭에 `draw_companion_drive_gate(DriveLane::Item)` —
+  지급 버튼은 Item 레인이라 Companion 레인을 보면 반대로 오해한다(최종 리뷰 정정).
 - **장비 창 표**: 열 = 부위(카탈로그 `category_name`) · 장비 · 연마 · 소켓 · 염색, `Resizable`,
   장비명 툴팁. 소켓은 칸마다 `SmallButton` 하나(`"0 심연의 광휘"` / `"3 비어 있음"` /
   `"4 잠김"`)를 `flow_same_line` 으로 흘린다. 누르면 **칸 팝업** `"소켓##equip_socket"`:
@@ -286,8 +288,9 @@ void log_write(std::string_view what, std::uintptr_t target, std::string_view be
   `confirm_small_button("비우기")`. 이를 위해 `gem_picker.cpp` 를 목록
   (`gem_list_draw(GemPicker*, const GemPickerOpts&, GemChoice*)` — 검색·표·선택·적용 버튼)
   과 팝업 껍데기(`gem_picker_draw`)로 나눈다. 보석 이름은 `grade_color`.
-- **인벤토리 표**: 버튼 라벨 `지급`·`보관`·`소켓 5칸`(뜻은 툴팁), 버튼 열 190 → 120,
-  `이름` 열 stretch 가중치 2.0. `보관` 은 목적지 세트 이름을 붙여 `보관 → <세트>`; 담은 뒤
+- **인벤토리 표**: 버튼 라벨 `지급`·`보관`·`소켓 5칸`(뜻은 툴팁), 버튼 열 190 → 160
+  (120 은 세 버튼이 안 들어간다 — 판정), `이름` 열 stretch 가중치 2.0. `보관` 은 라벨을
+  고정하고 목적지 세트 이름을 툴팁 `보관함의 '<세트>' 에 담습니다` 로(판정); 담은 뒤
   `Notice` "‘<이름>’ 을 <세트> 에 담았습니다". `걸기` 는 규칙 0개면 비활성. 소켓 상한
   안내에 "이미 가진 아이템은 표 아래 줄의 `소켓 5칸` 으로 레코드도 함께 열어야 합니다."
 - **지급 창**: 버튼 줄에 `flow_same_line`. `고급` 세션 표 `ScrollX`, `short_class` 가
@@ -303,7 +306,9 @@ void log_write(std::string_view what, std::uintptr_t target, std::string_view be
   ("자동 2초")`. 종 팝업 표 폭 = `min(620, 부모 창 폭 - 40)`. `"%zu / %zu 명"` → `"개체"`.
 - **색·문구**: 남은 리터럴 색 전부 `col::`. 어미 통일. 장비 창 `(순번 %u)` → `(카탈로그
   순번 %u)`.
-- **본창**: 쓰기 창(로스터·장비·플레이어) 라벨 옆 `TextDisabled("(쓰기)")`.
+- **본창**: 쓰기 창(로스터·장비·플레이어·인벤토리 — 소켓 열기·상한도 쓰기다) 체크박스 옆
+  `*` 표식 + 툴팁 "이 창은 게임 메모리를 바꿉니다" + 격자 아래 범례 한 줄. 처음의
+  `(쓰기)` 는 2열 격자(200px)를 넘어 옆 열과 겹쳤다(최종 리뷰 정정).
 - **1단계 최종 리뷰 이월**: 인벤 소켓 상한의 `g_cap_note` → Notice; 근처 탭 획득 성공을
   Ok 로; `apply_species` 를 `game::` 로 옮겨 명령 파일 경로도 같은 로그; 로스터 데이터
   표(탈것·용병 타입·캐릭터) 안내 어미 통일; `stash_panel` 의 리터럴 색 2곳; `Notice` 의
@@ -389,3 +394,51 @@ void log_write(std::string_view what, std::uintptr_t target, std::string_view be
 
 **최종 리뷰가 남긴 이월(4절에 반영됨).** `g_cap_note` → Notice, 근처 탭 성공 Ok, `apply_species` 의 `game::`
 이동, 로스터 데이터 표 어미, stash 리터럴 색, Notice UTF-8 절단·시계 되감김, confirm 라벨 79바이트 초과.
+
+## 9. 결과 — 2단계 (2026-09-11)
+
+브랜치 `feat/uiux-p2`(develop@a4c9a77 에서) — 태스크 9개 + 수정 라운드 3회(T2 표 높이, T5 팝업
+ID, 최종 wave) + 플랜 정정 3건, 커밋 17개. 태스크마다 opus 구현자·리뷰어, 마지막에 브랜치 전체
+최종 리뷰(With fixes → 수정 wave 1회 → 재리뷰 전부 해결). 테스트 **408 → 424**(전부 통과).
+
+### 공용 조각(2단계 신규)
+- `render/table_sort.h` — `SortSpec`·`cmp3`·`sort_view`(안정 정렬, 뷰에만). `render/table_sort_imgui.h` —
+  `table_sort_pull`. `render/view_cache.h` — `ViewKey`(tab·query·type·flags·sort·generation·count·stamp)
+  + `CachedView<T>`. `game::ItemKeyIndex`/`item_by_key`(판 교체 감지, 뮤텍스). `game::item_sort_from_specs`.
+- 정렬이 붙은 표 11개: 아이템 목록(해제 → 키 오름차순 복귀)·인벤·소켓 상한·세션·장비·로스터 6개.
+  tristate 표는 `DefaultSort` 열이 없으면 첫 프레임 정렬 없음(원래 순서)이다.
+
+### 판정 목록 (장부의 `Ruling:` 전부, 순서대로 — 틀렸으면 되돌릴 비용을 함께)
+1. T1 기대 테스트 수 13→12 는 플랜 덧셈 착오 — 기준선 420 으로 정정. (문서)
+2. 인벤 버튼 열 190→**160**, `보관` 라벨 고정 + 세트 이름은 툴팁·결과 줄. (숫자 하나)
+3. 본창 쓰기 표시에 **인벤토리 포함**(소켓 열기·상한이 쓰기). (조건 하나)
+4. Notice 시계 되감김은 **Gone**(옛 시계의 결과). (한 줄)
+5. `flow_same_line` 을 content-region 기준으로 재작성(표 칸 안에서도 흘림). (창에서는 같은 값)
+6. 기본 정렬 열: 근처 표 액터·핸들 NoSort + 이름 DefaultSort, 세션 표 횟수 내림차순, 나머지는 없음.
+7. `apply_species` 를 `game::` 으로 옮기되 명령 파일 연결은 하지 않음(호출자가 로스터뿐).
+8. T2: `ScrollX` 표는 자식 창이라 세션 표 높이를 머리글+8줄로 고정 + `ScrollY`. (한 줄)
+9. T2 리뷰 권장(대기 중 "끝났습니다" 문구)은 처음 보류 → 최종 리뷰가 뒤집어 분기 순서 수정.
+10. T5: 칸 팝업 confirm 버튼은 대상(인스턴스·칸)별 `PushID` — 무장 3초가 다른 장비로 넘어가던 회귀를 필수 수정으로.
+    소켓 라벨 `%.60s` 로 `##s%d` 보호.
+11. T7 구현자 우려(콘솔 명령의 `refresh_live_actors` 가 stamp 를 안 올림)는 `swap`/`move` 갱신이라 주소가 겹칠 수
+    없어 조치 불필요 — 최종 리뷰는 별도로 **스레드 경쟁**(콘솔 스레드가 렌더 스레드와 같은 벡터를 갈아엎음)을
+    기존 결함으로 지목 → 후속 태스크(아래).
+12. T7 리뷰 권장: 종 팝업 빈 상태 두 갈래 문구, 팝업 폭 하한 160 → T8 에 포함.
+13. T9 이월 9건(주석 정밀화·테스트 전제 주석·`max_temper` 선형 탐색 제거·머리글 루프 PushID·열 폭 44·`g_tab`
+    초기값·`msg` 널 금지 주석 등) 채택.
+14. 최종 리뷰: I-1 아이템 탭 게이트 레인(Item), I-2 지급 결과 줄 순서(대기 먼저), I-3 본창 표식 `*`,
+    M-1·M-2·M-6·M-10 — 한 wave 로 수정(d132143).
+15. 보류(코드 그대로): 개수 줄 한 프레임 지연(표 9개 공통, 자가 복구) · 소켓 상한 표 매 프레임 정렬(접힘 안) ·
+    장비 `부위` 열은 분류 번호로 정렬(같은 부위끼리 모임) · 보관함 줄 루프의 `item_by_key`(수십 행) ·
+    포획 탭 이름 열 정렬 키 `label`(표시 값과 일치) · confirm 라벨 200바이트 초과 시 표시만 잘림.
+
+### 알려진 문제 · 후속
+- **콘솔 명령 스레드 경쟁(기존 결함)**: `actordiff`/`actordump` 가 명령 스레드에서 `refresh_live_actors` 를 불러
+  렌더 스레드가 그리는 `g_live` 를 갈아엎는다(`actors.cpp` 의 "그리는 스레드만" 규약 위반). 값싼 경화: 갱신
+  세대 카운터를 `game::` 안에 두고 `refresh_live_actors` 가 올리게 하면 어느 스레드가 불러도 캐시가 무효화된다 —
+  정공법은 콘솔 refresh 를 렌더 스레드로 넘기는 것. 별도 태스크.
+- 지급 창 결과 줄은 여전히 "내 결과가 끝난 뒤 남이 덮으면" `다른 창의 지급 결과` 가 된다(참인 문구).
+- 오버레이가 켜진 동안 게임 입력(raw input·`GetAsyncKeyState`)이 새는 문제는 별도 브랜치 `fix/overlay-input`.
+
+### 화면 검증
+(배포 뒤 기록)

@@ -15,6 +15,7 @@
 #include "render/gates.h"
 #include "render/icon_atlas.h"
 #include "render/layout.h"
+#include "render/overlay.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -118,18 +119,15 @@ void draw_pager(std::size_t total) {
 
 void apply_sort_specs() {
     ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
-    if (specs == nullptr || !specs->SpecsDirty || specs->SpecsCount == 0) {
-        return;
-    }
-    const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
-    // 0번은 별표 칸이다(정렬 없음). 나머지가 한 칸씩 밀렸다.
-    switch (s.ColumnIndex) {
-        case 2: g_sort = game::ItemSort::Grade; break;
-        case 3: g_sort = game::ItemSort::Category; break;
-        case 4: g_sort = game::ItemSort::Name; break;
-        default: g_sort = game::ItemSort::Key; break;
-    }
-    g_ascending = (s.SortDirection == ImGuiSortDirection_Ascending);
+    if (specs == nullptr || !specs->SpecsDirty) return;
+    // 해제(SpecsCount 0)도 사양이다 - 키 오름차순으로 되돌린다.
+    const bool has = specs->SpecsCount > 0;
+    const game::ItemSortChoice c = game::item_sort_from_specs(
+        specs->SpecsCount, has ? specs->Specs[0].ColumnIndex : -1,
+        has ? specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending
+            : true);
+    g_sort = c.sort;
+    g_ascending = c.ascending;
     g_dirty = true;
     specs->SpecsDirty = false;
 }
@@ -190,10 +188,32 @@ void draw_item_panel(bool* open) {
                                 120.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
+        // 머리글을 직접 그린다 - ★ 칸에 툴팁을 달기 위해서다. 6,810줄에서 가장
+        // 눈에 안 띄는 기능이라 머리글이 뜻을 말해야 한다.
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) {
+            if (!ImGui::TableSetColumnIndex(c)) continue;   // TableHeadersRow 처럼 숨은 열은 건너뛴다
+            ImGui::PushID(c);   // TableHeadersRow 와 같게 - 이름 없는 칸이 생겨도 ID 가 안 겹친다
+            ImGui::TableHeader(ImGui::TableGetColumnName(c));
+            if (c == 0 && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("★ 는 보관함 즐겨찾기입니다 - 보관함 창에 모입니다");
+            }
+            ImGui::PopID();
+        }
 
         apply_sort_specs();
         if (g_dirty) rebuild();
+
+        if (g_view.empty()) {
+            const bool has_query = g_bar.query[0] != 0;
+            if (table_empty_row(4,
+                                has_query ? "검색어 때문에 비어 있습니다"
+                                          : "조건에 맞는 아이템이 없습니다",
+                                has_query ? "지우기" : nullptr)) {
+                g_bar.query[0] = 0;
+                g_dirty = true;
+            }
+        }
 
         const auto r = game::page_range(g_view.size(), g_page, per_page());
         for (std::size_t i = r.begin; i < r.end; ++i) {
@@ -207,7 +227,7 @@ void draw_item_panel(bool* open) {
             ImGui::TableSetColumnIndex(0);
             const bool fav = stash_is_favorite(e.key);
             ImGui::PushID(static_cast<int>(e.key));
-            if (ImGui::SmallButton(fav ? "★" : "☆")) {
+            if (ImGui::SmallButton(fav ? "★##fav" : "☆##fav")) {
                 stash_toggle_favorite(e.key);
             }
             ImGui::PopID();
@@ -224,6 +244,8 @@ void draw_item_panel(bool* open) {
                 std::snprintf(just_key, sizeof(just_key), "%u", e.key);
                 ImGui::SetClipboardText(just_key);
                 set_grant_item_key(e.key);   // 지급 칸에도 넣는다
+                // 지급 창이 닫혀 있으면 아무 일도 없어 보였다
+                overlay::show_window(cdtb::render::Win::Grant);
             }
 
             ImGui::TableSetColumnIndex(2);

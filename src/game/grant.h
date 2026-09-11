@@ -330,6 +330,7 @@ struct SpawnOutcome {
     std::uint32_t seh = 0;      // 예외 코드
     std::uintptr_t fault = 0;   // 터진 주소
     std::uint32_t result = 0;   // 게임이 낸 코드. 0 이면 성공
+    std::uint32_t serial = 0;   // 어느 요청의 결과인가. request_* 가 매긴다
 };
 
 // 아이템을 발밑 바닥에 떨군다. 인벤토리에서 버리기와 같은 루틴이라
@@ -546,6 +547,17 @@ bool hire_species_ready();
 // 그 레인에 걸린 요청이 있는가.
 bool spawn_pending(DriveLane lane);
 const SpawnOutcome& last_outcome();
+
+// 마지막으로 건 요청의 번호. 결과의 serial 과 같을 때만 "내 결과"다 - 지급
+// 창·보관함·로스터가 같은 결과 칸을 보므로, 남의 결과를 내 것처럼 읽지 않는다.
+std::uint32_t last_request_serial();
+inline bool outcome_is_mine(const SpawnOutcome& o, std::uint32_t my_serial) {
+    return o.serial == my_serial;
+}
+
+// RTTI 망글 이름을 사람 눈에 맞게 자른다 - ".?AV" 뒤부터 첫 '@' 앞까지.
+// 비어 있거나 널이면 "(확인 중)". out 은 늘 종료된다(n 은 1 이상).
+void short_class_name(const char* mangled, char* out, std::size_t n);
 
 // 바닥 스폰 메시지를 해석해 둔다.
 bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader);

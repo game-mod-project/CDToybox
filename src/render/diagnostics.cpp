@@ -33,7 +33,7 @@ Diagnostics compute() {
     const auto self = find_module(L"xinput1_4.dll");
     const auto marker_pat = parse_pattern(kMarkerPattern);
     if (!self.has_value() || !marker_pat.has_value()) {
-        d.error = "자기 모듈 또는 마커 패턴을 준비하지 못했다";
+        d.error = "자기 모듈 또는 마커 패턴을 준비하지 못했습니다";
         return d;
     }
     if (const std::uint8_t* hit =
@@ -46,7 +46,7 @@ Diagnostics compute() {
     const auto game = find_module(nullptr);
     const auto prologue_pat = parse_pattern(kProloguePattern);
     if (!game.has_value() || !prologue_pat.has_value()) {
-        d.error = "게임 모듈 또는 프롤로그 패턴을 준비하지 못했다";
+        d.error = "게임 모듈 또는 프롤로그 패턴을 준비하지 못했습니다";
         return d;
     }
     d.game_base = reinterpret_cast<std::uintptr_t>(game->base);

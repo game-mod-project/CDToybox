@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -134,6 +135,7 @@ struct Pending {
     MessageDesc msg;
     std::uint8_t wire[kMessageWireMax]{};
     std::size_t wire_len = 0;
+    std::uint32_t serial = 0;   // 요청 번호(stamp_request)
 };
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
@@ -363,6 +365,17 @@ void log_normal_stack() {
 }
 SpawnOutcome g_outcome;
 
+std::atomic<std::uint32_t> g_request_serial{0};
+
+// 요청마다 번호를 매기고 결과 칸을 비운다. 창은 자기 번호의 결과만 읽는다.
+void stamp_request(LaneSlot& lane) {
+    const std::uint32_t s =
+        g_request_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
+    lane.req.serial = s;
+    g_outcome = SpawnOutcome{};
+    g_outcome.serial = s;
+}
+
 // 작업 디스패처. 여기 진입점이 안전한 실행 지점이다 - 스택이 얕고
 // 아직 아무 작업도 시작하지 않았다.
 using TaskDispatchFn = void(__fastcall*)(void*);
@@ -499,6 +512,8 @@ bool run_one_picked() {
                             &g_outcome);
                 break;
         }
+        // run_* 가 결과를 통째로 덮어 번호가 지워진다.
+        g_outcome.serial = req.serial;
         // 종류를 가리지 않는다. 게임 안에서 죽었다는 것은 우리가
         // 넘긴 세션이 이미 풀렸다는 뜻이고 - 실측 2026-09-06: 죽은
         // 자리가 `mov rax,[세션+0x88]` 이었다 - 같은 자리로 또 보내면
@@ -1295,7 +1310,7 @@ bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
     lane.req.kind = Kind::HireSpecies;
     lane.req.session = session;
     lane.req.key = char_key;
-    g_outcome = SpawnOutcome{};
+    stamp_request(lane);
     lane.at.store(GetTickCount64(), std::memory_order_release);
     lane.has.store(true, std::memory_order_release);
     log::infof("종 등록 요청을 걸었다 (키 {}) - 게임 스레드를 기다린다",
@@ -1824,7 +1839,7 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
     lane.req.session = session;
     lane.req.a = a;
     lane.req.b = b;
-    g_outcome = SpawnOutcome{};
+    stamp_request(lane);
     lane.at.store(GetTickCount64(), std::memory_order_release);
     lane.has.store(true, std::memory_order_release);
     log::infof("내구도 요청을 걸었다");
@@ -1998,7 +2013,7 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
     lane.req.msg = msg;
     std::memcpy(lane.req.wire, wire, len);
     lane.req.wire_len = len;
-    g_outcome = SpawnOutcome{};
+    stamp_request(lane);
     lane.at.store(GetTickCount64(), std::memory_order_release);
     lane.has.store(true, std::memory_order_release);
     log::infof("메시지 구동 요청을 걸었다 (ID {} 길이 {}) - 게임 스레드를 기다린다",
@@ -2037,12 +2052,12 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
     safe.socket_count =
         clamp_socket_count(extras.socket_count, socket_room_for(item_key));
     lane.req.extras = safe;
-    g_outcome = SpawnOutcome{};
+    stamp_request(lane);
     lane.at.store(GetTickCount64(), std::memory_order_release);
     lane.has.store(true, std::memory_order_release);
-    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}"
-               " 소켓 {}/{}) - 게임 스레드를 기다린다",
-               safe.temper, safe.endurance, safe.sharpness,
+    log::infof("인벤토리 지급 요청을 걸었다 key={} count={} (담금질 {} 내구도 {}"
+               " 연마 {} 소켓 {}/{}) - 게임 스레드를 기다린다",
+               item_key, count, safe.temper, safe.endurance, safe.sharpness,
                static_cast<int>(safe.socket_count),
                static_cast<int>(extras.socket_count));
     return true;
@@ -2070,10 +2085,11 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
     lane.req.pos[0] = pos[0];
     lane.req.pos[1] = pos[1];
     lane.req.pos[2] = pos[2];
-    g_outcome = SpawnOutcome{};
+    stamp_request(lane);
     lane.at.store(GetTickCount64(), std::memory_order_release);
     lane.has.store(true, std::memory_order_release);
-    log::infof("바닥 스폰 요청을 걸었다 - 게임 스레드를 기다린다");
+    log::infof("바닥 스폰 요청을 걸었다 key={} count={} - 게임 스레드를 기다린다",
+               item_key, count);
     return true;
 }
 
@@ -2087,6 +2103,27 @@ bool spawn_pending(DriveLane lane) {
 }
 
 const SpawnOutcome& last_outcome() { return g_outcome; }
+
+std::uint32_t last_request_serial() {
+    return g_request_serial.load(std::memory_order_acquire);
+}
+
+void short_class_name(const char* mangled, char* out, std::size_t n) {
+    if (n == 0) return;
+    if (mangled == nullptr || mangled[0] == 0) {
+        std::snprintf(out, n, "%s", "(확인 중)");
+        return;
+    }
+    const char* p = std::strstr(mangled, ".?AV");
+    const char* s = (p != nullptr) ? p + 4 : mangled;
+    // "@pa@@" 같은 망글 꼬리는 사람 눈엔 잡음이다.
+    std::size_t i = 0;
+    while (s[i] != 0 && s[i] != '@' && i + 1 < n) {
+        out[i] = s[i];
+        ++i;
+    }
+    out[i] = 0;
+}
 
 
 }  // namespace cdtb::game

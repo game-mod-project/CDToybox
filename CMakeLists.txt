@@ -138,6 +138,7 @@ add_executable(cdtb_tests
     tests/ui_state_tests.cpp
     tests/layout_tests.cpp
     tests/core_helpers_tests.cpp
+    tests/table_sort_tests.cpp
     src/input/cursor.cpp
     src/game/grant.cpp
     src/game/stash.cpp

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdio>
 #include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -13,16 +14,18 @@
 #include "mem/reader.h"
 #include "render/confirm.h"
 #include "render/gem_picker.h"
+#include "render/item_style.h"
 #include "render/layout.h"
 #include "render/notice.h"
+#include "render/table_sort_imgui.h"
 
 namespace cdtb::render {
 namespace {
 
-std::uint64_t g_gem_inst = 0;   // 보석을 박을 대상 아이템 인스턴스
-int g_gem_k = -1;               // 그 아이템의 소켓 칸
-char g_gem_title[96]{};         // 보석 팝업 제목 - 어느 장비의 몇 번 칸인지
-GemPicker g_gem_picker;         // 보석 고르기 팝업 (지급 창과 같은 위젯)
+std::uint64_t g_sock_inst = 0;   // 칸 팝업의 대상 장비 인스턴스
+int g_sock_k = -1;               // 그 장비의 칸
+bool g_sock_open_req = false;    // 다음 프레임에 팝업을 연다
+GemPicker g_sock_picker;         // 칸 팝업 안의 보석 목록 상태
 Notice g_notice;
 std::map<std::uint64_t, int> g_refine_edit;
 
@@ -41,28 +44,108 @@ const char* name_of_sunbeon(std::uint32_t sunbeon) {
     return e.name.empty() ? nullptr : e.name.c_str();
 }
 
-void draw_gem_popup(const mem::Reader& reader) {
-    GemPickerOpts o;   // 빈 칸에만 '채우기' 가 뜨므로 강조할 현재 보석은 없다
-    o.title = g_gem_title;
-    GemChoice c;
-    if (!gem_picker_draw(&g_gem_picker, o, &c) || c.entry == nullptr) return;
-    // 소켓에 박는 값은 그 보석의 순번(= 카탈로그 인덱스).
-    const int w = game::eq_write_socket(reader, g_gem_inst, g_gem_k,
-                                        static_cast<std::uint16_t>(c.index));
-    if (w >= 2) {
-        notice_set(&g_notice, NoticeLevel::Ok,
-                   "소켓 {}에 '{}' 을 박았습니다 (클라·서버 모두). 벗었다 다시"
-                   " 착용하면 화면에 반영됩니다.",
-                   g_gem_k, c.entry->name);
-    } else if (w == 1) {
-        notice_set(&g_notice, NoticeLevel::Warn,
-                   "소켓 {}에 '{}' 을 한쪽만 박았습니다 - 다시 시도하세요.",
-                   g_gem_k, c.entry->name);
-    } else {
-        notice_set(&g_notice, NoticeLevel::Bad,
-                   "쓰기 실패 (잠긴 소켓이거나 대상 없음).");
+// 소켓 칸 팝업. 표에는 칸마다 버튼 하나만 두고 열기·비우기·보석 고르기는
+// 여기서 한다 - 한 줄에 열기·비우기·채우기가 다섯 칸씩 늘어서 창을 넓혀도
+// 다 안 보였다. 문구는 1단계의 것 그대로다.
+void draw_socket_popup(const mem::Reader& reader,
+                       const std::vector<game::WornPiece>& pieces) {
+    if (g_sock_open_req) {
+        ImGui::OpenPopup("소켓##equip_socket");
+        g_sock_open_req = false;
     }
-    game::equip_refresh_pieces(reader);
+    if (!ImGui::BeginPopup("소켓##equip_socket")) return;
+    const game::WornPiece* w = nullptr;
+    for (const auto& p : pieces) {
+        if (p.instance == g_sock_inst) {
+            w = &p;
+            break;
+        }
+    }
+    if (w == nullptr || g_sock_k < 0 || g_sock_k >= 5) {
+        ImGui::TextDisabled("대상을 잃었습니다 - 장비를 바꿨거나 스냅샷이"
+                            " 갱신됐습니다");
+        ImGui::EndPopup();
+        return;
+    }
+    // 확인 버튼의 무장 상태는 ImGui ID 로 키잉된다 - 대상(장비·칸)마다 ID 를
+    // 밀어야 A 장비에서 무장한 3초가 B 장비로 넘어가지 않는다(1단계와 같은 격리).
+    ImGui::PushID(reinterpret_cast<const void*>(
+        static_cast<std::uintptr_t>(w->instance)));
+    ImGui::PushID(g_sock_k);
+    const char* nm = name_of_sunbeon(w->key);
+    ImGui::Text("%s 소켓 %d", nm != nullptr ? nm : "(이름 없음)", g_sock_k);
+    ImGui::Separator();
+    const game::WornSocket& s = w->sockets[g_sock_k];
+    if (s.locked()) {
+        // 잠긴 칸도 열 수 있다(실측 2026-09-08). 앞 칸이 잠겨 있으면 그 칸부터
+        // 순서대로 열린다.
+        ImGui::TextDisabled("잠긴 칸입니다. 앞 칸부터 순서대로 열립니다.");
+        if (confirm_button("이 칸 열기")) {
+            const int n = game::eq_unlock_sockets(reader, w->instance,
+                                                  g_sock_k + 1);
+            if (n > 0) {
+                notice_set(&g_notice, NoticeLevel::Ok,
+                           "소켓 {}칸까지 열었습니다. 벗었다 다시 착용하면"
+                           " 화면에 반영됩니다.",
+                           g_sock_k + 1);
+            } else {
+                notice_set(&g_notice, NoticeLevel::Bad,
+                           "열기 실패 (대상 없음).");
+            }
+            game::equip_refresh_pieces(reader);
+        }
+    } else {
+        if (s.filled()) {
+            const char* gn = name_of_sunbeon(s.gem);
+            ImGui::Text("지금: %s", gn != nullptr ? gn : "(보석)");
+            ImGui::SameLine();
+            if (confirm_small_button("비우기")) {
+                const int wc = game::eq_write_socket(reader, w->instance,
+                                                     g_sock_k, 0xFFFF);
+                if (wc >= 1) {
+                    notice_set(&g_notice, NoticeLevel::Ok,
+                               "소켓 {} 을 비웠습니다. 벗었다 다시 착용하면"
+                               " 화면에 반영됩니다.",
+                               g_sock_k);
+                } else {
+                    notice_set(&g_notice, NoticeLevel::Bad, "비우기 실패.");
+                }
+                game::equip_refresh_pieces(reader);
+            }
+        } else {
+            ImGui::TextDisabled("빈 칸입니다. 아래에서 골라 적용하세요.");
+        }
+        GemPickerOpts o;
+        o.title = "박을 보석";
+        const auto& cat = game::item_catalog();
+        o.selected_key = (s.filled() && s.gem < cat.size()) ? cat[s.gem].key : 0;
+        GemChoice c;
+        if (gem_list_draw(&g_sock_picker, o, &c) && c.entry != nullptr) {
+            // 소켓에 박는 값은 그 보석의 순번(= 카탈로그 인덱스).
+            const int wc =
+                game::eq_write_socket(reader, w->instance, g_sock_k,
+                                      static_cast<std::uint16_t>(c.index));
+            if (wc >= 2) {
+                notice_set(&g_notice, NoticeLevel::Ok,
+                           "소켓 {}에 '{}' 을 박았습니다 (클라·서버 모두)."
+                           " 벗었다 다시 착용하면 화면에 반영됩니다.",
+                           g_sock_k, c.entry->name);
+            } else if (wc == 1) {
+                notice_set(&g_notice, NoticeLevel::Warn,
+                           "소켓 {}에 '{}' 을 한쪽만 박았습니다 - 다시"
+                           " 시도하세요.",
+                           g_sock_k, c.entry->name);
+            } else {
+                notice_set(&g_notice, NoticeLevel::Bad,
+                           "쓰기 실패 (잠긴 소켓이거나 대상 없음).");
+            }
+            game::equip_refresh_pieces(reader);
+        }
+    }
+    notice_draw(g_notice);
+    ImGui::PopID();
+    ImGui::PopID();
+    ImGui::EndPopup();
 }
 
 // 염색 고르기. 이 조각이 가진 zone 레코드마다 색을 바꾼다. zone 이
@@ -211,35 +294,94 @@ void draw_equip_panel(bool* open) {
         }
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(잠긴 칸까지 연다)");
+    ImGui::TextDisabled("(잠긴 칸까지 엽니다)");
 
     notice_draw(g_notice);
 
     constexpr ImGuiTableFlags kF = ImGuiTableFlags_Borders |
                                    ImGuiTableFlags_RowBg |
-                                   ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("worn", 4, kF)) {
-        ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+                                   ImGuiTableFlags_ScrollY |
+                                   ImGuiTableFlags_Resizable |
+                                   ImGuiTableFlags_Sortable |
+                                   ImGuiTableFlags_SortTristate;
+    if (ImGui::BeginTable("worn", 5, kF)) {
+        ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthFixed |
+                                            ImGuiTableColumnFlags_DefaultSort,
+                                90.0f);
+        ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthStretch,
+                                1.0f);
         ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-        ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("염색", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+        ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch |
+                                            ImGuiTableColumnFlags_NoSort,
+                                2.0f);
+        ImGui::TableSetupColumn("염색", ImGuiTableColumnFlags_WidthFixed |
+                                            ImGuiTableColumnFlags_NoSort,
+                                90.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
-        int rowid = 0;
-        for (const auto& w : pieces) {
-            ImGui::PushID(rowid++);
+        // 12줄이라 매 프레임 정렬해도 된다. 스냅샷은 매 프레임 새 벡터다.
+        static SortSpec sort;
+        table_sort_pull(&sort);
+        const auto& cat = game::item_catalog();
+        const auto ent = [&](const game::WornPiece& w)
+            -> const game::ItemCatalogEntry* {
+            // w.key 는 카탈로그 순번
+            return w.key < cat.size() ? &cat[w.key] : nullptr;
+        };
+        std::vector<const game::WornPiece*> view;
+        view.reserve(pieces.size());
+        for (const auto& w : pieces) view.push_back(&w);
+        sort_view(view, sort, [&](const game::WornPiece* a,
+                                  const game::WornPiece* b, int col) {
+            switch (col) {
+                case 0: {
+                    const auto* ea = ent(*a);
+                    const auto* eb = ent(*b);
+                    return cmp3(
+                        static_cast<long long>(ea != nullptr ? ea->category : 255),
+                        static_cast<long long>(eb != nullptr ? eb->category : 255));
+                }
+                case 1: {
+                    const char* na = name_of_sunbeon(a->key);
+                    const char* nb = name_of_sunbeon(b->key);
+                    return cmp3(std::string(na != nullptr ? na : ""),
+                                std::string(nb != nullptr ? nb : ""));
+                }
+                default:
+                    return cmp3(static_cast<long long>(a->refine),
+                                static_cast<long long>(b->refine));
+            }
+        });
+
+        for (const game::WornPiece* wp : view) {
+            const game::WornPiece& w = *wp;
+            // 행 ID 는 인스턴스 - 정렬로 줄이 옮겨도 무장 확인이 딴 장비로
+            // 안 간다.
+            ImGui::PushID(reinterpret_cast<const void*>(
+                static_cast<std::uintptr_t>(w.instance)));
             ImGui::TableNextRow();
 
-            ImGui::TableNextColumn();
-            const char* nm = name_of_sunbeon(w.key);
-            if (nm) {
-                ImGui::TextUnformatted(nm);
+            ImGui::TableNextColumn();   // 부위
+            const game::ItemCatalogEntry* e = ent(w);
+            const char* part =
+                e != nullptr ? category_name(e->category) : nullptr;
+            if (part != nullptr) {
+                ImGui::TextUnformatted(part);
             } else {
-                ImGui::Text("(순번 %u)", w.key);
+                ImGui::TextDisabled("-");
             }
 
-            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();   // 장비
+            const char* nm = name_of_sunbeon(w.key);
+            if (nm != nullptr) {
+                ImGui::TextUnformatted(nm);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", nm);
+            } else {
+                ImGui::Text("(카탈로그 순번 %u)", w.key);
+            }
+
+            ImGui::TableNextColumn();   // 연마 - 기존 InputInt + 적용 코드 그대로
             // 편집값은 인스턴스별로 유지한다. 매 프레임 스냅샷으로 덮으면
             // 입력이 리셋돼 값이 안 바뀐다(연마가 안 먹던 원인).
             int& rf = g_refine_edit.try_emplace(w.instance, w.refine)
@@ -268,65 +410,37 @@ void draw_equip_panel(bool* open) {
                 game::equip_refresh_pieces(reader);
             }
 
-            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();   // 소켓 - 칸마다 버튼 하나, 칸 안에서 흘린다
             for (int k = 0; k < 5; ++k) {
-                const auto& s = w.sockets[k];
-                ImGui::PushID(k);
-                if (s.index == 0xFF) {
-                    // 잠긴 칸도 열 수 있다(실측 2026-09-08). 게임의 지급
-                    // 코드가 하는 것과 같은 두 줄 - 레코드 +0x70 과 칸[4].
-                    // 앞칸이 잠겨 있으면 그 칸부터 순서대로 열린다.
-                    ImGui::TextDisabled("%d:", k);
-                    ImGui::SameLine();
-                    if (confirm_small_button("열기")) {
-                        const int n = game::eq_unlock_sockets(reader,
-                                                              w.instance, k + 1);
-                        if (n > 0) {
-                            notice_set(&g_notice, NoticeLevel::Ok,
-                                       "소켓 {}칸까지 열었습니다. 벗었다 다시"
-                                       " 착용하면 화면에 반영됩니다.",
-                                       k + 1);
-                        } else {
-                            notice_set(&g_notice, NoticeLevel::Bad,
-                                       "열기 실패 (대상 없음).");
-                        }
-                        game::equip_refresh_pieces(reader);
-                    }
-                } else if (s.marker == 0xFFFF && s.gem != 0xFFFF) {
+                const game::WornSocket& s = w.sockets[k];
+                char lb[96];
+                if (s.locked()) {
+                    std::snprintf(lb, sizeof(lb), "%d 잠김##s%d", k, k);
+                } else if (s.filled()) {
                     const char* gn = name_of_sunbeon(s.gem);
-                    ImGui::Text("%d: %s", k, gn ? gn : "(보석)");
-                    if (gn && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", gn);
-                    ImGui::SameLine();
-                    if (confirm_small_button("비우기")) {
-                        const int wc = game::eq_write_socket(reader, w.instance,
-                                                             k, 0xFFFF);
-                        if (wc >= 1) {
-                            notice_set(&g_notice, NoticeLevel::Ok,
-                                       "소켓 {} 을 비웠습니다. 벗었다 다시"
-                                       " 착용하면 화면에 반영됩니다.",
-                                       k);
-                        } else {
-                            notice_set(&g_notice, NoticeLevel::Bad,
-                                       "비우기 실패.");
-                        }
-                        game::equip_refresh_pieces(reader);
-                    }
+                    // 이름은 60바이트까지만 - 라벨이 잘려도 ID 접미사 ##s%d 는 남아야 한다.
+                    std::snprintf(lb, sizeof(lb), "%d %.60s##s%d", k,
+                                  gn != nullptr ? gn : "(보석)", k);
                 } else {
-                    ImGui::Text("%d:", k);
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("채우기")) {
-                        g_gem_inst = w.instance;
-                        g_gem_k = k;
-                        const char* nm = name_of_sunbeon(w.key);
-                        std::snprintf(g_gem_title, sizeof(g_gem_title), "%s 소켓 %d",
-                                      nm != nullptr ? nm : "(이름 없음)", k);
-                        gem_picker_open(&g_gem_picker);
-                    }
+                    std::snprintf(lb, sizeof(lb), "%d 비어 있음##s%d", k, k);
                 }
-                ImGui::PopID();
+                if (k > 0) {
+                    flow_same_line(ImGui::CalcTextSize(lb, nullptr, true).x +
+                                   ImGui::GetStyle().FramePadding.x * 2.0f);
+                }
+                if (ImGui::SmallButton(lb)) {
+                    g_sock_inst = w.instance;
+                    g_sock_k = k;
+                    g_sock_open_req = true;
+                    gem_picker_reset(&g_sock_picker);
+                }
+                if (s.filled() && ImGui::IsItemHovered()) {
+                    const char* gn = name_of_sunbeon(s.gem);
+                    if (gn != nullptr) ImGui::SetTooltip("%s", gn);
+                }
             }
 
-            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();   // 염색 - 기존 코드 그대로
             if (w.dyes.empty()) {
                 ImGui::TextDisabled("없음");
             } else {
@@ -343,7 +457,7 @@ void draw_equip_panel(bool* open) {
         ImGui::EndTable();
     }
 
-    draw_gem_popup(reader);
+    draw_socket_popup(reader, pieces);
     draw_dye_popup(reader, pieces);
     ImGui::End();
 }

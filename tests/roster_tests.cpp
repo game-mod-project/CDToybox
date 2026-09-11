@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "fake_memory.h"
+#include "game/clan.h"
 #include "game/roster.h"
 #include "harness.h"
 
@@ -243,4 +244,16 @@ TEST(roster_name_suffix_says_none_without_an_underscore_number) {
 TEST(roster_name_suffix_rejects_an_overlong_run) {
     // u32 를 넘길 만큼 긴 숫자는 버린다. 넘치면 엉뚱한 엔티티가 된다.
     CHECK_EQ(cdtb::game::roster_name_suffix("Animal_X_1234567890"), 0u);
+}
+
+TEST(apply_species_without_rtti_reports_not_ready) {
+    // RTTI 가 없는 프로세스에서는 자리를 찾기 전에 돌아온다 - 아무것도 안 쓴다
+    // 이 실행 파일은 camera.cpp 를 링크하지 않아 discover_clan 이 불리지 않는다 -
+    // g_rtti 는 늘 nullptr 이다.
+    // 나머지 갈래(NoTarget·WriteFailed·VerifyMismatch)는 살아 있는 게임에서만 실측한다.
+    cdtb::tests::FakeMemory mem;
+    std::string msg;
+    const auto r = cdtb::game::apply_species(mem, 1, 2, &msg);
+    CHECK(r == cdtb::game::SpeciesApply::NoRtti);
+    CHECK(msg == "RTTI 준비 전입니다");
 }

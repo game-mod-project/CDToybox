@@ -184,6 +184,13 @@ const std::vector<ClanEntry>& clan_roster();
 // 오버레이가 resolve_species_write 를 부르려면 이것이 필요하다.
 const mem::Rtti* clan_rtti();
 
+// 종을 바꿔 쓴다(클라·서버 양쪽). 주소는 그 자리에서 다시 찾는다 - 들고 있다가
+// 쓰면 안 된다(2026-09-09 사고). 쓰기 로그는 여기서 남긴다. msg 에 화면 문구.
+// msg 는 널이면 안 된다.
+enum class SpeciesApply { Ok, NoRtti, NoTarget, WriteFailed, VerifyMismatch };
+SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
+                           std::uint16_t row, std::string* msg);
+
 // 클라이언트 쪽 명부를 걷는다. 서버와 따로 가지고 있으므로
 // 둘을 비교하면 ‘서버에는 들어갔는데 클라가 모른다’ 를 잡을 수 있다.
 // 획득 직후 소환이 먹통이 되는 증상의 유력 후보다(조사 2026-09-09).
