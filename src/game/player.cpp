@@ -1,4 +1,5 @@
 #include "game/player.h"
+#include "game/actors.h"
 
 #include <windows.h>
 
@@ -52,6 +53,14 @@ bool wr32(std::uintptr_t a, std::int32_t v) {
 }
 
 }  // namespace
+
+// char -> [+0x68] actor -> [+0x20] marker -> [+0x18] root. 게이지 배열은 root+0x58.
+std::uintptr_t char_root(const mem::Reader& reader, std::uintptr_t ch) {
+    if (!vp(ch)) return 0;
+    const std::uintptr_t actor = q(reader, ch, 0x68);
+    const std::uintptr_t mark = q(reader, actor, 0x20);
+    return q(reader, mark, 0x18);
+}
 
 std::uintptr_t player_gauge_array(const mem::Reader& reader, std::uintptr_t ch) {
     if (!vp(ch)) return 0;
@@ -130,6 +139,41 @@ void player_discover(const mem::Reader& reader) {
     g_char.store(want, std::memory_order_release);
     g_arr.store(arr, std::memory_order_release);
     rebuild_player_arrs(reader, arr);
+}
+
+int player_roots(const mem::Reader& reader, std::uintptr_t* out, int max) {
+    if (out == nullptr || max <= 0) return 0;
+    int n = 0;
+    auto push = [&](std::uintptr_t r) {
+        if (!vp(r) || n >= max) return;
+        for (int i = 0; i < n; ++i) {
+            if (out[i] == r) return;
+        }
+        out[n++] = r;
+    };
+    // 지금 고른 캐릭터의 root 를 먼저 넣는다.
+    const std::uintptr_t ch = player_char();
+    push(char_root(reader, ch));
+    // 같은 캐릭터의 **다른 realm** 을 찾아 함께 넣는다. player_char() 가 클라·서버
+    // 중 어느 쪽을 집을지 보장되지 않는데, 데미지 디스패처는 서버 root 를 rcx 로
+    // 넘긴다(2026-09-12 실측) - 클라 쪽이 잡힌 실행에서는 낙사 훅이 한 번도 안
+    // 물렸다. 캐릭터 행으로 짝지어 둘 다 먹인다.
+    const std::uint16_t want = equip_current_character();
+    if (want == kEquipAutoCharacter) return n;   // 행을 못 풀면 지금 것만
+    std::vector<EquipTable> tabs;
+    equip_tables_copy(&tabs);
+    for (const auto& t : tabs) {
+        if (n >= max) break;
+        if (t.comp == 0) continue;
+        const std::uintptr_t c = q(reader, t.comp, 0x08);
+        if (c == 0 || c == ch) continue;
+        if (!char_is_player(reader, c)) continue;
+        std::uint16_t row = 0;
+        if (!actor_character_row(reader, c, &row)) continue;
+        if (row != want) continue;
+        push(char_root(reader, c));
+    }
+    return n;
 }
 
 std::uintptr_t player_char() { return g_char.load(std::memory_order_acquire); }

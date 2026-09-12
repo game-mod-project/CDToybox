@@ -76,7 +76,8 @@ struct NofallDiag {
     std::uint64_t last_rcx = 0;  // 마지막으로 본 rcx
     std::uint64_t last_rdx = 0;  // 마지막 rdx (하위 16비트가 dx)
     std::uint64_t last_r9 = 0;   // 마지막 델타
-    std::uint64_t owner = 0;     // 지금 먹이고 있는 내 root
+    std::uint64_t owner = 0;     // 지금 먹이고 있는 내 root #1
+    std::uint64_t owner2 = 0;    // 같은 캐릭터의 다른 realm root
 };
 NofallDiag nofall_diag();
 
