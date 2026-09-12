@@ -151,15 +151,22 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (!g_state.compare_exchange_strong(expect, 1, std::memory_order_acq_rel)) {
         return g_state.load(std::memory_order_acquire) == 2;
     }
-    // 여기부터는 이 스레드 혼자다. 어느 갈래로 나가든 g_state 를 되돌려 놓는다.
-    auto give_up = [&]() { g_state.store(0, std::memory_order_release); };
+    // 여기부터는 이 스레드 혼자다. 어느 갈래로 나가든 - 던져지는 예외까지 -
+    // g_state 를 되돌려 놓는다. 명시적 호출만으로는 예외 경로가 새어
+    // g_state 가 1 에 영구히 갇히고, 그러면 다시는 설치되지 않는다.
+    struct StateGuard {
+        std::atomic<int>* st;
+        bool done = false;
+        ~StateGuard() {
+            if (!done) st->store(0, std::memory_order_release);
+        }
+    } guard{&g_state};
 
     const auto parsed = mem::parse_pattern(kSite);
     if (!parsed) {
         // kSite 는 컴파일 타임 상수라 이 실패는 세션 내내 절대 안 바뀐다.
         g_unsupported.store(true, std::memory_order_release);
         log::warnf("낙사: AOB 문자열을 해석하지 못했다 - 설치 안 함");
-        give_up();
         return false;
     }
     const auto& img = rtti.image();
@@ -169,7 +176,6 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
         g_unsupported.store(true, std::memory_order_release);
         log::warnf("낙사: 디스패처 시그니처가 유일하지 않다({}) - 설치 안 함",
                    hits.size());
-        give_up();
         return false;
     }
     const std::uint64_t rva = static_cast<std::uint64_t>(hits[0] - img.data());
@@ -180,21 +186,18 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
         g_unsupported.store(true, std::memory_order_release);
         log::warnf("낙사: 사이트 0x{:X} 가 8바이트 정렬이 아니다 - 설치 안 함",
                    site);
-        give_up();
         return false;
     }
 
     // 사이트 첫 명령 `mov [rsp+8], rbx` 가 정확히 5바이트다. 라이브에서 복사한다.
     std::uint8_t orig[kNofallOrigSize]{};
     if (!reader.read(site, orig, sizeof(orig))) {
-        give_up();
         return false;
     }
 
     void* vars = VirtualAlloc(nullptr, kNofallVarsSize,
                               MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (vars == nullptr) {
-        give_up();
         return false;
     }
     std::memset(vars, 0, kNofallVarsSize);
@@ -203,7 +206,6 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     void* cave = alloc_near(site, kNofallCaveSize);
     if (cave == nullptr) {
         VirtualFree(vars, 0, MEM_RELEASE);
-        give_up();
         return false;
     }
 
@@ -214,7 +216,6 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
         log::warnf("낙사: 케이브 조립 실패({}) - 설치 안 함", code.why);
         VirtualFree(cave, 0, MEM_RELEASE);
         VirtualFree(vars, 0, MEM_RELEASE);
-        give_up();
         return false;
     }
 
@@ -236,8 +237,7 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
             veh_added.store(false, std::memory_order_release);
             VirtualFree(cave, 0, MEM_RELEASE);
             VirtualFree(vars, 0, MEM_RELEASE);
-            give_up();
-            return false;
+                return false;
         }
     }
 
@@ -252,7 +252,6 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
         g_done.store(0, std::memory_order_release);
         VirtualFree(cave, 0, MEM_RELEASE);
         VirtualFree(vars, 0, MEM_RELEASE);
-        give_up();
         return false;
     }
 
@@ -260,6 +259,7 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     g_cave = cave_at;
     g_vars = vars_at;
     std::memcpy(g_orig, orig, kNofallOrigSize);
+    guard.done = true;
     g_state.store(2, std::memory_order_release);
     log::infof("낙사 훅 설치: site=0x{:X} cave=0x{:X} 케이브 {}바이트", site,
                g_cave, code.code.size());

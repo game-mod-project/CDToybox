@@ -54,9 +54,9 @@ void draw_player_panel(bool* open) {
         if (ImGui::Checkbox("낙사 방지", &nf)) game::nofall_set(nf);
         ImGui::SameLine();
         ImGui::TextDisabled("(낙하·출처 없는 환경 피해를 막습니다)");
-        // 이 두 숫자가 판별식이 맞는지 보는 **유일한** 수단이다. 「무적」을 끈
-        // 채로 낮은 데서 떨어지면 취소함이 오르고, 적에게 맞으면 통과시킴만
-        // 올라야 한다. 맞는 동안 취소함이 오르면 조용한 갓모드이니 바로 끈다.
+        // 이 두 숫자가 판별식이 맞는지 보는 **유일한** 수단이다.
+        // 판정 기준은 아래 툴팁과 nofall.h 의 검증 절차가 정본이다 - 여기에
+        // 옮겨 적지 않는다(예전에 주석만 옛 기준으로 남아 툴팁과 모순됐다).
         ImGui::Text("취소함 %llu / 통과시킴 %llu",
                     static_cast<unsigned long long>(game::nofall_zeroed()),
                     static_cast<unsigned long long>(

@@ -56,7 +56,10 @@ struct NofallCave {
 //   orig : 사이트에서 복사한 kNofallOrigSize 바이트
 //   vars : 32바이트 vars 블록의 주소
 //   site : 사이트 주소(꼬리 점프는 site + kNofallOrigSize 로 돌아간다)
+//   cave_max : 케이브에 잡아 줄 크기. 기본값 말고 다른 값을 넣는 것은 **시험**
+//              뿐이다 - 그러지 않으면 상한 가드가 도달 불가라 시험할 수 없다.
 NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
-                             std::uintptr_t site);
+                             std::uintptr_t site,
+                             std::size_t cave_max = kNofallCaveSize);
 
 }  // namespace cdtb::game

@@ -221,7 +221,7 @@ TEST(nofall_cave_counters_are_locked) {
     // 카운터는 판별식 검증의 유일한 장치다. 전투 코드 39곳이 여러 스레드에서
     // 들어오므로 증가가 유실되면 안 된다 - `inc` 둘 다 lock 이어야 한다.
     int locked = 0, bare = 0;
-    for (std::size_t i = 0; i + 4 <= c.code.size(); ++i) {
+    for (std::size_t i = 1; i + 3 <= c.code.size(); ++i) {
         if (c.code[i] == 0x48 && c.code[i + 1] == 0xFF && c.code[i + 2] == 0x00) {
             if (i > 0 && c.code[i - 1] == 0xF0) {
                 ++locked;
@@ -232,34 +232,6 @@ TEST(nofall_cave_counters_are_locked) {
     }
     CHECK(locked == 2);
     CHECK(bare == 0);
-}
-
-TEST(nofall_cave_touches_only_rax_flags_and_r9) {
-    const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
-    CHECK(c.ok);
-    // 계약: 케이브는 rax·플래그·(zero 갈래의) r9 말고는 아무 레지스터도 바꾸지
-    // 않는다. rcx/rdx/r8 은 디스패처가 그대로 쓸 인자다. 원본 5바이트(rbx 저장)
-    // 뒤는 꼬리라 세지 않는다.
-    const std::size_t body = c.done_at + 2;  // pop rax / popfq 까지
-    // 목적지가 rcx(001)/rdx(010)/r8 인 mov·xor·add 류가 없어야 한다. 여기서는
-    // 실제로 쓰이는 인코딩만 확인한다: REX.W 있는 89/8B/33/31 의 ModRM 목적지.
-    for (std::size_t i = 0; i + 3 <= body; ++i) {
-        const std::uint8_t rex = c.code[i];
-        if ((rex & 0xF0) != 0x40) continue;
-        const std::uint8_t op = c.code[i + 1];
-        if (op != 0x89 && op != 0x8B && op != 0x33 && op != 0x31) continue;
-        const std::uint8_t modrm = c.code[i + 2];
-        if ((modrm & 0xC0) != 0xC0) continue;  // 레지스터 목적지만 본다
-        const int dst = (op == 0x8B || op == 0x33) ? ((modrm >> 3) & 7)
-                                                   : (modrm & 7);
-        const bool wide_dst = (rex & 0x04) != 0;   // REX.R
-        const bool wide_rm = (rex & 0x01) != 0;    // REX.B
-        const bool ext = (op == 0x8B || op == 0x33) ? wide_dst : wide_rm;
-        // rax(000, 확장 아님) 과 r9(001, 확장) 만 허용한다.
-        const bool is_rax = (dst == 0 && !ext);
-        const bool is_r9 = (dst == 1 && ext);
-        CHECK(is_rax || is_r9);
-    }
 }
 
 TEST(nofall_cave_golden_bytes) {
@@ -283,4 +255,151 @@ TEST(nofall_cave_golden_bytes) {
     CHECK(c.ok);
     CHECK(c.code.size() == sizeof(kGolden));
     CHECK(std::memcmp(c.code.data(), kGolden, sizeof(kGolden)) == 0);
+}
+
+TEST(nofall_cave_body_uses_only_the_allowed_encodings) {
+    // **계약 시험.** 케이브 본문을 명령 하나씩 앞에서부터 해독해, 아래 목록에 없는
+    // 인코딩이 나오면 실패한다. 목록은 "케이브가 내도 되는 명령" 전부이고, 전부
+    // rax·플래그·r9 만 건드린다 - 그러므로 이 시험을 통과하면 rcx/rdx/r8/rbx 를
+    // 건드리지 않는다는 계약이 따라온다.
+    //
+    // 바이트 단위로 훑지 않고 **선형 전진 해독**을 하는 이유: 목적지 레지스터만
+    // 틀린 오타(`mov rcx,[rsp+0x38]` = 48 8B 4C 24 38)는 ModRM 의 mod 가 같아서
+    // 바이트 훑기 필터를 통째로 빠져나간다. 길이를 따라 전진하면 그런 것이
+    // "모르는 인코딩" 으로 걸린다.
+    struct Op {
+        const char* what;
+        std::uint8_t pat[6];
+        std::size_t pat_len;   // 비교할 앞부분
+        std::size_t len;       // 명령 전체 길이
+    };
+    static const Op kAllowed[] = {
+        {"pushfq",                {0x9C}, 1, 1},
+        {"push rax",              {0x50}, 1, 1},
+        {"pop rax",               {0x58}, 1, 1},
+        {"popfq",                 {0x9D}, 1, 1},
+        {"test r9,r9",            {0x4D, 0x85, 0xC9}, 3, 3},
+        {"cmp dx,0",              {0x66, 0x83, 0xFA, 0x00}, 4, 4},
+        {"movabs rax,imm64",      {0x48, 0xB8}, 2, 10},
+        {"mov rax,[rax]",         {0x48, 0x8B, 0x00}, 3, 3},
+        {"test rax,rax",          {0x48, 0x85, 0xC0}, 3, 3},
+        {"cmp rcx,rax",           {0x48, 0x39, 0xC1}, 3, 3},
+        {"mov rax,[rsp+0x38]",    {0x48, 0x8B, 0x44, 0x24, 0x38}, 5, 5},
+        {"cmp rax,imm32",         {0x48, 0x3D}, 2, 6},
+        {"shr rax,47",            {0x48, 0xC1, 0xE8, 0x2F}, 4, 4},
+        {"mov rax,[rax+0x68]",    {0x48, 0x8B, 0x40, 0x68}, 4, 4},
+        {"lock inc qword [rax]",  {0xF0, 0x48, 0xFF, 0x00}, 4, 4},
+        {"xor r9d,r9d",           {0x45, 0x33, 0xC9}, 3, 3},
+        {"jns rel8",              {0x79}, 1, 2},
+        {"jne rel8",              {0x75}, 1, 2},
+        {"je rel8",               {0x74}, 1, 2},
+        {"jb rel8",               {0x72}, 1, 2},
+        {"jmp rel8",              {0xEB}, 1, 2},
+    };
+
+    const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    // 본문 = 처음부터 done 의 `pop rax / popfq` 까지. 그 뒤는 원본 바이트와
+    // 꼬리 점프(데이터 포함)라 따로 본다.
+    const std::size_t body = c.done_at + 2;
+    std::size_t at = 0;
+    int decoded = 0;
+    while (at < body) {
+        const Op* hit = nullptr;
+        for (const Op& op : kAllowed) {
+            if (at + op.len > body) continue;
+            if (std::memcmp(c.code.data() + at, op.pat, op.pat_len) == 0) {
+                hit = &op;
+                break;
+            }
+        }
+        CHECK(hit != nullptr);   // 모르는 인코딩 = 계약 위반
+        if (hit == nullptr) break;
+        at += hit->len;
+        ++decoded;
+    }
+    // 빈틈없이 딱 떨어져야 한다 - 어긋나면 길이 표가 틀린 것이다.
+    CHECK(at == body);
+    // pushfq/push rax + 조기탈출 4갈래 + sourceCtx 2번 읽기 + 카운터 2쌍
+    // + xor r9d + pop rax/popfq = 29개.
+    CHECK(decoded == 29);
+    // 꼬리는 원본 5바이트 + jmp [rip+0] + qword 다.
+    CHECK(std::memcmp(c.code.data() + body, kOrig, kNofallOrigSize) == 0);
+}
+
+TEST(nofall_cave_rejects_a_cave_that_would_not_fit) {
+    // 상한 가드를 실제로 태운다. 기본 상한(256)으로는 도달할 수 없어, 시험만
+    // 작은 상한을 넘긴다 - 그러지 않으면 이 가드는 한 번도 실행되지 않는다.
+    const NofallCave tight = nofall_build_cave(kOrig, kVars, kSite, 64);
+    CHECK(!tight.ok);
+    CHECK(tight.why[0] != '\0');
+    CHECK(tight.code.empty());
+    // 실패하면 오프셋도 비워야 한다 - 설치 쪽이 잘못된 VEH 주소를 잡지 않게.
+    CHECK(tight.zero_at == 0 && tight.done_at == 0 && tight.deref_at == 0);
+    // 딱 맞는 상한은 통과해야 한다(경계).
+    const NofallCave exact = nofall_build_cave(kOrig, kVars, kSite, 126);
+    CHECK(exact.ok);
+    CHECK(exact.code.size() == 126);
+}
+
+TEST(nofall_cave_every_rel8_displacement_is_in_range) {
+    // rel8 사거리 가드는 현재 코드로는 도달 불가라(케이브가 126바이트) 태울 수
+    // 없다. 대신 **조립 결과의 모든 변위가 실제로 사거리 안**임을 계산으로 확인해,
+    // 누가 케이브를 늘렸을 때 이 시험이 먼저 깨지게 한다.
+    const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    const std::size_t body = c.done_at + 2;
+    std::size_t at = 0;
+    int branches = 0;
+    // 본문을 다시 전진 해독하며 분기만 골라낸다(바이트 훑기가 아니라 명령 단위).
+    while (at < body) {
+        const std::uint8_t op = c.code[at];
+        std::size_t len = 0;
+        bool is_branch = false;
+        if (op == 0x9C || op == 0x50 || op == 0x58 || op == 0x9D) {
+            len = 1;
+        } else if (op == 0x79 || op == 0x75 || op == 0x74 || op == 0x72 ||
+                   op == 0xEB) {
+            len = 2;
+            is_branch = true;
+        } else if (op == 0x66) {
+            len = 4;
+        } else if (op == 0x45) {
+            len = 3;
+        } else if (op == 0xF0) {
+            len = 4;
+        } else if (op == 0x4D) {
+            len = 3;
+        } else if (op == 0x48) {
+            const std::uint8_t o2 = c.code[at + 1];
+            if (o2 == 0xB8) {
+                len = 10;
+            } else if (o2 == 0x3D) {
+                len = 6;
+            } else if (o2 == 0xC1) {
+                len = 4;
+            } else if (o2 == 0x8B && c.code[at + 2] == 0x44) {
+                len = 5;
+            } else if (o2 == 0x8B && c.code[at + 2] == 0x40) {
+                len = 4;
+            } else {
+                len = 3;  // 48 8B 00 / 48 85 C0 / 48 39 C1
+            }
+        }
+        CHECK(len > 0);
+        if (len == 0) break;
+        if (is_branch) {
+            const auto disp = static_cast<std::int8_t>(c.code[at + 1]);
+            const std::ptrdiff_t target =
+                static_cast<std::ptrdiff_t>(at + 2) + disp;
+            CHECK(disp >= -128 && disp <= 127);
+            CHECK(target == static_cast<std::ptrdiff_t>(c.zero_at) ||
+                  target == static_cast<std::ptrdiff_t>(c.done_at));
+            ++branches;
+        }
+        at += len;
+    }
+    CHECK(at == body);
+    // jns / jne(dx) / je(owner) / jne(rcx) / jb / jne(shr) / jb / jmp = 8
+    CHECK(branches == 8);
 }

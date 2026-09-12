@@ -13,7 +13,7 @@ struct Fixup {
 }  // namespace
 
 NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
-                             std::uintptr_t site) {
+                             std::uintptr_t site, std::size_t cave_max) {
     NofallCave out;
     if (orig == nullptr) {
         out.why = "원본 바이트가 없다";
@@ -103,7 +103,7 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
         out.zero_at = out.done_at = out.deref_at = 0;
         return out;
     }
-    if (b.size() > kNofallCaveSize) {
+    if (b.size() > cave_max) {
         out.why = "케이브가 상한을 넘는다";
         out.zero_at = out.done_at = out.deref_at = 0;
         return out;
