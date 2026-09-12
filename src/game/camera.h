@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -83,5 +84,9 @@ bool read_name(std::uintptr_t camera, std::string* out);
 
 // 카메라 월드 좌표. 카메라가 아니라 컴포넌트에서 읽는다.
 bool read_world_position(std::uintptr_t component, float out[3]);
+
+
+// 카메라 탐색이 힙에서 찾는 RTTI 클래스 넷(통과 단위 미리 훑기용).
+std::vector<std::string> camera_scan_classes();
 
 }  // namespace cdtb::game

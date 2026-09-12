@@ -986,4 +986,7 @@ bool is_socket_gem(const ItemCatalogEntry& e) {
     return e.category == kSocketGemCategory && !e.name.empty();
 }
 
+
+std::vector<std::string> items_scan_classes() { return {kManagerClass}; }
+
 }  // namespace cdtb::game

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -83,6 +84,21 @@ public:
     std::vector<Found> find_objects_of(const std::vector<std::string>& names,
                                        std::size_t max) const;
 
+    // 한 통과의 힙 훑기를 한 번으로. names 를 한 번에 훑어 캐시(그 시점의 스냅숏)해 두면 그
+    // 뒤 instances_of_class / find_objects_of 가 그 이름들에 대해 힙을 다시 읽지 않고 캐시에서
+    // 낸다. 캐시된 이름에 객체가 하나도 없었으면 빈 결과다(다시 걷지 않는다 - 월드 진입 전에
+    // 없는 객체를 통과마다 다시 훑던 비용이 그것이다). 모르는 이름은 예전처럼 걷는다. 힙은
+    // 바뀌므로 통과가 끝나면 clear_prefetch 로 비운다. max_per_class 는 클래스마다 따로 세어
+    // 한 클래스의 가짜 후보가 다른 클래스를 굶기지 않게 한다. 스레드 안전.
+    void prefetch_instances(const std::vector<std::string>& names,
+                            std::size_t max_per_class) const;
+    void clear_prefetch() const;
+    struct PrefetchStats {
+        std::size_t names = 0;     // 미리 모은 이름 수(빈 것 포함)
+        std::size_t objects = 0;   // 찾은 객체 수
+    };
+    PrefetchStats prefetch_stats() const;
+
     // 모듈 이미지에서 8바이트 값이 저장된 위치. 전역 포인터 탐색용.
     std::vector<std::uintptr_t> find_qword(std::uint64_t value,
                                            std::size_t max) const;
@@ -125,9 +141,15 @@ private:
     std::vector<std::uintptr_t> instances_of_vtable(std::uintptr_t vtable,
                                                     std::size_t max) const;
     // 힙을 한 번 훑어 matching 의 vtable 값을 담은 자리를 모은다(find_objects 계열의 공통 몸통).
+    // per_class_max 가 0 이 아니면 클래스(이름 포인터)마다 그만큼까지만 담는다.
     std::vector<Found> scan_heap(
         const std::vector<std::pair<std::uintptr_t, const std::string*>>& matching,
-        std::size_t max) const;
+        std::size_t max, std::size_t per_class_max = 0) const;
+
+    // prefetch_instances 의 스냅숏. 이름 → 인스턴스 주소(오름차순). 통과 사이에만 산다.
+    mutable std::mutex prefetch_mutex_;
+    mutable std::unordered_map<std::string, std::vector<std::uintptr_t>> prefetch_;
+    mutable std::size_t prefetch_objects_ = 0;
 
     // --- 이미지 색인 (한 번만 만든다) ---
     //

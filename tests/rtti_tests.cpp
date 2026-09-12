@@ -164,3 +164,58 @@ TEST(rtti_find_objects_substring_still_finds_all_after_refactor) {
     CHECK_EQ(two.size(), 2u);
     CHECK_EQ(two[1].address, f.mem.heap_addr(Fixture::kObjBar));
 }
+
+// ---- 통과 단위 미리 훑기(prefetch): 단계들이 힙을 다시 읽지 않고 스냅숏에서 낸다
+
+TEST(rtti_prefetch_serves_snapshot_without_rescanning) {
+    Fixture f;
+    cdtb::mem::Rtti rt(f.mem);
+    CHECK(rt.load_image());
+    rt.prefetch_instances({".?AVFoo@@", ".?AVBar@@"}, 64);
+    CHECK_EQ(rt.prefetch_stats().names, 2u);
+    CHECK_EQ(rt.prefetch_stats().objects, 4u);
+    // 그 뒤 힙에 Foo 가 하나 더 생겨도 캐시는 그때의 스냅숏이다
+    f.mem.put_u64(0x200, Fixture::vt(Fixture::kSlotFoo));
+    CHECK_EQ(rt.instances_of_class(".?AVFoo@@", 16).size(), 3u);
+    CHECK_EQ(rt.instances_of_class(".?AVBar@@", 16).size(), 1u);
+    CHECK_EQ(rt.instances_of_class(".?AVFoo@@", 2).size(), 2u);   // max 는 캐시에서도
+    // 부분 일치 경로(find_objects)는 캐시를 안 쓰므로 새 객체가 보인다
+    CHECK_EQ(rt.find_objects("Foo", 100).size(), 4u);
+    // find_objects_of 는 이름이 전부 캐시됐을 때만 스냅숏이다
+    CHECK_EQ(rt.find_objects_of({".?AVFoo@@", ".?AVBar@@"}, 100).size(), 4u);
+    CHECK_EQ(rt.find_objects_of({".?AVFoo@@"}, 100).size(), 3u);
+    const auto both = rt.find_objects_of({".?AVBar@@", ".?AVFoo@@"}, 100);
+    CHECK_EQ(both[0].address, f.mem.heap_addr(Fixture::kObjFoo1));   // 주소 오름차순
+    CHECK_EQ(both[1].cls, std::string(".?AVBar@@"));
+    // 비우면 다시 걷는다
+    rt.clear_prefetch();
+    CHECK_EQ(rt.prefetch_stats().names, 0u);
+    CHECK_EQ(rt.instances_of_class(".?AVFoo@@", 16).size(), 4u);
+    CHECK_EQ(rt.find_objects_of({".?AVFoo@@", ".?AVBar@@"}, 100).size(), 5u);
+}
+
+TEST(rtti_prefetch_caps_each_class_separately) {
+    Fixture f;
+    cdtb::mem::Rtti rt(f.mem);
+    CHECK(rt.load_image());
+    rt.prefetch_instances({".?AVFoo@@", ".?AVBar@@"}, 2);
+    const auto foo = rt.instances_of_class(".?AVFoo@@", 16);
+    CHECK_EQ(foo.size(), 2u);   // 셋 중 낮은 주소 둘
+    CHECK_EQ(foo[0], f.mem.heap_addr(Fixture::kObjFoo1));
+    CHECK_EQ(foo[1], f.mem.heap_addr(Fixture::kObjFoo2));
+    // Foo 가 상한에 닿아도 Bar 는 제 몫을 받는다
+    CHECK_EQ(rt.instances_of_class(".?AVBar@@", 16).size(), 1u);
+    CHECK_EQ(rt.prefetch_stats().objects, 3u);
+}
+
+TEST(rtti_prefetch_unknown_name_is_cached_as_empty_and_others_still_walk) {
+    Fixture f;
+    cdtb::mem::Rtti rt(f.mem);
+    CHECK(rt.load_image());
+    rt.prefetch_instances({".?AVNope@@"}, 64);
+    CHECK_EQ(rt.prefetch_stats().names, 1u);
+    CHECK_EQ(rt.prefetch_stats().objects, 0u);
+    CHECK(rt.instances_of_class(".?AVNope@@", 16).empty());   // 걷지 않고 빈 결과
+    CHECK_EQ(rt.instances_of_class(".?AVFoo@@", 16).size(), 3u);   // 모르는 이름은 걷는다
+    rt.clear_prefetch();
+}

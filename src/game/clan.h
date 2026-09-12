@@ -201,4 +201,8 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
 bool find_clan_component_client(const mem::Reader& reader, const mem::Rtti& rtti,
                                 std::uintptr_t* out);
 
+
+// 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
+std::vector<std::string> clan_scan_classes();
+
 }  // namespace cdtb::game
