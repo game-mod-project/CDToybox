@@ -178,4 +178,8 @@ InventoryRowText format_inventory_row(std::uint32_t endurance,
                                       std::uint32_t sharpness,
                                       const std::vector<std::string>& gems);
 
+
+// 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
+std::vector<std::string> inventory_scan_classes();
+
 }  // namespace cdtb::game

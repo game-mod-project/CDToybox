@@ -458,4 +458,8 @@ struct ItemKeyIndex {
 // 대신한다.
 const ItemCatalogEntry* item_by_key(std::uint32_t key);
 
+
+// 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
+std::vector<std::string> items_scan_classes();
+
 }  // namespace cdtb::game

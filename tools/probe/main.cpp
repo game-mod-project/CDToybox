@@ -2237,6 +2237,49 @@ void cmd_equipchars(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 (unsigned long long)game::equip_player_comp());
 }
 
+// 분석 스레드의 통과 한 바퀴를 흉내 낸다 - 힙 한 번 훑기(prefetch) 뒤 단계들이 캐시에서
+// 내는지, 단계마다 얼마나 걸리는지 잰다. 인자 "old" 를 주면 미리 훑기 없이(예전처럼 단계마다
+// 힙을 읽으며) 돌려 견준다. 전 경로 읽기 전용(게임 메모리를 읽기만 한다).
+void cmd_passscan(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    const bool old = argc > 2 && std::strcmp(argv[2], "old") == 0;
+    const auto t0 = ::GetTickCount64();
+    auto t = t0;
+    auto step = [&](const char* what) {
+        const auto now = ::GetTickCount64();
+        std::printf("  [%s] %llums\n", what, (unsigned long long)(now - t));
+        t = now;
+    };
+    if (!old) {
+        // DLL 과 같은 목록·상한(camera.h) - 실측이 어긋나지 않게(리뷰 P-4).
+        rt.prefetch_instances(game::pass_scan_classes(), game::kPassScanPerClass);
+        const auto ps = rt.prefetch_stats();
+        std::printf("힙 훑기: 클래스 %zu개 객체 %zu개 (상한 %zu 에 닿은 클래스 %zu개)\n",
+                    ps.names, ps.objects, game::kPassScanPerClass, ps.capped);
+        step("힙 훑기");
+    } else {
+        std::printf("(미리 훑기 없이 - 단계마다 힙을 읽는다)\n");
+    }
+    game::discover_items(rt, reader);
+    step("아이템표");
+    game::discover_inventory(rt, reader);
+    step("인벤토리");
+    game::discover_roster(rt, reader);
+    step("로스터");
+    game::discover_actor_manager(rt, reader);
+    step("액터 매니저");
+    game::CameraSet cs;
+    const bool cam = game::discover_with(rt, reader, &cs);
+    step("카메라");
+    game::discover_clan(rt, reader);
+    step("동반자 명부");
+    rt.clear_prefetch();
+    std::printf("통과 합계 %llums, 카메라 %s, 인벤토리 %s, 로스터 %s, 액터 매니저 %s, 명부 %s\n",
+                (unsigned long long)(::GetTickCount64() - t0), cam ? "확보" : "미확보",
+                game::inventory_ready() ? "OK" : "-", game::roster_ready() ? "OK" : "-",
+                game::actor_manager_ready() ? "OK" : "-", game::clan_ready() ? "OK" : "-");
+}
+
 void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                char** argv) {
     if (argc > 2 && std::strcmp(argv[2], "diag") == 0) {
@@ -3774,6 +3817,7 @@ int main(int argc, char** argv) {
     if (cmd == "aob") { cmd_aob(rt, reader, argc, argv); return 0; }
     if (cmd == "invsock") { cmd_invsock(rt, reader); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
+    if (cmd == "passscan") { cmd_passscan(rt, reader, argc, argv); return 0; }
     if (cmd == "equipchars") { cmd_equipchars(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {

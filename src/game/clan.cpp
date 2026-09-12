@@ -562,4 +562,7 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
     return SpeciesApply::VerifyMismatch;
 }
 
+
+std::vector<std::string> clan_scan_classes() { return {kClanClass, kClanClientClass}; }
+
 }  // namespace cdtb::game

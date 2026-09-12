@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -83,6 +84,33 @@ public:
     std::vector<Found> find_objects_of(const std::vector<std::string>& names,
                                        std::size_t max) const;
 
+    // 한 통과의 힙 훑기를 한 번으로. names 를 한 번에 훑어 캐시(그 시점의 스냅숏)해 두면 그
+    // 뒤 instances_of_class / find_objects_of 가 그 이름들에 대해 힙을 다시 읽지 않고 캐시에서
+    // 낸다. 캐시된 이름에 객체가 하나도 없었으면 빈 결과다(다시 걷지 않는다 - 월드 진입 전에
+    // 없는 객체를 통과마다 다시 훑던 비용이 그것이다). 힙은 바뀌므로 통과가 끝나면
+    // clear_prefetch 로 비운다. max_per_class 는 클래스마다 따로 세어 한 클래스의 가짜 후보가
+    // 다른 클래스를 굶기지 않게 한다.
+    //
+    // 캐시 규칙 셋(시험이 못박는다):
+    //  - instances_of_class(name, max): name 이 캐시에 있으면 스냅숏을 max 로 잘라 낸다. 단
+    //    스냅숏이 상한(max_per_class)에 닿았고 max 가 그보다 크면 호출부가 원한 만큼 못 주는
+    //    것이라 캐시를 건너뛰고 걷는다(리뷰 P-1). 모르는 이름은 걷는다.
+    //  - find_objects_of(names, max): 이름이 **전부** 캐시에 있고 어느 것도 상한에 안 닿았을
+    //    때만 스냅숏(주소 순). 아니면 걷는다.
+    //  - find_objects(부분 일치): 캐시를 안 쓴다.
+    // 이 캐시는 이 Rtti 를 쓰는 **모든** 스레드에 보인다 - 통과 사이에 배경 워커(예: 명부
+    // 재탐색)가 instances_of_class 를 부르면 그 통과의 스냅숏을 받는다(리뷰 P-3). 뮤텍스로
+    // 보호된다.
+    void prefetch_instances(const std::vector<std::string>& names,
+                            std::size_t max_per_class) const;
+    void clear_prefetch() const;
+    struct PrefetchStats {
+        std::size_t names = 0;     // 미리 모은 이름 수(빈 것 포함)
+        std::size_t objects = 0;   // 찾은 객체 수
+        std::size_t capped = 0;    // 상한(max_per_class)에 닿은 클래스 수
+    };
+    PrefetchStats prefetch_stats() const;
+
     // 모듈 이미지에서 8바이트 값이 저장된 위치. 전역 포인터 탐색용.
     std::vector<std::uintptr_t> find_qword(std::uint64_t value,
                                            std::size_t max) const;
@@ -125,9 +153,19 @@ private:
     std::vector<std::uintptr_t> instances_of_vtable(std::uintptr_t vtable,
                                                     std::size_t max) const;
     // 힙을 한 번 훑어 matching 의 vtable 값을 담은 자리를 모은다(find_objects 계열의 공통 몸통).
+    // per_class_max 가 0 이 아니면 클래스(이름 포인터)마다 그만큼까지만 담고, 상한에 닿은
+    // 클래스 수를 capped_out 에 낸다.
     std::vector<Found> scan_heap(
         const std::vector<std::pair<std::uintptr_t, const std::string*>>& matching,
-        std::size_t max) const;
+        std::size_t max, std::size_t per_class_max = 0,
+        std::size_t* capped_out = nullptr) const;
+
+    // prefetch_instances 의 스냅숏. 이름 → 인스턴스 주소(오름차순). 통과 사이에만 산다.
+    mutable std::mutex prefetch_mutex_;
+    mutable std::unordered_map<std::string, std::vector<std::uintptr_t>> prefetch_;
+    mutable std::size_t prefetch_objects_ = 0;
+    mutable std::size_t prefetch_cap_ = 0;      // 그때 쓴 max_per_class
+    mutable std::size_t prefetch_capped_ = 0;   // 상한에 닿은 클래스 수
 
     // --- 이미지 색인 (한 번만 만든다) ---
     //

@@ -328,4 +328,8 @@ inline constexpr std::uint16_t kProtagonistRow = 0;
 // 값이거나 kProtagonistRow - 웅카를 조종하는 동안에도 클리프는 플레이어블이다.
 bool is_playable_character_row(const mem::Reader& reader, std::uint32_t row);
 
+
+// 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
+std::vector<std::string> roster_scan_classes();
+
 }  // namespace cdtb::game

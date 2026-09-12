@@ -246,4 +246,7 @@ InventoryRowText format_inventory_row(std::uint32_t endurance,
     return t;
 }
 
+
+std::vector<std::string> inventory_scan_classes() { return {kInventoryClass}; }
+
 }  // namespace cdtb::game
