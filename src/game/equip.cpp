@@ -11,6 +11,7 @@
 #include "game/actors.h"
 #include "game/items.h"
 #include "game/player.h"
+#include "game/roster.h"
 
 namespace cdtb::game {
 namespace {
@@ -435,6 +436,7 @@ std::vector<WornPiece> g_eq_pieces;    // 플레이어 착용장비
 EquipTable g_eq_player_table;           // 플레이어 테이블(빠른 재읽기용)
 std::vector<EquipCharacter> g_eq_chars; // 월드의 플레이어형 캐릭터(행 오름차순)
 std::uint16_t g_eq_current_row = kEquipAutoCharacter;   // 캐시된 테이블의 캐릭터
+std::uint16_t g_eq_resolved_want = kEquipAutoCharacter; // 마지막 발견이 소화한 선택
 bool g_eq_ready = false;
 std::atomic<bool> g_eq_refresh{false};
 std::atomic<std::uint16_t> g_eq_want_row{kEquipAutoCharacter};   // 렌더 스레드가 고른다
@@ -463,6 +465,10 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
         if (n == 0 || dt * 2 < n) continue;
         const std::uint16_t row = table_character_row(reader, t);
         if (row == kEquipAutoCharacter) continue;
+        // 정신력 풀은 동행(companion)에도 있다 - 플레이어블(주인공·Mercenary_Main)만 후보다
+        // (리뷰 E-1: 7조각짜리 동반자(행 5654)가 콤보에 들고, 고르면 치트·낙사 앵커까지
+        // 그쪽으로 옮겨갔다).
+        if (!is_playable_character_row(reader, row)) continue;
         EquipCharacter* found = nullptr;
         for (auto& c : chars) {
             if (c.row == row) {
@@ -489,6 +495,7 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_tables = std::move(tabs);
     g_eq_chars = std::move(chars);
+    g_eq_resolved_want = want;   // 실패해도 "이 선택을 봤다" 는 남긴다(창의 갱신 중 표시)
     if (ok) {
         g_eq_player_table = pt;
         g_eq_pieces = std::move(pieces);
@@ -531,6 +538,11 @@ std::uint16_t equip_selected_character() {
 std::uint16_t equip_current_character() {
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     return g_eq_ready ? g_eq_current_row : kEquipAutoCharacter;
+}
+
+std::uint16_t equip_resolved_character() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_resolved_want;
 }
 
 void equip_tables_copy(std::vector<EquipTable>* out) {

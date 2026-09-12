@@ -57,7 +57,8 @@ struct WornPiece {
     std::uint32_t key = 0;        // +0x08 하위16, 아이템 순번
     // +0x0A 담금질(툴팁 게이지 10칸, 상한 ItemCatalogEntry::max_temper). 이식 원본(Trinity)이
     // "refinement" 라 불러 오래 "연마" 로 표시됐는데, 인벤토리 레코드 +0x0A 와 같은 자리라
-    // 담금질이다(실측 2026-09-12: 창에서 10 을 쓴 장비가 전부 +0x0A = 10, +0x58 은 0).
+    // 담금질이다(실측 2026-09-12: 창에서 10 을 쓴 장비가 전부 +0x0A = 10, +0x58 은 무기 한 개만
+    // 50 이고 나머지 0).
     std::uint16_t temper = 0;
     // +0x58 장비 연마(툴팁 "장비 연마 N/100", 상한 max_sharpness). 인벤토리 레코드와 같은 자리.
     std::uint16_t sharpness = 0;
@@ -88,8 +89,9 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
 // 조종하는데 "조각 최다" 규칙은 늘 클리프를 골라, 웅카로 플레이해도 클리프 장비만 보였다
 // (사용자 보고 2026-09-12). 캐릭터 행은 comp+0x08 의 캐릭터 객체에서 actor_character_row
 // 로 푼다(실측: 조각 21 = 행 0 클리프, 16 = 행 5 웅카, 11 = 행 3 데미안). 행을 못 푼
-// 테이블은 후보에 안 든다(자동 선택에는 든다). 이름은 로스터(character_by_row)에서 그릴
-// 때 푼다 - 발견 시점에 로스터가 아직 없을 수 있다.
+// 테이블은 후보에 안 든다(자동 선택에는 든다). 정신력 풀은 동행에도 있어 플레이어블
+// (roster.h is_playable_character_row: 주인공 행 또는 Mercenary_Main)만 후보로 남긴다.
+// 이름은 로스터(character_by_row)에서 그릴 때 푼다 - 발견 시점에 로스터가 아직 없을 수 있다.
 struct EquipCharacter {
     std::uint16_t row = 0xFFFF;   // 캐릭터 행
     int pieces = 0;               // 착용 조각 수(서로 다른 슬롯, realm 중 큰 것)
@@ -104,6 +106,9 @@ void equip_select_character(std::uint16_t row);
 std::uint16_t equip_selected_character();
 // 지금 캐시된 테이블의 캐릭터 행(못 풀었으면 kEquipAutoCharacter).
 std::uint16_t equip_current_character();
+// 마지막 발견이 소화한 선택. equip_selected_character 와 다르면 아직 갱신 중이다(창이
+// "월드에 없음" 과 "갱신 중" 을 가르는 데 쓴다, 리뷰 E-2).
+std::uint16_t equip_resolved_character();
 
 // ------------------------------------------------------------------ 캐시/발견
 // 분석 스레드에서 주기적으로 부른다(힙 스캔이라 값싸지 않음). 플레이어

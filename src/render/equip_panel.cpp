@@ -239,9 +239,20 @@ std::string character_label(std::uint16_t row) {
 // 조종 중인 캐릭터를 자동으로 따라가는 것은 세션 전역 사슬이 2850 에서 끊겨 아직 없다
 // (roster.h main_character_row) - 고르는 것은 사람 몫이고 선택은 ini 에 남는다.
 void draw_character_picker() {
+    // 후보 목록은 발견 때만 채워진다(첫 성공 뒤엔 요청 때만 돈다) - 창이 열려 있는 동안
+    // 20초마다 한 번 다시 훑어 합류·이탈을 따라간다(리뷰 E-4). 힙 스캔이라 더 자주는 안 한다.
+    {
+        static ULONGLONG s_last_auto_ms = 0;
+        const ULONGLONG now = ::GetTickCount64();
+        if (now - s_last_auto_ms > 20000) {
+            s_last_auto_ms = now;
+            game::equip_request_refresh();
+        }
+    }
     const std::vector<game::EquipCharacter> chars = game::equip_characters();
     const std::uint16_t want = game::equip_selected_character();
     const std::uint16_t cur = game::equip_current_character();
+    const std::uint16_t resolved = game::equip_resolved_character();
     const std::string preview = character_label(want);
     ImGui::SetNextItemWidth(240.0f);
     if (ImGui::BeginCombo("캐릭터", preview.c_str())) {
@@ -251,7 +262,8 @@ void draw_character_picker() {
         }
         for (const auto& c : chars) {
             char lb[160];
-            std::snprintf(lb, sizeof(lb), "%s (조각 %d)##c%u",
+            // 표시명은 80바이트까지만 - 라벨이 잘려도 ID 접미사 ##c 는 남아야 한다(리뷰 E-6).
+            std::snprintf(lb, sizeof(lb), "%.80s (조각 %d)##c%u",
                           character_label(c.row).c_str(), c.pieces,
                           static_cast<unsigned>(c.row));
             if (ImGui::Selectable(lb, want == c.row)) select_character(c.row);
@@ -261,23 +273,45 @@ void draw_character_picker() {
     ImGui::SameLine();
     const std::string shown =
         cur == game::kEquipAutoCharacter ? std::string("?") : character_label(cur);
-    if (want != game::kEquipAutoCharacter && cur != want) {
+    // 발견이 아직 이 선택을 소화하지 않았으면 "갱신 중" - 정상 전환에서 2초 넘게 "월드에
+    // 없음" 을 띄우던 것(리뷰 E-2). 그동안 표는 옛 캐릭터 것이라 그것도 적는다.
+    if (resolved != want) {
+        ImGui::TextDisabled("(갱신 중… 지금 보이는 것은 %s 의 장비)", shown.c_str());
+    } else if (want != game::kEquipAutoCharacter && cur != want) {
         ImGui::TextDisabled("(고른 캐릭터가 월드에 없어 자동으로 보입니다: %s)",
                             shown.c_str());
     } else {
-        ImGui::TextDisabled("표시 중: %s - 플레이어 치트 창의 표시도 이 캐릭터입니다.",
+        ImGui::TextDisabled("표시 중: %s (치트 표시·낙사 학습도 이 캐릭터; 목록은 20초마다"
+                            " 갱신)",
                             shown.c_str());
     }
 }
 
-// 담금질·연마 칸 하나. cap 이 0 이면 그 값이 없는 아이템(재료 등)이라 "-". 입력은
-// 인스턴스별로 유지한다. 클라·서버 모두 쓴다.
+// 담금질·연마 상한. 표가 아직 없으면 -1(칸은 "-", 일괄은 건너뜀 - 두 경로가 같게, 리뷰 E-5),
+// 그 값이 없는 아이템이면 0. u16 밖은 자른다(리뷰 E-7).
+int level_cap(const game::ItemCatalogEntry* e, bool temper) {
+    if (e == nullptr) return -1;
+    long long cap = temper ? static_cast<long long>(e->max_temper)
+                           : static_cast<long long>(e->max_sharpness);
+    if (cap < 0) cap = 0;
+    if (cap > 0xFFFF) cap = 0xFFFF;
+    return static_cast<int>(cap);
+}
+
+// 담금질·연마 칸 하나. cap 이 0 이면 그 값이 없는 아이템(재료 등), 음수면 표가 아직 없는
+// 것이라 "-". 입력은 인스턴스별로 유지한다. 클라·서버 모두 쓴다.
 void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
                      bool temper, int cap, std::map<std::uint64_t, int>& edits) {
     const char* what = temper ? "담금질" : "연마";
     if (cap <= 0) {
         ImGui::TextDisabled("-");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("이 아이템에는 %s 값이 없습니다.", what);
+        if (ImGui::IsItemHovered()) {
+            if (cap < 0) {
+                ImGui::SetTooltip("아이템 표가 아직 준비되지 않았습니다.");
+            } else {
+                ImGui::SetTooltip("이 아이템에는 %s 값이 없습니다.", what);
+            }
+        }
         return;
     }
     const int cur = temper ? w.temper : w.sharpness;
@@ -317,9 +351,7 @@ void bulk_write(const mem::Reader& reader, const std::vector<game::WornPiece>& p
     int done = 0, part = 0, skipped = 0;
     for (const auto& w : pieces) {
         const game::ItemCatalogEntry* e = w.key < cat.size() ? &cat[w.key] : nullptr;
-        const int cap = e == nullptr ? 0
-                        : temper     ? static_cast<int>(e->max_temper)
-                                     : static_cast<int>(e->max_sharpness);
+        const int cap = level_cap(e, temper);
         if (cap <= 0) {
             ++skipped;
             continue;
@@ -505,15 +537,11 @@ void draw_equip_panel(bool* open) {
             }
 
             // 담금질(+0x0A, 툴팁 게이지 10칸)과 장비 연마(+0x58, "장비 연마 N/100").
-            // 상한은 표에서 - 표가 없으면 게임 기본(10·100)으로 둔다.
+            // 상한은 표에서(level_cap) - 표가 아직 없으면 일괄처럼 "-" 로 둔다.
             ImGui::TableNextColumn();   // 담금질
-            draw_level_cell(reader, w, true,
-                            e != nullptr ? static_cast<int>(e->max_temper) : 10,
-                            g_temper_edit);
+            draw_level_cell(reader, w, true, level_cap(e, true), g_temper_edit);
             ImGui::TableNextColumn();   // 연마
-            draw_level_cell(reader, w, false,
-                            e != nullptr ? static_cast<int>(e->max_sharpness) : 100,
-                            g_sharp_edit);
+            draw_level_cell(reader, w, false, level_cap(e, false), g_sharp_edit);
 
             ImGui::TableNextColumn();   // 소켓 - 칸마다 버튼 하나, 칸 안에서 흘린다
             for (int k = 0; k < 5; ++k) {
