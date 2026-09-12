@@ -57,20 +57,21 @@ void draw_player_panel(bool* open) {
         // 같은 줄(SameLine)에 붙이면 창 폭에서 잘린다 - 실측 2026-09-12 화면에서
         // "...환경 피해를 막습니" 로 끝났다. 아래 줄로 내리고 폭에 맞춰 감싼다.
         ImGui::TextWrapped(
-            "낙하와 출처 없는 환경 피해를 막습니다. 판별식을 이 빌드에 맞추는"
-            " 중이라 아래 규칙을 바꿔 가며 시험합니다.");
+            "낙하와 환경 피해를 막습니다. 이 게임은 낙하 피해의 출처를 내 캐릭터"
+            " 자신으로 적으므로(실측), 적의 타격과 그것으로 가릅니다.");
         // 규칙을 화면에서 바꾼다. 게임을 껐다 켜지 않고 후보를 갈아 보려는 것이다
         // (2026-09-12: CT 의 가해자 슬롯 판별이 이 빌드에서 낙하를 못 걸러 냈다).
-        const char* kRuleNames[] = {"가해자 없을 때만 취소",
+        const char* kRuleNames[] = {"출처가 나 자신일 때 취소 (권장)",
+                                    "가해자 없을 때만 (이 빌드에선 안 먹음)",
                                     "출처 없을 때만 취소",
                                     "내 생명 피해면 무조건 취소(시험용)"};
         int rule = static_cast<int>(game::nofall_rule());
-        if (rule < 0 || rule > 2) rule = 0;
-        ImGui::SetNextItemWidth(300.0f);
-        if (ImGui::Combo("판별 규칙", &rule, kRuleNames, 3)) {
+        if (rule < 0 || rule > 3) rule = 0;
+        ImGui::SetNextItemWidth(340.0f);
+        if (ImGui::Combo("판별 규칙", &rule, kRuleNames, 4)) {
             game::nofall_set_rule(static_cast<std::uint64_t>(rule));
         }
-        if (rule == 2) {
+        if (rule == 3) {
             ImGui::TextDisabled(
                 "주의: 이 규칙은 낙하가 아니어도 내 생명 피해를 전부 지웁니다."
                 " r9 를 0 으로 만드는 것이 정말 피해를 막는지 가리는 용도입니다.");

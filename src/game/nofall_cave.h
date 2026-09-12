@@ -49,18 +49,26 @@ inline constexpr std::size_t kNofallLastAtk = 56;     // [sourceCtx+0x68]
 inline constexpr std::size_t kNofallLastDelta = 64;   // 그때의 델타
 inline constexpr std::size_t kNofallSrcLow = 72;      // sourceCtx 가 없던 횟수
 inline constexpr std::size_t kNofallSrcBad = 80;      // 말 안 되는 포인터였던 횟수
+// 내 캐릭터 객체(char) 두 realm. **낙하 판별의 핵심**이다 - 2026-09-12 실측에서
+// 낙하 피해의 sourceCtx 가 내 char 자신이었다(적에게 맞으면 그 적의 char 다).
+inline constexpr std::size_t kNofallSelf = 88;        // 내 char #1
+inline constexpr std::size_t kNofallSelf2 = 96;       // 내 char #2 (다른 realm)
 inline constexpr std::size_t kNofallVarsSize = 128;
 
 // 판별 규칙. vars[kNofallRule] 에 쓰면 **다음 피해부터 바로** 바뀐다.
 enum NofallRule : std::uint64_t {
-    // 출처 뒤에 가해자가 없을 때만 취소한다(CT v5.0 의 판별식).
-    kRuleNoAttacker = 0,
-    // 출처 자체가 없을 때만 취소한다(가해자 슬롯을 안 본다).
-    kRuleNoSource = 1,
-    // 내 생명 피해면 무조건 취소한다. **사실상 생명 무적**이라 시험용이다 -
-    // r9 를 0 으로 만드는 것이 정말 피해를 막는지부터 가리는 데 쓴다.
-    kRuleAlways = 2,
-    kRuleMax = 2,
+    // **기본값.** 출처(sourceCtx)가 내 캐릭터 자신이면 취소한다. 2026-09-12 실측:
+    // 낙하 피해의 sourceCtx 가 내 char(서버, 행 0, 생명 1,500,000)와 정확히
+    // 같았다. 적에게 맞으면 출처는 그 적의 char 라 자연히 갈린다.
+    kRuleSelfSource = 0,
+    // 출처 뒤에 가해자가 없을 때만 취소한다(CT v5.0 의 판별식). **이 빌드에서는
+    // 안 먹는다** - char+0x68 은 가해자가 아니라 actor 링크라 늘 채워져 있다.
+    kRuleNoAttacker = 1,
+    // 출처 자체가 없을 때만 취소한다.
+    kRuleNoSource = 2,
+    // 내 생명 피해면 무조건 취소한다. **사실상 생명 무적**이라 시험용이다.
+    kRuleAlways = 3,
+    kRuleMax = 3,
 };
 
 // 사이트에서 복사하는 원본 길이. 디스패처의 첫 명령 `mov [rsp+8], rbx` 가 정확히
