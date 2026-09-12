@@ -1,4 +1,13 @@
 #include "game/inventory.h"
+#include "core/write_log.h"
+
+#include <vector>
+
+#include <string>
+
+#include <mutex>
+
+#include <windows.h>
 
 #include <atomic>
 #include <cstring>
@@ -182,31 +191,47 @@ namespace {
 
 constexpr const char* kInventoryClass =
     ".?AVServerInventoryActorComponent@pa@@";
+// 같은 인벤토리가 클라·서버 두 벌로 존재한다. 가방 확장은 화면 숫자의 출처가
+// 어느 쪽인지 확정되지 않아 **둘 다** 쓴다(장비·게이지의 both-realms 와 같은 이유).
+constexpr const char* kInventoryClassClient =
+    ".?AVClientInventoryActorComponent@pa@@";
 
 std::atomic<std::uintptr_t> g_component{0};
+std::atomic<std::uintptr_t> g_component_client{0};
 std::atomic<bool> g_rescan{false};
+
+// 내용이 든 컴포넌트인가. 빈 것이 여럿 살아 있어 그것으로 가른다.
+bool component_has_items(const mem::Reader& reader, std::uintptr_t addr,
+                         std::vector<InventoryContainer>* out) {
+    if (!read_inventory_containers(reader, addr, out)) return false;
+    for (const auto& c : *out) {
+        if (c.used > 0) return true;
+    }
+    return false;
+}
 
 }  // namespace
 
 bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_component.load(std::memory_order_acquire) != 0) return true;
+    const bool have_server = g_component.load(std::memory_order_acquire) != 0;
+    const bool have_client =
+        g_component_client.load(std::memory_order_acquire) != 0;
+    if (have_server && have_client) return true;
 
-    for (const auto addr : rtti.instances_of_class(kInventoryClass, 64)) {
+    // 두 클래스를 **힙 한 번 훑기**로 같이 찾는다 - instances_of_class 는 vtable
+    // 마다 힙 전체를 읽어, 따로 부르면 훑기가 두 배가 된다.
+    for (const auto& f : rtti.find_objects_of(
+             {kInventoryClass, kInventoryClassClient}, 128)) {
+        const bool is_client = f.cls == kInventoryClassClient;
+        auto& slot = is_client ? g_component_client : g_component;
+        if (slot.load(std::memory_order_acquire) != 0) continue;
         std::vector<InventoryContainer> cs;
-        if (!read_inventory_containers(reader, addr, &cs)) continue;
-        bool any = false;
-        for (const auto& c : cs) {
-            if (c.used > 0) {
-                any = true;
-                break;
-            }
-        }
-        if (!any) continue;   // 빈 컴포넌트가 여럿 살아 있다
-        g_component.store(addr, std::memory_order_release);
-        log::infof("인벤토리 컴포넌트 0x{:X}", addr);
-        return true;
+        if (!component_has_items(reader, f.address, &cs)) continue;
+        slot.store(f.address, std::memory_order_release);
+        log::infof("인벤토리 컴포넌트{} 0x{:X}", is_client ? "(클라)" : "",
+                   f.address);
     }
-    return false;
+    return g_component.load(std::memory_order_acquire) != 0;
 }
 
 bool inventory_ready() {
@@ -217,8 +242,13 @@ std::uintptr_t inventory_component() {
     return g_component.load(std::memory_order_acquire);
 }
 
+std::uintptr_t inventory_component_client() {
+    return g_component_client.load(std::memory_order_acquire);
+}
+
 void forget_inventory() {
     g_component.store(0, std::memory_order_release);
+    g_component_client.store(0, std::memory_order_release);
     request_inventory_rescan();
 }
 
@@ -248,5 +278,169 @@ InventoryRowText format_inventory_row(std::uint32_t endurance,
 
 
 std::vector<std::string> inventory_scan_classes() { return {kInventoryClass}; }
+
+
+// ------------------------------------------------------ 가방·보관함 확장
+
+BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target) {
+    BagPlan p;
+    // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
+    // 유도한 데서 시작했으므로, 모델이 안 맞으면 쓰지 않는 쪽이 맞다.
+    if (cap < 0 || sum < 0 || a < 0 || b < 0 || slots <= 0) {
+        p.skip = "값이 음수다";
+        return p;
+    }
+    if (cap < sum) {
+        p.skip = "용량이 확장 합계보다 작다";
+        return p;
+    }
+    if (a != 0 && b != 0 && a + b != sum) {
+        p.skip = "확장 두 갈래의 합이 합계와 다르다";
+        return p;
+    }
+    p.base = cap - sum;   // **여기가 핵심** - +0x1A 가 아니라 합계로 유도한다
+    if (p.base <= 0) {
+        p.skip = "기본 슬롯이 0 이하다";
+        return p;
+    }
+    int want = target;
+    if (want > kBagTargetMax) want = kBagTargetMax;
+    if (want > kBagEngineMax) want = kBagEngineMax;   // 이중 방어
+    if (want > slots) want = slots;                   // 물리 배열을 넘지 않는다
+    if (want < p.base) {
+        p.skip = "목표가 기본 슬롯보다 작다";
+        return p;
+    }
+    // +0x18(a)은 그대로 두고 +0x1A 만 조정한다. 엔진이 합계를 sum 으로 재계산하든
+    // max 로 재계산하든 결과가 want 이하가 된다(max 면 오히려 작아진다).
+    p.expand_b = want - p.base - a;
+    if (p.expand_b < 0) {
+        p.skip = "이미 목표보다 크다";
+        return p;
+    }
+    p.sum = a + p.expand_b;
+    p.capacity = p.base + p.sum;
+    p.apply = p.capacity != cap || p.expand_b != b;
+    if (!p.apply) p.skip = "이미 그 값이다";
+    return p;
+}
+
+namespace {
+
+// 확장 전 원본. 되돌리기가 **진짜 복원**이 되게 한다 - 옛 restore 는 확장을 0 으로
+// 써서 가방의 190·보관함의 200 을 날렸다(그건 복원이 아니다).
+struct BagBackup {
+    std::uintptr_t address = 0;
+    std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+};
+std::mutex g_bag_mtx;
+std::vector<BagBackup> g_bag_backup;
+
+// 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
+bool bag_wr16(std::uintptr_t a, std::uint16_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint16_t*>(a) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool want_kind(std::uint16_t kind, bool storage) {
+    if (kind == 1) return true;                 // 가방
+    if (!storage) return false;
+    // 보관함류만. 용량 5·20 짜리 작은 것까지 부풀린 것이 2026-09-05 의
+    // "리로드 후 지급 손상" 이었다.
+    return kind == 4 || kind == 7 || kind == 9 || kind == 11;
+}
+
+// 한 컴포넌트의 대상 컨테이너에 계획을 적용한다.
+void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
+              bool storage, bool remember, BagResult* r) {
+    if (comp == 0) return;
+    std::vector<InventoryContainer> cs;
+    if (!read_inventory_containers(reader, comp, &cs)) return;
+    for (const auto& c : cs) {
+        if (!want_kind(c.kind, storage)) continue;
+        std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+        if (!reader.read_value(c.address + 0x14, &cap) ||
+            !reader.read_value(c.address + 0x16, &sum) ||
+            !reader.read_value(c.address + 0x18, &a) ||
+            !reader.read_value(c.address + 0x1A, &b)) {
+            ++r->fail;
+            continue;
+        }
+        const BagPlan p = plan_bag_expand(cap, sum, a, b,
+                                          static_cast<int>(c.slots), target);
+        if (!p.apply) {
+            ++r->skip;
+            continue;
+        }
+        if (remember) {
+            std::lock_guard<std::mutex> lk(g_bag_mtx);
+            g_bag_backup.push_back(BagBackup{c.address, cap, sum, a, b});
+        }
+        // 저장이 담는 칸 -> 합계 -> 캐시 순으로. +0x18 은 건드리지 않는다.
+        bag_wr16(c.address + 0x1A, static_cast<std::uint16_t>(p.expand_b));
+        bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum));
+        bag_wr16(c.address + 0x14, static_cast<std::uint16_t>(p.capacity));
+        std::uint16_t back = 0;
+        if (reader.read_value(c.address + 0x14, &back) &&
+            back == static_cast<std::uint16_t>(p.capacity)) {
+            ++r->changed;
+            log_write("가방 용량", c.address + 0x14, std::to_string(cap),
+                      std::to_string(p.capacity));
+        } else {
+            ++r->fail;
+        }
+    }
+}
+
+}  // namespace
+
+BagResult bag_expand(const mem::Reader& reader, int target, bool storage) {
+    BagResult r;
+    {
+        std::lock_guard<std::mutex> lk(g_bag_mtx);
+        g_bag_backup.clear();   // 이번 확장의 원본만 기억한다
+    }
+    apply_to(reader, inventory_component(), target, storage, true, &r);
+    apply_to(reader, inventory_component_client(), target, storage, true, &r);
+    log::infof("가방 확장: 목표 {} -> 바꾼 것 {}개, 건너뜀 {}, 실패 {}", target,
+               r.changed, r.skip, r.fail);
+    return r;
+}
+
+bool bag_has_backup() {
+    std::lock_guard<std::mutex> lk(g_bag_mtx);
+    return !g_bag_backup.empty();
+}
+
+BagResult bag_restore(const mem::Reader& reader) {
+    BagResult r;
+    std::vector<BagBackup> saved;
+    {
+        std::lock_guard<std::mutex> lk(g_bag_mtx);
+        saved = g_bag_backup;
+    }
+    for (const auto& s : saved) {
+        // 되돌릴 때도 쓴 순서의 역순으로 - 캐시(+0x14)를 마지막에 맞춘다.
+        bag_wr16(s.address + 0x1A, s.b);
+        bag_wr16(s.address + 0x16, s.sum);
+        bag_wr16(s.address + 0x14, s.cap);
+        std::uint16_t back = 0;
+        if (reader.read_value(s.address + 0x14, &back) && back == s.cap) {
+            ++r.changed;
+        } else {
+            ++r.fail;
+        }
+    }
+    if (r.fail == 0) {
+        std::lock_guard<std::mutex> lk(g_bag_mtx);
+        g_bag_backup.clear();
+    }
+    log::infof("가방 복원: 되돌린 것 {}개, 실패 {}", r.changed, r.fail);
+    return r;
+}
 
 }  // namespace cdtb::game

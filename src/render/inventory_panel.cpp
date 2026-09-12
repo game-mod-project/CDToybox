@@ -329,6 +329,62 @@ std::vector<game::SocketCapRule> rules_from_ui() {
 //
 // 부위는 (분류 +0xA3, 장비타입 +0x42) 쌍이다 - 분류만으로는 갑옷과 망토가
 // 안 갈린다. 근거: specs/2026-09-07-socket-grant-unlock-research.md 9·10절.
+// 가방·보관함 용량. **2026-09-05 에 되돌렸던 기능을 원인 규명 후 다시 붙인 것**
+// 이다(inventory.h 의 긴 주석 참고). 그때 사고는 "임시 버퍼를 건드려서" 가 아니라
+// ① 기본 슬롯을 한 칸(+0x1A)만 보고 유도해 가방에서 240(정답 50)이 나왔고
+// ② 목표 기본값이 999 인데 하드 상한이 없었기 때문이다.
+void draw_bag_expand() {
+    if (!ImGui::CollapsingHeader("가방·보관함 용량")) return;
+    static int s_target = game::kBagTargetMax;
+    static bool s_storage = false;
+    static std::string s_msg;
+
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderInt("목표 슬롯", &s_target, 50, game::kBagTargetMax);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(상한 %d)", game::kBagTargetMax);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "참고 모드 둘이 독립적으로 732 초과는 엔진이 깨진다고 적습니다\n"
+            "(창고 이동 실패, 동료 부활·어비스 추출 크래시, 그 상태로 저장하면\n"
+            "로드에서 죽음). 700 은 그들이 쓰는 실전값이고 여유를 둔 값입니다.\n"
+            "확장 모드가 없을 때 게임 자체 천장은 240 입니다.");
+    }
+    ImGui::Checkbox("보관함도 함께", &s_storage);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "끄면 가방(종류 1)만 바꿉니다. 켜면 보관함류(4·7·9·11)도 같이\n"
+            "바꿉니다. 용량 5·20 짜리 작은 칸은 어느 쪽이든 건드리지 않습니다 -\n"
+            "그것까지 부풀린 것이 2026-09-05 의 '리로드 후 지급 손상' 이었습니다.");
+    }
+
+    const mem::LocalReader reader;
+    if (ImGui::Button("적용")) {
+        const auto r = game::bag_expand(reader, s_target, s_storage);
+        s_msg = "바꾼 것 " + std::to_string(r.changed) + "개, 건너뜀 " +
+                std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        refresh(reader);   // 용량 표시를 바로 새로 읽는다
+    }
+    ImGui::SameLine();
+    if (!game::bag_has_backup()) ImGui::BeginDisabled();
+    if (ImGui::Button("되돌리기")) {
+        const auto r = game::bag_restore(reader);
+        s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 실패 " +
+                std::to_string(r.fail);
+        refresh(reader);   // 용량 표시를 바로 새로 읽는다
+    }
+    if (!game::bag_has_backup()) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && !game::bag_has_backup()) {
+        ImGui::SetTooltip("이번 실행에서 확장한 적이 없습니다.");
+    }
+    if (!s_msg.empty()) ImGui::TextDisabled("%s", s_msg.c_str());
+
+    ImGui::TextWrapped(
+        "저장에 남는지는 아직 확인되지 않았습니다. 한 번 적용한 뒤 저장하고 "
+        "게임을 다시 켜서 용량이 유지되는지 확인해 주십시오. 유지되지 않으면 "
+        "켤 때마다 다시 눌러야 합니다.");
+}
+
 void draw_socket_cap() {
     if (!ImGui::CollapsingHeader("소켓 상한")) return;
     ImGui::Indent();
@@ -578,10 +634,7 @@ void draw_inventory_panel(bool* open) {
 
     draw_socket_cap();
 
-    // 가방 확장은 되돌렸다. 등록 컨테이너 18개 전부에 무차별로 쓰면
-    // 그중 임시 버퍼(게임이 유지하는 4개 평행 사본 중 2개)를 건드려
-    // 게임이 크래시하고 지급 경로까지 손상됐다(2026-09-05 실측). CT 처럼
-    // 어느 사본이 안전한지 구조로 식별한 뒤에 다시 붙인다.
+    draw_bag_expand();
 
     draw_filter_bar(&g_bar, g_opts);   // 매 프레임 거르므로 반환값은 안 쓴다
     const game::ItemFilter filter = to_filter(g_bar, g_opts);
