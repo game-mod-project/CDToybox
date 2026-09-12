@@ -1,5 +1,7 @@
 #include "render/equip_panel.h"
 
+#include <windows.h>  // GetTickCount64
+
 #include <imgui.h>
 
 #include <array>
@@ -33,6 +35,15 @@ Notice g_notice;
 // 리셋돼 값이 안 바뀐다.
 std::map<std::uint64_t, int> g_temper_edit;
 std::map<std::uint64_t, int> g_sharp_edit;
+// 마지막으로 발견을 요청한 시각. 창이 열린 동안 20초마다 자동 요청하되, 콤보·"다시 읽기" 의
+// 수동 요청도 이 시각을 갱신해 힙 스캔이 연이어 두 번 돌지 않게 한다(리뷰 R-4).
+ULONGLONG g_refresh_ms = 0;
+constexpr ULONGLONG kAutoRefreshMs = 20000;
+
+void request_refresh_now() {
+    g_refresh_ms = ::GetTickCount64();
+    game::equip_request_refresh();
+}
 
 // 염색 팝업 대상과 편집값. 편집값은 (인스턴스,rec)별로 유지한다 -
 // 매 프레임 스냅샷으로 덮으면 드래그 중 값이 리셋된다.
@@ -217,7 +228,7 @@ void draw_dye_popup(const mem::Reader& reader,
 // 캐릭터의 장비에 옛 입력이 붙지 않게).
 void select_character(std::uint16_t row) {
     game::equip_select_character(row);
-    game::equip_request_refresh();
+    request_refresh_now();
     overlay::set_equip_character_setting(
         row == game::kEquipAutoCharacter ? -1 : static_cast<int>(row));
     g_temper_edit.clear();
@@ -241,14 +252,7 @@ std::string character_label(std::uint16_t row) {
 void draw_character_picker() {
     // 후보 목록은 발견 때만 채워진다(첫 성공 뒤엔 요청 때만 돈다) - 창이 열려 있는 동안
     // 20초마다 한 번 다시 훑어 합류·이탈을 따라간다(리뷰 E-4). 힙 스캔이라 더 자주는 안 한다.
-    {
-        static ULONGLONG s_last_auto_ms = 0;
-        const ULONGLONG now = ::GetTickCount64();
-        if (now - s_last_auto_ms > 20000) {
-            s_last_auto_ms = now;
-            game::equip_request_refresh();
-        }
-    }
+    if (::GetTickCount64() - g_refresh_ms > kAutoRefreshMs) request_refresh_now();
     const std::vector<game::EquipCharacter> chars = game::equip_characters();
     const std::uint16_t want = game::equip_selected_character();
     const std::uint16_t cur = game::equip_current_character();
@@ -276,7 +280,11 @@ void draw_character_picker() {
     // 발견이 아직 이 선택을 소화하지 않았으면 "갱신 중" - 정상 전환에서 2초 넘게 "월드에
     // 없음" 을 띄우던 것(리뷰 E-2). 그동안 표는 옛 캐릭터 것이라 그것도 적는다.
     if (resolved != want) {
-        ImGui::TextDisabled("(갱신 중… 지금 보이는 것은 %s 의 장비)", shown.c_str());
+        ImGui::TextDisabled("(갱신 중… 지금 보이는 것은 %s의 장비)", shown.c_str());
+    } else if (!game::equip_ready()) {
+        // 아직 한 번도 못 찾았으면 "월드에 없음" 이 아니다(리뷰 R-2) - 아래 본문이 "월드에
+        // 들어가 장비를 착용하면 읽힙니다" 를 낸다.
+        ImGui::TextDisabled("(아직 착용 장비를 못 찾았습니다)");
     } else if (want != game::kEquipAutoCharacter && cur != want) {
         ImGui::TextDisabled("(고른 캐릭터가 월드에 없어 자동으로 보입니다: %s)",
                             shown.c_str());
@@ -287,8 +295,8 @@ void draw_character_picker() {
     }
 }
 
-// 담금질·연마 상한. 표가 아직 없으면 -1(칸은 "-", 일괄은 건너뜀 - 두 경로가 같게, 리뷰 E-5),
-// 그 값이 없는 아이템이면 0. u16 밖은 자른다(리뷰 E-7).
+// 담금질·연마 상한. 표에서 못 찾으면(표 미준비 또는 표 밖 순번) -1 - 칸은 "-", 일괄은 건너뜀
+// (두 경로가 같게, 리뷰 E-5). 그 값이 없는 아이템이면 0. u16 밖은 자른다(리뷰 E-7).
 int level_cap(const game::ItemCatalogEntry* e, bool temper) {
     if (e == nullptr) return -1;
     long long cap = temper ? static_cast<long long>(e->max_temper)
@@ -307,7 +315,7 @@ void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
         ImGui::TextDisabled("-");
         if (ImGui::IsItemHovered()) {
             if (cap < 0) {
-                ImGui::SetTooltip("아이템 표가 아직 준비되지 않았습니다.");
+                ImGui::SetTooltip("아이템 표에서 상한을 못 찾았습니다 (표 준비 중이거나 표 밖 순번).");
             } else {
                 ImGui::SetTooltip("이 아이템에는 %s 값이 없습니다.", what);
             }
@@ -370,7 +378,8 @@ void bulk_write(const mem::Reader& reader, const std::vector<game::WornPiece>& p
     game::equip_refresh_pieces(reader);
     if (done + part == 0) {
         notice_set(&g_notice, NoticeLevel::Warn,
-                   "쓴 것이 없습니다 ({} 값이 없는 장비 {}개 건너뜀).", what, skipped);
+                   "쓴 것이 없습니다 ({} 상한을 못 찾았거나 값이 없는 장비 {}개 건너뜀).",
+                   what, skipped);
     } else if (part > 0) {
         notice_set(&g_notice, NoticeLevel::Warn,
                    "{}개 {} 최대, {}개는 한쪽만 적용됐습니다 - 다시 시도하세요.", done,
@@ -395,7 +404,7 @@ void draw_equip_panel(bool* open) {
         g_temper_edit.clear();
         g_sharp_edit.clear();
         g_dye_edit.clear();
-        game::equip_request_refresh();
+        request_refresh_now();
     }
     ImGui::SameLine();
     ImGui::TextDisabled("잠긴 칸은 '열기' 로 엽니다. 툴팁에 다 보이려면"
