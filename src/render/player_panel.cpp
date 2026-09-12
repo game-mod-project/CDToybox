@@ -2,6 +2,8 @@
 
 #include <imgui.h>
 
+#include <cstdint>
+
 #include "game/nofall.h"
 #include "game/player.h"
 #include "mem/reader.h"
@@ -54,45 +56,39 @@ void draw_player_panel(bool* open) {
         if (ImGui::Checkbox("낙사 방지", &nf)) game::nofall_set(nf);
         // 같은 줄(SameLine)에 붙이면 창 폭에서 잘린다 - 실측 2026-09-12 화면에서
         // "...환경 피해를 막습니" 로 끝났다. 아래 줄로 내리고 폭에 맞춰 감싼다.
-        ImGui::TextWrapped("낙하와 출처 없는 환경 피해를 막습니다.");
-        // 이 두 숫자가 판별식이 맞는지 보는 **유일한** 수단이다.
-        // 판정 기준은 아래 툴팁과 nofall.h 의 검증 절차가 정본이다 - 여기에
-        // 옮겨 적지 않는다(예전에 주석만 옛 기준으로 남아 툴팁과 모순됐다).
-        if (game::nofall_observing()) {
-            // 진단 빌드: 케이브가 r9 를 건드리지 않는다. 무엇이 디스패처를
-            // 지나는지 세기만 하므로, 켠 채로 평소처럼 노시면 된다.
-            const auto d = game::nofall_diag();
-            ImGui::TextDisabled("진단 빌드 - 막지 않고 세기만 합니다");
-            ImGui::Text("피해 %llu / rcx 일치 %llu / dx==0 %llu",
-                        static_cast<unsigned long long>(d.events),
-                        static_cast<unsigned long long>(d.rcx_hit),
-                        static_cast<unsigned long long>(d.dx_zero));
-            ImGui::Text("마지막 rcx 0x%llX (내 root 0x%llX)",
-                        static_cast<unsigned long long>(d.last_rcx),
-                        static_cast<unsigned long long>(d.owner));
-            ImGui::Text("마지막 dx %llu / 델타 %lld",
-                        static_cast<unsigned long long>(d.last_rdx & 0xFFFF),
-                        static_cast<long long>(d.last_r9));
-        } else {
+        ImGui::TextWrapped(
+            "낙하와 출처 없는 환경 피해를 막습니다. 판별식을 이 빌드에 맞추는"
+            " 중이라 아래 규칙을 바꿔 가며 시험합니다.");
+        // 규칙을 화면에서 바꾼다. 게임을 껐다 켜지 않고 후보를 갈아 보려는 것이다
+        // (2026-09-12: CT 의 가해자 슬롯 판별이 이 빌드에서 낙하를 못 걸러 냈다).
+        const char* kRuleNames[] = {"가해자 없을 때만 취소",
+                                    "출처 없을 때만 취소",
+                                    "내 생명 피해면 무조건 취소(시험용)"};
+        int rule = static_cast<int>(game::nofall_rule());
+        if (rule < 0 || rule > 2) rule = 0;
+        ImGui::SetNextItemWidth(300.0f);
+        if (ImGui::Combo("판별 규칙", &rule, kRuleNames, 3)) {
+            game::nofall_set_rule(static_cast<std::uint64_t>(rule));
+        }
+        if (rule == 2) {
+            ImGui::TextDisabled(
+                "주의: 이 규칙은 낙하가 아니어도 내 생명 피해를 전부 지웁니다."
+                " r9 를 0 으로 만드는 것이 정말 피해를 막는지 가리는 용도입니다.");
+        }
+        const auto d = game::nofall_diag();
         ImGui::Text("취소함 %llu / 통과시킴 %llu",
-                    static_cast<unsigned long long>(game::nofall_zeroed()),
-                    static_cast<unsigned long long>(
-                        game::nofall_let_through()));
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "취소함 = 가해자 없는 피해(낙하·환경·지속 피해)를 0 으로 만든 "
-                "횟수.\n"
-                "통과시킴 = 가해자가 있어 그대로 둔 횟수.\n"
-                "\n"
-                "검증은 「무적」을 끈 채로 하십시오.\n"
-                "  적에게 맞았는데 통과시킴이 오르면 정상입니다.\n"
-                "  통과시킴이 안 오르고 취소함만 오르면 모든 피해가 지워지는 "
-                "것이니 바로 끄고 알려 주십시오.\n"
-                "  둘 다 안 오르면 훅이 안 물린 것입니다(판정 불가).");
-        }
-        }
-        // 폴트 가드가 끼어들었다면 그 사실을 숨기지 않는다 - 가해자 판정이
-        // 이 빌드에서 불안정하다는 뜻이다(피해는 통과시키므로 위험하지는 않다).
+                    static_cast<unsigned long long>(d.zeroed),
+                    static_cast<unsigned long long>(d.let_through));
+        // 마지막 생명 피해의 **출처 정체**. 낙하일 때와 맞았을 때가 어떻게 다른지
+        // 이 줄로 가른다 - vtable 을 probe 로 풀면 클래스 이름이 나온다.
+        ImGui::Text("마지막 출처 0x%llX  vtable 0x%llX",
+                    static_cast<unsigned long long>(d.last_src),
+                    static_cast<unsigned long long>(d.last_vt));
+        ImGui::Text("가해자 0x%llX  델타 %lld  (출처없음 %llu / 이상한값 %llu)",
+                    static_cast<unsigned long long>(d.last_atk),
+                    static_cast<long long>(d.last_delta),
+                    static_cast<unsigned long long>(d.src_low),
+                    static_cast<unsigned long long>(d.src_bad));
         if (const auto f = game::nofall_faults(); f > 0) {
             ImGui::TextDisabled("판정 불가 %llu회 (그대로 통과시켰습니다)",
                                 static_cast<unsigned long long>(f));

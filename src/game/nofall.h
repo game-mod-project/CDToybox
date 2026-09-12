@@ -15,25 +15,23 @@
 // 디스패처 호출 규약(2850 실측, RVA 0x01719850):
 //   rcx = 대상 소유자   dx = statusId(0 = Health)   r8 = 시각
 //   r9  = 델타(데미지는 음수)      [rsp+0x28] = sourceCtx(인자 5)
-// 판별식은 nofall_cave.h 를 보라. 관찰 학습이 없으므로 **첫 낙하부터** 보호된다.
 //
-// **막는 것은 "낙하" 가 아니라 "가해자가 없는 Health 피해" 다.** 낙하가 대표적인
-// 경우일 뿐, 출처 없는 환경 피해(익사·지형·지속 피해)도 함께 취소된다. 화면 문구도
-// 그렇게 적어야 한다 - "낙하만" 이라고 적으면 모르는 사이 부분 갓모드가 된다.
+// **여기까지는 라이브에서 확정됐다**(2026-09-12): 피해 이벤트 120건 중 내 것 6건,
+// 그중 생명 피해는 `rcx` = 내 root, `dx` = 0, 델타 -337,500 이었고 같은 시각 생명이
+// 정확히 334,500 줄었다. 관찰 학습이 없으므로 **첫 낙하부터** 판정한다.
+//
+// **아직 확정 안 된 것은 "낙하인가" 를 가르는 판별식이다.** CT v5.0 의
+// `sourceCtx+0x68`(가해자 슬롯) 방식은 이 빌드에서 낙하를 못 걸러 냈다 - 낙하
+// 피해도 가해자가 있는 것으로 분류돼 그대로 통과했다(취소함 0 / 통과시킴 4).
+// 그래서 케이브가 **출처의 정체를 기록**하면서 **판별 규칙을 런타임에 바꿀 수 있게**
+// 해 두었다(nofall_cave.h 의 NofallRule). 게임을 껐다 켜지 않고 후보를 갈아 본다.
 //
 // 내 root = [[[char+0x68]+0x20]+0x18] - player.h 의 게이지 체인과 같은 자리다.
-// 캐릭터 교체·지역 이동으로 바뀌므로 **캐시하지 않고 매 프레임 갱신**한다.
+// 같은 캐릭터가 클라·서버 두 realm 으로 존재하고 디스패처는 서버 root 를 넘기므로
+// **둘 다** 먹인다(player_roots). 캐릭터 교체·지역 이동으로 바뀌므로 캐시하지 않는다.
 //
-// 가해자 판정(sourceCtx+0x68)은 정적으로 못 박는다. 틀리면 조용한 갓모드가 되므로
-// **취소함/통과시킴 카운터 2개**로 눈에 보이게 한다 - 검증의 유일한 수단이다.
-// 검증(「무적」을 끈 채로): ① 낮은 데서 떨어지면 **취소함**이 올라야 한다.
-// ② 적에게 맞으면 **통과시킴**이 올라야 한다 - 오르면 가해자 판정이 살아 있다는
-//    뜻이고, 그때 취소함이 같이 올라도 상관없다(출혈·독이 함께 취소된 것).
-//    통과시킴이 안 오르고 취소함만 오르면 조용한 갓모드이니 **즉시 끈다**.
-// ③ 둘 다 안 오르면 훅이 안 물린 것이다(판정 불가) - 켠 채로 두지 않는다.
-//
-// 출처: CT v5.0 "No Fall Damage"(mul0095/Trinity, MIT) 이식. 옛 구현의 출처였던
-//       XeTrinityz/Trinity (MIT) 도 같은 벽에 부딪혀 교체했다.
+// 출처: CT v5.0 "No Fall Damage"(mul0095/Trinity, MIT) 이식 - 사이트와 규약은
+//       그대로, 낙하 판별만 이 빌드에 맞춰 다시 잡는 중이다.
 //
 // **모드(주입 DLL)에서만** 부른다. 라이브 코드 패치.
 
@@ -46,39 +44,36 @@ bool nofall_installed();
 // AOB 가 이 게임 빌드에서 유일 매칭되지 않아 설치 불가로 판정됨(안전, 무효).
 bool nofall_unsupported();
 
-// 내 root 를 다시 계산해 케이브에 건네준다. **렌더 틱(~16ms)에서** 부른다 -
+// 내 root 두 개를 다시 계산해 케이브에 건네준다. **렌더 틱(~16ms)에서** 부른다 -
 // 분석 통과는 수십 초라 캐릭터 교체 뒤 낡은 root 로 남는 창이 너무 길다.
-// 꺼져 있으면 0 을 써서 케이브의 `test rax,rax / je done` 으로 무력화한다.
+// 꺼져 있으면 0 을 써서 케이브가 곧바로 빠져나가게 한다.
 void nofall_refresh(const mem::Reader& reader);
 
 // 켜기/끄기. 끄면 root 를 지워 케이브가 곧바로 빠져나간다(훅은 남되 무효).
 void nofall_set(bool on);
 bool nofall_enabled();
 
-// 케이브가 센 두 숫자. 취소함 = 낙하로 보고 0 으로 만든 횟수,
-// 통과시킴 = 가해자가 있어 그대로 둔 횟수. 미설치면 둘 다 0.
-std::uint64_t nofall_zeroed();
-std::uint64_t nofall_let_through();
+// 판별 규칙(nofall_cave.h 의 NofallRule). 다음 피해부터 바로 먹는다.
+std::uint64_t nofall_rule();
+void nofall_set_rule(std::uint64_t rule);
+
+// 케이브가 센 것과 마지막으로 본 값들. 미설치면 전부 0.
+struct NofallDiag {
+    std::uint64_t owner = 0;        // 내 root #1
+    std::uint64_t owner2 = 0;       // 내 root #2 (다른 realm)
+    std::uint64_t zeroed = 0;       // 취소함
+    std::uint64_t let_through = 0;  // 통과시킴
+    std::uint64_t last_src = 0;     // 마지막 sourceCtx
+    std::uint64_t last_vt = 0;      // 그 객체의 vtable(클래스를 푸는 열쇠)
+    std::uint64_t last_atk = 0;     // [sourceCtx+0x68]
+    std::uint64_t last_delta = 0;   // 그때의 델타(음수)
+    std::uint64_t src_low = 0;      // 출처가 아예 없던 횟수
+    std::uint64_t src_bad = 0;      // 말 안 되는 포인터였던 횟수
+};
+NofallDiag nofall_diag();
 
 // 가해자 역참조가 매핑 안 된 주소를 물어 폴트 가드가 끼어든 횟수. 0 이어야
 // 정상이고, 오르면 그 판정이 이 빌드에서 불안정하다는 신호다(피해는 통과시킨다).
 std::uint64_t nofall_faults();
-
-// 진단(관찰) 모드인가. 이 모드의 케이브는 **r9 를 건드리지 않는다** - 무엇이
-// 디스패처를 지나는지 세기만 하므로 게임 동작이 달라지지 않는다. 적용 케이브가
-// 한 번도 안 물릴 때 어느 관문이 튕기는지 가르려고 둔다.
-bool nofall_observing();
-
-struct NofallDiag {
-    std::uint64_t events = 0;    // 피해 이벤트(r9 < 0)
-    std::uint64_t rcx_hit = 0;   // 그중 rcx == 내 root
-    std::uint64_t dx_zero = 0;   // 그중 dx == 0
-    std::uint64_t last_rcx = 0;  // 마지막으로 본 rcx
-    std::uint64_t last_rdx = 0;  // 마지막 rdx (하위 16비트가 dx)
-    std::uint64_t last_r9 = 0;   // 마지막 델타
-    std::uint64_t owner = 0;     // 지금 먹이고 있는 내 root #1
-    std::uint64_t owner2 = 0;    // 같은 캐릭터의 다른 realm root
-};
-NofallDiag nofall_diag();
 
 }  // namespace cdtb::game

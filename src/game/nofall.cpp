@@ -32,15 +32,10 @@ std::atomic<int> g_state{0};
 std::atomic<bool> g_unsupported{false};
 std::atomic<bool> g_enabled{false};
 std::atomic<std::uintptr_t> g_deref{0};  // 폴트를 지켜볼 명령 주소(VEH)
+std::atomic<std::uintptr_t> g_vt{0};     // vtable 읽기도 폴트가 날 수 있다
 std::atomic<std::uintptr_t> g_done{0};   // 폴트 시 떨어뜨릴 자리(VEH)
 std::atomic<std::uint64_t> g_faults{0};
 
-// **진단 빌드 스위치.** true 면 r9 를 건드리지 않는 관찰 케이브를 심는다.
-// 2026-09-12: 적용 케이브가 실측에서 한 번도 안 물렸다(취소함·통과시킴 둘 다 0,
-// 사이트 패치와 root 는 정상). 두 관문(dx == 0 = Health, rcx == 내 root)이 정적
-// 분석으로 못 박은 적 없는 가정이라, 어느 쪽이 튕기는지 세어 보고 정한다.
-// 가려내고 나면 false 로 되돌린다.
-constexpr bool kObserveOnly = false;
 // 마지막으로 owner 에 써 넣은 값. 같은 값을 매 프레임 다시 쓰지 않으려는 것이다.
 // nofall_set 이 owner 를 직접 건드리므로 그쪽에서 반드시 무효화해야 한다 -
 // 안 하면 껐다 켰을 때 "root 가 그대로" 라 다시 안 써져 보호가 안 켜진다.
@@ -97,7 +92,10 @@ LONG CALLBACK on_cave_fault(EXCEPTION_POINTERS* ep) {
     if (deref == 0 || done == 0) return EXCEPTION_CONTINUE_SEARCH;
     const auto at =
         reinterpret_cast<std::uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
-    if (at != deref) return EXCEPTION_CONTINUE_SEARCH;
+    const auto vt = g_vt.load(std::memory_order_acquire);
+    if (at != deref && (vt == 0 || at != vt)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     ep->ContextRecord->Rip = static_cast<DWORD64>(done);
     g_faults.fetch_add(1, std::memory_order_relaxed);
     return EXCEPTION_CONTINUE_EXECUTION;
@@ -217,9 +215,7 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
 
     // 케이브의 꼬리 점프는 원본 명령을 실행한 뒤 site+5 로 돌아간다.
-    const NofallCave code =
-        kObserveOnly ? nofall_build_observe_cave(orig, vars_at, site)
-                     : nofall_build_cave(orig, vars_at, site);
+    const NofallCave code = nofall_build_cave(orig, vars_at, site);
     if (!code.ok) {
         g_unsupported.store(true, std::memory_order_release);
         log::warnf("낙사: 케이브 조립 실패({}) - 설치 안 함", code.why);
@@ -233,9 +229,10 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
 
     // 폴트 가드를 **패치보다 먼저** 건다 - 패치가 끝나는 순간부터 케이브가 돈다.
     const auto cave_at = reinterpret_cast<std::uintptr_t>(cave);
-    // 관찰 케이브는 게임 포인터를 따라가지 않아 deref_at 이 0 이다(가드 불필요).
-    g_deref.store(code.deref_at != 0 ? cave_at + code.deref_at : 0,
-                  std::memory_order_release);
+    // 케이브에서 게임 포인터를 따라가는 자리는 둘뿐이다(vtable 읽기, 가해자 읽기).
+    // 둘 다 매핑을 보장할 수 없으므로 폴트 가드가 지킨다.
+    g_deref.store(cave_at + code.deref_at, std::memory_order_release);
+    g_vt.store(cave_at + code.vt_at, std::memory_order_release);
     g_done.store(cave_at + code.done_at, std::memory_order_release);
     static std::atomic<bool> veh_added{false};
     bool expect_veh = false;
@@ -244,6 +241,7 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
         if (::AddVectoredExceptionHandler(1, on_cave_fault) == nullptr) {
             log::warnf("낙사: 폴트 가드 등록 실패 - 설치 안 함");
             g_deref.store(0, std::memory_order_release);
+        g_vt.store(0, std::memory_order_release);
             g_done.store(0, std::memory_order_release);
             veh_added.store(false, std::memory_order_release);
             VirtualFree(cave, 0, MEM_RELEASE);
@@ -260,6 +258,7 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::memcpy(patch + 1, &rel, 4);
     if (!patch_site_atomically(site, patch)) {
         g_deref.store(0, std::memory_order_release);
+        g_vt.store(0, std::memory_order_release);
         g_done.store(0, std::memory_order_release);
         VirtualFree(cave, 0, MEM_RELEASE);
         VirtualFree(vars, 0, MEM_RELEASE);
@@ -272,16 +271,14 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::memcpy(g_orig, orig, kNofallOrigSize);
     guard.done = true;
     g_state.store(2, std::memory_order_release);
-    // vars 주소를 남기는 이유: 취소함/통과시킴 카운터는 패널에만 뜨는데, 화면을
-    // 못 보는 상황(로그만 받는 경우)에서도 probe dump <vars> 24 로 읽을 수 있어야
-    // 판별식이 맞는지 밖에서 확인할 수 있다. 레이아웃은 [0]=root [8]=취소함
-    // [16]=통과시킴 이다.
+    // vars 주소를 남기는 이유: 카운터와 마지막 출처는 패널에만 뜨는데, 화면을
+    // 못 보는 상황(로그만 받는 경우)에서도 probe dump <vars> 128 로 읽어
+    // 판별식이 맞는지 밖에서 확인할 수 있어야 한다.
     log::infof(
-        "낙사 훅 설치({}): site=0x{:X} cave=0x{:X} 케이브 {}바이트 vars=0x{:X} ({})",
-        kObserveOnly ? "관찰" : "적용", site, g_cave, code.code.size(), g_vars,
-        kObserveOnly
-            ? "[8]=피해 [16]=rcx일치 [24]=dx0 [32]=rcx [40]=rdx [48]=r9"
-            : "[0]=root [8]=취소함 [16]=통과시킴");
+        "낙사 훅 설치: site=0x{:X} cave=0x{:X} 케이브 {}바이트 vars=0x{:X} ({})",
+        site, g_cave, code.code.size(), g_vars,
+        "[0]=root#1 [8]=root#2 [16]=취소함 [24]=통과시킴 [32]=규칙"
+        " [40]=출처 [48]=vtable [56]=가해자 [64]=델타");
     return true;
 }
 
@@ -305,26 +302,36 @@ void nofall_set(bool on) {
 
 bool nofall_enabled() { return g_enabled.load(std::memory_order_acquire); }
 
-std::uint64_t nofall_zeroed() { return vars_read(kNofallZeroed); }
-std::uint64_t nofall_let_through() { return vars_read(kNofallLetThrough); }
 std::uint64_t nofall_faults() {
     return g_faults.load(std::memory_order_relaxed);
 }
 
-bool nofall_observing() { return kObserveOnly; }
+
+std::uint64_t nofall_rule() { return vars_read(kNofallRule); }
+
+void nofall_set_rule(std::uint64_t rule) {
+    if (rule > kRuleMax) rule = kRuleNoAttacker;
+    log_write("낙사 판별 규칙", g_vars, "", rule == kRuleAlways ? "무조건"
+                                          : rule == kRuleNoSource ? "출처 없음"
+                                                                  : "가해자 없음");
+    vars_write(kNofallRule, rule);
+}
 
 NofallDiag nofall_diag() {
     NofallDiag d;
     d.owner = vars_read(kNofallOwner);
     d.owner2 = vars_read(kNofallOwner2);
-    d.events = vars_read(kNofallEvents);
-    d.rcx_hit = vars_read(kNofallRcxHit);
-    d.dx_zero = vars_read(kNofallDxZero);
-    d.last_rcx = vars_read(kNofallLastRcx);
-    d.last_rdx = vars_read(kNofallLastRdx);
-    d.last_r9 = vars_read(kNofallLastR9);
+    d.zeroed = vars_read(kNofallZeroed);
+    d.let_through = vars_read(kNofallLetThrough);
+    d.last_src = vars_read(kNofallLastSrc);
+    d.last_vt = vars_read(kNofallLastVt);
+    d.last_atk = vars_read(kNofallLastAtk);
+    d.last_delta = vars_read(kNofallLastDelta);
+    d.src_low = vars_read(kNofallSrcLow);
+    d.src_bad = vars_read(kNofallSrcBad);
     return d;
 }
+
 
 void nofall_refresh(const mem::Reader& reader) {
     if (g_state.load(std::memory_order_acquire) != 2) return;
