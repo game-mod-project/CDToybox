@@ -245,7 +245,9 @@ std::vector<Rtti::Found> Rtti::find_objects_of(const std::vector<std::string>& n
             bool all = true;
             for (const auto& n : names) {
                 const auto it = prefetch_.find(n);
-                if (it == prefetch_.end()) {
+                // 없거나 상한에 닿은 이름이 있으면 스냅숏이 모자랄 수 있다 - 걷는다(리뷰 P-1).
+                if (it == prefetch_.end() ||
+                    (prefetch_cap_ != 0 && it->second.size() >= prefetch_cap_)) {
                     all = false;
                     break;
                 }
@@ -280,8 +282,9 @@ std::vector<Rtti::Found> Rtti::find_objects_of(const std::vector<std::string>& n
 // vtable 주소 오름차순으로 이분 탐색한다(색인 순서가 그렇다 - 아니면 여기서 정렬).
 std::vector<Rtti::Found> Rtti::scan_heap(
     const std::vector<std::pair<std::uintptr_t, const std::string*>>& matching_in,
-    std::size_t max, std::size_t per_class_max) const {
+    std::size_t max, std::size_t per_class_max, std::size_t* capped_out) const {
     std::vector<Found> out;
+    if (capped_out != nullptr) *capped_out = 0;
     if (matching_in.empty() || max == 0) return out;
     using Entry = std::pair<std::uintptr_t, const std::string*>;
     const auto by_vt = [](const Entry& a, const Entry& b) { return a.first < b.first; };
@@ -325,7 +328,10 @@ std::vector<Rtti::Found> Rtti::scan_heap(
                 std::size_t& n = per_class[it->second];
                 if (n >= per_class_max) continue;
                 ++n;
-                if (n == per_class_max) ++capped;
+                if (n == per_class_max) {
+                    ++capped;
+                    if (capped_out != nullptr) *capped_out = capped;
+                }
             }
             out.push_back(Found{base + i, *it->second});
             if (out.size() >= max) return out;
@@ -339,7 +345,7 @@ void Rtti::prefetch_instances(const std::vector<std::string>& names,
                               std::size_t max_per_class) const {
     std::unordered_map<std::string, std::vector<std::uintptr_t>> fresh;
     for (const auto& n : names) fresh.emplace(n, std::vector<std::uintptr_t>{});
-    std::size_t objects = 0;
+    std::size_t objects = 0, capped = 0;
     if (!image_.empty() && !names.empty()) {
         ensure_index();
         std::vector<std::pair<std::uintptr_t, const std::string*>> matching;
@@ -349,7 +355,7 @@ void Rtti::prefetch_instances(const std::vector<std::string>& names,
         }
         const std::size_t total =
             max_per_class == 0 ? 4096 : max_per_class * names.size();
-        for (const auto& f : scan_heap(matching, total, max_per_class)) {
+        for (const auto& f : scan_heap(matching, total, max_per_class, &capped)) {
             fresh[f.cls].push_back(f.address);
             ++objects;
         }
@@ -357,17 +363,21 @@ void Rtti::prefetch_instances(const std::vector<std::string>& names,
     std::lock_guard<std::mutex> lk(prefetch_mutex_);
     prefetch_ = std::move(fresh);
     prefetch_objects_ = objects;
+    prefetch_cap_ = max_per_class;
+    prefetch_capped_ = capped;
 }
 
 void Rtti::clear_prefetch() const {
     std::lock_guard<std::mutex> lk(prefetch_mutex_);
     prefetch_.clear();
     prefetch_objects_ = 0;
+    prefetch_cap_ = 0;
+    prefetch_capped_ = 0;
 }
 
 Rtti::PrefetchStats Rtti::prefetch_stats() const {
     std::lock_guard<std::mutex> lk(prefetch_mutex_);
-    return PrefetchStats{prefetch_.size(), prefetch_objects_};
+    return PrefetchStats{prefetch_.size(), prefetch_objects_, prefetch_capped_};
 }
 
 std::vector<std::uintptr_t> Rtti::find_qword(std::uint64_t value,
@@ -469,11 +479,13 @@ std::vector<Rtti::Ref> Rtti::find_refs(std::uintptr_t target,
 std::vector<std::uintptr_t> Rtti::instances_of_class(const std::string& name,
                                                      std::size_t max) const {
     std::vector<std::uintptr_t> out;
-    // 미리 모아 둔 이름이면 힙을 다시 읽지 않는다(prefetch_instances 의 스냅숏).
+    // 미리 모아 둔 이름이면 힙을 다시 읽지 않는다(prefetch_instances 의 스냅숏). 단 스냅숏이
+    // 상한에 닿았고 호출부가 그보다 많이 원하면 모자랄 수 있으니 걷는다(리뷰 P-1).
     {
         std::lock_guard<std::mutex> lk(prefetch_mutex_);
         const auto it = prefetch_.find(name);
-        if (it != prefetch_.end()) {
+        if (it != prefetch_.end() &&
+            !(prefetch_cap_ != 0 && it->second.size() >= prefetch_cap_ && max > prefetch_cap_)) {
             out = it->second;
             if (out.size() > max) out.resize(max);
             return out;

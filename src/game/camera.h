@@ -89,4 +89,13 @@ bool read_world_position(std::uintptr_t component, float out[3]);
 // 카메라 탐색이 힙에서 찾는 RTTI 클래스 넷(통과 단위 미리 훑기용).
 std::vector<std::string> camera_scan_classes();
 
+// 분석 통과 한 바퀴의 단계들(아이템표·인벤토리·로스터·액터 매니저·카메라·명부)이 힙에서
+// 찾는 클래스 전부 - 통과 시작에 한 번 훑어 둔다(mem/rtti.h prefetch_instances). probe 의
+// passscan 도 같은 목록을 써서 실측이 DLL 과 어긋나지 않게 한다.
+std::vector<std::string> pass_scan_classes();
+
+// 통과 한 바퀴의 클래스별 상한. 호출부의 max(items 32·inventory 64·roster 32·actors 8·
+// clan 16)를 전부 덮는다 - 상한에 닿은 클래스는 캐시 대신 걷는다(rtti.h 캐시 규칙).
+inline constexpr std::size_t kPassScanPerClass = 64;
+
 }  // namespace cdtb::game

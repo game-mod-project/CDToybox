@@ -90,7 +90,7 @@ std::vector<std::string> camera_scan_classes() {
 
 // 한 통과의 단계들(아이템표·인벤토리·로스터·액터 매니저·카메라·명부)이 힙에서 찾는 클래스
 // 전부. 통과 시작에 한 번 훑어 두면(prefetch_instances) 단계들은 캐시에서 낸다.
-static std::vector<std::string> pass_scan_classes() {
+std::vector<std::string> pass_scan_classes() {
     std::vector<std::string> all;
     for (auto part : {&items_scan_classes, &inventory_scan_classes,
                              &roster_scan_classes, &actors_scan_classes,
@@ -100,6 +100,29 @@ static std::vector<std::string> pass_scan_classes() {
     }
     return all;
 }
+
+// 통과 한 바퀴의 미리 훑기 창. 만들 때 훑고(로그 한 줄), 블록을 어떻게 나가든(break·return·
+// 예외) 소멸자가 비운다 - 손으로 짝지으면 조기 반환이 생길 때 스냅숏이 본 루프로 샌다
+// (리뷰 O-1).
+namespace {
+struct PrefetchScope {
+    const mem::Rtti& rtti;
+    PrefetchScope(const mem::Rtti& r, const char* what) : rtti(r) {
+        rtti.prefetch_instances(pass_scan_classes(), kPassScanPerClass);
+        const auto ps = rtti.prefetch_stats();
+        if (ps.capped == 0) {
+            log::infof("힙 훑기({}): 클래스 {}개에서 객체 {}개", what, ps.names, ps.objects);
+        } else {
+            log::infof("힙 훑기({}): 클래스 {}개에서 객체 {}개 - 그중 {}개 클래스는 상한 {}에 "
+                       "닿아 그 단계는 다시 걷는다",
+                       what, ps.names, ps.objects, ps.capped, kPassScanPerClass);
+        }
+    }
+    ~PrefetchScope() { rtti.clear_prefetch(); }
+    PrefetchScope(const PrefetchScope&) = delete;
+    PrefetchScope& operator=(const PrefetchScope&) = delete;
+};
+}  // namespace
 
 bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
                    CameraSet* out) {
@@ -282,11 +305,7 @@ void auto_analysis_loop() {
         // 월드 안에서 단계마다 10~30초)이 한 번이 된다. 준비된 단계는 어차피 안 찾고, 아직
         // 없는 객체는 빈 결과로 끝난다(다음 통과가 다시 훑는다). 통과 끝에 비운다 - 힙은
         // 바뀐다.
-        rtti.prefetch_instances(pass_scan_classes(), 64);
-        {
-            const auto ps = rtti.prefetch_stats();
-            log::infof("힙 훑기: 클래스 {}개에서 객체 {}개", ps.names, ps.objects);
-        }
+        const PrefetchScope prefetch_scope(rtti, "통과");
         t = step("힙 훑기", t);
 
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
@@ -322,7 +341,7 @@ void auto_analysis_loop() {
         // 이 스캔을 돌면 종 바꾸기에서 게임이 멈춘다(game/clan.cpp).
         discover_clan(rtti, reader);
         step("동반자 명부", t);
-        rtti.clear_prefetch();
+        rtti.clear_prefetch();   // 통과 사이(10초)엔 캐시를 비워 둔다 - 소멸자는 안전망
         log::infof("탐색 {}번째 통과: {}ms", attempt,
                    ::GetTickCount64() - pass_t0);
         if (got_cam && g_set.active != 0) {
@@ -345,7 +364,7 @@ void auto_analysis_loop() {
     // 정상이다. 예전에는 카메라를 찾는 순간 이 루프를 빠져나가 이름이
     // 영영 비었다 - 로그에 "이름 풀린 것 0개" 로 남았다.
     for (int i = 0; i < 120 && !g_stop.load(); ++i) {
-        rtti.prefetch_instances(pass_scan_classes(), 64);   // 위 루프와 같은 이유
+        const PrefetchScope prefetch_scope(rtti, "이름 채우기");   // 위 루프와 같은 이유
         discover_item_ids(rtti, reader);
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
@@ -361,7 +380,7 @@ void auto_analysis_loop() {
         if (items_done) discover_item_ids(rtti, reader);
         // 명부: 값싼 세션 사슬 먼저, RTTI 스캔은 월드 안에서만(clan.cpp 가 가른다).
         discover_clan(rtti, reader);
-        rtti.clear_prefetch();
+        rtti.clear_prefetch();   // 반복 사이(5초)엔 캐시를 비워 둔다 - 소멸자는 안전망
         if (items_done && inventory_ready() && item_ids_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응

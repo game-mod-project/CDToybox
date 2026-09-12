@@ -2251,16 +2251,11 @@ void cmd_passscan(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         t = now;
     };
     if (!old) {
-        std::vector<std::string> names;
-        for (auto part : {&game::items_scan_classes, &game::inventory_scan_classes,
-                          &game::roster_scan_classes, &game::actors_scan_classes,
-                          &game::camera_scan_classes, &game::clan_scan_classes}) {
-            const auto v = part();
-            names.insert(names.end(), v.begin(), v.end());
-        }
-        rt.prefetch_instances(names, 64);
+        // DLL 과 같은 목록·상한(camera.h) - 실측이 어긋나지 않게(리뷰 P-4).
+        rt.prefetch_instances(game::pass_scan_classes(), game::kPassScanPerClass);
         const auto ps = rt.prefetch_stats();
-        std::printf("힙 훑기: 클래스 %zu개 객체 %zu개\n", ps.names, ps.objects);
+        std::printf("힙 훑기: 클래스 %zu개 객체 %zu개 (상한 %zu 에 닿은 클래스 %zu개)\n",
+                    ps.names, ps.objects, game::kPassScanPerClass, ps.capped);
         step("힙 훑기");
     } else {
         std::printf("(미리 훑기 없이 - 단계마다 힙을 읽는다)\n");

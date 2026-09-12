@@ -199,13 +199,23 @@ TEST(rtti_prefetch_caps_each_class_separately) {
     cdtb::mem::Rtti rt(f.mem);
     CHECK(rt.load_image());
     rt.prefetch_instances({".?AVFoo@@", ".?AVBar@@"}, 2);
-    const auto foo = rt.instances_of_class(".?AVFoo@@", 16);
-    CHECK_EQ(foo.size(), 2u);   // 셋 중 낮은 주소 둘
-    CHECK_EQ(foo[0], f.mem.heap_addr(Fixture::kObjFoo1));
-    CHECK_EQ(foo[1], f.mem.heap_addr(Fixture::kObjFoo2));
-    // Foo 가 상한에 닿아도 Bar 는 제 몫을 받는다
-    CHECK_EQ(rt.instances_of_class(".?AVBar@@", 16).size(), 1u);
     CHECK_EQ(rt.prefetch_stats().objects, 3u);
+    CHECK_EQ(rt.prefetch_stats().capped, 1u);   // Foo 만 상한에 닿았다
+    // 상한 안에서 원하면 스냅숏(셋 중 낮은 주소 둘)
+    const auto foo2 = rt.instances_of_class(".?AVFoo@@", 2);
+    CHECK_EQ(foo2.size(), 2u);
+    CHECK_EQ(foo2[0], f.mem.heap_addr(Fixture::kObjFoo1));
+    CHECK_EQ(foo2[1], f.mem.heap_addr(Fixture::kObjFoo2));
+    // 상한에 닿은 클래스를 상한보다 많이 원하면 스냅숏이 모자랄 수 있어 걷는다(리뷰 P-1)
+    CHECK_EQ(rt.instances_of_class(".?AVFoo@@", 16).size(), 3u);
+    // Foo 가 상한에 닿아도 Bar 는 제 몫을 받고, 상한 아래라 캐시에서 낸다
+    f.mem.put_u64(0x200, Fixture::vt(Fixture::kSlotBar));   // 새 Bar 는 스냅숏에 없다
+    CHECK_EQ(rt.instances_of_class(".?AVBar@@", 16).size(), 1u);
+    // find_objects_of 도 상한에 닿은 이름이 섞이면 걷는다(새 Bar 까지 5개)
+    CHECK_EQ(rt.find_objects_of({".?AVFoo@@", ".?AVBar@@"}, 100).size(), 5u);
+    CHECK_EQ(rt.find_objects_of({".?AVBar@@"}, 100).size(), 1u);   // Bar 만은 스냅숏
+    rt.clear_prefetch();
+    CHECK_EQ(rt.prefetch_stats().capped, 0u);
 }
 
 TEST(rtti_prefetch_unknown_name_is_cached_as_empty_and_others_still_walk) {
