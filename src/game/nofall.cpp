@@ -280,8 +280,8 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
         "낙사 훅 설치({}): site=0x{:X} cave=0x{:X} 케이브 {}바이트 vars=0x{:X} ({})",
         kObserveOnly ? "관찰" : "적용", site, g_cave, code.code.size(), g_vars,
         kObserveOnly
-            ? "[8]=피해 [16]=rcx일치 [24]=dx0 [32]=rcx [40]=rdx [48]=r9"
-            : "[0]=root [8]=취소함 [16]=통과시킴");
+            ? "[16]=피해 [24]=rcx일치 [32]=dx0 [40]=rcx [48]=rdx [56]=r9"
+            : "[0]=root#1 [8]=root#2 [16]=취소함 [24]=통과시킴");
     return true;
 }
 
