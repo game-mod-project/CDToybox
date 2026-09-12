@@ -296,6 +296,8 @@ void nofall_set(bool on) {
     if (!on) {
         vars_write(kNofallOwner, 0);
         vars_write(kNofallOwner2, 0);
+        vars_write(kNofallSelf, 0);
+        vars_write(kNofallSelf2, 0);
     }
     g_last_owner.store(kOwnerUnknown, std::memory_order_release);
 }
@@ -311,9 +313,11 @@ std::uint64_t nofall_rule() { return vars_read(kNofallRule); }
 
 void nofall_set_rule(std::uint64_t rule) {
     if (rule > kRuleMax) rule = kRuleNoAttacker;
-    log_write("낙사 판별 규칙", g_vars, "", rule == kRuleAlways ? "무조건"
-                                          : rule == kRuleNoSource ? "출처 없음"
-                                                                  : "가해자 없음");
+    log_write("낙사 판별 규칙", g_vars, "",
+              rule == kRuleAlways        ? "무조건"
+              : rule == kRuleNoSource    ? "출처 없음"
+              : rule == kRuleNoAttacker  ? "가해자 없음"
+                                         : "출처가 나 자신");
     vars_write(kNofallRule, rule);
 }
 
@@ -338,6 +342,8 @@ void nofall_refresh(const mem::Reader& reader) {
     if (g_vars == 0) return;
     std::uint64_t want = 0;
     std::uint64_t want2 = 0;
+    std::uint64_t self1 = 0;
+    std::uint64_t self2 = 0;
     if (g_enabled.load(std::memory_order_acquire)) {
         // 디스패처의 rcx 와 비교할 대상. 같은 캐릭터가 클라·서버 두 realm 으로
         // 존재하고 디스패처는 **서버 root** 를 넘긴다(2026-09-12 실측) - 어느 쪽이
@@ -349,13 +355,21 @@ void nofall_refresh(const mem::Reader& reader) {
         const int n = player_roots(reader, roots, 2);
         if (n > 0) want = static_cast<std::uint64_t>(roots[0]);
         if (n > 1) want2 = static_cast<std::uint64_t>(roots[1]);
+        // 낙하 판별용 - 출처(sourceCtx)와 맞춰 볼 내 캐릭터 객체.
+        std::uintptr_t chars[2]{};
+        const int m = player_chars(reader, chars, 2);
+        if (m > 0) self1 = static_cast<std::uint64_t>(chars[0]);
+        if (m > 1) self2 = static_cast<std::uint64_t>(chars[1]);
     }
     // 값이 그대로면 쓰지 않는다 - owner 와 카운터가 같은 캐시 라인이라, 렌더
     // 스레드의 초당 60회 저장이 게임 스레드들의 lock inc 와 부딪힌다.
-    const std::uint64_t key = want ^ (want2 * 0x9E3779B97F4A7C15ULL);
+    const std::uint64_t key = (want ^ (want2 * 0x9E3779B97F4A7C15ULL)) +
+                              (self1 ^ (self2 * 0xC2B2AE3D27D4EB4FULL));
     if (g_last_owner.load(std::memory_order_acquire) == key) return;
     vars_write(kNofallOwner, want);
     vars_write(kNofallOwner2, want2);
+    vars_write(kNofallSelf, self1);
+    vars_write(kNofallSelf2, self2);
     g_last_owner.store(key, std::memory_order_release);
 }
 

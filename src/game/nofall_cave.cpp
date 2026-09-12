@@ -88,8 +88,8 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
     // 규칙이 "무조건 취소" 면 출처를 안 보고 바로 지운다(시험용).
     add({0x48, 0xA1});
     addq(static_cast<std::uint64_t>(vars + kNofallRule));   // mov rax, [abs rule]
-    add({0x48, 0x83, 0xF8, kRuleAlways});   // cmp rax, 2
-    j32(0x84, &to_zero);                    // je  zero
+    add({0x48, 0x83, 0xF8, kRuleAlways});   // cmp rax, 3
+    j32(0x84, &to_zero);                    // je  zero   무조건(시험용)
 
     add({0x48, 0x8B, 0x44, 0x24, 0x38});    // mov rax, [rsp+0x38]
     add({0x48, 0x3D, 0x00, 0x00, 0x01, 0x00});   // cmp rax, 0x10000
@@ -106,15 +106,36 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
     add({0x48, 0x8B, 0x40, 0x68});          // mov rax, [rax+0x68]   가해자
     store_abs(kNofallLastAtk);
 
-    // 규칙 0(가해자 없음)일 때만 가해자 슬롯으로 가른다. 규칙 1(출처 없음)은
-    // 여기까지 왔다는 것 자체가 출처가 있다는 뜻이라 통과다.
-    add({0x48, 0x3D, 0x00, 0x00, 0x01, 0x00});   // cmp rax, 0x10000
+    // 규칙별로 가른다. 여기까지 왔다는 것은 출처가 **있다**는 뜻이므로 규칙 2
+    // (출처 없음)는 통과다.
     std::vector<Fixup> to_pass;
-    j32(0x83, &to_pass);                    // jae pass   가해자가 있다
     add({0x48, 0xA1});
     addq(static_cast<std::uint64_t>(vars + kNofallRule));
     add({0x48, 0x85, 0xC0});                // test rax, rax
-    j32(0x84, &to_zero);                    // je  zero   규칙 0 이면 취소
+    std::vector<Fixup> to_rule1;
+    j32(0x85, &to_rule1);                   // jne rule1   규칙 0 이 아니다
+
+    // 규칙 0: **출처가 나 자신인가.** 낙하·환경 피해는 내 char 가 출처다
+    // (2026-09-12 실측). 적의 타격은 그 적의 char 라 여기서 갈린다.
+    // `mov rax,[abs]` + `cmp rax,[rsp+0x38]` 이라 두 번째 레지스터가 필요 없다.
+    add({0x48, 0xA1});
+    addq(static_cast<std::uint64_t>(vars + kNofallSelf));
+    add({0x48, 0x3B, 0x44, 0x24, 0x38});    // cmp rax, [rsp+0x38]
+    j32(0x84, &to_zero);                    // je  zero
+    add({0x48, 0xA1});
+    addq(static_cast<std::uint64_t>(vars + kNofallSelf2));
+    add({0x48, 0x3B, 0x44, 0x24, 0x38});    // cmp rax, [rsp+0x38]
+    j32(0x84, &to_zero);                    // je  zero
+    j32(0, &to_pass);                       // jmp pass   남이 때렸다
+
+    const std::size_t rule1_at = b.size();  // rule1:
+    add({0x48, 0x83, 0xF8, kRuleNoAttacker});   // cmp rax, 1
+    j32(0x85, &to_pass);                    // jne pass   규칙 2 는 통과
+    // 규칙 1(CT 원안): 방금 적어 둔 가해자 값을 다시 읽어 판단한다.
+    add({0x48, 0xA1});
+    addq(static_cast<std::uint64_t>(vars + kNofallLastAtk));
+    add({0x48, 0x3D, 0x00, 0x00, 0x01, 0x00});   // cmp rax, 0x10000
+    j32(0x82, &to_zero);                    // jb  zero   가해자가 없다
     const std::size_t pass_at = b.size();   // pass:
     bump(kNofallLetThrough);
     j32(0, &to_done);                       // jmp done
@@ -161,6 +182,7 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
     patch32(to_low, low_at);
     patch32(to_bad, bad_at);
     patch32(to_pass, pass_at);
+    patch32(to_rule1, rule1_at);
     if (!patch8(to_hit, mine_at) || !patch8(to_dx, mine_at)) {
         out.why = "rel8 분기가 사거리를 벗어난다";
         out.done_at = out.vt_at = out.deref_at = 0;

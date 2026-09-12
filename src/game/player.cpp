@@ -141,6 +141,39 @@ void player_discover(const mem::Reader& reader) {
     rebuild_player_arrs(reader, arr);
 }
 
+// player_roots 와 같은 걸음이되, root 대신 char 자체를 모은다. 둘을 한 함수로
+// 합치지 않는 이유는 부르는 쪽(낙사)이 둘 다 필요하고 의미가 다르기 때문이다 -
+// root 는 "누가 맞았나"(rcx), char 는 "누가 때렸나"(sourceCtx) 에 쓴다.
+int player_chars(const mem::Reader& reader, std::uintptr_t* out, int max) {
+    if (out == nullptr || max <= 0) return 0;
+    int n = 0;
+    auto push = [&](std::uintptr_t c) {
+        if (!vp(c) || n >= max) return;
+        for (int i = 0; i < n; ++i) {
+            if (out[i] == c) return;
+        }
+        out[n++] = c;
+    };
+    const std::uintptr_t ch = player_char();
+    push(ch);
+    const std::uint16_t want = equip_current_character();
+    if (want == kEquipAutoCharacter) return n;
+    std::vector<EquipTable> tabs;
+    equip_tables_copy(&tabs);
+    for (const auto& t : tabs) {
+        if (n >= max) break;
+        if (t.comp == 0) continue;
+        const std::uintptr_t c = q(reader, t.comp, 0x08);
+        if (c == 0 || c == ch) continue;
+        if (!char_is_player(reader, c)) continue;
+        std::uint16_t row = 0;
+        if (!actor_character_row(reader, c, &row)) continue;
+        if (row != want) continue;
+        push(c);
+    }
+    return n;
+}
+
 int player_roots(const mem::Reader& reader, std::uintptr_t* out, int max) {
     if (out == nullptr || max <= 0) return 0;
     int n = 0;

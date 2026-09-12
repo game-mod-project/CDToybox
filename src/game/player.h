@@ -46,6 +46,10 @@ std::uintptr_t player_char();
 // 때문이다(2026-09-12 실측). 낙사 방지가 쓴다. 넣은 개수를 돌려준다.
 int player_roots(const mem::Reader& reader, std::uintptr_t* out, int max);
 
+// 지금 고른 캐릭터의 **모든 realm char**(클라+서버). root 가 아니라 그 앞의
+// 캐릭터 객체다 - 낙하 피해의 sourceCtx 가 바로 이것이다(2026-09-12 실측).
+int player_chars(const mem::Reader& reader, std::uintptr_t* out, int max);
+
 struct PlayerVitals {
     std::int32_t hp_cur = 0, hp_max = 0;
     std::int32_t sta_cur = 0, sta_max = 0;
