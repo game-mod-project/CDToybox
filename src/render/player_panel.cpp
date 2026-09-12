@@ -5,12 +5,12 @@
 #include "game/nofall.h"
 #include "game/player.h"
 #include "mem/reader.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 
 void draw_player_panel(bool* open) {
-    ImGui::SetNextWindowSize(ImVec2(320.0f, 220.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("플레이어 치트", open)) {
+    if (!begin_window(Win::Player, open)) {
         ImGui::End();
         return;
     }
@@ -28,12 +28,20 @@ void draw_player_panel(bool* open) {
         ImGui::Text("생명 %d / %d", v.hp_cur, v.hp_max);
         ImGui::Text("스태미나 %d / %d", v.sta_cur, v.sta_max);
         ImGui::Text("정신력 %d / %d", v.spi_cur, v.spi_max);
-        ImGui::TextDisabled("(내부 수치. 화면 표기와 배율이 다를 수 있음)");
+        // 창 폭 320 에서 한 줄로는 잘린다. 회색은 그대로 두고 줄바꿈만 켠다.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("(내부 수치입니다. 화면 표기와 배율이 다를 수 있습니다)");
+        ImGui::PopStyleColor();
+    } else {
+        // 못 읽는 건 고장이 아니라 전환 중이라는 뜻이다. 빈 화면 대신 이유를 말한다.
+        ImGui::TextDisabled(
+            "게이지를 읽지 못했습니다 (지역 이동·캐릭터 전환 중일 수 있습니다)");
     }
     ImGui::Separator();
 
     bool god = game::player_godmode();
-    if (ImGui::Checkbox("무적 (Godmode)", &god)) game::player_set_godmode(god);
+    if (ImGui::Checkbox("무적", &god)) game::player_set_godmode(god);
     bool sta = game::player_inf_stamina();
     if (ImGui::Checkbox("무한 스태미나", &sta)) game::player_set_inf_stamina(sta);
     bool spi = game::player_inf_spirit();
@@ -43,14 +51,15 @@ void draw_player_panel(bool* open) {
     ImGui::Separator();
     if (game::nofall_installed()) {
         bool nf = game::nofall_enabled();
-        if (ImGui::Checkbox("낙사 방지 (No Fall Damage)", &nf))
-            game::nofall_set(nf);
+        if (ImGui::Checkbox("낙사 방지", &nf)) game::nofall_set(nf);
         ImGui::SameLine();
-        ImGui::TextDisabled("(한 번 낙하해야 학습)");
+        ImGui::TextDisabled("(첫 낙하 한 번은 피해를 받습니다 - 그때 대상을 학습합니다)");
     } else if (game::nofall_unsupported()) {
-        ImGui::TextDisabled("낙사 방지: 이 게임 빌드 미지원 (사이트 재추출 필요)");
+        ImGui::TextDisabled(
+            "낙사 방지: 이 게임 빌드에서 훅 지점을 못 찾았습니다"
+            " (모드 업데이트가 필요합니다)");
     } else {
-        ImGui::TextDisabled("낙사 방지: 훅 준비 중...");
+        ImGui::TextDisabled("낙사 방지: 훅을 준비하는 중입니다...");
     }
 
     ImGui::Separator();

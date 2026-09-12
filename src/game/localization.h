@@ -32,9 +32,6 @@ constexpr std::uint32_t loc_key_field(std::uint64_t key) {
     return static_cast<std::uint32_t>(key & 0xFFFFFFFFull);
 }
 
-// 이름으로 추정하는 필드 번호. 0x71 은 그 다음 칸(설명으로 추정).
-inline constexpr std::uint32_t kLocFieldName = 0x70;
-
 // 게임이 카테고리를 0x36 미만으로 검사한다(cmp al, 0x36).
 inline constexpr int kLocCategoryCount = 0x36;
 

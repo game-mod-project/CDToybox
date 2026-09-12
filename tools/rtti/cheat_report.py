@@ -82,7 +82,7 @@ def find_handler(img, deser_rva):
     클래스마다 다르므로 흔한 것들을 모두 본다."""
     off = img.rva_to_off(deser_rva)
     if off is None:
-        return None
+        return None, ''   # 호출부가 (handler, how) 로 푼다 - None 하나면 TypeError
     end = func_end(img, deser_rva)
     body = img.data[off:off + end]
     hits = []

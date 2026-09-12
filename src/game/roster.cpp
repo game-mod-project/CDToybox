@@ -1,5 +1,7 @@
 #include "game/roster.h"
 
+#include <algorithm>
+
 #include <atomic>
 #include <memory>
 #include <utility>
@@ -23,9 +25,13 @@ constexpr std::size_t kCharMercRow = 0xBE;     // u16 _mercenaryInfo (행 번호
 constexpr std::size_t kCharCatchable = 0x148;  // u8 _isCatchable
 constexpr std::size_t kCharUnique = 0x14B;     // u8 _isUnique
 constexpr std::size_t kCharHirable = 0x156;    // u8 _isHirable
+constexpr std::size_t kCharEquipInfo = 0x6A;    // u16 _equipInfo
+constexpr std::size_t kCharOwnedMerc = 0x100;   // u16 _ownedMercenaryCharacterInfo
+constexpr std::size_t kCharCountAble = 0x16E;   // u8  _isMercenaryCountAble
 
 // 용병 레코드 (실측 2026-09-05)
 constexpr std::size_t kMercType = 0x20;  // u8 _mercenaryType
+constexpr std::size_t kMercPlayable = 0x22;  // u8 _isPlayable
 
 // 엔진 문자열 객체
 constexpr std::size_t kStrData = 0x00;    // char* UTF-8
@@ -162,6 +168,9 @@ bool build_catalog_from_manager(const mem::Reader& reader,
             entry.key = i;
             std::uint8_t t = 0;
             if (reader.read_value(record + kMercType, &t)) entry.merc_type = t;
+            std::uint8_t playable = 0;
+            if (reader.read_value(record + kMercPlayable, &playable))
+                entry.merc_playable = playable != 0;
         } else {
             std::uint16_t key = 0;
             if (!read_u16_key(reader, record + kRecKey, &key)) continue;
@@ -173,6 +182,8 @@ bool build_catalog_from_manager(const mem::Reader& reader,
                 read_engine_string(reader, static_cast<std::uintptr_t>(str_obj));
         }
         if (kind == RosterKind::Character) {
+            // 현지화 엔티티는 +0x00 의 u32 전체다(roster.h 설명).
+            reader.read_value(record, &entry.loc_entity);
             std::uint16_t row = 0xFFFF;
             if (reader.read_value(record + kCharMercRow, &row)) {
                 entry.merc_row = row;
@@ -180,6 +191,11 @@ bool build_catalog_from_manager(const mem::Reader& reader,
             read_flag(reader, record + kCharCatchable, &entry.catchable);
             read_flag(reader, record + kCharUnique, &entry.unique);
             read_flag(reader, record + kCharHirable, &entry.hirable);
+            reader.read_value(record + kCharEquipInfo, &entry.equip_info);
+            reader.read_value(record + kCharOwnedMerc, &entry.owned_merc_row);
+            std::uint8_t countable = 0;
+            if (reader.read_value(record + kCharCountAble, &countable))
+                entry.merc_countable = countable != 0;
         }
         catalog.push_back(std::move(entry));
     }
@@ -189,8 +205,10 @@ bool build_catalog_from_manager(const mem::Reader& reader,
 
 bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
                           const char* manager_class, RosterKind kind,
-                          std::vector<RosterEntry>* out) {
+                          std::vector<RosterEntry>* out,
+                          std::uintptr_t* manager_out) {
     if (out == nullptr || manager_class == nullptr) return false;
+    if (manager_out != nullptr) *manager_out = 0;
     std::uintptr_t manager = 0;
     if (kind == RosterKind::Mercenary) {
         for (const auto addr : rtti.instances_of_class(manager_class, 32)) {
@@ -203,6 +221,7 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
     } else if (!find_static_manager(reader, rtti, manager_class, &manager)) {
         return false;
     }
+    if (manager_out != nullptr) *manager_out = manager;
     return build_catalog_from_manager(reader, manager, kind, out);
 }
 
@@ -300,7 +319,16 @@ std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
     for (auto& e : *entries) {
         // 레코드 키로 먼저, 안 되면 내부 이름 끝의 숫자로. 둘이
         // 일치하는 행도 많지만 어긋나는 행도 그만큼 많다.
-        std::uint32_t candidates[2] = {e.key, roster_name_suffix(e.name)};
+        // 현지화 엔티티는 레코드 +0x00 의 u32 전체다(roster.h 설명).
+        // 그것 하나면 된다 - 예전에 쓰던 "키로 찾고 안 되면 내부 이름
+        // 끝자리 숫자로" 폴백은 걷어냈다. 그 폴백이 엉뚱한 이름을
+        // 붙였다(실측 2026-09-09):
+        //
+        //   Animal_Baby_Wyvern_1  -> 엔티티 1     "클리프"(주인공)
+        //   Animal_Wolf_Wild_30023 -> 엔티티 30023 "암탉"
+        //
+        // u32 로 고쳐 읽으니 각각 "새끼 와이번"·"대형 늑대" 가 나온다.
+        std::uint32_t candidates[2] = {e.loc_entity, e.key};
         if (candidates[1] == candidates[0]) candidates[1] = 0;
         for (const std::uint32_t entity : candidates) {
             if (entity == 0) continue;
@@ -318,14 +346,57 @@ std::size_t apply_roster_labels(const mem::Reader& reader, const LocSystem& sys,
     return named;
 }
 
+bool read_spawn_table(const mem::Reader& reader, std::uintptr_t manager,
+                      std::vector<std::uint32_t>* out) {
+    if (out == nullptr) return false;
+    out->clear();
+    if (manager == 0) return false;
+    std::uint32_t nonzero = 0, buckets = 0;
+    std::uint64_t arr = 0;
+    if (!reader.read_value(manager + 0x6C,
+                           &nonzero) ||
+        nonzero == 0) {
+        return false;
+    }
+    if (!reader.read_value(manager + 0x68,
+                           &buckets) ||
+        buckets == 0 || buckets > kSpawnMaxBuckets) {
+        return false;
+    }
+    if (!reader.read_value(manager + 0x78, &arr) ||
+        arr == 0) {
+        return false;
+    }
+    for (std::uint32_t b = 0; b < buckets; ++b) {
+        const std::uintptr_t base =
+            static_cast<std::uintptr_t>(arr) + b * kSpawnBucketStride;
+        std::uint32_t n = 0;
+        if (!reader.read_value(base, &n)) continue;
+        if (n > kSpawnBucketMaxEntries) continue;  // 쓰레기 버킷은 건너뛴다
+        for (std::uint32_t i = 0; i < n; ++i) {
+            std::uint32_t key = 0;
+            if (!reader.read_value(base + 8 + static_cast<std::uintptr_t>(i) * 8,
+                                   &key)) {
+                break;
+            }
+            out->push_back(key);
+        }
+    }
+    std::sort(out->begin(), out->end());
+    out->erase(std::unique(out->begin(), out->end()), out->end());
+    return !out->empty();
+}
+
 bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_ready.load(std::memory_order_acquire)) return true;
 
     std::vector<RosterEntry> v, m, c;
     const bool ok_v = build_static_catalog(reader, rtti, kVehicleClass,
                                            RosterKind::Vehicle, &v);
+    std::uintptr_t char_manager = 0;
     const bool ok_c = build_static_catalog(reader, rtti, kCharacterClass,
-                                           RosterKind::Character, &c);
+                                           RosterKind::Character, &c,
+                                           &char_manager);
     if (!ok_v || !ok_c) return false;
     // 용병 표는 느슨한 판정이라 못 찾아도 준비로 친다. 없으면 동반자
     // 탭의 타입 이름만 비고 목록은 그려진다.
@@ -339,6 +410,24 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (find_loc_system(rtti, reader, &sys)) {
         labeled += apply_roster_labels(reader, sys, &v);
         labeled += apply_roster_labels(reader, sys, &c);
+    }
+
+    // 소환 표를 읽어 캐릭터마다 표시한다. 못 읽어도 목록은 그대로 산다.
+    std::vector<std::uint32_t> spawnable;
+    std::size_t spawn_marked = 0;
+    if (read_spawn_table(reader, char_manager, &spawnable)) {
+        for (auto& e : c) {
+            if (std::binary_search(spawnable.begin(), spawnable.end(), e.key)) {
+                e.spawnable = true;
+                ++spawn_marked;
+            }
+        }
+        log::infof("소환 표 {}개 - 캐릭터 {}행이 소환 가능", spawnable.size(),
+                   spawn_marked);
+    } else {
+        log::warnf("소환 표를 못 읽었다 (CharacterInfoManager 0x{:X}) - 소환 가능 "
+                   "표시가 빈다",
+                   char_manager);
     }
 
     const std::size_t vn = v.size(), cn = c.size(), mn = m.size();
@@ -396,6 +485,57 @@ std::uint8_t mercenary_type_of_row(std::uint16_t row) {
         if (e.key == row) return e.merc_type;
     }
     return 0;
+}
+
+bool is_playable_merc_row(std::uint16_t row) {
+    return mercenary_type_of_row(row) == kMercTypeMain;
+}
+
+CompanionGroup companion_group_of_row(std::uint16_t merc_row) {
+    if (merc_row == 0xFFFF) return CompanionGroup::Unknown;
+    switch (mercenary_type_of_row(merc_row)) {
+        case 1: case 6: case 7: case 8: case 9: case 12:
+            return CompanionGroup::People;
+        case 2: case 3: case 4: case 5:
+            return CompanionGroup::Mount;
+        case 10: case 11:
+            return CompanionGroup::System;
+        default:
+            return CompanionGroup::Unknown;
+    }
+}
+
+namespace {
+// 전역 하나를 사슬대로 따라가 캐릭터 행을 낸다. 못 읽으면 0xFFFF.
+std::uint16_t session_char_row(const mem::Reader& reader, std::uint64_t rva) {
+    const std::uintptr_t base = reader.module_base();
+    if (base == 0) return 0xFFFF;
+    std::uintptr_t p = 0;
+    if (!reader.read_value(base + rva, &p) || p == 0) return 0xFFFF;
+    if (!reader.read_value(p, &p) || p == 0) return 0xFFFF;
+    if (!reader.read_value(p + 8, &p) || p == 0) return 0xFFFF;
+    if (!reader.read_value(p + 0x28, &p) || p == 0) return 0xFFFF;
+    std::uint16_t row = 0xFFFF;
+    if (!reader.read_value(p + kSessionCharRowOff, &row)) return 0xFFFF;
+    return row;
+}
+}  // namespace
+
+std::uint16_t main_character_row(const mem::Reader& reader) {
+    const std::size_t n = character_catalog().size();
+    for (std::uint64_t rva : {kSessionGlobalRvaA, kSessionGlobalRvaB}) {
+        const std::uint16_t row = session_char_row(reader, rva);
+        // 표 안의 행이어야 진짜다. 아니면 다른 전역을 본다.
+        if (row != 0xFFFF && (n == 0 || row < n)) return row;
+    }
+    return 0xFFFF;
+}
+
+bool is_playable_character_row(const mem::Reader& reader, std::uint32_t row) {
+    if (row == 0xFFFF) return false;
+    if (row == main_character_row(reader)) return true;
+    const RosterEntry* e = character_by_row(row);
+    return e != nullptr && is_playable_merc_row(e->merc_row);
 }
 
 }  // namespace cdtb::game

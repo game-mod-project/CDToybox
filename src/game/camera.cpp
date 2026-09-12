@@ -13,11 +13,14 @@
 
 #include "game/equip.h"
 #include "game/actors.h"
+#include "game/clan.h"
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/nofall.h"
+#include "game/specguard.h"
+#include "game/spec_heal.h"
 #include "game/player.h"
 #include "game/roster.h"
 #include "mem/reader.h"
@@ -190,6 +193,17 @@ void auto_analysis_loop() {
         log::errorf("자동 분석: 모듈 이미지를 읽지 못했다");
         return;
     }
+
+    // RTTI 색인도 여기서 한 번에 만든다. 이미지는 안 바뀌므로 색인은
+    // 이미지의 순수 함수다. 예전에는 조회마다 350MB 를 다시 훑어
+    // (find_types 는 1바이트씩) 탐색 통과 한 번에 2분 30초가 걸렸다.
+    {
+        const auto t0 = ::GetTickCount64();
+        rtti.build_index();
+        const auto st = rtti.index_stats();
+        log::infof("RTTI 색인: 타입 {}개, vtable {}개 ({}ms)", st.types,
+                   st.vtables, ::GetTickCount64() - t0);
+    }
     log::infof("자동 분석 시작 - 월드 진입을 기다린다");
 
     // 세션에서 플레이어 액터를 꺼내는 게임 함수를 후킹해 둔다. 게임
@@ -204,7 +218,6 @@ void auto_analysis_loop() {
     //   pump_hook_install(rtti, reader);
     //   taskrun_hook_install(rtti, reader);
     spawn_resolve_message(rtti, reader);
-    spawn_resolve(rtti, reader);
     entity_hook_install(rtti, reader);
     // 동반자 획득 경로 메시지 캡처(Phase 1, 진단). 길들이기 때 뜬다.
     companion_capture_install(rtti, reader);
@@ -220,27 +233,55 @@ void auto_analysis_loop() {
         return read_world_position(set.player_component, out);
     });
     companion_command_start(reader);
-    // 인벤토리 레코드 +0x08 의 값이 어느 표에서 조회되는지 잡는다.
-    // 늑대의 한손검. 인벤토리 첫 칸이고 현지화에 이름이 있다.
-    table_probe_install(rtti, reader, 1163042);
-    spawn_trace_install();
 
     for (int attempt = 1; !g_stop.load(); ++attempt) {
+        // 한 통과가 얼마나 걸리는지 남긴다. 어디가 느린지 로그만 보고
+        // 가릴 수 있어야 한다 - 실측 2026-09-08 에 통과 한 번이 2분
+        // 30초였는데 로그에 이정표가 없어 짐작으로만 봤다.
+        const auto pass_t0 = ::GetTickCount64();
+        auto step = [](const char* what, unsigned long long t0) {
+            const auto ms = ::GetTickCount64() - t0;
+            if (ms >= 500) log::infof("탐색 [{}] {}ms", what, ms);
+            return ::GetTickCount64();
+        };
+        auto t = pass_t0;
+
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
         discover_items(rtti, reader);
+        t = step("아이템표", t);
         // 소켓 지급이 키 -> 순번 대응표를 쓴다. 아이템 표가 선 뒤에
         // 한 번만 읽고 스스로 빠진다.
         discover_item_ids(rtti, reader);
+        t = step("아이템 대응표", t);
         // 인벤토리 창이 쓴다. 찾으면 스스로 빠진다.
         discover_inventory(rtti, reader);
+        t = step("인벤토리", t);
         // 탈것·용병·캐릭터 카탈로그. 아이템 표와 같은 인프라라 여기
         // 얹는다. 이름까지 풀리면 스스로 빠진다.
         discover_roster(rtti, reader);
+        t = step("로스터", t);
         discover_actor_manager(rtti, reader);
+        t = step("액터 매니저", t);
         log_new_actors(rtti, reader);
-        if (discover_with(rtti, reader, nullptr) && g_set.active != 0) {
+        t = step("액터 목록", t);
+        const bool got_cam = discover_with(rtti, reader, nullptr);
+        t = step("카메라", t);
+        // 내 동반자 명부(용병단 컴포넌트)는 **맨 뒤에서** 잡는다.
+        //
+        // RTTI 인스턴스 스캔이라 실측 10.7초가 든다. 앞에 두면 그만큼
+        // 아이템 대응표가 늦어진다 - 사용자가 "인벤토리 로드가 너무
+        // 오래 걸린다" 고 짚은 것이 이것이다(2026-09-09). 명부는 월드에
+        // 들어가 동반자 기능을 쓸 때나 필요하므로 급하지 않다.
+        //
+        // 그래도 배경에서 미리 잡아 두기는 해야 한다 - 그리는 스레드가
+        // 이 스캔을 돌면 종 바꾸기에서 게임이 멈춘다(game/clan.cpp).
+        discover_clan(rtti, reader);
+        step("동반자 명부", t);
+        log::infof("탐색 {}번째 통과: {}ms", attempt,
+                   ::GetTickCount64() - pass_t0);
+        if (got_cam && g_set.active != 0) {
             log::infof("자동 분석: {}번째 시도에 카메라 확보", attempt);
             break;
         }
@@ -264,7 +305,18 @@ void auto_analysis_loop() {
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
         discover_actor_manager(rtti, reader);
-        if (discover_items(rtti, reader) && inventory_ready()) break;
+        // 명부 탐색은 아이템 이름보다 뒤다 - 앞에 두면 매 바퀴 10초 넘게
+        // 잡아먹어 대응표가 그만큼 늦는다(2026-09-09).
+        const bool items_done = discover_items(rtti, reader);
+        // 아이템 **대응표**는 아이템 표가 끝난 뒤에야 된다. 위에서 한 번
+        // 부르지만 그때는 아직 표가 없어 실패하고, 바로 아래 break 로
+        // 빠져나가 다시 시도할 기회가 없었다 - 그래서 인벤토리 패널이
+        // "대응표를 아직 못 읽었습니다" 로 남았다(실측 2026-09-09).
+        // 표가 방금 완성됐을 수 있으니 여기서 한 번 더 부른다.
+        if (items_done) discover_item_ids(rtti, reader);
+        // 명부: 값싼 세션 사슬 먼저, RTTI 스캔은 월드 안에서만(clan.cpp 가 가른다).
+        discover_clan(rtti, reader);
+        if (items_done && inventory_ready() && item_ids_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
         }
@@ -283,6 +335,13 @@ void auto_analysis_loop() {
     int spin = 0;
     while (!g_stop.load()) {
         log_new_actors(rtti, reader);
+
+        // 명부 컴포넌트도 월드에 들어가야 생기고, 앞의 루프들이 먼저 끝나면 못 잡은
+        // 채 남았다(실측 2026-09-11: 2번 루프 종료 21:38:47, 세션 21:39:05). 여기서
+        // 계속 본다 - 세션 사슬 두 번 읽기라 값싸고, RTTI 스캔은 clan.cpp 가 월드
+        // 안·30초 간격으로 막는다. 별도 대기 루프로 두면 이 루프(세션 이름표·인벤·
+        // 장비·치트)를 막아 스스로를 굶긴다(리뷰 C1·C2).
+        if (!clan_ready() || clan_rtti() == nullptr) discover_clan(rtti, reader);
 
         // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
         // 표보다 늦어서, 앞의 루프들이 먼저 끝나면 못 잡은 채로
@@ -316,6 +375,8 @@ void auto_analysis_loop() {
         // faller 학습을 시도한다(플레이어가 한 번 떨어져야 학습됨).
         nofall_install(rtti, reader);
         nofall_identify(reader);
+        specguard_install(reader);   // 백업(렌더 루프가 먼저 설치)
+        heal_special_items(reader);   // 특수아이템 표시 보정
 
         if (ent_reports < 6) {
             std::uint32_t ids[32]{};

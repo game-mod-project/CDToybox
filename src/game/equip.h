@@ -6,8 +6,11 @@
 #include "mem/reader.h"
 #include "mem/rtti.h"
 
-// 착용 장비(worn gear) 에디터의 읽기 계층. 소켓(이미 열린 칸)·연마·염색을
-// cplayer 포인터 경로로 다룬다 - 인벤토리 컨테이너 핸들도 NPC 도 필요 없다.
+// 착용 장비(worn gear) 에디터의 읽기 계층. 소켓·연마·염색을 다룬다 -
+// 인벤토리 컨테이너 핸들도 NPC 도 필요 없다. 힙에서 `EquipSlotActorComponent`
+// 를 전부 찾아(collect_equip_tables) 슬롯 태그가 서로 다른 것으로 착용 배열을
+// 유도하고(find_equip_table), 정신력 풀 + 착용 조각 최다로 플레이어 것을
+// 고른다(pick_player_table). cplayer 포인터 경로(MGRCHAIN)는 안 쓰여 지웠다.
 //
 // 출처: 소켓·장비 컴포넌트 매핑은 XeTrinityz/Trinity (MIT). Nexus 3209 CT 가
 // Cheat Engine 으로 이식한 것을 실측 참고해 다시 이식했다. 자세한 근거는
@@ -16,30 +19,6 @@
 // 이 헤더는 **읽기 전용**이다. 쓰기(both-realms)는 라이브 검증 뒤에 붙인다.
 
 namespace cdtb::game {
-
-// 코어 전역과 오프셋. MGRCHAIN AOB 로 해석한다(RVA 를 박지 않는다).
-struct EquipGlobals {
-    std::uintptr_t g = 0;      // 코어 전역의 절대 주소
-    std::uint32_t pm = 0;      // 보통 0x30
-    std::uint32_t blk = 0;     // 보통 0x68 (actor -> 서브)
-    std::uint32_t mo = 0;      // 보통 0xB8 (인벤 매니저용, 참고)
-    bool ok() const { return g != 0; }
-};
-
-// MGRCHAIN 을 디스크 이미지에서 스캔해 G/pm/blk/mo 를 디코드한다. 여러 사이트가
-// 맞으면 전부 같은 값이어야 한다(자기검증). 실패면 false.
-bool resolve_equip_globals(const mem::Rtti& rtti, const mem::Reader& reader,
-                           EquipGlobals* out);
-
-// 클라이언트 플레이어 액터 = [[[G]+pm]+0x50]. 실패면 0.
-std::uintptr_t equip_player_actor(const mem::Reader& reader,
-                                  const EquipGlobals& g);
-
-// 액터에서 장비 컴포넌트를 찾는다. actor+blk -> 서브, 서브+0x38 -> comp,
-// comp+0x08 == actor 백참조로 검증. 실패시 서브(및 액터) 안에서 +0x08==actor
-// 인 포인터를 0x400 범위로 백참조 검색. 실패면 0.
-std::uintptr_t equip_component(const mem::Reader& reader, std::uintptr_t actor,
-                               std::uint32_t blk);
 
 // 착용 장비 테이블(배열/개수/스트라이드).
 struct EquipTable {
@@ -87,18 +66,15 @@ struct WornPiece {
 bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
                     std::vector<WornPiece>* out);
 
-// entry+0x60 소켓 벡터에서 열린 소켓 수. 잠김(+4==0xFF)에서 멈춘다. 벡터가
-// 아니면 -1.
-int socket_unlocked(const mem::Reader& reader, std::uintptr_t entry);
-
 // ------------------------------------------------------------------ 자동 선택
 // RTTI 로 서버·클라 장비 컴포넌트 인스턴스를 모두 열거해, 유효한 착용장비
 // 테이블만 수집한다(잡음 필터: 실제아이템 >=3). both-realms 쓰기의 대상.
 int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
                          std::vector<EquipTable>* out);
 
-// 플레이어의 착용장비를 한 번에 읽는다(가장 큰 테이블 = 플레이어). out 은
-// 그 테이블, pieces 는 그 착용 장비. 실패면 false.
+// 플레이어의 착용장비를 한 번에 읽는다 - 테이블은 pick_player_table 이 고른다
+// (정신력 풀 + 착용 조각 최다). out 은 그 테이블, pieces 는 그 착용 장비.
+// 실패면 false.
 bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
                       EquipTable* table_out, std::vector<WornPiece>* pieces_out);
 
@@ -144,5 +120,29 @@ int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
 // 염색 레코드 rec 의 RGB 를 설정한다.
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
                  std::uint8_t r, std::uint8_t g, std::uint8_t b);
+
+// **잠긴 소켓 칸을 연다.** 이미 열린 칸과 박힌 보석은 안 건드린다.
+//
+// 게임의 지급 코드가 하는 것과 같은 두 줄이다 - 레코드 `+0x70 = 칸 수` 와
+// 칸 `[4] = k`. 락은 그 둘이 전부이고 검증이 없다(실측 2026-09-08: 열린 칸
+// 0개짜리 장비를 5칸으로 열어 저장·재시작을 넘겼다).
+// 근거: specs/2026-09-07-socket-grant-unlock-research.md 9절.
+//
+// 아이템표의 상한(`max_sockets`)과는 별개다. 표는 **툴팁 목록**만 정하고
+// 스탯 계산은 여기서 연 칸을 그대로 더한다. 표보다 많이 열어도 동작하지만
+// 툴팁에 다 안 보인다 - `items::socket_cap_apply` 로 표도 같이 올린다.
+//
+// 착용 장비는 both-realms 로 쓴다. 쓴 realm 수를 돌려준다(0 이면 실패).
+int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
+                      int want);
+
+// 위와 같은 일을 **레코드 주소로** 한다. 인벤토리 레코드와 착용 장비
+// entry 는 같은 구조라(둘 다 `+0x60` 벡터, `+0x68` 크기, `+0x70` 열린 수)
+// 한 함수로 된다. 인벤토리 레코드는 그 자체가 authoritative 라 단일 쓰기로
+// 저장까지 살아남는다(both-realms 불필요).
+//
+// 연 칸 수를 돌려준다. 0 이면 아무것도 안 열었다.
+int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,
+                         int want);
 
 }  // namespace cdtb::game

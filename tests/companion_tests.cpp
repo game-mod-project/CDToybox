@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 #include "game/companion.h"
@@ -162,4 +163,79 @@ TEST(complete_summon_wire_rejects_a_null_position) {
     std::size_t len = 0;
     CHECK(!cdtb::game::build_complete_summon_wire(1, nullptr, wire,
                                                   sizeof(wire), &len));
+}
+
+// 게임이 실제로 보낸 와이어다. 사용자가 정상 플레이로 야생 개체를
+// 잡는 동안 캡처됐다(실측 2026-09-07 17:49:38).
+//
+//   52 09 00 08 00 | 01 00 10 A0 | 0D 37 10 B0
+//
+// 이 표본이 우리 조립·해석의 기준이다.
+TEST(catch_wire_matches_the_bytes_the_game_sent) {
+    const std::uint8_t sample[] = {0x52, 0x09, 0x00, 0x08, 0x00,
+                                   0x01, 0x00, 0x10, 0xA0,
+                                   0x0D, 0x37, 0x10, 0xB0};
+    std::uint32_t self = 0, target = 0;
+    CHECK(cdtb::game::decode_catch(sample, sizeof(sample), &self, &target));
+    CHECK_EQ(self, 0xA0100001u);
+    CHECK_EQ(target, 0xB010370Du);
+
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    CHECK(cdtb::game::build_catch_wire(self, target, wire, sizeof(wire), &len));
+    CHECK_EQ(len, sizeof(sample));
+    CHECK(std::memcmp(wire, sample, sizeof(sample)) == 0);
+}
+
+TEST(catch_decode_rejects_a_wrong_length) {
+    const std::uint8_t shortw[] = {0x52, 0x09, 0x00, 0x08, 0x00, 0x01, 0x00};
+    std::uint32_t self = 0, target = 0;
+    CHECK(!cdtb::game::decode_catch(shortw, sizeof(shortw), &self, &target));
+}
+
+TEST(catch_decode_rejects_another_message_id) {
+    // 획득(2338) 와이어를 붙잡기로 읽으면 안 된다.
+    std::uint8_t other[13]{};
+    const std::uint16_t id = 2338, body = 8;
+    std::memcpy(other, &id, 2);
+    std::memcpy(other + 3, &body, 2);
+    std::uint32_t self = 0, target = 0;
+    CHECK(!cdtb::game::decode_catch(other, sizeof(other), &self, &target));
+}
+
+TEST(catch_wire_rejects_a_small_buffer) {
+    std::uint8_t wire[8]{};
+    std::size_t len = 0;
+    CHECK(!cdtb::game::build_catch_wire(1, 2, wire, sizeof(wire), &len));
+}
+
+TEST(hire_inv_wire_round_trips) {
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    CHECK(cdtb::game::build_hire_inv_wire(18578, 7, wire, sizeof(wire), &len));
+    CHECK_EQ(len, cdtb::game::kHireInvWireLen);
+    // 머리: ID 2454 = 0x0996, 본문길이 4
+    CHECK_EQ(wire[0], 0x96);
+    CHECK_EQ(wire[1], 0x09);
+    CHECK_EQ(wire[2], 0x00);
+    CHECK_EQ(wire[3], 0x04);
+    CHECK_EQ(wire[4], 0x00);
+    std::uint16_t a = 0, b = 0;
+    CHECK(cdtb::game::decode_hire_inv(wire, len, &a, &b));
+    CHECK_EQ(a, 18578u);
+    CHECK_EQ(b, 7u);
+}
+
+TEST(hire_inv_decode_rejects_a_wrong_length) {
+    std::uint8_t wire[16]{};
+    std::size_t len = 0;
+    CHECK(cdtb::game::build_hire_inv_wire(1, 2, wire, sizeof(wire), &len));
+    std::uint16_t a = 0, b = 0;
+    CHECK(!cdtb::game::decode_hire_inv(wire, len - 1, &a, &b));
+}
+
+TEST(hire_inv_wire_rejects_a_small_buffer) {
+    std::uint8_t wire[4]{};
+    std::size_t len = 0;
+    CHECK(!cdtb::game::build_hire_inv_wire(1, 2, wire, sizeof(wire), &len));
 }

@@ -2,11 +2,27 @@
 
 #include <dxgi1_4.h>
 
+#include <string>
+#include <vector>
+
 #include "core/config.h"
+#include "render/layout_table.h"
 
 namespace cdtb::overlay {
 
-void set_config(const Config& cfg);
+// ini 경로도 함께 받는다. 화면에서 바꾼 설정을 그 자리에서 저장하려면
+// 어디에 쓸지 알아야 한다(소켓 상한처럼 세션마다 다시 걸어야 하는 것).
+void set_config(const Config& cfg, const std::wstring& ini_path);
+
+// 지금 설정의 부위별 소켓 상한. 비어 있으면 자동으로 걸지 않는다.
+std::vector<Config::SocketCapPart> socket_cap_setting();
+
+// 부위별 소켓 상한 설정을 바꾸고 ini 에 저장한다. 저장에 성공하면 true.
+// **거는 것은 부르는 쪽 일이다** - 여기서는 설정만 만진다.
+bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts);
+
+// 창을 켠다. 아이템 목록이 줄 클릭 때 지급 창을 띄우는 데 쓴다.
+void show_window(cdtb::render::Win w);
 
 bool is_visible();
 void toggle();

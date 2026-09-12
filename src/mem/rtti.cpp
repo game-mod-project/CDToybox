@@ -1,5 +1,6 @@
 #include "mem/rtti.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace cdtb::mem {
@@ -35,32 +36,85 @@ bool Rtti::load_image(ImageLoad* stats) {
     return true;
 }
 
+void Rtti::ensure_index() const {
+    std::call_once(index_once_, [this] {
+        if (image_.empty()) return;
+
+        // ① 타입 서술자. `.?AV...@@` 문자열 자리에서 이름과 서술자 주소를
+        //    뽑는다. 이미지를 **한 번만** 훑는다.
+        static const char kPrefix[] = ".?AV";
+        constexpr std::size_t kPrefixLen = 4;
+        types_.reserve(16384);
+        for (std::size_t i = 0; i + kPrefixLen < image_.size(); ++i) {
+            if (std::memcmp(image_.data() + i, kPrefix, kPrefixLen) != 0) {
+                continue;
+            }
+            std::size_t end = i;
+            const std::size_t limit =
+                (i + 512 < image_.size()) ? i + 512 : image_.size();
+            while (end < limit && image_[end] != 0) ++end;
+            if (end >= limit) continue;
+
+            std::string name(reinterpret_cast<const char*>(image_.data() + i),
+                             end - i);
+            if (name.find("@@") == std::string::npos) continue;
+            if (i < kNameOffset) continue;
+
+            types_.push_back(
+                TypeInfo{std::move(name), r_.module_base() + i - kNameOffset});
+        }
+
+        // ② vtable -> 타입. `class_of_vtable` 이 되는 자리를 모은다.
+        //    주소가 오름차순으로 쌓이므로 그대로 이분 탐색이 된다.
+        const std::uintptr_t mb = r_.module_base();
+        vtable_cls_.reserve(32768);
+        std::vector<std::pair<const std::string*, std::size_t>> by_name;
+        by_name.reserve(types_.size());
+        for (std::size_t k = 0; k < types_.size(); ++k) {
+            by_name.emplace_back(&types_[k].name, k);
+        }
+        std::sort(by_name.begin(), by_name.end(),
+                  [](const auto& a, const auto& b) { return *a.first < *b.first; });
+
+        for (std::size_t i = 8; i + 8 <= image_.size(); i += 8) {
+            const std::uintptr_t vt = mb + i;
+            const std::string cls = class_of_vtable(vt);
+            if (cls.empty()) continue;
+            const auto it =
+                std::lower_bound(by_name.begin(), by_name.end(), cls,
+                                 [](const auto& a, const std::string& b) {
+                                     return *a.first < b;
+                                 });
+            if (it == by_name.end() || *it->first != cls) continue;
+            vtable_cls_.emplace_back(vt, it->second);
+        }
+    });
+}
+
+bool Rtti::build_index() const {
+    if (!types_.empty()) return false;
+    ensure_index();
+    return true;
+}
+
+Rtti::IndexStats Rtti::index_stats() const {
+    IndexStats s;
+    s.types = types_.size();
+    s.vtables = vtable_cls_.size();
+    s.ready = !types_.empty() || image_.empty();
+    return s;
+}
+
 std::vector<Rtti::TypeInfo> Rtti::find_types(const std::string& substring,
                                              std::size_t max) const {
     std::vector<TypeInfo> out;
     if (image_.empty()) return out;
-
-    static const char kPrefix[] = ".?AV";
-    constexpr std::size_t kPrefixLen = 4;
-
-    for (std::size_t i = 0; i + kPrefixLen < image_.size(); ++i) {
-        if (std::memcmp(image_.data() + i, kPrefix, kPrefixLen) != 0) continue;
-
-        std::size_t end = i;
-        const std::size_t limit =
-            (i + 512 < image_.size()) ? i + 512 : image_.size();
-        while (end < limit && image_[end] != 0) ++end;
-        if (end >= limit) continue;
-
-        const std::string name(reinterpret_cast<const char*>(image_.data() + i),
-                               end - i);
-        if (name.find("@@") == std::string::npos) continue;
-        if (!substring.empty() && name.find(substring) == std::string::npos) {
+    ensure_index();
+    for (const auto& t : types_) {
+        if (!substring.empty() && t.name.find(substring) == std::string::npos) {
             continue;
         }
-        if (i < kNameOffset) continue;
-
-        out.push_back(TypeInfo{name, r_.module_base() + i - kNameOffset});
+        out.push_back(t);
         if (out.size() >= max) break;
     }
     return out;
@@ -170,14 +224,16 @@ std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
     const std::uintptr_t mb = r_.module_base();
     const std::uintptr_t me = mb + r_.module_size();
 
-    // vtable 해석을 미리 캐시한다. 힙을 훑을 때마다 RTTI를 되짚으면
-    // 너무 느리다.
-    std::vector<std::pair<std::uintptr_t, std::string>> matching;
-    for (std::size_t i = 8; i + 8 <= image_.size(); i += 8) {
-        const auto cls = class_of_vtable(mb + i);
-        if (cls.empty()) continue;
+    // vtable 해석은 색인에서 가져온다. 예전에는 여기서 이미지 전체를
+    // 8바이트씩 훑으며 `class_of_vtable` 을 불렀는데, 이 함수를 부르는
+    // 탐색마다 그 짓을 되풀이해 시작이 분 단위로 걸렸다.
+    ensure_index();
+    std::vector<std::pair<std::uintptr_t, const std::string*>> matching;
+    matching.reserve(64);
+    for (const auto& [vt, ti] : vtable_cls_) {
+        const std::string& cls = types_[ti].name;
         if (cls.find(substring) == std::string::npos) continue;
-        matching.emplace_back(mb + i, cls);
+        matching.emplace_back(vt, &cls);
     }
     if (matching.empty()) return out;
 
@@ -195,7 +251,7 @@ std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
             if (v < mb || v >= me) continue;
             for (const auto& m : matching) {
                 if (v != m.first) continue;
-                out.push_back(Found{base + i, m.second});
+                out.push_back(Found{base + i, *m.second});
                 break;
             }
             if (out.size() >= max) return out;

@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-
 #include <string>
 #include <vector>
 
@@ -60,21 +58,32 @@ struct InventoryRecord {
     std::uint32_t endurance = 0;
     std::int64_t count = 0;
     std::uintptr_t sockets = 0;      // 소켓 배열 (레코드 +0x60)
-    std::uint32_t socket_count = 0;  // 소켓 칸 수 (실측 5)
+
+    // 배열의 크기 (레코드 +0x68). **아이템의 소켓 칸 수가 아니다** -
+    // 게임이 늘 5칸을 잡아 실측이 예외 없이 5다. 용량(+0x6C)도 5다.
+    std::uint32_t socket_count = 0;
+
+    // **열린 소켓 칸 수** (레코드 +0x70, u8). 이것이 사람이 보는
+    // "이 장비의 소켓 개수" 다. 잠긴 칸은 배열에 남아 있되
+    // `raw[4] == 0xFF` 다. 아이템 표의 상한은 `max_sockets`(+0x238).
+    std::uint8_t open_sockets = 0;
 };
 
 // 소켓 한 칸. 실측 6바이트다.
 //
-//   FF FF 00 00 FF 03    빈 칸 (첫 칸)
-//   FF FF 00 00 FF 00    빈 칸 (나머지)
+//   24 0D FF FF 00 §§    보석이 박힌 칸 (칸 0)
+//   FF FF 00 00 01 §§    열려 있는 빈 칸 (칸 1)
+//   FF FF 00 00 FF ??    잠긴 칸 (게임이 [5] 를 안 건드려 쓰레기값)
 //
 //   +0x00  u16  박힌 것의 아이템 표 순번. 0xFFFF 면 빈 칸
-//   +0x02  u16  뜻 모름 (실측 전부 0)
-//   +0x04  u8   뜻 모름 (실측 전부 0xFF)
-//   +0x05  u8   뜻 모름 (첫 칸만 3, 나머지 0)
+//   +0x02  u16  채움 표시. 보석 있으면 0xFFFF, 비면 0x0000
+//   +0x04  u8   **칸 번호(=열림) / 0xFF(=잠김, items.h 의 kSocketLocked)**
+//   +0x05  u8   뜻 모름(§§). **고정 상수가 아니다** - 한 판 안에서는
+//               열린 칸이 전부 같은데 판이 바뀌면 달라질 수 있다(실측
+//               다섯 판: 04 · 05 · 03 · 02 · 02). 로드할 때 게임이 다시
+//               매기므로 우리가 쓴 값은 남지 않는다.
 //
-// 뜻을 다 모르므로 원본 바이트를 그대로 들고 있는다. export 는 모르는
-// 칸까지 되돌려야 하기 때문이다.
+// 근거: specs/2026-09-07-socket-grant-unlock-research.md 2.2 절.
 inline constexpr std::size_t kSocketSize = 6;
 
 struct InventorySocket {

@@ -93,6 +93,49 @@ TEST(note_actor_stops_when_full) {
 
 // 게임이 함수 앞머리에서 하는 검사와 같은 것을 우리도 먼저 한다.
 // 코드에 그대로 있다: 키가 0이면 실패, 개수가 0 이하면 실패.
+// 표는 축출이 없어서 월드에 한 번 들어가면 16칸이 다 찼고, 그 뒤에
+// 생긴 세션은 조용히 버려졌다 - 인플레이스 로드 뒤 지급이 먹통이 된
+// 원인이다(실측 2026-09-10). 자리가 없으면 가장 오래된 칸을 내준다.
+TEST(session_slot_returns_the_existing_slot) {
+    const std::uintptr_t slots[4] = {0x11, 0x22, 0, 0};
+    const std::uint64_t last[4] = {100, 200, 0, 0};
+    bool fresh = true;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 2, 4, 0x22, &fresh), 1);
+    CHECK(!fresh);
+}
+
+TEST(session_slot_takes_the_next_free_one) {
+    const std::uintptr_t slots[4] = {0x11, 0x22, 0, 0};
+    const std::uint64_t last[4] = {100, 200, 0, 0};
+    bool fresh = false;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 2, 4, 0x33, &fresh), 2);
+    CHECK(fresh);
+}
+
+TEST(session_slot_evicts_the_oldest_when_full) {
+    const std::uintptr_t slots[3] = {0x11, 0x22, 0x33};
+    const std::uint64_t last[3] = {900, 100, 500};
+    bool fresh = false;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 3, 3, 0x44, &fresh), 1);
+    CHECK(fresh);
+}
+
+// 살아 있는 세션은 게임이 쉬지 않고 부르므로 마지막으로 본 시각이 늘
+// 앞선다 - 축출이 그것을 밀어내면 안 된다.
+TEST(session_slot_does_not_evict_the_live_one) {
+    const std::uintptr_t slots[3] = {0x11, 0x22, 0x33};
+    const std::uint64_t last[3] = {1000, 999, 1};
+    bool fresh = false;
+    CHECK_EQ(cdtb::game::session_slot_for(slots, last, 3, 3, 0x44, &fresh), 2);
+}
+
+TEST(session_slot_returns_none_without_a_table) {
+    bool fresh = true;
+    CHECK_EQ(cdtb::game::session_slot_for(nullptr, nullptr, 0, 16, 0x11, &fresh),
+             -1);
+    CHECK(!fresh);
+}
+
 // 조회 함수는 서버 쪽과 클라이언트 쪽을 다 돌려주고, 서버 쪽만
 // 해도 여럿이다(NPC·상자). 실측에서 플레이어 것은 17020회, 다음이
 // 1110회, 나머지는 1~3회였다. 서버 쪽 중 가장 많이 불린 것을 고른다.
@@ -117,6 +160,54 @@ TEST(best_actor_returns_none_without_a_server) {
 
 TEST(best_actor_returns_none_when_empty) {
     CHECK_EQ(cdtb::game::best_actor_index(nullptr, nullptr, 0), -1);
+}
+
+// 지급이 통하는지는 게이트가 실제로 풀리는지로 갈린다 - 호출 횟수나
+// 최근성이 아니다(실측 2026-09-07: 로드 뒤에도 지급이 되던 세션이
+// last_seen 이 뒤처졌다는 이유로 걸러져 "세션 못 찾음" 이 됐다).
+TEST(best_gate_session_picks_the_busiest_open_server) {
+    const bool gate[3] = {true, true, false};
+    const std::uint32_t hits[3] = {5, 900, 99999};
+    const bool server[3] = {true, true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 3), 1);
+}
+
+TEST(best_gate_session_skips_a_closed_gate) {
+    // 호출 1위라도 문이 닫혀 있으면 처리기가 조용히 반환한다.
+    const bool gate[2] = {false, true};
+    const std::uint32_t hits[2] = {17020, 3};
+    const bool server[2] = {true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), 1);
+}
+
+TEST(best_gate_session_still_ignores_client_side) {
+    const bool gate[2] = {true, true};
+    const std::uint32_t hits[2] = {99999, 4};
+    const bool server[2] = {false, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), 1);
+}
+
+// 못 고르면 -1 이다. stale 세션으로 폴백하지 않는다 - 폴백이 있던
+// 동안에는 풀린 세션으로 구동해 게임 안에서 죽었다.
+TEST(best_gate_session_returns_none_when_every_gate_is_closed) {
+    const bool gate[2] = {false, false};
+    const std::uint32_t hits[2] = {10, 20};
+    const bool server[2] = {true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), -1);
+}
+
+TEST(best_gate_session_returns_none_when_empty) {
+    CHECK_EQ(cdtb::game::best_gate_session_index(nullptr, nullptr, nullptr, 0),
+             -1);
+}
+
+// 횟수가 같으면 뒤엣것을 잡는다. 표는 뒤로 갈수록 새 세션이라,
+// 로드 뒤 갓 들어온 세션이 옛 세션에 밀리지 않는다.
+TEST(best_gate_session_prefers_the_newer_slot_on_a_tie) {
+    const bool gate[2] = {true, true};
+    const std::uint32_t hits[2] = {7, 7};
+    const bool server[2] = {true, true};
+    CHECK_EQ(cdtb::game::best_gate_session_index(gate, hits, server, 2), 1);
 }
 
 // 세션 표는 지워지지 않는다. 접속이 다시 맺어지면 옛 세션이 누적
@@ -555,7 +646,20 @@ TEST(find_entity_lookup_fails_without_the_anchor) {
 TEST(request_refuses_without_a_session) {
     const float pos[3] = {0.0f, 0.0f, 0.0f};
     CHECK(!cdtb::game::request_spawn(0, 50001, 1, pos));
-    CHECK(!cdtb::game::spawn_pending());
+    CHECK(!cdtb::game::spawn_pending(cdtb::game::DriveLane::Item));
+}
+
+// 구동 대기열은 용도별로 나뉘어 있다. 예전에는 칸이 하나라 아이템
+// 지급과 동반자 구동이 서로를 막았고, 대기 상태가 엉뚜한 패널에
+// 떴다(사용자 지적 2026-09-09).
+TEST(drive_lanes_are_independent) {
+    using cdtb::game::DriveLane;
+    CHECK(!cdtb::game::spawn_pending(DriveLane::Item));
+    CHECK(!cdtb::game::spawn_pending(DriveLane::Companion));
+    const auto item = cdtb::game::drive_gate_state(DriveLane::Item);
+    const auto comp = cdtb::game::drive_gate_state(DriveLane::Companion);
+    CHECK(!item.pending);
+    CHECK(!comp.pending);
 }
 
 // 렌더 스레드에서 직접 부르면 죽는다 - 작업 함수 안쪽이 TLS 를 쓰는데
@@ -695,6 +799,43 @@ TEST(fill_item_value_refuses_more_sockets_than_the_array_holds) {
     CHECK(!cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
 }
 
+// --- 소켓 칸 수 자르기 ------------------------------------------------
+//
+// 생성 함수 0x2A70000 이 갈래를 둘로 나눈다(2026-09-07 실측):
+//   - 겹치는 아이템/장비 아님 : 소켓수>0 이면 오류 갈래
+//   - 장비                    : `표 +0x238 >= 소켓수` 면 통과
+// `socket_room` 이 그 규칙을, `clamp_socket_count` 가 배열 다섯 칸을 본다.
+
+TEST(clamp_socket_count_keeps_a_value_inside_the_room) {
+    CHECK_EQ(cdtb::game::clamp_socket_count(2, 3), std::uint8_t{2});
+    CHECK_EQ(cdtb::game::clamp_socket_count(3, 3), std::uint8_t{3});
+}
+
+TEST(clamp_socket_count_cuts_to_the_room) {
+    CHECK_EQ(cdtb::game::clamp_socket_count(5, 2), std::uint8_t{2});
+}
+
+TEST(clamp_socket_count_gives_nothing_when_the_room_is_zero) {
+    // 겹치는 아이템·장비 아님. 넘기면 게임이 오류 갈래로 빠진다.
+    CHECK_EQ(cdtb::game::clamp_socket_count(3, 0), std::uint8_t{0});
+}
+
+TEST(clamp_socket_count_never_passes_more_than_the_array_holds) {
+    // 표가 여섯 칸을 허용해도 TrItemValue 배열은 다섯 칸이다.
+    CHECK_EQ(cdtb::game::clamp_socket_count(9, 9),
+             static_cast<std::uint8_t>(cdtb::game::kGiveMaxSockets));
+}
+
+TEST(clamped_socket_count_always_fits_fill_item_value) {
+    // 자른 값은 fill_item_value 가 거절하지 않아야 한다 - 거절하면
+    // 큐가 그 자리에서 멈춘다.
+    std::uint8_t buf[0x200]{};
+    cdtb::game::GiveExtras ex;
+    ex.socket_count = cdtb::game::clamp_socket_count(200, 200);
+    CHECK(cdtb::game::fill_item_value(buf, sizeof(buf), 200914, 1, ex));
+    CHECK_EQ(buf[0x5E], static_cast<std::uint8_t>(cdtb::game::kGiveMaxSockets));
+}
+
 TEST(fill_item_value_writes_no_sockets_by_default) {
     std::uint8_t buf[0x200]{};
     std::memset(buf, 0xAB, sizeof(buf));
@@ -822,4 +963,68 @@ TEST(clamp_count_treats_zero_stack_as_no_limit) {
 TEST(clamp_count_never_goes_below_one) {
     CHECK_EQ(cdtb::game::clamp_count_to_stack(0, 10), 1);
     CHECK_EQ(cdtb::game::clamp_count_to_stack(-494665728, 3800301568u), 1);
+}
+
+TEST(short_class_name_cuts_prefix_and_mangle_tail) {
+    char b[64];
+    cdtb::game::short_class_name(".?AVServerPlayerSession@pa@@", b, sizeof(b));
+    CHECK(std::strcmp(b, "ServerPlayerSession") == 0);
+    cdtb::game::short_class_name("Plain", b, sizeof(b));
+    CHECK(std::strcmp(b, "Plain") == 0);
+    cdtb::game::short_class_name("", b, sizeof(b));
+    CHECK(std::strcmp(b, "(확인 중)") == 0);
+    cdtb::game::short_class_name(nullptr, b, sizeof(b));
+    CHECK(std::strcmp(b, "(확인 중)") == 0);
+    cdtb::game::short_class_name(".?AVAbcdefghij@pa@@", b, 5);   // 잘려도 종료된다
+    CHECK(std::strcmp(b, "Abcd") == 0);
+}
+
+TEST(outcome_is_mine_compares_serial) {
+    cdtb::game::SpawnOutcome o;
+    o.serial = 7;
+    CHECK(cdtb::game::outcome_is_mine(o, 7));
+    CHECK(!cdtb::game::outcome_is_mine(o, 6));
+    // 요청을 걸 수 없는 테스트 환경에서는 번호가 0 이고 결과도 비어 있다
+    // 스위트 어디에서도 request_* 가 성공(번호 매김)하지 않는다는 전제다 -
+    // 성공 경로 테스트를 더하면 이 단언을 옮길 것.
+    CHECK_EQ(cdtb::game::last_request_serial(), 0u);
+    CHECK_EQ(cdtb::game::last_outcome().serial, 0u);
+}
+
+// 종 등록 검사 자리는 본체로 가는 jmp 썽크다. 2850 실측 바이트로 판정 함수를 본다.
+TEST(hire_check_jmp_target_follows_rel32) {
+    // 0x20991F0: E9 FB B2 03 0C -> 0x20991F5 + 0x0C03B2FB = 0xE0D44F0
+    const std::uint8_t thunk[] = {0xE9, 0xFB, 0xB2, 0x03, 0x0C};
+    const std::uintptr_t base = 0x140000000ull;
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, sizeof(thunk),
+                                               base + 0x20991F0),
+             base + 0xE0D44F0);
+}
+
+TEST(hire_check_jmp_target_rejects_non_jmp_or_short) {
+    // 2760 자리 0x2097BC0 이 2850 에서 갖는 바이트 - lea ecx,[rbp+0x48] 한복판.
+    const std::uint8_t mid[] = {0x8D, 0x4D, 0x48, 0xE8, 0x58};
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(mid, sizeof(mid), 0x142097BC0ull), 0u);
+    const std::uint8_t thunk[] = {0xE9, 0xFB, 0xB2, 0x03, 0x0C};
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, 4, 0x1420991F0ull), 0u);
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(nullptr, 5, 0x1420991F0ull), 0u);
+}
+
+TEST(hire_check_body_ok_accepts_the_2850_prologue) {
+    // 0xE0D44F0: mov rax,rsp / mov [rax+8],rbx / mov [rax+0x20],r9d / mov [rax+0x18],r8w
+    const std::uint8_t body[] = {0x48, 0x89, 0xE0, 0x48, 0x89, 0x58, 0x08, 0x44,
+                                 0x89, 0x48, 0x20, 0x66, 0x44, 0x89, 0x40, 0x18};
+    CHECK(cdtb::game::hire_check_body_ok(body, sizeof(body)));
+    CHECK(cdtb::game::hire_check_body_ok(body, 11));
+}
+
+TEST(hire_check_body_ok_rejects_short_or_different) {
+    const std::uint8_t body[] = {0x48, 0x89, 0xE0, 0x48, 0x89, 0x58,
+                                 0x08, 0x44, 0x89, 0x48, 0x20};
+    CHECK(!cdtb::game::hire_check_body_ok(body, sizeof(body) - 1));
+    CHECK(!cdtb::game::hire_check_body_ok(nullptr, sizeof(body)));
+    std::uint8_t other[sizeof(body)];
+    std::memcpy(other, body, sizeof(body));
+    other[10] = 0x18;  // mov [rax+0x18],r9d - 같은 꼴의 다른 함수
+    CHECK(!cdtb::game::hire_check_body_ok(other, sizeof(other)));
 }

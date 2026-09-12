@@ -5,20 +5,19 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #include "core/log.h"
+#include "game/companion.h"
+#include "game/items.h"
 #include "mem/hook.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
 namespace {
-
-// 표 조회 함수. 아이템 표를 비롯해 82개 표가 이걸 쓴다.
-//   rcx = 표 + 0x68,  rdx = &키
-constexpr const char* kTableLookupPattern =
-    "48 83 EC 08 83 79 04 00 4C 8B D1 75";
 
 // 함수 앞머리 그대로다. 주소를 박아 두면 패치마다 밀리므로 바이트로
 // 찾는다. 둘 다 349MB 이미지 안에서 유일한 것을 확인했다.
@@ -67,8 +66,6 @@ bool g_installed = false;
 constexpr int kSeenCap = 16;
 std::uintptr_t g_seen[kSeenCap]{};
 std::uint32_t g_seen_hits[kSeenCap]{};
-char g_seen_class[kSeenCap][96]{};
-bool g_seen_server[kSeenCap]{};
 
 // 세션은 조회 함수의 인자다. 처리기에 넘길 것은 이쪽이다.
 std::uintptr_t g_sess[kSeenCap]{};
@@ -83,15 +80,6 @@ std::atomic<std::uintptr_t> g_drive_fault{0};
 
 std::atomic<int> g_seen_count{0};
 
-// 바닥 스폰. 인자는 전부 포인터다 - 디스어셈블에서 확인했다.
-//   rcx 액터  rdx 결과  r8 아이템키  r9 개수  [+0x20] 필드3  [+0x28] 위치
-using SpawnFn = void*(__fastcall*)(void*, std::uint32_t*, const std::uint32_t*,
-                                   const std::int64_t*, const std::uint16_t*,
-                                   const float*);
-SpawnFn g_spawn = nullptr;
-SpawnFn g_orig_spawn = nullptr;
-bool g_trace = false;
-
 // 처리기. 역직렬화가 파싱을 마치고 부르는 그 함수다. 값이 아니라
 // 포인터를 받는다.
 //   rcx 서술자  rdx 패킷  r8 아이템키  r9 개수  arg5 필드3  arg6 위치
@@ -104,22 +92,10 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
 //   rcx 서술자  rdx 패킷  r8 &캐릭터키u32  r9 &Bu32  [+0x20] &위치float3
 //   [+0x28] &플래그u8
 // 처리기는 캐릭터키가 0이면 거부한다(아이템 스폰의 키 검사와 같다).
-using CharSpawnFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
-                                      const std::uint32_t*, const float*,
-                                      const std::uint8_t*);
 CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
-CheatMessage g_char_msg;   // SpawnCharacterCheatReq (ID 2510)
-
-// 표 조회 후킹. 찾는 키가 들어올 때만 남긴다.
-using TableLookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
-TableLookupFn g_orig_lookup = nullptr;
-void* g_lookup_target = nullptr;
-bool g_lookup_installed = false;
-std::atomic<std::uint32_t> g_watch_key{0};
-std::atomic<int> g_watch_left{0};
 
 // 내구도 처리기. 인자 넷뿐이다.
 using EndurFn = void(__fastcall*)(void*, void*, const std::uint16_t*,
@@ -144,7 +120,7 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance, CharSpawn, Message };
+enum class Kind { Ground, Inventory, Endurance, Message, HireSpecies };
 
 struct Pending {
     Kind kind = Kind::Inventory;
@@ -160,40 +136,73 @@ struct Pending {
     MessageDesc msg;
     std::uint8_t wire[kMessageWireMax]{};
     std::size_t wire_len = 0;
+    std::uint32_t serial = 0;   // 요청 번호(stamp_request)
 };
 // 아래에서 정의한다. 후킹이 먼저 나온다.
 void run_spawn(std::uintptr_t session, std::uint32_t item_key,
                std::int64_t count, const float pos[3], SpawnOutcome* out);
+void run_hire_species(std::uintptr_t session, std::uint16_t key,
+                      SpawnOutcome* out);
 void run_give(std::uintptr_t session, std::uint32_t item_key,
               std::int64_t count, const GiveExtras& extras, SpawnOutcome* out);
 void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
                    SpawnOutcome* out);
-void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                    std::uint32_t b, std::uint8_t flag, const float pos[3],
-                    SpawnOutcome* out);
 void run_message(std::uintptr_t session, const MessageDesc& msg,
                  const std::uint8_t* wire, std::size_t len, SpawnOutcome* out);
 
-Pending g_pending;
-std::atomic<bool> g_has_pending{false};
+// 레인별 칸. 아이템 지급과 동반자 구동이 서로를 막지 않게
+// 칸을 나눠 둔다(grant.h DriveLane 설명).
+struct LaneSlot {
+    Pending req;
+    std::atomic<bool> has{false};
+    std::atomic<std::uint64_t> at{0};
+};
+LaneSlot g_lane[kDriveLaneCount];
+
+// 쿨타임은 **레인별**이다. 실행은 직렬이어야 하지만, 지급을 했다고
+// 획득까지 2초 막을 이유는 없다(사용자 지적 2026-09-09).
+std::atomic<unsigned long long> g_lane_done[kDriveLaneCount]{};
+
+LaneSlot& lane_of(DriveLane l) {
+    return g_lane[static_cast<int>(l)];
+}
+
+// 어느 레인이든 걸린 것이 있는가.
+// 그 레인이 마지막으로 난 시각. 쿨타임은 레인별이다.
+unsigned long long lane_done_ms(const LaneSlot& l) {
+    const int idx = static_cast<int>(&l - &g_lane[0]);
+    if (idx < 0 || idx >= kDriveLaneCount) return 0;
+    return g_lane_done[idx].load(std::memory_order_acquire);
+}
+
+bool any_pending() {
+    for (auto& l : g_lane) {
+        if (l.has.load(std::memory_order_acquire)) return true;
+    }
+    return false;
+}
 
 // 요청을 건 시각. 게임 스레드가 집어 가지 않으면 대기열이 영영 막힌다
 // - 실측 2026-09-06: 메뉴 화면에서 건 요청 하나가 6분 넘게 남아 그 뒤
 // 모든 요청이 거부됐다. 실행 지점은 월드가 돌 때만 불리므로, 오래
 // 묵은 요청은 버리고 새 요청을 받는다.
-std::atomic<std::uint64_t> g_pending_at{0};
 constexpr std::uint64_t kPendingMaxMs = 15000;
 
 // 묵은 요청이면 버린다. 버렸으면 true.
 bool drop_stale_pending() {
-    if (!g_has_pending.load(std::memory_order_acquire)) return false;
-    const std::uint64_t at = g_pending_at.load(std::memory_order_acquire);
-    if (at == 0 || GetTickCount64() - at < kPendingMaxMs) return false;
-    if (!g_has_pending.exchange(false, std::memory_order_acq_rel)) return false;
-    log::warnf("대기열: {}ms 동안 실행되지 않은 요청을 버린다 - 월드가 돌고 "
-               "있어야 실행된다",
-               GetTickCount64() - at);
-    return true;
+    bool dropped = false;
+    for (int i = 0; i < kDriveLaneCount; ++i) {
+        LaneSlot& l = g_lane[i];
+        if (!l.has.load(std::memory_order_acquire)) continue;
+        const std::uint64_t at = l.at.load(std::memory_order_acquire);
+        if (at == 0 || GetTickCount64() - at < kPendingMaxMs) continue;
+        if (!l.has.exchange(false, std::memory_order_acq_rel)) continue;
+        log::warnf("대기열[{}]: {}ms 동안 실행되지 않은 요청을 버린다 - "
+                   "월드가 돌고 있어야 실행된다",
+                   i, GetTickCount64() - at);
+        dropped = true;
+    }
+    return dropped;
 }
 
 
@@ -211,7 +220,11 @@ thread_local int g_detour_depth = 0;
 // 안 된다.
 thread_local int g_pump_depth = 0;
 std::atomic<bool> g_running{false};
+// 구동이 시작된 시각. 물렸을 때 얼마나 오래됐는지 보려고 둔다.
+std::atomic<unsigned long long> g_running_at{0};
 std::atomic<unsigned long long> g_last_done{0};
+// 실행 중이던 구동을 손으로 풀었다 = 그 호출이 안 돌아왔다는 뜻.
+std::atomic<bool> g_drive_dead{false};
 // 지급이 실제로 실행되는 스레드 = 게임 로직 스레드. 액터 조회가
 // depth==1·TLS 준비 상태로 도는 그 스레드다. 작업 실행 래퍼가 이
 // 스레드에서도 도는지 가리는 데 쓴다.
@@ -249,6 +262,81 @@ constexpr int kNormalTraces = 4;
 std::atomic<int> g_normal_traces{0};
 std::uintptr_t g_normal_outer[kNormalTraces]{};
 
+// 구동을 시작하는 **그 자리**를 한 줄로 남긴다.
+//
+// 구동이 게임 안에서 돌아오지 않는 일이 간헐적으로 생긴다
+// (실측 2026-09-09: 지급 한 번, 획득 두 번). __finally 가 돌지
+// 않았으니 예외가 아니라 진짜로 막힌 것이고, 게임 코드 한복판에서
+// 게임 함수를 부르는 재진입 교착으로 보인다.
+//
+// 성공한 구동과 막힌 구동의 **부르는 자리**를 비교하면 어느 자리가
+// 안전한지 갈린다. 막히면 이 줄이 마지막으로 남으므로 그 자리가
+// 범인이다. 구동할 때만 찍으므로 비용은 없다시피 하다.
+// 실측으로 확인된 **안전한 구동 자리**.
+//
+// 구동 지점(det_actor_getter)은 게임 코드 한복판이라, 그 자리가 이미
+// 락을 쥐고 있으면 게임 함수를 부르는 순간 교착한다. 그러면 게임
+// 로직 스레드가 통째로 멈춰 **저장도 정상 종료도 안 된다**.
+//
+// 자리를 찍어 비교하니 성공과 멈춤이 서로 다른 자리였다
+// (실측 2026-09-09).
+//
+//   성공  +2A0263D +2A2BBBF ...   지급·획득 전부 이 자리
+//   멈춤  +27A95D5 +1041C5B7 ...  이 자리에서 게임이 멈췄다
+//
+// 그래서 확인된 자리에서만 구동한다. 모르는 자리면 이번은
+// 건너뛰고 요청은 그대로 둔다 - 다음에 안전한 자리가 오면 돌아간다.
+// 새 자리를 더 모으려면 건너뛴 자리를 로그에서 보고 여기 넣는다.
+// 1.0.0.2850(2026-09-11): 옛 자리 0x2A0263D 가 +0x1740 밀렸다(역직렬화들과 같은
+// 폭). 새 exe 에서 액터 조회(0x2074BA0)를 부르는 반환 주소 중 정확히 그 자리다.
+// 틀리면 요청이 전부 건너뛰어지고 "구동 건너뜀: 확인되지 않은 자리 +RVA" 로그에
+// 실제 자리가 찍힌다("구동 자리 …" 줄은 성공 경로 전용). 2850 첫 실행(옛 값을
+// 가진 1차 빌드) 실측: 지급 때마다 `+2A03D7D` 가 남고 지급·획득이 전부 미뤄졌다.
+constexpr std::uint64_t kGoodDriveSites[] = {0x2A03D7D};
+
+// 부르는 자리(모듈 안 첫 프레임)를 낸다. 모르면 0.
+std::uint64_t drive_site_rva() {
+    if (g_reader == nullptr) return 0;
+    void* frames[8]{};
+    const USHORT n = RtlCaptureStackBackTrace(0, 8, frames, nullptr);
+    const std::uintptr_t base = g_reader->module_base();
+    const std::size_t size = g_reader->module_size();
+    for (USHORT i = 0; i < n; ++i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) return a - base;
+    }
+    return 0;
+}
+
+bool drive_site_is_good(std::uint64_t site) {
+    if (site == 0) return false;
+    for (const auto g : kGoodDriveSites) {
+        if (g == site) return true;
+    }
+    return false;
+}
+
+void log_drive_site() {
+    if (g_reader == nullptr) return;
+    void* frames[8]{};
+    const USHORT n = RtlCaptureStackBackTrace(0, 8, frames, nullptr);
+    const std::uintptr_t base = g_reader->module_base();
+    const std::size_t size = g_reader->module_size();
+    std::string line;
+    char buf[32];
+    for (USHORT i = 0; i < n; ++i) {
+        const auto a = reinterpret_cast<std::uintptr_t>(frames[i]);
+        if (a >= base && a < base + size) {
+            std::snprintf(buf, sizeof(buf), " +%llX",
+                          static_cast<unsigned long long>(a - base));
+        } else {
+            std::snprintf(buf, sizeof(buf), " ?");
+        }
+        line += buf;
+    }
+    log::infof("구동 자리 (스레드 {}):{}", GetCurrentThreadId(), line);
+}
+
 void log_normal_stack() {
     void* frames[48]{};
     const USHORT n = RtlCaptureStackBackTrace(0, 48, frames, nullptr);
@@ -281,7 +369,27 @@ void log_normal_stack() {
         }
     }
 }
+// 결과 칸. 게임 스레드가 쓰고 렌더·명령 스레드가 읽으므로 뮤텍스로 감싼다.
 SpawnOutcome g_outcome;
+std::mutex g_outcome_mutex;
+// 생산자(렌더 스레드·명령 파일 스레드)가 같은 레인을 동시에 채우지 않게 한다.
+std::mutex g_produce_mutex;
+
+std::atomic<std::uint32_t> g_request_serial{0};
+// 이 스레드가 마지막으로 매긴 번호. 스레드별이라 다른 생산자가 그 사이에 번호를
+// 올려도 내 것이 바뀌지 않는다(Codex 지적 2026-09-11).
+thread_local std::uint32_t t_last_serial = 0;
+
+// 요청마다 번호를 매기고 결과 칸을 비운다. 창은 자기 번호의 결과만 읽는다.
+void stamp_request(LaneSlot& lane) {
+    const std::uint32_t s =
+        g_request_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
+    lane.req.serial = s;
+    t_last_serial = s;
+    std::lock_guard<std::mutex> lock(g_outcome_mutex);
+    g_outcome = SpawnOutcome{};
+    g_outcome.serial = s;
+}
 
 // 작업 디스패처. 여기 진입점이 안전한 실행 지점이다 - 스택이 얕고
 // 아직 아무 작업도 시작하지 않았다.
@@ -379,47 +487,112 @@ bool safe_deref(std::uintptr_t at, std::uintptr_t* out);
 
 // 걸어 둔 요청이 있으면 여기서 실행한다. 조건을 한 곳에 모은다.
 // 실제로 하나를 실행했으면 true.
-bool run_pending_if_any() {
-    if (!g_has_pending.load(std::memory_order_acquire)) return false;
-    if (!thread_ready_for_spawn()) return false;
-    if (g_running.exchange(true, std::memory_order_acq_rel)) return false;
+// 실제 실행부. 예외가 난 자리를 밖으로 보내지 않고 그대로 둔다 -
+// 게이트 푸는 일은 부르는 쪽의 __finally 가 맡는다.
+int g_last_lane = -1;
+
+bool run_one_picked() {
     bool ran = false;
-    if (g_has_pending.exchange(false, std::memory_order_acq_rel)) {
+    // 레인을 순서대로 본다. 한 번에 하나만 실행한다 - 실행 지점은
+    // 여전히 직렬화되어야 한다.
+    int picked = -1;
+    for (int i = 0; i < kDriveLaneCount; ++i) {
+        if (g_lane[i].has.exchange(false, std::memory_order_acq_rel)) {
+            picked = i;
+            break;
+        }
+    }
+    g_last_lane = picked;
+    if (picked >= 0) {
         ran = true;
-        const Pending req = g_pending;
+        const Pending req = g_lane[picked].req;
+        // 지역 칸에 받아 한 번에 게시한다 - run_* 가 쓰는 도중에 창이 읽지 않게.
+        SpawnOutcome local;
         switch (req.kind) {
             case Kind::Inventory:
                 run_give(req.session, req.key, req.count, req.extras,
-                         &g_outcome);
+                         &local);
                 break;
             case Kind::Endurance:
-                run_endurance(req.session, req.a, req.b, &g_outcome);
+                run_endurance(req.session, req.a, req.b, &local);
                 break;
             case Kind::Ground:
-                run_spawn(req.session, req.key, req.count, req.pos, &g_outcome);
+                run_spawn(req.session, req.key, req.count, req.pos, &local);
                 break;
-            case Kind::CharSpawn:
-                run_char_spawn(req.session, req.key,
-                               static_cast<std::uint32_t>(req.count), req.a,
-                               req.pos, &g_outcome);
+            case Kind::HireSpecies:
+                run_hire_species(req.session,
+                                 static_cast<std::uint16_t>(req.key),
+                                 &local);
                 break;
             case Kind::Message:
                 run_message(req.session, req.msg, req.wire, req.wire_len,
-                            &g_outcome);
+                            &local);
                 break;
+        }
+        // run_* 가 결과를 통째로 덮어 번호가 지워진다.
+        local.serial = req.serial;
+        {
+            std::lock_guard<std::mutex> lock(g_outcome_mutex);
+            g_outcome = local;
         }
         // 종류를 가리지 않는다. 게임 안에서 죽었다는 것은 우리가
         // 넘긴 세션이 이미 풀렸다는 뜻이고 - 실측 2026-09-06: 죽은
         // 자리가 `mov rax,[세션+0x88]` 이었다 - 같은 자리로 또 보내면
         // 또 죽는다. 그 반복이 클라이언트를 오류로 떨어뜨린다.
-        if (g_outcome.crashed && req.session != 0) {
+        if (local.crashed && req.session != 0) {
             g_drive_fault.store(req.session, std::memory_order_release);
             log::warnf("세션 0x{:X} 를 잠갔다 - 새 세션이 잡힐 때까지 구동하지 않는다",
                        req.session);
         }
     }
-    g_last_done.store(GetTickCount64(), std::memory_order_release);
-    g_running.store(false, std::memory_order_release);
+    return ran;
+}
+
+// 걸어 둔 요청이 있으면 여기서 실행한다. 조건을 한 곳에 모은다.
+// 실제로 하나를 실행했으면 true.
+bool run_pending_if_any() {
+
+    if (!any_pending()) return false;
+    if (!thread_ready_for_spawn()) return false;
+    if (g_running.exchange(true, std::memory_order_acq_rel)) return false;
+    g_running_at.store(GetTickCount64(), std::memory_order_release);
+    bool ran = false;
+    // **게이트는 무슨 일이 있어도 푸단다.**
+    //
+    // 실측 2026-09-09: 지급과 획득이 각각 한 번씩, 작업을 시작해 놓고
+    // "끝" 로그 없이 사라졌다. 그런데 게임은 62 FPS 로 멀썩히 돌고
+    // 있었다 - 즉 게임 스레드가 멈춘 것이 아니라 **예외가 이 함수를
+    // 건너뛰어 풀렸다.** 이 빌드는 /EHsc 라 SEH 는 C++ 소멸자를
+    // 돌리지 않으므로 RAII 로는 막힐 수 없다. __finally 여야 한다.
+    //
+    // 이것이 없으면 g_running 이 영원히 true 로 남아 그 뒤 모든 지급·
+    // 획득이 죽고, 게임을 다시 시작하는 수밖에 없었다.
+    // 확인된 자리가 아니면 구동하지 않는다. 요청은 그대로 둔다.
+    const std::uint64_t site = drive_site_rva();
+    if (!drive_site_is_good(site)) {
+        static std::uint64_t s_last_skip = 0;
+        if (s_last_skip != site) {
+            s_last_skip = site;
+            log::infof("구동 건너뜀: 확인되지 않은 자리 +{:X} - 안전한 자리를 기다린다",
+                       site);
+        }
+        g_running.store(false, std::memory_order_release);
+        return false;
+    }
+    log_drive_site();
+    __try {
+        ran = run_one_picked();
+    } __finally {
+        const unsigned long long done_at = GetTickCount64();
+        g_last_done.store(done_at, std::memory_order_release);
+        if (g_last_lane >= 0 && g_last_lane < kDriveLaneCount) {
+            g_lane_done[g_last_lane].store(done_at, std::memory_order_release);
+        }
+        g_running.store(false, std::memory_order_release);
+        if (AbnormalTermination()) {
+            log::errorf("구동이 예외로 풀렸다 - 게이트는 풀었으니 계속 쓸 수 있다");
+        }
+    }
     return ran;
 }
 
@@ -449,44 +622,6 @@ void note_pump_context() {
     log::infof("메시지 펌프 경계: 스레드 {} 작업 컨텍스트 0x{:X}", tid, ctx);
 }
 
-// 디스패처를 지나는 작업들. 콜백마다 한 번씩 "어느 콜백이, 어떤
-// 컨텍스트로, 그때 TLS+0x250 이 서 있는지" 를 남긴다. 매 틱 돌면서
-// TLS 가 서 있는 작업이 있으면 그것이 프레임 경계 후보다.
-constexpr int kTaskSeenCap = 24;
-std::uintptr_t g_task_cb[kTaskSeenCap]{};
-std::uint32_t g_task_hits[kTaskSeenCap]{};
-std::atomic<int> g_task_seen{0};
-
-void note_task(void* self) {
-    if (g_reader == nullptr) return;
-    const auto t = reinterpret_cast<std::uintptr_t>(self);
-    std::uintptr_t desc = 0, cb = 0, ctx = 0, tls_ctx = 0;
-    if (!safe_deref(t + 0x78, &desc) || desc == 0) return;
-    safe_deref(desc + 8, &cb);
-    safe_deref(t + 0x80, &ctx);
-    const std::uintptr_t tls = static_cast<std::uintptr_t>(__readgsqword(0x58));
-    std::uintptr_t slot0 = 0;
-    if (tls != 0 && safe_deref(tls, &slot0) && slot0 != 0) {
-        safe_deref(slot0 + 0x250, &tls_ctx);
-    }
-    const int n = g_task_seen.load(std::memory_order_acquire);
-    for (int i = 0; i < n; ++i) {
-        if (g_task_cb[i] == cb) {
-            ++g_task_hits[i];
-            return;
-        }
-    }
-    if (n >= kTaskSeenCap) return;
-    g_task_cb[n] = cb;
-    g_task_hits[n] = 1;
-    g_task_seen.store(n + 1, std::memory_order_release);
-    const std::uintptr_t base = g_reader->module_base();
-    log::infof("작업 #{}: 콜백 모듈+0x{:X} 컨텍스트 0x{:X} TLS+0x250 0x{:X} "
-               "스레드 {}",
-               n, cb >= base ? cb - base : cb, ctx, tls_ctx,
-               GetCurrentThreadId());
-}
-
 // 계측 전용이다. **g_detour_depth 를 건드리지 않는다** - 대신 펌프
 // 전용 가드(g_pump_depth)로 중첩 진입 때 로그만 걸러 낸다. 실행은
 // 하지 않는다(펌프는 메시지 구동이라 프레임 경계가 아니었다).
@@ -511,7 +646,7 @@ void __fastcall det_message_pump(void* a, void* b, void* c, void* d, void* e) {
             log::infof("메시지 펌프 호출 {}회 (스레드 {})", calls,
                        GetCurrentThreadId());
         }
-        if (g_has_pending.load(std::memory_order_acquire)) note_pump_context();
+        if (any_pending()) note_pump_context();
     }
     --g_pump_depth;
 }
@@ -551,27 +686,6 @@ void* __fastcall det_entity_lookup(void* mgr, void* out, std::uint32_t id) {
     return g_orig_entity(mgr, out, id);
 }
 
-void* __fastcall det_table_lookup(void* table, const std::uint32_t* key) {
-    // 정확히 그 키 하나가 아니라 근처 범위를 본다. 인벤토리
-    // 식별자(5915)는 이 함수로 조회되지 않았다 - 변환이 먼저
-    // 일어나고 그 결과가 여기로 온다면 아이템 키 자리에서 잡힌다.
-    const std::uint32_t want = g_watch_key.load(std::memory_order_relaxed);
-    const bool in_range =
-        want != 0 && key != nullptr &&
-        (*key == want || (*key > want - 5000 && *key < want + 5000));
-    if (in_range && g_watch_left.load(std::memory_order_relaxed) > 0) {
-        g_watch_left.fetch_sub(1, std::memory_order_relaxed);
-        void* ret = _ReturnAddress();
-        const std::uintptr_t base = (g_reader != nullptr)
-                                        ? g_reader->module_base()
-                                        : 0;
-        log::infof("표 조회: 키 {} 표 0x{:X} 부른 곳 모듈+0x{:X}", *key,
-                   reinterpret_cast<std::uintptr_t>(table),
-                   reinterpret_cast<std::uintptr_t>(ret) - base);
-    }
-    return g_orig_lookup(table, key);
-}
-
 // 게임의 여러 스레드에서 불린다. 하는 일은 값을 적어 두는 것뿐이다.
 std::uintptr_t __fastcall det_actor_getter(void* session) {
     // 우리가 부른 게임 함수가 이 후킹을 다시 밟는다. 진입할 때마다
@@ -579,23 +693,40 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
     ++g_detour_depth;
     const std::uintptr_t actor = g_orig_actor_getter(session);
 
-    if (session != nullptr) {
+    // 액터를 낸 세션만 표에 적는다. 지급은 세션 -> 액터 경로를 타므로
+    // 널만 돌려주는 세션은 애초에 후보가 못 되는데, 실측 2026-09-10 에
+    // 그런 세션(…E0600~…E0C00 등)이 16칸 중 9칸을 먹어 정작 살아 있는
+    // 세션이 들어올 자리를 없앴다.
+    if (session != nullptr && actor != 0) {
         const auto s = reinterpret_cast<std::uintptr_t>(session);
         const int m = g_sess_count.load(std::memory_order_relaxed);
-        const int now = note_actor(g_sess, g_sess_hits, m, kSeenCap, s);
-        // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
-        // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
-        const std::uint64_t tick = ::GetTickCount64();
-        for (int i = 0; i < now; ++i) {
-            if (g_sess[i] == s) {
-                g_sess_actor[i] = actor;
-                // 살아 있다는 유일한 증거. 표에서 지울 수는 없으니
-                // 언제 봤는지를 남겨 고를 때 거른다.
-                g_sess_last[i] = tick;
-                break;
+        bool fresh = false;
+        const int slot =
+            session_slot_for(g_sess, g_sess_last, m, kSeenCap, s, &fresh);
+        if (slot >= 0) {
+            if (fresh) {
+                // 앞 세션의 흔적을 먼저 지우고 주소를 맨 마지막에
+                // 세운다. 순서가 거꾸로면 읽는 쪽이 "새 주소 + 옛
+                // 이름표" 인 찰나를 볼 수 있는데, 그것이 바로 새 세션을
+                // 클라이언트로 오인해 후보에서 빼는 자리다.
+                g_sess_class[slot][0] = 0;
+                g_sess_server[slot] = false;
+                g_sess_actor[slot] = 0;
+                g_sess_hits[slot] = 0;
+                g_sess[slot] = s;
+            }
+            ++g_sess_hits[slot];
+            // 이 세션이 어떤 액터를 내는지 같이 적어 둔다. 나중에 분석
+            // 스레드가 클래스를 붙여 서버 쪽인지 가린다.
+            g_sess_actor[slot] = actor;
+            // 마지막으로 액터를 낸 시각. 축출이 이 값으로 가장 오래된
+            // 칸을 고른다 - 살아 있는 세션은 게임이 쉬지 않고 부르므로
+            // 밀려나지 않는다.
+            g_sess_last[slot] = ::GetTickCount64();
+            if (slot >= m) {
+                g_sess_count.store(slot + 1, std::memory_order_release);
             }
         }
-        if (now != m) g_sess_count.store(now, std::memory_order_release);
     }
     if (actor != 0) {
         g_last_actor.store(actor, std::memory_order_relaxed);
@@ -623,7 +754,7 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         // 지급이 안 걸린 평소 상태의 스택을 몇 개 잡는다 - 매 프레임
         // 세션 업데이트 루프를 찾기 위한 것. 상한이 차면 아무것도 안 한다.
         if (g_reader != nullptr &&
-            !g_has_pending.load(std::memory_order_acquire) &&
+            !any_pending() &&
             g_normal_traces.load(std::memory_order_acquire) < kNormalTraces) {
             log_normal_stack();
         }
@@ -650,19 +781,6 @@ bool safe_deref(std::uintptr_t at, std::uintptr_t* out) {
         *out = *reinterpret_cast<std::uintptr_t*>(at);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-bool call_spawn_guarded(SpawnFn fn, void* actor, std::uint32_t* result,
-                        const std::uint32_t* key, const std::int64_t* count,
-                        const std::uint16_t* f3, const float* pos,
-                        std::uint32_t* seh_out) {
-    __try {
-        fn(actor, result, key, count, f3, pos);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        *seh_out = static_cast<std::uint32_t>(GetExceptionCode());
         return false;
     }
 }
@@ -711,6 +829,22 @@ bool call_give_guarded(GiveFn fn, void* self, void* packet, void* value,
     }
 }
 
+using HireSpeciesFn = std::uint32_t*(__fastcall*)(void*, std::uint32_t*,
+                                                 std::uint16_t, std::uint32_t,
+                                                 std::uint8_t);
+
+bool call_hire_species_guarded(HireSpeciesFn fn, void* clan,
+                               std::uint32_t* result, std::uint16_t key,
+                               std::uint32_t* seh_out,
+                               std::uintptr_t* addr_out) {
+    __try {
+        fn(clan, result, key, 1, 1);
+        return true;
+    } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
+        return false;
+    }
+}
+
 bool call_ctor_guarded(CtorFn fn, void* obj, std::uint32_t* seh_out,
                        std::uintptr_t* addr_out) {
     __try {
@@ -731,52 +865,6 @@ bool call_handler_guarded(HandlerFn fn, void* self, void* packet,
     } __except (seh_filter(GetExceptionInformation(), seh_out, addr_out)) {
         return false;
     }
-}
-
-// 캐릭터 소환 크래시 시점의 호출 스택. 널 해시가 어디서 불렸는지
-// 찾으려 예외 필터에서 뜬다(그 시점엔 스택이 살아 있다).
-void* g_char_crash_frames[24]{};
-USHORT g_char_crash_n = 0;
-
-int charspawn_seh_filter(EXCEPTION_POINTERS* ep, std::uint32_t* code,
-                         std::uintptr_t* addr) {
-    *code = static_cast<std::uint32_t>(ep->ExceptionRecord->ExceptionCode);
-    *addr = reinterpret_cast<std::uintptr_t>(
-        ep->ExceptionRecord->ExceptionAddress);
-    g_char_crash_n = RtlCaptureStackBackTrace(0, 24, g_char_crash_frames, nullptr);
-    return EXCEPTION_EXECUTE_HANDLER;
-}
-
-bool call_charspawn_guarded(CharSpawnFn fn, void* self, void* packet,
-                            const std::uint32_t* key, const std::uint32_t* b,
-                            const float* pos, const std::uint8_t* flag,
-                            std::uint32_t* seh_out, std::uintptr_t* addr_out) {
-    __try {
-        fn(self, packet, key, b, pos, flag);
-        return true;
-    } __except (charspawn_seh_filter(GetExceptionInformation(), seh_out,
-                                     addr_out)) {
-        return false;
-    }
-}
-
-// 실제 작업 함수가 불릴 때마다 인자를 남긴다. 원본을 그대로 부른다.
-void* __fastcall det_spawn(void* actor, std::uint32_t* result,
-                           const std::uint32_t* key, const std::int64_t* count,
-                           const std::uint16_t* f3, const float* pos) {
-    log::infof("[추적] 바닥 떨구기 액터 0x{:X} 키 {} 개수 {} 필드3 {} "
-               "위치 {:.1f},{:.1f},{:.1f}",
-               reinterpret_cast<std::uintptr_t>(actor),
-               key != nullptr ? *key : 0,
-               count != nullptr ? *count : 0,
-               f3 != nullptr ? *f3 : 0,
-               pos != nullptr ? pos[0] : 0.0f,
-               pos != nullptr ? pos[1] : 0.0f,
-               pos != nullptr ? pos[2] : 0.0f);
-    void* r = g_orig_spawn(actor, result, key, count, f3, pos);
-    log::infof("[추적] 바닥 떨구기 결과 0x{:X}",
-               result != nullptr ? *result : 0);
-    return r;
 }
 
 bool find_one(const std::vector<std::uint8_t>& image, const char* pattern,
@@ -866,32 +954,6 @@ int seen_entities(std::uint32_t* out, std::uint32_t* hits_out, int cap) {
     return take;
 }
 
-bool table_probe_install(const mem::Rtti& rtti, const mem::Reader& reader,
-                         std::uint32_t watch_key) {
-    g_watch_key.store(watch_key, std::memory_order_relaxed);
-    g_watch_left.store(8, std::memory_order_relaxed);
-    if (g_lookup_installed) return true;
-
-    std::uint64_t rva = 0;
-    if (!find_one(rtti.image(), kTableLookupPattern, &rva)) {
-        log::warnf("표 조회 함수를 못 찾았다");
-        return false;
-    }
-    if (!mem::hook_init()) return false;
-    g_lookup_target = reinterpret_cast<void*>(
-        reader.module_base() + static_cast<std::uintptr_t>(rva));
-    if (!mem::hook_install(g_lookup_target, &det_table_lookup,
-                           reinterpret_cast<void**>(&g_orig_lookup))) {
-        log::errorf("표 조회 후킹 실패 (RVA 0x{:X})", rva);
-        g_lookup_target = nullptr;
-        return false;
-    }
-    g_lookup_installed = true;
-    log::infof("표 조회 후킹 설치 (RVA 0x{:X}) - 키 {} 을 지켜본다", rva,
-               watch_key);
-    return true;
-}
-
 bool find_task_dispatcher_rva(const std::vector<std::uint8_t>& image,
                               std::uint64_t* rva_out) {
     return find_one(image, kTaskDispatcherPattern, rva_out);
@@ -916,14 +978,6 @@ bool tick_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     g_tick_installed = true;
     log::infof("작업 디스패처 후킹 설치 (RVA 0x{:X}) - 여기서만 실행한다", rva);
     return true;
-}
-
-void tick_hook_remove() {
-    if (!g_tick_installed) return;
-    mem::hook_remove(g_dispatch_target);
-    g_dispatch_target = nullptr;
-    g_orig_dispatch = nullptr;
-    g_tick_installed = false;
 }
 
 bool tick_hook_installed() { return g_tick_installed; }
@@ -1032,15 +1086,6 @@ bool actor_hook_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     return true;
 }
 
-void actor_hook_remove() {
-    if (!g_installed) return;
-    mem::hook_remove(g_actor_getter_target);
-    g_actor_getter_target = nullptr;
-    g_orig_actor_getter = nullptr;
-    g_installed = false;
-    log::infof("액터 조회 후킹 원복");
-}
-
 bool actor_hook_installed() { return g_installed; }
 
 int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
@@ -1058,22 +1103,30 @@ int note_actor(std::uintptr_t* slots, std::uint32_t* hits, int count, int cap,
     return count + 1;
 }
 
+int session_slot_for(const std::uintptr_t* slots,
+                     const std::uint64_t* last_seen, int count, int cap,
+                     std::uintptr_t value, bool* fresh_slot) {
+    if (fresh_slot != nullptr) *fresh_slot = false;
+    if (slots == nullptr || last_seen == nullptr || cap <= 0) return -1;
+    for (int i = 0; i < count && i < cap; ++i) {
+        if (slots[i] == value) return i;
+    }
+    if (fresh_slot != nullptr) *fresh_slot = true;
+    if (count < cap) return count;
+    // 꽉 찼다. 가장 오래 전에 본 자리를 내준다.
+    int oldest = 0;
+    for (int i = 1; i < cap; ++i) {
+        if (last_seen[i] < last_seen[oldest]) oldest = i;
+    }
+    return oldest;
+}
+
 int seen_sessions(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
     const int n = g_sess_count.load(std::memory_order_acquire);
     const int take = (n < cap) ? n : cap;
     for (int i = 0; i < take; ++i) {
         out[i] = g_sess[i];
         if (hits_out != nullptr) hits_out[i] = g_sess_hits[i];
-    }
-    return take;
-}
-
-int seen_actors(std::uintptr_t* out, std::uint32_t* hits_out, int cap) {
-    const int n = g_seen_count.load(std::memory_order_acquire);
-    const int take = (n < cap) ? n : cap;
-    for (int i = 0; i < take; ++i) {
-        out[i] = g_seen[i];
-        if (hits_out != nullptr) hits_out[i] = g_seen_hits[i];
     }
     return take;
 }
@@ -1090,6 +1143,47 @@ int best_actor_index(const std::uint32_t* hits, const bool* is_server, int n) {
         if (best < 0 || hits[i] > hits[best]) best = i;
     }
     return best;
+}
+
+int session_capacity() { return kSeenCap; }
+
+int best_gate_session_index(const bool* gate_open, const std::uint32_t* hits,
+                            const bool* is_server, int n) {
+    if (gate_open == nullptr || hits == nullptr || is_server == nullptr) {
+        return -1;
+    }
+    int best = -1;
+    std::uint32_t best_hits = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!is_server[i] || !gate_open[i]) continue;
+        // 같으면 뒤엣것을 잡는다 - 표는 뒤로 갈수록 새 세션이다.
+        if (best < 0 || hits[i] >= best_hits) {
+            best = i;
+            best_hits = hits[i];
+        }
+    }
+    return best;
+}
+
+std::uintptr_t pick_drive_session(const mem::Reader& reader) {
+    std::uintptr_t seen[kSeenCap]{};
+    std::uint32_t hits[kSeenCap]{};
+    const int n = seen_sessions(seen, hits, kSeenCap);
+    if (n == 0) return 0;
+    bool server[kSeenCap]{};
+    bool gate_open[kSeenCap]{};
+    std::uintptr_t gate = 0;
+    for (int i = 0; i < n; ++i) {
+        server[i] = session_is_server(i);
+        // 안전 읽기라 풀린 세션은 여기서 자연히 실패한다.
+        gate_open[i] = gate_object(reader, seen[i], &gate);
+    }
+    const int pick = best_gate_session_index(gate_open, hits, server, n);
+    if (pick < 0) return 0;
+    const std::uintptr_t session = seen[pick];
+    // 새 세션을 잡았으면 지난 고장 잠금은 의미가 없다.
+    if (session != drive_fault_session()) clear_drive_fault();
+    return session;
 }
 
 std::uintptr_t session_actor(int index) {
@@ -1161,6 +1255,88 @@ bool session_looks_live(const mem::Reader& reader, std::uintptr_t session) {
     // 죽는다 - 우리가 먼저 읽어 본다.
     std::uint8_t flag = 0;
     if (!reader.read_value(gate + 1, &flag)) return false;
+    return true;
+}
+
+DriveGate drive_gate_state(DriveLane lane) {
+    LaneSlot& l = lane_of(lane);
+    DriveGate g;
+    g.pending = l.has.load(std::memory_order_acquire);
+    g.running = g_running.load(std::memory_order_acquire);
+    const unsigned long long now = GetTickCount64();
+    const unsigned long long pat = l.at.load(std::memory_order_acquire);
+    const unsigned long long rat = g_running_at.load(std::memory_order_acquire);
+    g.pending_age_ms = (g.pending && pat != 0) ? now - pat : 0;
+    g.running_age_ms = (g.running && rat != 0) ? now - rat : 0;
+    const unsigned long long done = g_last_done.load(std::memory_order_acquire);
+    g.cooldown_left_ms =
+        (done != 0 && now - done < kCooldownMs) ? kCooldownMs - (now - done) : 0;
+    g.fault_session = drive_fault_session();
+    return g;
+}
+
+bool drive_gate_reset() {
+    // 오래 물려 있을 때만 푼다. 진짜로 도는 중에 풀면 게임 스레드가
+    // 쓰는 자리를 다른 요청이 덮어쓴다.
+    // 레인 어느 쪽이든 30초 넘게 물려 있으면 그것만 푸다.
+    bool stuck_pending = false;
+    for (int i = 0; i < kDriveLaneCount; ++i) {
+        const DriveGate lg = drive_gate_state(static_cast<DriveLane>(i));
+        if (lg.pending && lg.pending_age_ms > 30000) stuck_pending = true;
+    }
+    const DriveGate g = drive_gate_state(DriveLane::Item);
+    const bool stuck_running = g.running && g.running_age_ms > 30000;
+    if (!stuck_pending && !stuck_running) return false;
+    if (stuck_pending) {
+        for (int i = 0; i < kDriveLaneCount; ++i) {
+            const DriveGate lg = drive_gate_state(static_cast<DriveLane>(i));
+            if (lg.pending && lg.pending_age_ms > 30000) {
+                g_lane[i].has.store(false, std::memory_order_release);
+            }
+        }
+    }
+    if (stuck_running) {
+        // 실행 중이던 것을 푸는 것은 그 호출이 게임 안에서 돌아오지
+        // 않았다는 뜻이다. 그 스레드는 재귀 깊이가 박혀 다시 구동을
+        // 서비스하지 못한다. 숨기지 말고 표시한다.
+        g_running.store(false, std::memory_order_release);
+        g_drive_dead.store(true, std::memory_order_release);
+        log::errorf("구동 지점이 게임 안에서 멈췄다 - 게임을 다시 시작해야 한다");
+    }
+    log::warnf("구동 게이트를 손으로 풀었다 (대기 {}ms, 실행 {}ms)",
+               g.pending_age_ms, g.running_age_ms);
+    return true;
+}
+
+// 아래에 정의돼 있다.
+bool clan_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out);
+
+bool hire_species_ready() {
+    return g_reader != nullptr && g_orig_actor_getter != nullptr;
+}
+
+bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
+    if (!hire_species_ready() || session == 0 || char_key == 0) return false;
+    drop_stale_pending();
+    LaneSlot& lane = lane_of(DriveLane::Companion);
+    if (lane.has.load(std::memory_order_acquire)) return false;
+    if (g_running.load(std::memory_order_acquire)) return false;
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
+        return false;
+    }
+    if (g_drive_fault.load(std::memory_order_acquire) == session) return false;
+
+    lane.req = Pending{};
+    lane.req.kind = Kind::HireSpecies;
+    lane.req.session = session;
+    lane.req.key = char_key;
+    stamp_request(lane);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
+    log::infof("종 등록 요청을 걸었다 (키 {}) - 게임 스레드를 기다린다",
+               char_key);
     return true;
 }
 
@@ -1308,6 +1484,50 @@ bool gate_object(const mem::Reader& reader, std::uintptr_t session,
     return true;
 }
 
+// 용병단(MercenaryClanActorComponent). 문 객체와 같은 사슬인데 끝만
+// 다르다 - 문은 +0x130, 용병단은 +0x110.
+// 하나의 세션에서 사슬을 따라간다. 끊기면 false.
+bool clan_from_session(const mem::Reader& reader, std::uintptr_t session,
+                       std::uintptr_t* out) {
+    if (out == nullptr || session == 0) return false;
+    // 2454 역직렬화(0x2965662)가 쓰는 사슬 그대로다.
+    //   mov rcx, [세션+0x68] / mov rcx, [rcx+0x110]
+    // 문 객체(gate_object)가 쓰는 +0xA0 한 단계는 여기 없다 - 그것은
+    // 세션 vtable[0x160] 이 돌려주는 스포너를 흉내낸 것이고 용병단은
+    // 세션에서 바로 간다. 실측 2026-09-08으로 확인했다.
+    std::uintptr_t p = 0;
+    if (!reader.read(session + 0x68, &p, sizeof(p)) || p == 0) return false;
+    if (!reader.read(p + 0x110, &p, sizeof(p)) || p == 0) return false;
+    *out = p;
+    return true;
+}
+
+// 용병단(MercenaryClanActorComponent)을 찾는다.
+//
+// **세션마다 달려 있지 않다.** 실측 2026-09-08: 고른 세션에서는
+// [컴포넌트+0x110] 이 0 이었다(+0x130 의 문 객체는 살아 있었다).
+// 세션이 여섯 개인데 용병단은 그중 일부에만 붙는다. 그래서 준 세션을
+// 먼저 보고, 없으면 본 세션 전부를 훑는다.
+bool clan_object(const mem::Reader& reader, std::uintptr_t session,
+                 std::uintptr_t* out) {
+    if (out == nullptr) return false;
+    if (clan_from_session(reader, session, out)) return true;
+    for (int i = 0; i < kSeenCap; ++i) {
+        const std::uintptr_t s = g_sess[i];
+        if (s == 0 || s == session) continue;
+        if (clan_from_session(reader, s, out)) {
+            // 세션 0 으로 부른 명부 탐색(값싼 길)은 매 바퀴 오므로 조용히 간다 -
+            // 찾은 쪽(discover_clan)이 한 번 남긴다.
+            if (session != 0) {
+                log::infof("용병단은 세션 0x{:X} 에 있다 (고른 세션 0x{:X} 에는 없다)",
+                           s, session);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 void log_gate(const mem::Rtti& rtti, const mem::Reader& reader,
               std::uintptr_t session) {
     std::uintptr_t obj = 0;
@@ -1416,10 +1636,6 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
         }
     }
 
-    if (g_char_msg.handler == 0) {
-        resolve_cheat_message(rtti, reader, "SpawnCharacterCheatReq",
-                              &g_char_msg);
-    }
 
     if (g_endur_msg.handler == 0) {
         resolve_cheat_message(rtti, reader, "VaryEnduranceItemByCheatReq",
@@ -1432,40 +1648,6 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
 }
 
 const CheatMessage& spawn_message() { return g_spawn_msg; }
-
-bool spawn_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_spawn != nullptr) return true;
-    std::uint64_t rva = 0;
-    if (!find_spawn_ground_rva(rtti.image(), &rva)) {
-        log::warnf("바닥 스폰 함수를 찾지 못했다 - 패치로 밀렸을 수 있다");
-        return false;
-    }
-    g_spawn = reinterpret_cast<SpawnFn>(
-        reader.module_base() + static_cast<std::uintptr_t>(rva));
-    log::infof("바닥 스폰 함수 확보 (RVA 0x{:X})", rva);
-    return true;
-}
-
-bool spawn_trace_install() {
-    if (g_trace) return true;
-    if (g_spawn == nullptr) return false;
-    if (!mem::hook_init()) return false;
-    if (!mem::hook_install(reinterpret_cast<void*>(g_spawn), &det_spawn,
-                           reinterpret_cast<void**>(&g_orig_spawn))) {
-        log::errorf("바닥 떨구기 추적 설치 실패");
-        return false;
-    }
-    g_trace = true;
-    log::infof("바닥 떨구기 추적 설치 - 인벤토리에서 아이템을 버려 보세요");
-    return true;
-}
-
-void spawn_trace_remove() {
-    if (!g_trace) return;
-    mem::hook_remove(reinterpret_cast<void*>(g_spawn));
-    g_orig_spawn = nullptr;
-    g_trace = false;
-}
 
 bool thread_ready_for_spawn() {
     // gs:[0x58] 는 TEB 의 ThreadLocalStoragePointer 다. 작업 함수는
@@ -1480,9 +1662,6 @@ bool thread_ready_for_spawn() {
     return true;
 }
 
-bool char_spawn_ready() {
-    return g_char_msg.handler != 0 && g_orig_actor_getter != nullptr;
-}
 
 bool spawn_ready() {
     return g_spawn_msg.handler != 0 && g_orig_actor_getter != nullptr;
@@ -1561,130 +1740,75 @@ struct CharTrace {
     int ordinal = -1;             // record 의 u16 순번 (0xFFFF 면 없음)
 };
 
-bool trace_char_path(std::uintptr_t session, std::uint32_t key,
-                     std::uintptr_t base, CharTrace* t) {
-    using GetSpawnerFn = std::uintptr_t(__fastcall*)(void*);
-    using CtxFn = void(__fastcall*)(void*, void*);
-    using GateFn = bool(__fastcall*)(void*, void*);
-    using LookupFn = void*(__fastcall*)(void*, const std::uint32_t*);
-    __try {
-        t->step = 1;
-        void* sess = reinterpret_cast<void*>(session);
-        const std::uintptr_t svt = *reinterpret_cast<std::uintptr_t*>(sess);
-        auto get_spawner =
-            *reinterpret_cast<GetSpawnerFn*>(svt + 0x160);
-        t->spawner = get_spawner(sess);
-        if (t->spawner == 0) return true;
-
-        t->step = 2;
-        alignas(16) std::uint8_t buf[0x80]{};
-        // 2026-09-06: 0x1D48380 -> 0x1FB5B60 으로 고쳤다. 옛 주소를
-        // 부르다 매번 예외로 죽어 추적이 아무것도 못 보고 있었다.
-        // 작업 함수(0x2B6E530)가 스포너를 얻은 뒤 실제로 부르는 것이
-        // 이쪽이고, 그 결과 버퍼의 +0x10 이 0 이면 소환을 포기한다.
-        auto ctx = reinterpret_cast<CtxFn>(base + 0x1FB5B60);
-        ctx(reinterpret_cast<void*>(t->spawner), buf);
-        t->ctx_byte = buf[0x10];
-
-        t->step = 3;
-        const std::uintptr_t g68 =
-            *reinterpret_cast<std::uintptr_t*>(t->spawner + 0x68);
-        t->gate = (g68 != 0)
-                      ? *reinterpret_cast<std::uintptr_t*>(g68 + 0x130)
-                      : 0;
-        if (t->gate != 0) {
-            const std::uintptr_t gvt =
-                *reinterpret_cast<std::uintptr_t*>(t->gate);
-            auto gatefn = *reinterpret_cast<GateFn*>(gvt + 0x140);
-            t->gate_ok = gatefn(reinterpret_cast<void*>(t->gate), nullptr) ? 1
-                                                                           : 0;
-        }
-
-        t->step = 4;
-        const std::uintptr_t gobj =
-            *reinterpret_cast<std::uintptr_t*>(base + 0x6331360);
-        auto lookup = reinterpret_cast<LookupFn>(base + 0x31BBF0);
-        void* rec = lookup(reinterpret_cast<void*>(gobj + 0x68), &key);
-        t->record = reinterpret_cast<std::uintptr_t>(rec);
-        t->ordinal = (rec != nullptr) ? *reinterpret_cast<std::uint16_t*>(rec)
-                                      : -1;
-        t->step = 5;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+// 검사 자리를 부르기 전에 썽크와 본체 프롤로그를 읽어 본다. 읽기 실패와
+// 불일치를 로그에서 구분한다(리뷰 관찰 2026-09-11).
+static bool hire_check_site_ok(const mem::Reader& reader) {
+    const std::uintptr_t base = reader.module_base();
+    const std::uintptr_t site = base + kHireCheckRva;
+    std::uint8_t thunk[5]{};
+    if (!reader.read(site, thunk, sizeof(thunk))) {
+        log::warnf("종 등록 검사: RVA 0x{:X} 를 읽지 못했다 - 부르지 않는다",
+                   kHireCheckRva);
         return false;
     }
+    const std::uintptr_t body = hire_check_jmp_target(thunk, sizeof(thunk), site);
+    if (body == 0) {
+        log::warnf("종 등록 검사: RVA 0x{:X} 첫 바이트 {:02X} 가 jmp(E9) 가 아니다 - "
+                   "게임 갱신으로 밀린 자리라 부르지 않는다",
+                   kHireCheckRva, thunk[0]);
+        return false;
+    }
+    const std::uintptr_t body_rva = body >= base ? body - base : body;
+    std::uint8_t head[sizeof(kHireCheckBodyPrologue)]{};
+    if (!reader.read(body, head, sizeof(head))) {
+        log::warnf("종 등록 검사: 썽크 대상 RVA 0x{:X} 를 읽지 못했다 - 부르지 않는다",
+                   body_rva);
+        return false;
+    }
+    if (!hire_check_body_ok(head, sizeof(head))) {
+        log::warnf("종 등록 검사: 썽크 대상 RVA 0x{:X} 프롤로그가 다르다 ({:02X} {:02X} "
+                   "{:02X} {:02X} {:02X}) - 다른 함수의 썽크다, 부르지 않는다",
+                   body_rva, head[0], head[1], head[2], head[3], head[4]);
+        return false;
+    }
+    return true;
 }
 
-// 캐릭터(탈것·NPC 포함)를 월드에 소환한다. TLS 가 준비된 스레드에서만.
-// 아이템 바닥 스폰과 같은 꼴이다 - 처리기가 세션에서 스포너를 얻어
-// 처리하므로 우리는 세션과 키·위치만 넘긴다. 미시도 치트라 처음엔
-// 죽을 수 있으므로 SEH 로 감싼다.
-void run_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                    std::uint32_t b_in, std::uint8_t flag_in, const float pos[3],
-                    SpawnOutcome* out) {
+void run_hire_species(std::uintptr_t session, std::uint16_t key,
+                      SpawnOutcome* out) {
     SpawnOutcome o;
     if (out != nullptr) *out = o;
-    if (g_char_msg.handler == 0 || g_reader == nullptr) {
-        log::warnf("캐릭터 소환: 메시지 미해석");
-        return;
-    }
+    if (g_reader == nullptr) return;
 
-    std::uint32_t key = char_key;
-    std::uint32_t b = b_in;        // 뜻 미상 - UI 에서 바꿔 실험한다
-    std::uint8_t flag = flag_in;   // 뜻 미상 - UI 에서 바꿔 실험한다
-    float where[3] = {pos[0], pos[1], pos[2]};
-
-    log::infof("캐릭터 소환: 세션 0x{:X} 키 {} B {} 플래그 {} "
-               "위치 {:.1f},{:.1f},{:.1f}",
-               session, char_key, b, static_cast<int>(flag), where[0], where[1],
-               where[2]);
-
-    // 서버 세션이어야 한다 - 처리기가 세션 vtable +0x160 으로 스포너를
-    // 얻는다. 클라이언트 세션은 사슬이 끊겨 조용히 되돌아간다.
-    std::uintptr_t gate = 0;
-    if (!gate_object(*g_reader, session, &gate)) {
+    std::uintptr_t clan = 0;
+    if (!clan_object(*g_reader, session, &clan)) {
         o.no_actor = true;
-        log::warnf("캐릭터 소환: 세션 0x{:X} 사슬이 끊겼다 (클라이언트 세션)",
-                   session);
+        log::warnf("종 등록: 세션 0x{:X} 에서 용병단 사슬이 끊겼다", session);
         if (out != nullptr) *out = o;
         return;
     }
 
-    // 처리기가 조용히 실패하므로, 그 판정 경로를 그대로 재현해 어디서
-    // 빠지는지 먼저 로그로 남긴다.
-    // 추적 재현은 부르지 않는다. 게임 함수를 우리가 직접 호출하는
-    // 방식이라, 주소나 인자가 어긋나면 그 안에서 상태가 깨진다 -
-    // 실측 2026-09-06: 하드코딩된 주소가 밀린 것을 고쳐 다시 돌렸다가
-    // 게임이 통째로 죽었다. 예외 가드는 우리 스레드의 접근 위반만
-    // 잡을 뿐, 게임 함수 안에서 벌어진 일은 못 되돌린다.
-    //
-    // 이 관문 값을 보려면 재현하지 말고 그 함수에 **수동 훅**을 걸어
-    // 원본이 돌려준 것을 읽어야 한다(소환 작업 추적과 같은 방식).
-    // trace_char_path 는 코드로만 남겨 둔다.
-
-    std::uint64_t packet[8]{};
-    packet[0] = static_cast<std::uint64_t>(session);
-
+    auto fn = reinterpret_cast<HireSpeciesFn>(g_reader->module_base() +
+                                              kHireCheckRva);
+    // 고정 RVA 라 게임이 갱신되면 엉뚱한 자리를 부른다. 그 자리는 본체로 가는
+    // jmp 썽크(E9)다 - 썽크를 따라가 본체 프롤로그까지 맞아야 부른다(2026-09-11
+    // 2850 갱신 때 옛 자리가 함수 한복판이었다. E9 한 바이트만 보면 주변 E9 가
+    // 4.7% 라 다른 함수의 썽크에 떨어질 수 있다 - 리뷰 관찰).
+    if (!hire_check_site_ok(*g_reader)) {
+        if (out != nullptr) *out = o;
+        return;
+    }
+    std::uint32_t result = 0xFFFFFFFFu;
     o.called = true;
-    o.crashed = !call_charspawn_guarded(
-        reinterpret_cast<CharSpawnFn>(g_char_msg.handler),
-        reinterpret_cast<void*>(g_char_msg.descriptor), packet, &key, &b, where,
-        &flag, &o.seh, &o.fault);
+    o.crashed = !call_hire_species_guarded(fn, reinterpret_cast<void*>(clan),
+                                           &result, key, &o.seh, &o.fault);
     if (o.crashed) {
-        const std::uintptr_t base = g_reader->module_base();
-        const std::size_t size = g_reader->module_size();
-        log::errorf("캐릭터 소환이 게임 안에서 죽었다: 0x{:X} at 0x{:X} "
-                    "(RVA 0x{:X}) - 호출 스택 {}단",
-                    o.seh, o.fault, o.fault - base, g_char_crash_n);
-        for (USHORT i = 0; i < g_char_crash_n; ++i) {
-            const auto a =
-                reinterpret_cast<std::uintptr_t>(g_char_crash_frames[i]);
-            if (a >= base && a < base + size) {
-                log::infof("  [{}] 모듈+0x{:X}", i, a - base);
-            }
-        }
+        log::errorf("종 등록이 게임 안에서 죽었다: 0x{:X} at 0x{:X} (RVA 0x{:X})",
+                    o.seh, o.fault, o.fault - g_reader->module_base());
     } else {
-        log::infof("캐릭터 소환 끝 (처리기 경로)");
+        log::infof("등록 검사: 행 {} -> 코드 0x{:08X} ({}). 검사일 뿐이라 "
+                   "명부에는 들어가지 않는다",
+                   key, result, result == 0 ? "통과" : "거부");
     }
     if (out != nullptr) *out = o;
 }
@@ -1764,30 +1888,55 @@ void run_endurance(std::uintptr_t session, std::uint16_t a, std::uint16_t b,
 
 }  // namespace
 
+std::uintptr_t hire_check_jmp_target(const std::uint8_t* thunk, std::size_t n,
+                                     std::uintptr_t thunk_addr) {
+    if (thunk == nullptr || n < 5 || thunk[0] != 0xE9) return 0;
+    std::int32_t rel = 0;
+    std::memcpy(&rel, thunk + 1, sizeof(rel));
+    return thunk_addr + 5 + static_cast<std::intptr_t>(rel);
+}
+
+bool hire_check_body_ok(const std::uint8_t* body, std::size_t n) {
+    return body != nullptr && n >= sizeof(kHireCheckBodyPrologue) &&
+           std::memcmp(body, kHireCheckBodyPrologue,
+                       sizeof(kHireCheckBodyPrologue)) == 0;
+}
+
 bool endurance_ready() {
     return g_endur_msg.handler != 0 && g_reader != nullptr;
 }
 
 bool request_endurance(std::uintptr_t session, std::uint16_t a,
                        std::uint16_t b) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!endurance_ready() || session == 0) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Item);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
-    g_pending = Pending{};
-    g_pending.kind = Kind::Endurance;
-    g_pending.session = session;
-    g_pending.a = a;
-    g_pending.b = b;
-    g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.req = Pending{};
+    lane.req.kind = Kind::Endurance;
+    lane.req.session = session;
+    lane.req.a = a;
+    lane.req.b = b;
+    stamp_request(lane);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("내구도 요청을 걸었다");
     return true;
+}
+
+std::uint8_t clamp_socket_count(std::uint8_t requested, std::uint32_t room) {
+    if (room > static_cast<std::uint32_t>(kGiveMaxSockets)) {
+        room = static_cast<std::uint32_t>(kGiveMaxSockets);
+    }
+    if (static_cast<std::uint32_t>(requested) > room) {
+        return static_cast<std::uint8_t>(room);
+    }
+    return requested;
 }
 
 int clamp_count_to_stack(int count, std::uint32_t max_stack) {
@@ -1930,26 +2079,27 @@ bool resolve_message(const mem::Rtti& rtti, const mem::Reader& reader,
 
 bool request_message(std::uintptr_t session, const MessageDesc& msg,
                      const std::uint8_t* wire, std::size_t len) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (session == 0 || msg.deser == 0 || wire == nullptr) return false;
     if (len < 5 || len > kMessageWireMax) return false;
     if (g_reader == nullptr) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Companion);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
-    g_pending = Pending{};
-    g_pending.kind = Kind::Message;
-    g_pending.session = session;
-    g_pending.msg = msg;
-    std::memcpy(g_pending.wire, wire, len);
-    g_pending.wire_len = len;
-    g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
+    lane.req = Pending{};
+    lane.req.kind = Kind::Message;
+    lane.req.session = session;
+    lane.req.msg = msg;
+    std::memcpy(lane.req.wire, wire, len);
+    lane.req.wire_len = len;
+    stamp_request(lane);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
     log::infof("메시지 구동 요청을 걸었다 (ID {} 길이 {}) - 게임 스레드를 기다린다",
                msg.id, len);
     return true;
@@ -1957,107 +2107,110 @@ bool request_message(std::uintptr_t session, const MessageDesc& msg,
 
 bool request_give(std::uintptr_t session, std::uint32_t item_key,
                   std::int64_t count, const GiveExtras& extras) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!give_ready()) return false;
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     if (session == g_drive_fault.load(std::memory_order_acquire)) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Item);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
 
-    g_pending = Pending{};
-    g_pending.kind = Kind::Inventory;
-    g_pending.to_inventory = true;
-    g_pending.session = session;
-    g_pending.key = item_key;
-    g_pending.count = count;
-    // 2026-09-04 업데이트: 소켓만 막는다. 새 처리기(생성 함수 0x2A70000)
-    // 는 소켓수(+0x5E)>0 이면 오류 분기로 빠져 상태를 오염시켜 게임이
-    // 죽는다. 내구도(+0x2A)·연마(+0x1AE)는 정적으로 재확인했다 - 소켓수
-    // 0 인 정상 경로의 필드 복사 함수 0x234F930 이 그 오프셋을 그대로
-    // 읽는다(연마는 아이템 표 +0x2E8 상한으로 자름). 담금질도 그대로.
-    // 자세한 것은 specs/2026-09-04-game-update-break.md.
+    lane.req = Pending{};
+    lane.req.kind = Kind::Inventory;
+    lane.req.to_inventory = true;
+    lane.req.session = session;
+    lane.req.key = item_key;
+    lane.req.count = count;
+    // 소켓은 여기서 최종으로 자른다. 2026-09-04 에는 아예 0 으로 밀었는데,
+    // 그 판정("업데이트가 소켓 전달을 없앴다")은 생성 함수 0x2A70000 의
+    // **두 갈래 중 하나만 보고** 내린 오독이었다. 실제로는:
+    //   - 겹치는 아이템 갈래: 소켓수>0 이면 오류 (0x2A7022C)
+    //   - 장비 갈래:         `표 +0x238 >= 소켓수` 면 통과 (0x2A70341)
+    // 그리고 필드 복사 함수 0x234F930 은 지금도 `+0x40` 의 소켓 바이트를
+    // 옮긴다(레지스터 인덱스라 예전 오프셋 훑기에 안 잡혔다).
+    // 근거: specs/2026-09-07-socket-grant-unlock-research.md.
     GiveExtras safe = extras;
-    safe.socket_count = 0;
-    g_pending.extras = safe;
-    g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
-    log::infof("인벤토리 지급 요청을 걸었다 (담금질 {} 내구도 {} 연마 {}) -"
-               " 게임 스레드를 기다린다",
-               safe.temper, safe.endurance, safe.sharpness);
+    safe.socket_count =
+        clamp_socket_count(extras.socket_count, socket_room_for(item_key));
+    lane.req.extras = safe;
+    stamp_request(lane);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
+    log::infof("인벤토리 지급 요청을 걸었다 key={} count={} (담금질 {} 내구도 {}"
+               " 연마 {} 소켓 {}/{}) - 게임 스레드를 기다린다",
+               item_key, count, safe.temper, safe.endurance, safe.sharpness,
+               static_cast<int>(safe.socket_count),
+               static_cast<int>(extras.socket_count));
     return true;
 }
 
 bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
                    std::int64_t count, const float pos[3]) {
+    std::lock_guard<std::mutex> produce(g_produce_mutex);
     if (!spawn_ready() || pos == nullptr || g_reader == nullptr) {
         return false;
     }
     if (!spawn_args_ok(item_key, count) || session == 0) return false;
     drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
+    LaneSlot& lane = lane_of(DriveLane::Item);
+    if (lane.has.load(std::memory_order_acquire)) return false;
     if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
+    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
         return false;
     }
 
-    g_pending = Pending{};
-    g_pending.kind = Kind::Ground;
-    g_pending.session = session;
-    g_pending.key = item_key;
-    g_pending.count = count;
-    g_pending.pos[0] = pos[0];
-    g_pending.pos[1] = pos[1];
-    g_pending.pos[2] = pos[2];
-    g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
-    log::infof("바닥 스폰 요청을 걸었다 - 게임 스레드를 기다린다");
+    lane.req = Pending{};
+    lane.req.kind = Kind::Ground;
+    lane.req.session = session;
+    lane.req.key = item_key;
+    lane.req.count = count;
+    lane.req.pos[0] = pos[0];
+    lane.req.pos[1] = pos[1];
+    lane.req.pos[2] = pos[2];
+    stamp_request(lane);
+    lane.at.store(GetTickCount64(), std::memory_order_release);
+    lane.has.store(true, std::memory_order_release);
+    log::infof("바닥 스폰 요청을 걸었다 key={} count={} - 게임 스레드를 기다린다",
+               item_key, count);
     return true;
 }
 
-bool request_char_spawn(std::uintptr_t session, std::uint32_t char_key,
-                        std::uint32_t b, std::uint8_t flag, const float pos[3]) {
-    if (!char_spawn_ready() || pos == nullptr || g_reader == nullptr) {
-        return false;
-    }
-    if (char_key == 0 || session == 0) return false;
-    drop_stale_pending();
-    if (g_has_pending.load(std::memory_order_acquire)) return false;
-    if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - g_last_done.load(std::memory_order_acquire) <
-        kCooldownMs) {
-        return false;
-    }
 
-    g_pending = Pending{};
-    g_pending.kind = Kind::CharSpawn;
-    g_pending.session = session;
-    g_pending.key = char_key;
-    g_pending.count = b;      // CharSpawn 은 count 칸에 B 를 싣는다
-    g_pending.a = flag;       // a 칸에 플래그를 싣는다
-    g_pending.pos[0] = pos[0];
-    g_pending.pos[1] = pos[1];
-    g_pending.pos[2] = pos[2];
-    g_outcome = SpawnOutcome{};
-    g_pending_at.store(GetTickCount64(), std::memory_order_release);
-    g_has_pending.store(true, std::memory_order_release);
-    log::infof("캐릭터 소환 요청을 걸었다 (키 {} B {} 플래그 {}) -"
-               " 게임 스레드를 기다린다",
-               char_key, b, static_cast<int>(flag));
-    return true;
+bool drive_point_dead() {
+    return g_drive_dead.load(std::memory_order_acquire);
 }
 
-bool spawn_pending() {
-    return g_has_pending.load(std::memory_order_acquire);
+bool spawn_pending(DriveLane lane) {
+    return lane_of(lane).has.load(std::memory_order_acquire);
 }
 
-const SpawnOutcome& last_outcome() { return g_outcome; }
+SpawnOutcome last_outcome() {
+    std::lock_guard<std::mutex> lock(g_outcome_mutex);
+    return g_outcome;
+}
+
+std::uint32_t last_request_serial() { return t_last_serial; }
+
+void short_class_name(const char* mangled, char* out, std::size_t n) {
+    if (n == 0) return;
+    if (mangled == nullptr || mangled[0] == 0) {
+        std::snprintf(out, n, "%s", "(확인 중)");
+        return;
+    }
+    const char* p = std::strstr(mangled, ".?AV");
+    const char* s = (p != nullptr) ? p + 4 : mangled;
+    // "@pa@@" 같은 망글 꼬리는 사람 눈엔 잡음이다.
+    std::size_t i = 0;
+    while (s[i] != 0 && s[i] != '@' && i + 1 < n) {
+        out[i] = s[i];
+        ++i;
+    }
+    out[i] = 0;
+}
 
 
 }  // namespace cdtb::game

@@ -45,11 +45,14 @@ add_library(cdtb_core STATIC
     src/mem/image_dump.cpp
     src/mem/watchpoint.cpp
     src/core/log.cpp
+    src/core/crashlog.cpp
     src/core/config.cpp
     src/core/guard.cpp
+    src/core/vk_name.cpp
+    src/core/file_version.cpp
 )
 target_include_directories(cdtb_core PUBLIC src)
-target_link_libraries(cdtb_core PUBLIC minhook)
+target_link_libraries(cdtb_core PUBLIC minhook version)
 
 # -------------------------------------------------------------------- DLL
 add_library(cdtoybox SHARED
@@ -63,11 +66,21 @@ add_library(cdtoybox SHARED
     src/render/icon_atlas.cpp
     src/render/grant_panel.cpp
     src/render/item_style.cpp
+    src/render/filter_bar.cpp
+    src/render/gem_picker.cpp
     src/render/stash_panel.cpp
+    src/render/stash_queue.cpp
     src/render/inventory_panel.cpp
     src/render/roster_panel.cpp
     src/render/equip_panel.cpp
     src/render/player_panel.cpp
+    src/render/notice_state.cpp
+    src/render/notice.cpp
+    src/render/confirm_state.cpp
+    src/render/confirm.cpp
+    src/render/gates.cpp
+    src/render/layout_table.cpp
+    src/render/layout.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -76,6 +89,7 @@ add_library(cdtoybox SHARED
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/actors.cpp
+    src/game/clan.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -84,8 +98,12 @@ add_library(cdtoybox SHARED
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/specguard.cpp
+    src/game/spawnguard.cpp
+    src/game/spec_heal.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
+    src/input/filter.cpp
     src/proxy/exports.def
 )
 set_target_properties(cdtoybox PROPERTIES
@@ -114,12 +132,20 @@ add_executable(cdtb_tests
     tests/icon_map_tests.cpp
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
+    tests/specguard_tests.cpp
     tests/stash_tests.cpp
+    tests/stash_queue_tests.cpp
     tests/roster_tests.cpp
     tests/companion_tests.cpp
     tests/actors_tests.cpp
     tests/image_dump_tests.cpp
+    tests/ui_state_tests.cpp
+    tests/layout_tests.cpp
+    tests/core_helpers_tests.cpp
+    tests/table_sort_tests.cpp
+    tests/input_filter_tests.cpp
     src/input/cursor.cpp
+    src/input/filter.cpp
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/localization.cpp
@@ -130,6 +156,11 @@ add_executable(cdtb_tests
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/actors.cpp
+    src/game/clan.cpp
+    src/render/notice_state.cpp
+    src/render/stash_queue.cpp
+    src/render/confirm_state.cpp
+    src/render/layout_table.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -157,6 +188,7 @@ add_executable(cdtb_probe
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/actors.cpp
+    src/game/clan.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -165,6 +197,9 @@ add_executable(cdtb_probe
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/specguard.cpp
+    src/game/spawnguard.cpp
+    src/game/spec_heal.cpp
 )
 target_include_directories(cdtb_probe PRIVATE tools/probe)
 target_link_libraries(cdtb_probe PRIVATE cdtb_core psapi)

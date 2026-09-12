@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mem/reader.h"
@@ -99,9 +101,39 @@ public:
     };
     std::vector<Ref> find_refs(std::uintptr_t target, std::size_t max) const;
 
+    // 이미지 색인을 미리 만든다. 안 부르면 첫 조회에서 저절로 만들어지므로
+    // 부를 의무는 없다 - 만드는 데 몇 초 걸리는 것을 로그로 보고 싶을 때,
+    // 그리고 그 비용을 첫 조회가 아니라 여기로 옮기고 싶을 때 쓴다.
+    // 만들었으면 true(이미 있었으면 false).
+    bool build_index() const;
+
+    struct IndexStats {
+        std::size_t types = 0;     // `.?AV...@@` 타입 서술자 수
+        std::size_t vtables = 0;   // 클래스가 붙은 vtable 수
+        bool ready = false;
+    };
+    IndexStats index_stats() const;
+
 private:
     std::vector<std::uintptr_t> instances_of_vtable(std::uintptr_t vtable,
                                                     std::size_t max) const;
+
+    // --- 이미지 색인 (한 번만 만든다) ---
+    //
+    // `image_` 는 한 번 읽고 안 바뀌므로 아래 둘은 **이미지의 순수
+    // 함수**다. 예전에는 조회마다 다시 만들었다: `find_types` 가 350MB 를
+    // **1바이트씩**(약 3.7억 회) 훑고, `instances_of_vtable` 도 이미지
+    // 전체를 8바이트씩 훑어 `class_of_vtable` 을 불렀다. 탐색(아이템표·
+    // 인벤토리·로스터·액터매니저…)마다 그 짓을 되풀이해서 시작이 분 단위로
+    // 걸렸다 - 실측 2026-09-08: 한 번의 탐색 통과에 2분 30초.
+    //
+    // 색인은 이미지를 **한 번** 훑어 만들고 그 뒤로는 전부 여기서 찾는다.
+    void ensure_index() const;
+
+    mutable std::once_flag index_once_;
+    mutable std::vector<TypeInfo> types_;                 // 이름 순 아님
+    mutable std::vector<std::pair<std::uintptr_t, std::size_t>> vtable_cls_;
+    // (vtable 주소, types_ 색인). 주소 오름차순이라 이분 탐색이 된다.
 
     const Reader& r_;
     std::vector<std::uint8_t> image_;

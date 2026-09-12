@@ -11,23 +11,34 @@
 #include <string>
 #include <vector>
 
+#include "core/file_version.h"
 #include "core/guard.h"
 #include "core/log.h"
+#include "core/slowlog.h"
+#include "core/vk_name.h"
 #include "input/cursor.h"
 #include "input/wndproc.h"
+#include "render/colors.h"
 #include "render/d3d12_hook.h"
 #include "render/diagnostics.h"
 #include "render/icon_atlas.h"
+#include "render/layout.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
 #include "render/item_panel.h"
 #include "render/roster_panel.h"
 #include "render/equip_panel.h"
 #include "render/player_panel.h"
+#include "render/notice.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
+#include "game/actors.h"
+#include "game/clan.h"
 #include "game/freecam.h"
+#include "game/items.h"
 #include "game/player.h"
+#include "game/specguard.h"
+#include "game/spawnguard.h"
 #include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
@@ -71,6 +82,7 @@ std::string self_dir_utf8() {
 }
 
 Config g_cfg;
+std::wstring g_ini_path;
 bool g_visible = false;
 bool g_ready = false;
 
@@ -348,59 +360,108 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 // 창마다 ✕ 를 달아 치울 수 있게 했으면, **다시 여는 자리**가 반드시
 // 있어야 한다. 없으면 한 번 닫은 창은 영영 못 본다. 그 자리가 본창
 // 이고, 그래서 본창은 닫히지 않는다.
-struct WindowFlags {
-    bool items = true;
-    bool grant = true;
-    bool stash = true;
-    bool inventory = true;
-    bool roster = false;   // 탈것·용병·캐릭터 뷰어. 필요할 때 연다
-    bool equip = false;    // 장비 소켓/연마 에디터. 필요할 때 연다
-    bool player = false;   // 플레이어 치트(Godmode 등). 필요할 때 연다
-    bool camera = false;   // 개발 진단이다. 필요할 때만 연다
-};
-WindowFlags g_show;
+// 켜 둔 창. 초기값은 배치 표의 default_open 이다.
+bool g_show[cdtb::render::kWinCount] = {};
+bool g_show_inited = false;
+
+bool& shown(cdtb::render::Win w) {
+    return g_show[static_cast<int>(w)];
+}
+
+void init_show_flags() {
+    if (g_show_inited) return;
+    for (const auto& s : cdtb::render::window_specs()) {
+        shown(s.id) = s.default_open;
+    }
+    g_show_inited = true;
+}
 
 // 켜 둔 창만 그린다. ✕ 를 누르면 ImGui 가 플래그를 내려 주므로
 // 다음 프레임부터 안 그린다.
 void draw_windows() {
-    if (g_show.items) cdtb::render::draw_item_panel(&g_show.items);
-    if (g_show.grant) cdtb::render::draw_grant_panel(&g_show.grant);
-    if (g_show.stash) cdtb::render::draw_stash_panel(&g_show.stash);
-    if (g_show.inventory) {
-        cdtb::render::draw_inventory_panel(&g_show.inventory);
+    using cdtb::render::Win;
+    if (shown(Win::Items)) cdtb::render::draw_item_panel(&shown(Win::Items));
+    if (shown(Win::Grant)) cdtb::render::draw_grant_panel(&shown(Win::Grant));
+    if (shown(Win::Stash)) cdtb::render::draw_stash_panel(&shown(Win::Stash));
+    if (shown(Win::Inventory)) {
+        cdtb::render::draw_inventory_panel(&shown(Win::Inventory));
     }
-    if (g_show.roster) cdtb::render::draw_roster_panel(&g_show.roster);
-    if (g_show.equip) cdtb::render::draw_equip_panel(&g_show.equip);
-    if (g_show.player) cdtb::render::draw_player_panel(&g_show.player);
-    if (g_show.camera) cdtb::render::draw_camera_panel(&g_show.camera);
+    if (shown(Win::Roster)) cdtb::render::draw_roster_panel(&shown(Win::Roster));
+    if (shown(Win::Equip)) cdtb::render::draw_equip_panel(&shown(Win::Equip));
+    if (shown(Win::Player)) cdtb::render::draw_player_panel(&shown(Win::Player));
+    if (shown(Win::Camera)) cdtb::render::draw_camera_panel(&shown(Win::Camera));
+}
+
+// 게임 exe 의 버전. 한 번 읽어 둔다 - 매 프레임 자원을 뒤질 이유가 없다.
+const std::string& game_version_line() {
+    static std::string line = [] {
+        wchar_t path[MAX_PATH]{};
+        // 실패하거나 잘리면 경로가 온전하지 않다. 빈 경로로 두면 아래가
+        // 실패해 "(버전 확인 불가)" 로 떨어진다.
+        const DWORD n = ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) path[0] = 0;
+        std::string v;
+        return cdtb::file_version_string(path, &v)
+                   ? "Crimson Desert " + v
+                   : std::string("Crimson Desert (버전 확인 불가)");
+    }();
+    return line;
 }
 
 void draw_ui() {
-    ImGui::SetNextWindowPos(ImVec2(60, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 260), ImGuiCond_FirstUseEver);
-    ImGui::Begin("CDToybox");
+    init_show_flags();
+    cdtb::render::begin_window(cdtb::render::Win::Main, nullptr);
 
     // 창 목록이 먼저다. 예전에는 FPS 와 개발 진단이 본창의 전부라,
-    // 무슨 창이 있는지 알 방법이 아예 없었다.
+    // 무슨 창이 있는지 알 방법이 아예 없었다. 글자는 배치 표의 label 이라
+    // 창 제목과 어긋날 수 없다. 2열 격자.
     ImGui::TextUnformatted("창");
-    ImGui::Checkbox("아이템 목록", &g_show.items);
-    ImGui::SameLine();
-    ImGui::Checkbox("아이템 지급", &g_show.grant);
-    ImGui::Checkbox("보관함", &g_show.stash);
-    ImGui::SameLine();
-    ImGui::Checkbox("인벤토리", &g_show.inventory);
-    ImGui::Checkbox("탈것·용병·캐릭터", &g_show.roster);
-    ImGui::Checkbox("장비 소켓·연마", &g_show.equip);
-    ImGui::SameLine();
-    ImGui::Checkbox("플레이어 치트", &g_show.player);
-    ImGui::Checkbox("카메라 분석", &g_show.camera);
+    int n = 0;
+    for (const auto& s : cdtb::render::window_specs()) {
+        if (s.id == cdtb::render::Win::Main) continue;
+        if ((n & 1) == 1) ImGui::SameLine(200.0f);
+        ImGui::Checkbox(s.label, &shown(s.id));
+        // 게임 메모리에 쓰는 창은 표식을 단다. "(쓰기)" 는 200px 열을 넘어 옆 열과
+        // 겹쳤다 - 한 글자로 줄이고 뜻은 툴팁과 아래 범례가 말한다.
+        const bool writes = s.id == cdtb::render::Win::Roster ||
+                            s.id == cdtb::render::Win::Equip ||
+                            s.id == cdtb::render::Win::Player ||
+                            s.id == cdtb::render::Win::Inventory;
+        if (writes) {
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("이 창은 게임 메모리를 바꿉니다");
+            }
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::TextDisabled("*");
+        }
+        ++n;
+    }
+    ImGui::TextDisabled("* 게임 메모리를 바꾸는 창");
+
+    // 보관함 창을 닫아도 일괄 지급은 stash_tick 이 이어 간다 - 진행을 여기서 보인다.
+    std::size_t q_done = 0, q_total = 0;
+    if (!cdtb::render::stash_body_visible() &&
+        cdtb::render::stash_queue_progress(&q_done, &q_total)) {
+        ImGui::TextColored(cdtb::render::col::kBusy, "보관함 지급 중 %zu / %zu",
+                           q_done, q_total);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("중단")) cdtb::render::stash_queue_cancel();
+    }
+    // 창이 닫혀 있거나 접혀 있으면 완료·세션 없음·중단 알림도 여기서만 볼 수 있다.
+    if (!cdtb::render::stash_body_visible()) {
+        cdtb::render::notice_draw(cdtb::render::stash_notice());
+    }
 
     ImGui::Separator();
-    ImGui::TextDisabled("Insert 토글 · End 비활성화 · F9 프리카메라");
-    ImGui::Text("Crimson Desert 2.00.01 / %.1f FPS", ImGui::GetIO().Framerate);
+    // 안내는 설정값에서 만든다. 키를 옮기고 안내를 안 고쳐 거짓이 된 적이 있다.
+    char kb1[16], kb2[16];
+    ImGui::TextDisabled("%s 토글 · %s 비활성화",
+                        cdtb::vk_name(g_cfg.toggle_key, kb1, sizeof(kb1)),
+                        cdtb::vk_name(g_cfg.unload_key, kb2, sizeof(kb2)));
+    ImGui::Text("%s / %.1f FPS", game_version_line().c_str(),
+                ImGui::GetIO().Framerate);
     if (!cdtb::guard::is_safe_to_modify()) {
-        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.35f, 1.0f),
-                           "쓰기 기능이 잠겨 있습니다");
+        ImGui::TextColored(cdtb::render::col::kWarn, "쓰기 기능이 잠겨 있습니다");
     }
 
     if (!g_cfg.show_diagnostics) {
@@ -413,13 +474,14 @@ void draw_ui() {
     ImGui::Separator();
 
     if (!d.error.empty()) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "오류: %s",
-                           d.error.c_str());
+        // 진단이 죽었다고 창 8개까지 숨기면 안 된다(그랬다 - 진단은 기본 켜짐).
+        ImGui::TextColored(cdtb::render::col::kBad, "오류: %s", d.error.c_str());
         ImGui::End();
+        draw_windows();
         return;
     }
 
-    if (ImGui::CollapsingHeader("모듈", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("모듈")) {
         ImGui::Text("베이스    0x%llX",
                     static_cast<unsigned long long>(d.game_base));
         ImGui::Text("이미지    %.1f MB",
@@ -434,13 +496,12 @@ void draw_ui() {
         ImGui::Unindent();
     }
 
-    if (ImGui::CollapsingHeader("스캐너 진단",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("스캐너 진단")) {
         const bool exact = d.self_marker_found &&
                            d.self_marker_found_at == d.self_marker_expected;
-        ImGui::TextColored(exact ? ImVec4(0.4f, 1, 0.4f, 1)
-                                 : ImVec4(1, 0.4f, 0.4f, 1),
-                           "자기 모듈 마커: %s", exact ? "일치" : "불일치");
+        ImGui::TextColored(
+            exact ? cdtb::render::col::kOk : cdtb::render::col::kBad,
+            "자기 모듈 마커: %s", exact ? "일치" : "불일치");
         ImGui::Text("  기대 0x%llX / 발견 0x%llX",
                     static_cast<unsigned long long>(d.self_marker_expected),
                     static_cast<unsigned long long>(d.self_marker_found_at));
@@ -458,7 +519,33 @@ namespace cdtb::overlay {
 
 using namespace detail;
 
-void set_config(const Config& cfg) { g_cfg = cfg; }
+void set_config(const Config& cfg, const std::wstring& ini_path) {
+    g_cfg = cfg;
+    g_ini_path = ini_path;
+}
+
+void show_window(cdtb::render::Win w) {
+    init_show_flags();
+    shown(w) = true;
+}
+
+std::vector<Config::SocketCapPart> socket_cap_setting() {
+    return g_cfg.socket_cap_parts;
+}
+
+bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts) {
+    for (const auto& p : parts) {
+        if (p.want < 0 || p.want > static_cast<int>(cdtb::game::kSocketSlotMax)) {
+            return false;
+        }
+    }
+    g_cfg.socket_cap_parts = parts;
+    // 부위 목록을 한 번이라도 저장하면 (구) 일괄 설정은 뜻을 잃는다.
+    // 둘이 남아 있으면 다음 실행에 어느 쪽이 걸릴지 헷갈린다.
+    g_cfg.socket_cap = 0;
+    if (g_ini_path.empty()) return false;
+    return cdtb::config::save(g_ini_path, g_cfg);
+}
 
 bool is_visible() {
     // 그리기가 꺼졌으면 열려 있다고 하지 않는다. 그래야 wndproc 이
@@ -507,6 +594,11 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_visible = false;
         // 훅을 떼기 전에 OS 커서를 원래 상태로 돌린다. 순서가 바뀌면
         // 되돌릴 원본 함수가 없다.
+        // 해체 뒤 다시 켤 때 옛 큐가 그 자리에서 이어지지 않게 접는다(로그 한 줄).
+        if (cdtb::render::stash_queue_progress(nullptr, nullptr)) {
+            cdtb::render::stash_queue_cancel();
+        }
+        cdtb::render::stash_flush();   // 해체 전에 저장 대기 중인 보관함 변경을 쓴다
         input::cursor_guard_sync(false);
         input::cursor_guard_remove();
         teardown(queue);
@@ -522,6 +614,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         g_frame_stage = kStageInitialize;
         if (!initialize(sc, queue)) {
             log::errorf("오버레이 초기화 실패 - 만든 것만 해체하고 중단한다");
+            // 커서 가드가 "열림" 에 갇히지 않게 - 이 반환은 아래 cursor_guard_sync 에
+            // 못 미치므로, 열려 있던 가드는 여기서 닫는다(리뷰 H4). is_visible 은
+            // g_ready 가 꺼져 이미 false 라 디투어는 통과 중이다.
+            input::cursor_guard_sync(false);
             teardown(queue);
             g_frame_stage = kStageIdle;
             return;
@@ -543,6 +639,62 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     {
         const mem::LocalReader reader;
         cdtb::game::player_apply(reader);
+        // 명령 파일 스레드가 부탁한 근처 액터 갱신은 여기(렌더 스레드)서 한다.
+        cdtb::game::live_actors_tick(reader);
+        // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
+        // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
+        cdtb::game::specguard_install(reader);
+        cdtb::game::spawnguard_install(reader);
+        // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
+        // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
+        // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
+        // 중 큐·저장이 멈췄다. 가드 설치 뒤에 둔다 - 큐의 지급이 가드보다 먼저 돌지
+        // 않게(위 주석의 규약).
+        cdtb::render::stash_tick();
+
+        // 획득 뒤처리. 2338 은 명부 레코드에 그 순간의 야생 액터
+        // 핸들을 박아 두는데, 그 액터가 사라져도 값은 남아 게임이
+        // "이미 소환됨" 으로 오판한다 - 그러면 그 개체는 소환도
+        // 해제도 안 된다(사용자 증상, 실측 2026-09-09). 지금까지
+        // 지역 이동·세이브 로드로만 풀리던 그것이다. 가시성과
+        // 무관하게 돌아야 오버레이를 닫아 둠 때도 풀린다.
+        if (const mem::Rtti* rtti = cdtb::game::clan_rtti()) {
+            cdtb::log::Slow slow_c("획득 뒤처리", 8.0);
+            cdtb::game::tick_hire_cleanup(*rtti, reader);
+        }
+
+        // 소켓 상한은 아이템표에 거는 것이라 **매 실행 다시 걸어야 한다**
+        // (표는 exe 에서 새로 읽힌다). 설정이 켜져 있으면 표가 올라온
+        // 뒤 한 번만 건다. 여기서 하는 이유는 specguard 와 같다 - 분석
+        // 루프는 목적을 이루면 빠져나가므로 걸 자리가 없다.
+        // 표가 올라온 그 순간 한 번만 본다. 설정이 꺼져 있어도 그때
+        // 끝낸다 - 안 그러면 나중에 화면에서 체크박스를 켜는 순간
+        // 여기서도 걸려, "다음 실행부터" 라는 문구와 어긋난다.
+        static bool s_cap_done = false;
+        if (!s_cap_done && cdtb::game::items_ready()) {
+            s_cap_done = true;
+            std::vector<cdtb::game::SocketCapRule> rules;
+            for (const auto& p : g_cfg.socket_cap_parts) {
+                rules.push_back(cdtb::game::SocketCapRule{
+                    cdtb::game::SocketPart{
+                        static_cast<std::uint8_t>(p.category),
+                        static_cast<std::uint16_t>(p.equip_type)},
+                    static_cast<std::uint32_t>(p.want)});
+            }
+            // (구) 일괄 설정: 부위 목록이 없을 때만, 원래 소켓이 있는
+            // 부위에만 건다. 예전 ini 를 그대로 읽어 주기 위한 것이다.
+            if (rules.empty() && g_cfg.socket_cap > 0) {
+                for (const auto& info : cdtb::game::socket_parts()) {
+                    if (info.with_socket == 0) continue;
+                    rules.push_back(cdtb::game::SocketCapRule{
+                        info.part,
+                        static_cast<std::uint32_t>(g_cfg.socket_cap)});
+                }
+            }
+            if (!rules.empty()) {
+                cdtb::game::socket_cap_apply(reader, rules);
+            }
+        }
     }
 
     if (!g_visible) { g_frame_stage = kStageIdle; return; }
@@ -569,6 +721,53 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    // 게임의 키 상태 조회를 거를지 - 글자 입력칸에 포커스가 있을 때만.
+    input::cursor_guard_set_want_keyboard(ImGui::GetIO().WantCaptureKeyboard);
+
+    // 진단(굳음 보고 2026-09-12, 리뷰 H1): 열린 동안 OS 포인터는 창 안에서 움직이는데
+    // ImGui 좌표가 멎으면 한 번 남긴다 - 소프트 커서가 굳어 보이는 원인 후보(포커스
+    // 창이 바뀌어 백엔드의 GetCursorPos 대체 경로가 안 돌거나, 추적 영역이 꺼짐).
+    // 2초마다 견주고, 1초 넘게 안 그린 뒤(닫혔다 다시 열림)엔 기준을 새로 잡는다.
+    {
+        static POINT s_os{};
+        static ImVec2 s_im{};
+        static ULONGLONG s_frame_ms = 0, s_cmp_ms = 0;
+        static bool s_logged = false;
+        const ULONGLONG now = ::GetTickCount64();
+        const ImGuiIO& io = ImGui::GetIO();
+        if (now - s_frame_ms > 1000) {
+            s_logged = false;
+            s_cmp_ms = now;
+            ::GetCursorPos(&s_os);
+            s_im = io.MousePos;
+        }
+        s_frame_ms = now;
+        if (now - s_cmp_ms >= 2000) {
+            POINT os{};
+            ::GetCursorPos(&os);
+            const ImVec2 im = io.MousePos;
+            const HWND hwnd =
+                static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw);
+            POINT client = os;
+            RECT rc{};
+            const bool inside = hwnd != nullptr && ::ScreenToClient(hwnd, &client) &&
+                                ::GetClientRect(hwnd, &rc) && ::PtInRect(&rc, client);
+            const bool os_moved = os.x != s_os.x || os.y != s_os.y;
+            const bool im_moved = im.x != s_im.x || im.y != s_im.y;
+            if (!s_logged && inside && os_moved && !im_moved) {
+                log::warnf("오버레이 포인터 진단: OS 커서는 창 안에서 움직였는데 ImGui 좌표가 "
+                           "멎었다 (ImGui {},{} / OS 클라 {},{} / 포그라운드 {} / "
+                           "WantCaptureMouse {})",
+                           im.x, im.y, client.x, client.y,
+                           ::GetForegroundWindow() == hwnd, io.WantCaptureMouse);
+                s_logged = true;
+            }
+            s_os = os;
+            s_im = im;
+            s_cmp_ms = now;
+        }
+    }
 
     g_frame_stage = kStageDrawUi;
     draw_ui();

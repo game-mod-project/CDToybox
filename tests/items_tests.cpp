@@ -1,6 +1,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/config.h"
 #include "fake_memory.h"
 #include "game/items.h"
 #include "game/localization.h"
@@ -360,4 +361,198 @@ TEST(build_item_catalog_carries_the_temper_cap) {
     CHECK(!cat.empty());
     if (cat.empty()) return;
     CHECK_EQ(cat[0].max_temper, std::uint32_t{10});
+}
+
+// --- 소켓 -------------------------------------------------------------
+
+TEST(read_item_table_reads_the_equip_type_at_0x42) {
+    Fixture f;
+    f.mem.put_u16(Fixture::kRecords + 0x42, 7);
+
+    std::vector<ItemEntry> items;
+    CHECK(cdtb::game::read_item_table(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                      &items, 0));
+    CHECK(!items.empty());
+    if (items.empty()) return;
+    CHECK_EQ(items[0].equip_type, std::uint16_t{7});
+}
+
+TEST(build_item_catalog_carries_the_socket_cap_and_equip_type) {
+    Fixture f;
+    f.mem.put_u32(Fixture::kRecords + 0x238, 3);
+    f.mem.put_u16(Fixture::kRecords + 0x42, 7);
+    f.mem.put_u32(Fixture::kRecords + 0x18, 1);   // 안 겹치는 아이템
+
+    std::vector<cdtb::game::ItemCatalogEntry> cat;
+    LocSystem sys;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.mem.heap_addr(Fixture::kMgr),
+                                         sys, &cat));
+    CHECK(!cat.empty());
+    if (cat.empty()) return;
+    CHECK_EQ(cat[0].max_sockets, std::uint32_t{3});
+    CHECK_EQ(cat[0].equip_type, std::uint16_t{7});
+}
+
+// 게임의 규칙(0x2A70000 · 0xF090BC0)을 그대로 옮긴 것이다.
+// specs/2026-09-07-socket-grant-unlock-research.md 3.1 절.
+
+TEST(socket_room_gives_the_table_cap_for_equipment) {
+    CHECK_EQ(cdtb::game::socket_room(3, 1, 7), std::uint32_t{3});
+    // 겹치지 않는 아이템은 max_stack 0 으로도 온다.
+    CHECK_EQ(cdtb::game::socket_room(5, 0, 7), std::uint32_t{5});
+}
+
+TEST(socket_room_refuses_when_the_item_is_not_equipment) {
+    // _equipTypeInfo == 0xFFFF. 판별자의 마지막 줄이 이것이다.
+    CHECK_EQ(cdtb::game::socket_room(3, 1, 0xFFFF), std::uint32_t{0});
+}
+
+TEST(socket_room_refuses_a_stacking_item) {
+    CHECK_EQ(cdtb::game::socket_room(3, 99, 7), std::uint32_t{0});
+}
+
+TEST(socket_room_refuses_when_the_table_gives_no_sockets) {
+    CHECK_EQ(cdtb::game::socket_room(0, 1, 7), std::uint32_t{0});
+}
+
+// --- 소켓 상한 올리기 대상 고르기 ---------------------------------------
+//
+// 아이템표(`ItemInfo+0x238`)가 화면·사용 칸 수를 정한다(실측 2026-09-08).
+// 올릴 것만 고른다.
+
+TEST(socket_cap_target_takes_equipment_below_the_wanted_cap) {
+    CHECK(cdtb::game::socket_cap_target(3, 7, 5));
+    CHECK(cdtb::game::socket_cap_target(1, 7, 2));
+}
+
+TEST(socket_cap_target_skips_items_that_are_not_equipment) {
+    CHECK(!cdtb::game::socket_cap_target(3, 0xFFFF, 5));
+}
+
+TEST(socket_cap_target_takes_gear_designed_without_sockets) {
+    // 원래 0칸인 장비도 대상이다. 망토·귀걸이·목걸이·반지도 레코드에
+    // 5칸 벡터가 이미 있어서 표 상한만 올리면 소켓이 생긴다
+    // (실측 2026-09-08: 마녀의 반지 0 -> 2칸). 어느 부위를 건드릴지는
+    // 규칙이 정하지 여기서 막을 일이 아니다.
+    CHECK(cdtb::game::socket_cap_target(0, 7, 5));
+}
+
+TEST(socket_cap_target_never_lowers_a_cap) {
+    CHECK(!cdtb::game::socket_cap_target(5, 7, 5));
+    CHECK(!cdtb::game::socket_cap_target(5, 7, 3));
+}
+
+TEST(socket_cap_target_does_nothing_when_no_value_is_wanted) {
+    // 규칙에 없는 부위는 want 0 으로 온다.
+    CHECK(!cdtb::game::socket_cap_target(0, 7, 0));
+    CHECK(!cdtb::game::socket_cap_target(3, 7, 0));
+}
+
+TEST(socket_cap_apply_does_nothing_without_a_catalog) {
+    // 표가 없으면 쓸 곳도 모른다. 게임 메모리를 안 건드리고 빠진다.
+    const Fixture f;
+    const std::vector<cdtb::game::SocketCapRule> rules{
+        {cdtb::game::SocketPart{24, 4}, 5}};
+    const auto r = cdtb::game::socket_cap_apply(f.mem, rules);
+    CHECK(!r.ok);
+    CHECK_EQ(r.changed, 0);
+}
+
+TEST(socket_cap_apply_refuses_a_value_past_the_vector) {
+    // 소켓 벡터는 다섯 칸이다. 한 부위라도 그 위면 통째로 거절한다 -
+    // 절반만 걸린 상태가 제일 나쁘다.
+    const Fixture f;
+    const std::vector<cdtb::game::SocketCapRule> bad{
+        {cdtb::game::SocketPart{24, 4}, 6}};
+    CHECK(!cdtb::game::socket_cap_apply(f.mem, bad).ok);
+}
+
+TEST(socket_cap_restore_reports_nothing_when_it_was_never_raised) {
+    const Fixture f;
+    const auto r = cdtb::game::socket_cap_restore(f.mem);
+    CHECK(!r.ok);
+    CHECK_EQ(r.changed, 0);
+    CHECK(!cdtb::game::socket_cap_active());
+    CHECK(cdtb::game::socket_cap_rules().empty());
+}
+
+TEST(socket_parts_is_empty_without_a_catalog) {
+    CHECK(cdtb::game::socket_parts().empty());
+}
+
+// --- 설정 파일의 부위 표기 ---------------------------------------------
+//
+// `분류:장비타입=칸수` 를 쉼표로 잇는다. 한 항목이 어긋나도 나머지는
+// 살린다 - 파일 한 줄 때문에 설정을 통째로 잃을 이유가 없다.
+
+TEST(config_reads_socket_cap_parts) {
+    const auto p = cdtb::config::parse_socket_cap_parts("3:5=5,24:4=2");
+    CHECK_EQ(p.size(), std::size_t{2});
+    if (p.size() < 2) return;
+    CHECK_EQ(p[0].category, 3);
+    CHECK_EQ(p[0].equip_type, 5);
+    CHECK_EQ(p[0].want, 5);
+    CHECK_EQ(p[1].category, 24);
+    CHECK_EQ(p[1].equip_type, 4);
+    CHECK_EQ(p[1].want, 2);
+}
+
+TEST(config_drops_a_broken_socket_cap_part_but_keeps_the_rest) {
+    const auto p = cdtb::config::parse_socket_cap_parts("3:5=5,쓰레기,24:4=2");
+    CHECK_EQ(p.size(), std::size_t{2});
+}
+
+TEST(config_drops_socket_cap_parts_past_the_vector) {
+    // 게임 표에 이상한 값을 쓰느니 버린다.
+    CHECK(cdtb::config::parse_socket_cap_parts("3:5=6").empty());
+    CHECK(cdtb::config::parse_socket_cap_parts("3:5=-1").empty());
+    // 0 은 "안 건드림" 이라 적을 이유가 없다.
+    CHECK(cdtb::config::parse_socket_cap_parts("3:5=0").empty());
+}
+
+// ------------------------------------------------------ 보석 거르기
+
+TEST(is_socket_gem_needs_category_74_and_a_name) {
+    // 장비 창과 지급 창의 보석 고르기가 같은 조건으로 거른다.
+    cdtb::game::ItemCatalogEntry e;
+    e.category = cdtb::game::kSocketGemCategory;
+    e.name = "바람 가르기";
+    CHECK(cdtb::game::is_socket_gem(e));
+    // 이름이 안 풀린 것은 고를 수 없다 - 목록에 빈 줄이 뜬다.
+    e.name.clear();
+    CHECK(!cdtb::game::is_socket_gem(e));
+    // 분류가 다르면 이름이 있어도 아니다.
+    e.name = "한손검";
+    e.category = 56;
+    CHECK(!cdtb::game::is_socket_gem(e));
+}
+
+TEST(item_key_index_first_wins_and_finds) {
+    std::vector<cdtb::game::ItemCatalogEntry> cat(3);
+    cat[0].key = 50001; cat[0].name = "화살";
+    cat[1].key = 2200;  cat[1].name = "편전";
+    cat[2].key = 50001; cat[2].name = "중복";
+    cdtb::game::ItemKeyIndex idx;
+    CHECK(idx.find(cat, 50001) == &cat[0]);   // 먼저 온 것이 이긴다
+    CHECK(idx.find(cat, 2200) == &cat[1]);
+    CHECK(idx.find(cat, 7) == nullptr);
+    CHECK_EQ(idx.map.size(), static_cast<std::size_t>(2));
+}
+
+TEST(item_key_index_rebuilds_when_catalog_swaps) {
+    std::vector<cdtb::game::ItemCatalogEntry> a(1), b(2);
+    a[0].key = 5; a[0].name = "옛것";
+    b[0].key = 5; b[0].name = "새것";
+    b[1].key = 6;
+    cdtb::game::ItemKeyIndex idx;
+    CHECK(idx.find(a, 5) == &a[0]);
+    CHECK(idx.find(a, 6) == nullptr);
+    CHECK(idx.find(b, 5) == &b[0]);   // 판이 바뀌면 색인을 다시 만든다
+    CHECK(idx.find(b, 6) == &b[1]);
+}
+
+TEST(item_by_key_without_catalog_is_null) {
+    // 표가 안 올라온 테스트 프로세스에서는 늘 nullptr 이다
+    CHECK(cdtb::game::item_by_key(50001) == nullptr);
+    CHECK(cdtb::game::item_by_key(0) == nullptr);
 }

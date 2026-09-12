@@ -6,14 +6,16 @@
 
 #include <imgui.h>
 
-#include <cfloat>
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <vector>
 
 #include "game/item_view.h"
+#include "render/filter_bar.h"
+#include "render/gates.h"
 #include "render/icon_atlas.h"
+#include "render/layout.h"
+#include "render/overlay.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -22,20 +24,25 @@ namespace {
 // 거르기·정렬·쪽나누기는 game::item_view 가 한다. 여기는 그리기만
 // 한다 - 경계 계산을 UI 안에 두면 화면으로만 확인하게 된다.
 
-char g_query[128] = "";
-// 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개 개발용이라 목록에
-// 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
-bool g_hide_unnamed = true;
+// 검색·등급·분류 줄. 인벤토리 창과 같은 위젯(render/filter_bar)을 쓴다.
+// '이름 없는 것 감추기' 는 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개
+// 개발용이라 목록에 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
+FilterBar g_bar = [] { FilterBar b; b.hide_unnamed = true; return b; }();
+// 이 창의 필터바 옵션. 힌트("이름 또는 키로 검색")와 match_key 가 한 쌍이다.
+const FilterBarOpts g_opts = [] {
+    FilterBarOpts o;
+    o.id = "items";
+    o.hint = "이름 또는 키로 검색";
+    o.show_hide_unnamed = true;
+    o.match_key = true;
+    return o;
+}();
 int g_per_page_idx = 1;                      // 아래 표의 첨자
-int g_grade_idx = 0;                         // 0=전체, 1=없음, 2..6=T1..T5
-int g_category_idx = 0;                      // 0=전체, 그 뒤는 g_categories
 game::ItemSort g_sort = game::ItemSort::Key;
 bool g_ascending = true;
 std::size_t g_page = 0;
 
 std::vector<const game::ItemCatalogEntry*> g_view;
-std::vector<std::uint8_t> g_categories;      // 표에 실제로 있는 분류 값
-std::string g_category_labels;               // Combo 용 널 구분 문자열
 bool g_dirty = true;
 std::size_t g_built_from = 0;
 // 카탈로그는 이름이 뒤늦게(현지화 후) 채워지며 새 판으로 갈린다.
@@ -52,91 +59,15 @@ std::size_t per_page() { return kPerPage[g_per_page_idx]; }
 // 등급 색은 crimsondb.gg 의 배지 색을 그대로 쓴다. 게임 툴팁의
 // 보라색은 등급이 아니라 '중요물품' 표시였다.
 
-void rebuild_categories() {
-    build_category_labels(&g_categories, &g_category_labels);
-}
+void rebuild_categories() { filter_bar_rebuild_categories(&g_bar); }
 
 void rebuild() {
     const auto& all = game::item_catalog();
-    game::ItemFilter f;
-    f.query = g_query;
-    f.hide_unnamed = g_hide_unnamed;
-    f.grade = (g_grade_idx == 0) ? -1 : g_grade_idx - 1;
-    f.category = (g_category_idx == 0 ||
-                  g_category_idx > static_cast<int>(g_categories.size()))
-                     ? -1
-                     : g_categories[g_category_idx - 1];
-    g_view = game::filter_items(all, f);
+    g_view = game::filter_items(all, to_filter(g_bar, g_opts));
     game::sort_items(g_view, g_sort, g_ascending);
     g_built_from = all.size();
     g_built_ptr = all.data();
     g_dirty = false;
-}
-
-
-// 라벨이 오른쪽에 붙는 위젯(Combo 등)이 실제로 차지하는 폭.
-float labeled_w(float item_w, const char* label) {
-    return item_w + ImGui::GetStyle().ItemInnerSpacing.x + text_width(label);
-}
-
-void draw_filter_bar() {
-    const ImGuiStyle& st = ImGui::GetStyle();
-    const float clear_w = text_width("지우기") + st.FramePadding.x * 2.0f;
-    const float check_w = text_width("이름 없는 것 감추기") +
-                          ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
-
-    // 검색창은 남은 폭을 쓰되 상한을 둔다. 상한이 없으면 창을 넓혔을
-    // 때 검색창만 늘어나 오른쪽 항목이 전부 밀려 잘린다.
-    float query_w = ImGui::GetContentRegionAvail().x - clear_w -
-                    st.ItemSpacing.x;
-    if (query_w > 420.0f) query_w = 420.0f;
-    if (query_w < 140.0f) query_w = 140.0f;
-    ImGui::SetNextItemWidth(query_w);
-    if (ImGui::InputTextWithHint("##query", "이름 또는 키로 검색", g_query,
-                                 sizeof(g_query))) {
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    flow_same_line(clear_w);
-    if (ImGui::Button("지우기")) {
-        g_query[0] = '\0';
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    flow_same_line(check_w);
-    if (ImGui::Checkbox("이름 없는 것 감추기", &g_hide_unnamed)) {
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    // 라벨을 위젯 **앞**에 둔다. ImGui 기본은 뒤에 붙는데, 그러면
-    // "전체 ▼ 등급" 처럼 읽혀 무엇을 고르는 칸인지 헷갈린다.
-    const float grade_w = text_width("등급") + st.ItemInnerSpacing.x + 120.0f;
-    const float cat_w = text_width("분류") + st.ItemInnerSpacing.x + 230.0f;
-
-    flow_same_line(grade_w);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("등급");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    // 목록이 길다. 잘리지 않도록 펼침 높이를 넉넉히 준다.
-    if (ImGui::Combo("##grade", &g_grade_idx, kGradeLabels, 12)) {
-        g_dirty = true;
-        g_page = 0;
-    }
-
-    flow_same_line(cat_w);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("분류");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(230.0f);
-    if (ImGui::Combo("##category", &g_category_idx,
-                     g_category_labels.c_str(), 20)) {
-        g_dirty = true;
-        g_page = 0;
-    }
 }
 
 void draw_pager(std::size_t total) {
@@ -188,18 +119,15 @@ void draw_pager(std::size_t total) {
 
 void apply_sort_specs() {
     ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
-    if (specs == nullptr || !specs->SpecsDirty || specs->SpecsCount == 0) {
-        return;
-    }
-    const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
-    // 0번은 별표 칸이다(정렬 없음). 나머지가 한 칸씩 밀렸다.
-    switch (s.ColumnIndex) {
-        case 2: g_sort = game::ItemSort::Grade; break;
-        case 3: g_sort = game::ItemSort::Category; break;
-        case 4: g_sort = game::ItemSort::Name; break;
-        default: g_sort = game::ItemSort::Key; break;
-    }
-    g_ascending = (s.SortDirection == ImGuiSortDirection_Ascending);
+    if (specs == nullptr || !specs->SpecsDirty) return;
+    // 해제(SpecsCount 0)도 사양이다 - 키 오름차순으로 되돌린다.
+    const bool has = specs->SpecsCount > 0;
+    const game::ItemSortChoice c = game::item_sort_from_specs(
+        specs->SpecsCount, has ? specs->Specs[0].ColumnIndex : -1,
+        has ? specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending
+            : true);
+    g_sort = c.sort;
+    g_ascending = c.ascending;
     g_dirty = true;
     specs->SpecsDirty = false;
 }
@@ -207,12 +135,7 @@ void apply_sort_specs() {
 }  // namespace
 
 void draw_item_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(400, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
-    // 너무 좁히면 표가 읽히지 않는다. 아래로는 못 내려가게 막는다.
-    ImGui::SetNextWindowSizeConstraints(ImVec2(430.0f, 240.0f),
-                                        ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("아이템 목록", open)) {
+    if (!begin_window(Win::Items, open)) {
         ImGui::End();
         return;
     }
@@ -221,23 +144,9 @@ void draw_item_panel(bool* open) {
     // 뒤에야(월드 진입 후 보통 5~10초, 더 걸리기도) 채워지므로, 그 전에
     // 목록을 열면 비어 보인다. 진행 수(N/M)를 함께 내 느린 로드인지
     // 멈춘 것인지 사람이 가릴 수 있게 한다.
-    if (!game::items_ready() || !game::items_named()) {
-        char dots[5] = {0};
-        const int nd = 1 + (static_cast<int>(ImGui::GetTime() * 3.0) % 3);
-        for (int i = 0; i < nd; ++i) dots[i] = '.';
-        if (!game::items_ready()) {
-            ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1),
-                               "아이템 표를 읽는 중%s", dots);
-        } else {
-            ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1),
-                               "이름 불러오는 중%s  (%zu / %zu)", dots,
-                               game::items_named_count(),
-                               game::items_total_count());
-        }
-        ImGui::TextWrapped(
-            "월드 진입 후 현지화가 올라오면 이름이 자동으로 채워집니다 "
-            "(보통 5~10초, 상황에 따라 더 걸릴 수 있습니다). 이 표시가 "
-            "사라지지 않고 계속 남아 있으면 로드 실패입니다.");
+    if (!loading_gate(game::items_ready(), "아이템 표") ||
+        !loading_gate(game::items_named(), "이름", game::items_named_count(),
+                      game::items_total_count())) {
         ImGui::End();
         return;
     }
@@ -250,7 +159,10 @@ void draw_item_panel(bool* open) {
     }
     if (g_dirty) rebuild();
 
-    draw_filter_bar();
+    if (draw_filter_bar(&g_bar, g_opts)) {
+        g_dirty = true;
+        g_page = 0;
+    }
     draw_pager(g_view.size());
 
     ImGui::Text("%zu / %zu", g_view.size(), all.size());
@@ -276,10 +188,32 @@ void draw_item_panel(bool* open) {
                                 120.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
+        // 머리글을 직접 그린다 - ★ 칸에 툴팁을 달기 위해서다. 6,810줄에서 가장
+        // 눈에 안 띄는 기능이라 머리글이 뜻을 말해야 한다.
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) {
+            if (!ImGui::TableSetColumnIndex(c)) continue;   // TableHeadersRow 처럼 숨은 열은 건너뛴다
+            ImGui::PushID(c);   // TableHeadersRow 와 같게 - 이름 없는 칸이 생겨도 ID 가 안 겹친다
+            ImGui::TableHeader(ImGui::TableGetColumnName(c));
+            if (c == 0 && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("★ 는 보관함 즐겨찾기입니다 - 보관함 창에 모입니다");
+            }
+            ImGui::PopID();
+        }
 
         apply_sort_specs();
         if (g_dirty) rebuild();
+
+        if (g_view.empty()) {
+            const bool has_query = g_bar.query[0] != 0;
+            if (table_empty_row(
+                                has_query ? "검색어 때문에 비어 있습니다"
+                                          : "조건에 맞는 아이템이 없습니다",
+                                has_query ? "지우기" : nullptr)) {
+                g_bar.query[0] = 0;
+                g_dirty = true;
+            }
+        }
 
         const auto r = game::page_range(g_view.size(), g_page, per_page());
         for (std::size_t i = r.begin; i < r.end; ++i) {
@@ -293,7 +227,7 @@ void draw_item_panel(bool* open) {
             ImGui::TableSetColumnIndex(0);
             const bool fav = stash_is_favorite(e.key);
             ImGui::PushID(static_cast<int>(e.key));
-            if (ImGui::SmallButton(fav ? "★" : "☆")) {
+            if (ImGui::SmallButton(fav ? "★##fav" : "☆##fav")) {
                 stash_toggle_favorite(e.key);
             }
             ImGui::PopID();
@@ -310,6 +244,8 @@ void draw_item_panel(bool* open) {
                 std::snprintf(just_key, sizeof(just_key), "%u", e.key);
                 ImGui::SetClipboardText(just_key);
                 set_grant_item_key(e.key);   // 지급 칸에도 넣는다
+                // 지급 창이 닫혀 있으면 아무 일도 없어 보였다
+                overlay::show_window(cdtb::render::Win::Grant);
             }
 
             ImGui::TableSetColumnIndex(2);

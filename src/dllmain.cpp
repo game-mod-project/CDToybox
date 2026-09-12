@@ -3,10 +3,12 @@
 #include <string>
 
 #include "core/config.h"
+#include "core/crashlog.h"
 #include "core/log.h"
 #include "proxy/xinput_proxy.h"
 #include "render/d3d12_hook.h"
 #include "game/camera.h"
+#include "game/clan.h"
 #include "render/overlay.h"
 #include "mem/watchpoint.h"
 
@@ -34,19 +36,29 @@ DWORD WINAPI init_thread(LPVOID) {
     const std::wstring dir = cdtb::self_directory();
 
     cdtb::log::init(dir + L"CDToybox.log");
+    // 로그보다 먼저 걸어 둔다. 지금까지 크래시가 나면 로그가
+    // 끊긴 자리만 남고 죽은 위치는 못 봤다.
+    cdtb::crashlog::install((dir + L"CDToybox.crash.txt").c_str());
     cdtb::log::infof("CDToybox 0단계 시작");
 
-    const cdtb::Config cfg = cdtb::config::load(dir + L"CDToybox.ini");
-    cdtb::log::infof("설정: toggle=0x{:X} unload=0x{:X} diagnostics={}",
-                     cfg.toggle_key, cfg.unload_key, cfg.show_diagnostics);
+    const std::wstring ini = dir + L"CDToybox.ini";
+    const cdtb::Config cfg = cdtb::config::load(ini);
+    cdtb::log::infof("설정: toggle=0x{:X} unload=0x{:X} diagnostics={}"
+                     " socket_cap={}",
+                     cfg.toggle_key, cfg.unload_key, cfg.show_diagnostics,
+                     cfg.socket_cap);
 
-    cdtb::overlay::set_config(cfg);
+    cdtb::overlay::set_config(cfg, ini);
 
     if (!cdtb::render::install_hooks()) {
         cdtb::log::errorf("렌더 훅 설치 실패 - 오버레이 없이 계속한다");
     }
 
     // 사용자가 버튼을 누를 필요 없이 스스로 분석한다.
+    // 명부 컴포넌트를 다시 찾는 일은 배경에서 한다. 그리는 스레드가
+    // 하면 10초 넘게 게임이 멈춘다(실측 2026-09-10).
+    cdtb::game::enable_background_clan_rescan();
+
     cdtb::game::start_auto_analysis();
 
     cdtb::log::infof("초기화 완료");

@@ -1,3 +1,4 @@
+#include <windows.h>
 #include "core/log.h"
 
 #include <chrono>
@@ -24,6 +25,17 @@ const char* level_tag(Level l) {
 void init(const std::wstring& path) {
     std::lock_guard lock(g_mutex);
     if (g_file.is_open()) g_file.close();
+    // 직전 실행의 로그를 남긴다.
+    //
+    // 예전에는 그냥 덮어썼다. 그래서 게임이 팅긴 뒤 다시 켜면 원인이
+    // 담긴 로그가 사라졌다 - 2026-09-09 에 그 일로 두 번 진단을
+    // 놓쳤다. 크래시 로그는 크래시 뒤에야 읽게 되므로 반드시 남아야
+    // 한다. 두 판까지 보관한다.
+    const std::wstring prev = path + L".prev";
+    const std::wstring prev2 = path + L".prev2";
+    ::DeleteFileW(prev2.c_str());
+    ::MoveFileW(prev.c_str(), prev2.c_str());
+    ::MoveFileW(path.c_str(), prev.c_str());
     g_file.open(path, std::ios::out | std::ios::trunc);
 }
 

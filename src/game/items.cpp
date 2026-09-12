@@ -1,11 +1,16 @@
 #include "game/items.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <format>
 #include <memory>
+#include <mutex>
 
 #include "core/log.h"
+#include "core/write_log.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -25,6 +30,7 @@ constexpr std::size_t kRecordsPtr = 0x58;   // 레코드 포인터 배열
 constexpr std::size_t kRecKey = 0x00;       // u32 키
 constexpr std::size_t kRecMaxStack = 0x18;  // u32 _maxStackCount
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
+constexpr std::size_t kRecEquipType = 0x42;  // u16 _equipTypeInfo (FFFF=장비 아님)
 constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
 constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없음)
@@ -145,6 +151,12 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         // 담금질과 달리 상한 그대로다 - 게임이 `>=` 로 검사한다.
         reader.read_value(e.record + kRecSockets, &e.max_sockets);
 
+        // 소켓 갈래를 가르는 값. 못 읽으면 0xFFFF(=장비 아님)로 두어
+        // 소켓을 안 싣는 쪽으로 기운다.
+        if (!reader.read_value(e.record + kRecEquipType, &e.equip_type)) {
+            e.equip_type = 0xFFFF;
+        }
+
         // 0xFFFF 면 내구도가 없는 아이템이다 - 담금질의 _equipTypeInfo
         // (+0x42) 와 같은 표기법이다.
         reader.read_value(e.record + kRecMaxEndurance, &e.max_endurance);
@@ -180,6 +192,8 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.max_endurance = e.max_endurance;
         entry.repair_entries = e.repair_entries;
         entry.max_sharpness = e.max_sharpness;
+        entry.equip_type = e.equip_type;
+        entry.record = e.record;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
@@ -201,10 +215,24 @@ const std::vector<ItemCatalogEntry> kEmptyCatalog;
 // 살려 둔다 - 많아야 두 판이다.
 std::atomic<const std::vector<ItemCatalogEntry>*> g_catalog{&kEmptyCatalog};
 std::vector<std::unique_ptr<std::vector<ItemCatalogEntry>>> g_versions;
+// 소켓 상한 올리기는 화면 스레드에서 오고 목록 만들기는 분석
+// 스레드에서 온다. 옛 판을 담아 두는 이 vector 만 겹치므로 여기만 잠근다.
+std::mutex g_versions_mutex;
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_named{false};
 std::atomic<std::size_t> g_named_count{0};
 std::atomic<std::size_t> g_total_count{0};
+
+// 옛 판을 살려 둔 채 새 판으로 바꿔 끼운다. 그리는 쪽이 참조를 쥔 채로
+// 프레임을 돌기 때문에 갈아엎으면 안 된다.
+void publish_catalog(std::unique_ptr<std::vector<ItemCatalogEntry>> built) {
+    const auto* p = built.get();
+    {
+        std::lock_guard<std::mutex> lk(g_versions_mutex);
+        g_versions.push_back(std::move(built));
+    }
+    g_catalog.store(p, std::memory_order_release);
+}
 
 }  // namespace
 
@@ -245,9 +273,7 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     const std::size_t total = built->size();
     g_total_count.store(total, std::memory_order_release);
     g_named_count.store(named, std::memory_order_release);
-    const auto* p = built.get();
-    g_versions.push_back(std::move(built));
-    g_catalog.store(p, std::memory_order_release);
+    publish_catalog(std::move(built));
     g_ready.store(true, std::memory_order_release);
     if (named > 0) g_named.store(true, std::memory_order_release);
     log::infof("아이템 표: {}개, 이름 풀린 것 {}개{}", total, named,
@@ -269,6 +295,31 @@ std::size_t items_total_count() {
 
 const std::vector<ItemCatalogEntry>& item_catalog() {
     return *g_catalog.load(std::memory_order_acquire);
+}
+
+const ItemCatalogEntry* ItemKeyIndex::find(
+    const std::vector<ItemCatalogEntry>& cat, std::uint32_t key) {
+    if (built_data != cat.data() || built_size != cat.size()) {
+        map.clear();
+        map.reserve(cat.size());
+        for (const auto& e : cat) map.emplace(e.key, &e);   // 먼저 온 것이 남는다
+        built_data = cat.data();
+        built_size = cat.size();
+    }
+    const auto it = map.find(key);
+    return it == map.end() ? nullptr : it->second;
+}
+
+namespace {
+// 화면 스레드와 명령 파일 스레드가 같이 부를 수 있어 잠근다.
+std::mutex g_key_index_mutex;
+ItemKeyIndex g_key_index;
+}  // namespace
+
+const ItemCatalogEntry* item_by_key(std::uint32_t key) {
+    if (key == 0 || !items_ready()) return nullptr;
+    std::lock_guard<std::mutex> lk(g_key_index_mutex);
+    return g_key_index.find(item_catalog(), key);
 }
 
 // ------------------------------------- 아이템 키 <-> 짧은 식별자 대응표
@@ -695,11 +746,12 @@ std::uint32_t item_id_for_key(std::uint32_t key) {
 
 void make_socket_bytes(std::uint16_t gem_id, std::uint8_t out[6]) {
     if (out == nullptr) return;
+    // 채움 표시: 보석이 있으면 0xFFFF, 빈 칸이면 0x0000.
+    const std::uint16_t marker = (gem_id == 0xFFFF) ? 0x0000u : 0xFFFFu;
     std::memcpy(out, &gem_id, sizeof(gem_id));
-    out[2] = 0xFF;
-    out[3] = 0xFF;
-    out[4] = 0x00;   // 게임이 슬롯 번호로 덮어쓴다
-    out[5] = 0xFF;
+    std::memcpy(out + 2, &marker, sizeof(marker));
+    out[4] = 0x00;               // 게임이 칸 번호로 덮어쓴다
+    out[5] = kSocketOpenTail;    // 열린 칸은 전부 0x04 (실측)
 }
 
 bool socket_bytes_for_key(std::uint32_t gem_key, std::uint8_t out[6]) {
@@ -718,6 +770,209 @@ std::int16_t max_sharpness_for(std::uint32_t item_key) {
     return 0;
 }
 
+std::uint32_t socket_room(std::uint32_t max_sockets, std::uint32_t max_stack,
+                          std::uint16_t equip_type) {
+    // 장비가 아니면 소켓수>0 이 오류 갈래다(0x2A7022C).
+    if (equip_type == 0xFFFF) return 0;
+    // 겹치는 아이템도 같은 갈래로 간다(판별자가 max_stack>1 을 본다).
+    if (max_stack > 1) return 0;
+    return max_sockets;
+}
+
+std::uint32_t socket_room_for(std::uint32_t item_key) {
+    if (!items_ready()) return 0;
+    for (const auto& e : item_catalog()) {
+        if (e.key != item_key) continue;
+        return socket_room(e.max_sockets, e.max_stack, e.equip_type);
+    }
+    return 0;
+}
+
+// ------------------------------------------------- 소켓 상한 올리기
+
+namespace {
+
+// 되돌리려고 기억해 두는 원본.
+struct CapSaved {
+    std::uintptr_t record = 0;
+    std::uint32_t key = 0;
+    std::uint32_t original = 0;
+    std::uint32_t applied = 0;
+};
+std::mutex g_cap_mutex;
+std::vector<CapSaved> g_cap_saved;
+std::vector<SocketCapRule> g_cap_rules;
+std::atomic<bool> g_cap_on{false};
+
+// 인프로세스 직접 쓰기. **주입 DLL 전용**이다(equip.cpp 와 같은 규약).
+bool cap_wr32(std::uintptr_t at, std::uint32_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint32_t*>(at) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// 규칙에서 이 아이템이 받을 값. 없으면 0(=안 건드림).
+std::uint32_t want_for(const std::vector<SocketCapRule>& rules,
+                       std::uint8_t cat, std::uint16_t etype) {
+    for (const auto& r : rules) {
+        if (r.part.category == cat && r.part.equip_type == etype) {
+            return r.want;
+        }
+    }
+    return 0;
+}
+
+// 지금 목록을 베껴 소켓 상한만 갈아 끼운 새 판을 낸다. 이름을 다시
+// 풀지 않으므로 값싸다(표를 다시 걷는 재생성이 필요 없다).
+// `caps` 는 키 -> 새 상한.
+void republish_caps(const std::vector<std::pair<std::uint32_t, std::uint32_t>>&
+                        caps) {
+    const auto& cur = item_catalog();
+    if (cur.empty() || caps.empty()) return;
+    auto built = std::make_unique<std::vector<ItemCatalogEntry>>(cur);
+    for (auto& e : *built) {
+        for (const auto& [key, cap] : caps) {
+            if (key != e.key) continue;
+            e.max_sockets = cap;
+            break;
+        }
+    }
+    publish_catalog(std::move(built));
+}
+
+}  // namespace
+
+bool socket_cap_target(std::uint32_t max_sockets, std::uint16_t equip_type,
+                       std::uint32_t want) {
+    if (want == 0) return false;
+    if (equip_type == 0xFFFF) return false;   // 장비가 아니다
+    return max_sockets < want;
+}
+
+std::vector<SocketPartInfo> socket_parts() {
+    std::vector<SocketPartInfo> out;
+    if (!items_ready()) return out;
+    for (const auto& e : item_catalog()) {
+        if (e.equip_type == 0xFFFF) continue;   // 장비만
+        SocketPartInfo* p = nullptr;
+        for (auto& x : out) {
+            if (x.part.category == e.category &&
+                x.part.equip_type == e.equip_type) {
+                p = &x;
+                break;
+            }
+        }
+        if (p == nullptr) {
+            out.push_back(SocketPartInfo{SocketPart{e.category, e.equip_type},
+                                         0, 0, 0, {}});
+            p = &out.back();
+        }
+        ++p->count;
+        if (e.max_sockets > 0) ++p->with_socket;
+        if (e.max_sockets > p->table_cap) p->table_cap = e.max_sockets;
+        if (p->sample.empty() && !e.name.empty()) p->sample = e.name;
+    }
+    std::sort(out.begin(), out.end(),
+              [](const SocketPartInfo& a, const SocketPartInfo& b) {
+                  if (a.part.category != b.part.category) {
+                      return a.part.category < b.part.category;
+                  }
+                  return a.part.equip_type < b.part.equip_type;
+              });
+    return out;
+}
+
+bool socket_cap_active() { return g_cap_on.load(std::memory_order_acquire); }
+
+std::vector<SocketCapRule> socket_cap_rules() {
+    std::lock_guard<std::mutex> lk(g_cap_mutex);
+    return g_cap_rules;
+}
+
+SocketCapResult socket_cap_apply(const mem::Reader& reader,
+                                 const std::vector<SocketCapRule>& rules) {
+    SocketCapResult r;
+    if (!items_ready()) return r;
+
+    // 값이 성한지 먼저 본다. 이상한 값을 게임 표에 쓰느니 아무것도 안 한다.
+    for (const auto& rule : rules) {
+        if (rule.want > kSocketSlotMax) return r;
+    }
+    if (socket_cap_active()) socket_cap_restore(reader);
+
+    std::vector<CapSaved> saved;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> caps;
+    const auto& cat = item_catalog();
+    saved.reserve(512);
+    caps.reserve(512);
+    for (const auto& e : cat) {
+        if (e.record == 0) continue;
+        const std::uint32_t want = want_for(rules, e.category, e.equip_type);
+        if (!socket_cap_target(e.max_sockets, e.equip_type, want)) {
+            ++r.skipped;
+            continue;
+        }
+        // 목록이 낡았을 수 있다. 표에서 다시 읽어 대조한 뒤에만 쓴다.
+        std::uint32_t live = 0;
+        if (!reader.read_value(e.record + kRecSockets, &live)) continue;
+        if (live != e.max_sockets) continue;   // 목록과 표가 어긋난다
+        if (!cap_wr32(e.record + kRecSockets, want)) continue;
+        std::uint32_t back = 0;
+        if (!reader.read_value(e.record + kRecSockets, &back) || back != want) {
+            continue;                           // 안 써졌다
+        }
+        saved.push_back(CapSaved{e.record, e.key, live, want});
+        caps.emplace_back(e.key, want);
+        ++r.changed;
+    }
+
+    if (r.changed == 0) return r;
+    {
+        std::lock_guard<std::mutex> lk(g_cap_mutex);
+        g_cap_saved = saved;
+        g_cap_rules = rules;
+    }
+    g_cap_on.store(true, std::memory_order_release);
+    republish_caps(caps);
+    r.ok = true;
+    log_write("소켓 상한", 0, "-",
+              std::format("부위 규칙 {}개, 아이템 {}개 올림 (대상 아님 {})",
+                          rules.size(), r.changed, r.skipped));
+    return r;
+}
+
+SocketCapResult socket_cap_restore(const mem::Reader& reader) {
+    SocketCapResult r;
+    std::vector<CapSaved> saved;
+    {
+        std::lock_guard<std::mutex> lk(g_cap_mutex);
+        saved.swap(g_cap_saved);
+        g_cap_rules.clear();
+    }
+    if (saved.empty()) return r;
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> caps;
+    caps.reserve(saved.size());
+    for (const auto& s : saved) {
+        if (cap_wr32(s.record + kRecSockets, s.original)) {
+            ++r.changed;
+        } else {
+            ++r.skipped;
+        }
+        caps.emplace_back(s.key, s.original);
+    }
+    g_cap_on.store(false, std::memory_order_release);
+    republish_caps(caps);
+    r.ok = true;
+    log::infof("소켓 상한: {}개를 원래 값으로 되돌렸다 (실패 {})", r.changed,
+               r.skipped);
+    (void)reader;
+    return r;
+}
+
 std::uint16_t full_endurance_for(std::uint32_t item_key) {
     if (!items_ready()) return 0;
     for (const auto& e : item_catalog()) {
@@ -725,6 +980,10 @@ std::uint16_t full_endurance_for(std::uint32_t item_key) {
         return (e.max_endurance == 0xFFFF) ? 0 : e.max_endurance;
     }
     return 0;
+}
+
+bool is_socket_gem(const ItemCatalogEntry& e) {
+    return e.category == kSocketGemCategory && !e.name.empty();
 }
 
 }  // namespace cdtb::game

@@ -24,6 +24,7 @@
 #include "findquat.h"
 #include "game/actors.h"
 #include "game/camera.h"
+#include "game/clan.h"
 #include "game/equip.h"
 #include "game/grant.h"
 #include "game/inventory.h"
@@ -74,6 +75,10 @@ void usage() {
         "  invlist [주소]              인벤토리를 이름·담금질까지\n"
         "  invlist raw [주소]          + 뜻을 모르는 칸까지\n"
         "  invexport [파일]            인벤토리를 보관함 파일로\n"
+        "  clan                        내가 가진 동반자 명부\n"
+        "  charfind <조각> [최대]        캐릭터를 이름으로 찾아 행·키를 낸다\n"
+        "  setspecies <번호> <행>     동반자의 종을 바꿈(클라+서버, 검증 후)\n"
+        "  unspawn <번호> [read]     죽은 액터 핸들을 지워 소환 판정을 푸다\n"
         "  dumpimage [파일] [--raw]    실행 중 프로세스의 모듈 이미지를\n"
         "                              디스어셈블러가 읽는 PE 로 뜬다\n"
         "\n"
@@ -1381,6 +1386,238 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // 탈것·용병·캐릭터 카탈로그를 낸다. 모드와 같은 함수를 돌려 배포 전
 // 검증한다. roster [탈것|용병|캐릭터] [최대개수]
 // 살아 있는 액터를 걷어 캐릭터 이름을 붙인다 (모드의 근처 탭과 같은 코드).
+// 내가 가진 동반자 명부. 전부 읽기다.
+//
+// 용병단 컴포넌트의 레코드 배열을 걷는다(game/clan.h).
+void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
+    }
+    const bool want_client = (argc > 2 && std::strcmp(argv[2], "client") == 0);
+    std::uintptr_t clan = 0;
+    const bool found = want_client
+                           ? game::find_clan_component_client(reader, rt, &clan)
+                           : game::find_clan_component(reader, rt, &clan);
+    std::printf("%s 명부\n",
+                want_client ? "클라이언트" : "서버");
+    if (!found) {
+        std::printf("용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::vector<game::ClanEntry> list;
+    if (!game::read_clan_roster(reader, clan, &list)) {
+        std::printf("명부를 읽지 못했습니다.\n");
+        return;
+    }
+    std::size_t spawned = 0;
+    for (const auto& e : list) if (e.spawned()) ++spawned;
+    std::printf("용병단 0x%llX - 동반자 %zu명, 그중 월드에 %zu명\n",
+                static_cast<unsigned long long>(clan), list.size(), spawned);
+    for (const auto& e : list) {
+        std::string owner;
+        if (e.owner_row != 0xFFFF) {
+            owner = "  [" + (e.owner_name.empty()
+                                 ? ("행 " + std::to_string(e.owner_row))
+                                 : e.owner_name) + "]";
+        }
+        std::printf("  번호 %8llu  행 %5u  키 %6u  타입행 %2d  %-42s %s%s%s\n",
+                    static_cast<unsigned long long>(e.merc_no), e.row, e.key,
+                    e.merc_row == 0xFFFF ? -1 : static_cast<int>(e.merc_row),
+                    e.name.empty() ? "(이름 없음)" : e.name.c_str(),
+                    e.label.empty() ? "" : e.label.c_str(),
+                    e.spawned() ? "  [월드]" : "", owner.c_str());
+    }
+    // 소유자 갈래를 세어 둔다. 플레이어블(클리프·데미안·웅카…) 개인
+    // 소유인지, 개인 임자가 없는 용병대 몫인지, NPC 개인 것인지.
+    std::size_t own_playable = 0, own_npc = 0, own_none = 0;
+    for (const auto& e : list) {
+        if (e.owner_row == 0xFFFF) ++own_none;
+        else if (e.owner_playable) ++own_playable;
+        else ++own_npc;
+    }
+    std::printf("소유: 플레이어블 %zu · 용병대(임자 없음) %zu · NPC %zu\n",
+                own_playable, own_none, own_npc);
+}
+
+// 플레이어블 캐릭터를 가릴 수 있는지 본다. MercenaryInfo 의
+// `_isPlayable`(+0x22) 이 후보다.
+void cmd_playable(const mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_roster(rt, reader)) { std::printf("로스터 실패\n"); return; }
+    std::printf("지금 조종 중인 캐릭터 행: %u\n",
+                game::main_character_row(reader));
+    std::printf("용병 표 (_isPlayable):\n");
+    for (const auto& m : game::mercenary_catalog()) {
+        std::printf("  행 %2u  타입 %2u  플레이어블 %d  %s\n", m.row,
+                    m.merc_type, m.merc_playable ? 1 : 0, m.name.c_str());
+    }
+    std::printf("\n플레이어블 타입에 속한 캐릭터:\n");
+    for (const auto& e : game::character_catalog()) {
+        if (!e.is_companion()) continue;
+        if (!game::is_playable_merc_row(e.merc_row)) continue;
+        std::printf("  행 %5u  키 %6u  타입행 %2u  %-40s %s\n", e.row, e.key,
+                    e.merc_row, e.name.c_str(), e.label.c_str());
+    }
+}
+
+// 표시 관문 후보들을 전수로 교차 집계한다. "게임 목록에 뜨는 종"의
+// 기준이 무엇인지 관찰이 아니라 숫자로 가리려고 만들었다.
+void cmd_gate(const mem::Rtti& rt, const mem::Reader& reader) {
+    if (!game::discover_roster(rt, reader)) { std::printf("로스터 실패\n"); return; }
+    const auto& cat = game::character_catalog();
+    struct Cell { int total = 0; int no_equip = 0; int no_count = 0; };
+    std::map<int, Cell> by_type;
+    for (const auto& e : cat) {
+        if (!e.is_companion()) continue;
+        Cell& c = by_type[static_cast<int>(e.merc_row)];
+        ++c.total;
+        if (e.equip_info == 0xFFFF) ++c.no_equip;
+        if (!e.merc_countable) ++c.no_count;
+    }
+    std::printf("타입행  전체  장비없음  셈안함   이름\n");
+    for (const auto& [row, c] : by_type) {
+        std::printf("%6d %5d %9d %8d   %s\n", row, c.total, c.no_equip,
+                    c.no_count, game::mercenary_type_name(
+                        static_cast<std::uint16_t>(row)).c_str());
+    }
+    // 목록에 올리는 세 타입(1 탈것 / 5 특수 / 9 반려) 안에서 장비
+    // 정보가 없는 것들. 지금 기준이 실제로 거르는 것이 이것뿐이다.
+    std::printf("\n장비 정보가 없는 1/5/9 종:\n");
+    for (const auto& e : cat) {
+        if (!e.is_companion() || e.equip_info != 0xFFFF) continue;
+        const int t = static_cast<int>(e.merc_row);
+        if (t != 1 && t != 5 && t != 9) continue;
+        std::printf("  행 %5u  타입행 %2d  %-44s %s\n", e.row, t,
+                    e.name.c_str(), e.label.c_str());
+    }
+}
+
+// 캐릭터를 이름으로 찾는다. **행 번호**를 내는 것이 목적이다 -
+// 명부 레코드의 +0x20 과 고용 검사가 쓰는 것이 키가 아니라 행이다.
+void cmd_charfind(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: charfind <이름조각> [최대=40]\n");
+        return;
+    }
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터를 못 찾았습니다.\n");
+        return;
+    }
+    const std::string want = ansi_to_utf8(argv[2]);
+    const std::size_t cap = (argc > 3) ? std::strtoull(argv[3], nullptr, 10) : 40;
+    const auto& cat = game::character_catalog();
+    std::size_t n = 0;
+    for (const auto& e : cat) {
+        if (e.name.find(want) == std::string::npos &&
+            e.label.find(want) == std::string::npos) {
+            continue;
+        }
+        if (n++ >= cap) break;
+        std::printf("  행 %5u  키 %6u  타입행 %2d  장비 %5u  소유판 %5u  셈 %d  "
+                    "%-40s %s\n", e.row, e.key,
+                    e.merc_row == 0xFFFF ? -1 : static_cast<int>(e.merc_row),
+                    e.equip_info, e.owned_merc_row, e.merc_countable ? 1 : 0,
+                    e.name.c_str(), e.label.c_str());
+    }
+    std::printf("%zu건 (캐릭터 %zu 중)\n", n, cat.size());
+}
+
+// 동반자의 종을 바꿔 쓴다. **이것만 쓸 것** - 생 poke 로
+// 명부에 쓰면 안 된다.
+//
+// 2026-09-09 사고: 명부 주소를 읽어 둔 뒤 그 사이에 동반자가 늘어
+// 게임이 레코드를 통째로 새로 만들었는데, 그것을 모르고 예전
+// 주소에 써서 남의 객체(GameData_GimmickPointData)를 망가뜨렸고
+// 게임이 팀겼다. 그래서 이 명령은 쓰기 직전에 번호로 다시
+// 찾고, 표식(+0x22==0xFFFF)과 번호(+0x28)를 확인하고, 쓴 뒤 다시 읽어
+// 확인한다.
+void cmd_setspecies(mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+                    int argc, char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: setspecies <용병번호> <새 행번호>\n"
+                    "  번호는 clan, 행번호는 charfind 로 찾는다.\n");
+        return;
+    }
+    const std::uint64_t no = std::strtoull(argv[2], nullptr, 0);
+    const unsigned long row = std::strtoul(argv[3], nullptr, 0);
+    if (no == 0 || row > 0xFFFE) { std::printf("인자가 이상하다.\n"); return; }
+    const auto want = static_cast<std::uint16_t>(row);
+
+    game::SpeciesWriteTarget t;
+    if (!game::resolve_species_write(rt, reader, no, &t)) {
+        std::printf("자리를 못 찾았다 (서버 0x%llX, 클라 0x%llX).\n"
+                    "  번호가 맞는지, 월드 안인지 볼 것.\n",
+                    static_cast<unsigned long long>(t.server),
+                    static_cast<unsigned long long>(t.client));
+        return;
+    }
+    std::printf("번호 %llu: 서버 0x%llX(행 %u) · 클라 0x%llX(행 %u) -> 행 %u\n",
+                static_cast<unsigned long long>(no),
+                static_cast<unsigned long long>(t.server), t.server_row,
+                static_cast<unsigned long long>(t.client), t.client_row, want);
+    std::uint8_t buf[2] = {static_cast<std::uint8_t>(want & 0xFF),
+                           static_cast<std::uint8_t>(want >> 8)};
+    if (!r.write(t.server, buf, 2) || !r.write(t.client, buf, 2)) {
+        std::printf("쓰기 실패.\n");
+        return;
+    }
+    // 쓴 뒤 반드시 다시 찾아 확인한다. 쓰는 사이에 명부가
+    // 재구성되면 엉뚜한 자리에 쓴 것이다.
+    game::SpeciesWriteTarget after;
+    if (!game::resolve_species_write(rt, reader, no, &after)) {
+        std::printf("쓴 뒤 다시 찾지 못했다 - 명부가 바뀌었을 수 있다!\n");
+        return;
+    }
+    std::printf("확인: 서버 행 %u, 클라 행 %u %s\n", after.server_row,
+                after.client_row,
+                (after.server_row == want && after.client_row == want)
+                    ? "- 반영됨"
+                    : "- 어깋난다");
+}
+
+// 소환 판정을 바로잡는다. 레코드 +0x50 에 남은 죽은 액터 핸들을
+// 지운다. 자세한 근거는 game/clan.h 설명.
+void cmd_unspawn(mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
+                 int argc, char** argv) {
+    if (argc < 3) {
+        std::printf("사용법: unspawn <용병번호> [read]\n"
+                    "  read 를 붙이면 읽기만 한다.\n");
+        return;
+    }
+    const std::uint64_t no = std::strtoull(argv[2], nullptr, 0);
+    const bool read_only = (argc > 3 && std::strcmp(argv[3], "read") == 0);
+    if (no == 0) { std::printf("번호가 0 이다.\n"); return; }
+    game::SpawnFlagTarget t;
+    if (!game::resolve_spawn_flag(rt, reader, no, &t)) {
+        std::printf("자리를 못 찾았다 (서버 0x%llX, 클라 0x%llX).\n",
+                    static_cast<unsigned long long>(t.server),
+                    static_cast<unsigned long long>(t.client));
+        return;
+    }
+    std::printf("번호 %llu: 서버 0x%llX 핸들 %08X · 클라 0x%llX 핸들 %08X\n",
+                static_cast<unsigned long long>(no),
+                static_cast<unsigned long long>(t.server), t.server_handle,
+                static_cast<unsigned long long>(t.client), t.client_handle);
+    if (read_only) return;
+    if (t.server_handle == 0 && t.client_handle == 0) {
+        std::printf("이미 0 이라 할 일이 없다.\n");
+        return;
+    }
+    const std::uint32_t zero = 0;
+    if (!r.write(t.server, &zero, 4) || !r.write(t.client, &zero, 4)) {
+        std::printf("쓰기 실패.\n");
+        return;
+    }
+    game::SpawnFlagTarget after;
+    if (game::resolve_spawn_flag(rt, reader, no, &after)) {
+        std::printf("확인: 서버 %08X, 클라 %08X %s\n", after.server_handle,
+                    after.client_handle,
+                    (after.server_handle == 0 && after.client_handle == 0)
+                        ? "- 풀렸다"
+                        : "- 어깋난다");
+    }
+}
+
 void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 char** argv) {
     const bool all = (argc > 2) && std::strcmp(argv[2], "all") == 0;
@@ -1407,12 +1644,15 @@ void cmd_nearby(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                 comp);
     for (const auto& a : list) {
         if (!all && !a.is_companion()) continue;
-        std::printf("  0x%llX  핸들 %08X  행 %5u  키 %6u  타입행 %2d  %s%s%s\n",
+        char own[32] = "";
+        // 임자가 있으면 획득(2338)이 0x97AE29C9 로 거부한다.
+        if (a.owned()) std::snprintf(own, sizeof(own), "  [소유 %08X]", a.owner);
+        std::printf("  0x%llX  핸들 %08X  행 %5u  키 %6u  타입행 %2d  %s%s%s%s\n",
                     static_cast<unsigned long long>(a.actor), a.handle, a.row, a.key,
                     a.is_companion() ? static_cast<int>(a.merc_row) : -1,
                     a.name.empty() ? "(이름 없음)" : a.name.c_str(),
                     game::roster_is_wild(a.name) ? "  [야생]" : "",
-                    a.hirable ? "  [고용가능]" : "");
+                    a.hirable ? "  [고용가능]" : "", own);
     }
 }
 
@@ -1758,6 +1998,53 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                         rows[i].second);
         }
         if (rows.size() > 24) std::printf("  ... 그 외 %zu종\n", rows.size() - 24);
+        return;
+    }
+
+    // items cats : 부위(분류·장비타입)별로 소켓 상한이 어떻게 깔려 있는지.
+    //
+    // 부위별 소켓 수를 따로 잡으려면 무엇으로 묶어야 하는지 알아야 한다.
+    // 분류(+0xA3)로 대부분 갈리는데 갑옷·망토처럼 한 분류에 여러 장비
+    // 타입(+0x42)이 섞이는 자리가 있어 둘 다 낸다.
+    if (argc > 2 && std::strcmp(argv[2], "cats") == 0) {
+        struct Row {
+            std::uint8_t cat = 0;
+            std::uint16_t etype = 0;
+            std::size_t count = 0;
+            std::size_t with_socket = 0;
+            std::uint32_t max_cap = 0;
+            std::string sample;
+        };
+        std::vector<Row> rows;
+        for (const auto& it : items) {
+            if (it.equip_type == 0xFFFF) continue;   // 장비만
+            Row* r = nullptr;
+            for (auto& x : rows) {
+                if (x.cat == it.category && x.etype == it.equip_type) {
+                    r = &x;
+                    break;
+                }
+            }
+            if (r == nullptr) {
+                rows.push_back(Row{it.category, it.equip_type, 0, 0, 0, {}});
+                r = &rows.back();
+            }
+            ++r->count;
+            if (it.max_sockets > 0) ++r->with_socket;
+            if (it.max_sockets > r->max_cap) r->max_cap = it.max_sockets;
+            if (r->sample.empty() && !it.name.empty()) r->sample = it.name;
+        }
+        std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+            if (a.cat != b.cat) return a.cat < b.cat;
+            return a.etype < b.etype;
+        });
+        std::printf("\n%-5s %-7s %-6s %-8s %-6s %s\n", "분류", "장비타입",
+                    "개수", "소켓있음", "상한", "보기");
+        for (const auto& r : rows) {
+            std::printf("%-5u %-7u %-6zu %-8zu %-6u %s\n", r.cat, r.etype,
+                        r.count, r.with_socket, r.max_cap, r.sample.c_str());
+        }
+        std::printf("\n장비 묶음 %zu개\n", rows.size());
         return;
     }
 
@@ -3375,6 +3662,12 @@ int main(int argc, char** argv) {
         cmd_fields(rt, r, parse_addr(argv[2]), n);
         return 0;
     }
+    if (cmd == "clan") { cmd_clan(rt, reader, argc, argv); return 0; }
+    if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
+    if (cmd == "gate") { cmd_gate(rt, reader); return 0; }
+    if (cmd == "playable") { cmd_playable(rt, reader); return 0; }
+    if (cmd == "setspecies") { cmd_setspecies(rt, reader, r, argc, argv); return 0; }
+    if (cmd == "unspawn") { cmd_unspawn(rt, reader, r, argc, argv); return 0; }
     if (cmd == "instcount") {
         cmd_instcount(rt, argc, argv);
         return 0;

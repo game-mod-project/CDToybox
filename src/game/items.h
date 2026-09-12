@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "game/localization.h"
@@ -28,7 +29,7 @@ struct ItemEntry {
     std::uint64_t name_key = 0;   // 레코드가 들고 있는 현지화 키
     std::uintptr_t record = 0;
     std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
-    std::uint8_t category = 0;    // 74종. 이름은 아직 못 붙였다
+    std::uint8_t category = 0;    // 74종. 이름은 render/item_style 의 category_name
     std::uint32_t max_stack = 0;  // 한 칸에 쌓이는 최대 개수
     // 담금질로 올릴 수 있는 최고 값. 0 이면 담금질이 없는 아이템이다.
     //
@@ -67,6 +68,16 @@ struct ItemEntry {
     // 변환 함수가 `min(TrItemValue +0x1AE, 이 값)` 을 레코드 +0x58 에
     // 넣는다. 담금질과 달리 상한 그대로다("-1" 이 아니다).
     std::int16_t max_sharpness = 0;
+
+    // `_equipTypeInfo` (레코드 +0x42). **0xFFFF 면 장비가 아니다** -
+    // `_maxEndurance` 와 같은 표기법이다.
+    //
+    // 지급의 소켓 갈래를 가르는 값이라 읽는다. 생성 함수 0x2A70000 이
+    // 판별자(0x2358A70 -> 0xF090BC0)로 갈래를 정하는데, 그 판별자의
+    // 마지막 줄이 `return _equipTypeInfo == 0xFFFF` 다. 장비가 아니면
+    // 소켓수>0 이 오류 갈래로 빠진다.
+    // specs/2026-09-07-socket-grant-unlock-research.md 3.1 절.
+    std::uint16_t equip_type = 0xFFFF;
 };
 
 // 등급 표시 이름. 표 밖의 값은 "?" 다.
@@ -211,6 +222,11 @@ struct ItemCatalogEntry {
     std::uint16_t max_endurance = 0xFFFF;  // ItemEntry 의 같은 칸
     std::uint32_t repair_entries = 0;      // ItemEntry 의 같은 칸
     std::int16_t max_sharpness = 0;        // ItemEntry 의 같은 칸
+    std::uint16_t equip_type = 0xFFFF;     // ItemEntry 의 같은 칸
+
+    // 이 아이템의 `ItemInfo` 레코드 주소. 소켓 상한 올리기가 여기에
+    // 쓴다(`socket_cap_raise`). 표를 다시 걷지 않으려고 들고 있는다.
+    std::uintptr_t record = 0;
 };
 
 // 표를 걷고 이름까지 붙인다. sys 가 비어 있으면(valid() 아님) 이름
@@ -268,18 +284,139 @@ std::int16_t max_sharpness_for(std::uint32_t item_key);
 // `category_name` 이 "심연 장비" 로 부른다.
 inline constexpr std::uint8_t kSocketGemCategory = 74;
 
+// 소켓에 박을 수 있는 강화 보석인가 - 분류 74 이고 이름이 풀린 것.
+// 보석 고르기(장비 창·지급 창)가 같은 조건으로 거른다.
+bool is_socket_gem(const ItemCatalogEntry& e);
+
+// 소켓 칸의 `raw[4]`(칸 번호)가 이 값이면 아직 안 열린 칸이다. 인벤 레코드와
+// 착용 장비가 같은 6바이트 소켓 형식을 쓰므로 아이템 헤더에 둔다.
+inline constexpr std::uint8_t kSocketLocked = 0xFF;
+
+// 이 아이템에 **지급으로** 실을 수 있는 소켓 칸 수. 0 이면 소켓 금지다.
+//
+// 게임의 규칙 그대로다(0x2A70000 · 0xF090BC0, 실측 디스어셈블):
+//   - 장비가 아니면(`equip_type == 0xFFFF`) 소켓수>0 은 오류 갈래다.
+//   - 겹치는 아이템(`max_stack > 1`)도 마찬가지다.
+//   - 장비면 `표 +0x238(max_sockets) >= 소켓수` 여야 통과한다.
+// 배열 다섯 칸 상한은 여기서 안 자른다 - 부르는 쪽(grant)이 자른다.
+//
+// 순수 함수라 표 없이 시험할 수 있다.
+std::uint32_t socket_room(std::uint32_t max_sockets, std::uint32_t max_stack,
+                          std::uint16_t equip_type);
+
+// 위를 아이템 키로 조회한다. 표가 아직 없거나 키가 없으면 0(=금지).
+std::uint32_t socket_room_for(std::uint32_t item_key);
+
+// ------------------------------------------------- 소켓 상한 올리기
+//
+// 아이템표의 소켓 상한(`ItemInfo+0x238`)을 want 로 올린다.
+//
+// **왜 필요한가 (실측 2026-09-08).** 레코드의 열린 칸 수(`+0x70`)는
+// 세이브에 남지만, **화면·사용 칸 수를 정하는 것은 아이템표**다. 표 상한
+// 3짜리 장비에 5칸을 열고 저장·재시작하면 레코드는 5칸 그대로인데 툴팁은
+// 3칸이고, 레코드를 그대로 둔 채 표만 5로 올리면 5칸이 된다.
+//
+// **한계.** 표는 매 실행 exe 에서 다시 읽히므로 이 변경은 **세이브에 안
+// 남는다.** 세션마다 다시 걸어야 하고, 모드를 빼면 데이터(열린 칸)는
+// 남되 표 상한까지만 보인다. 화면에 그대로 알린다.
+//
+// 근거: specs/2026-09-07-socket-grant-unlock-research.md 5·9 절.
+struct SocketCapResult {
+    bool ok = false;
+    int changed = 0;   // 실제로 올린(또는 되돌린) 아이템 수
+    int skipped = 0;   // 대상이 아니거나 이미 그 값
+};
+
+// 이 아이템이 상한 올리기의 대상인가. 순수 함수라 표 없이 시험한다.
+//
+//   - 장비여야 한다(`equip_type != 0xFFFF`). 아니면 소켓 자체가 없다.
+//   - 이미 want 이상이면 건드리지 않는다(낮추지 않는다).
+//
+// **원래 0칸인 장비도 대상이다.** 소켓이 설계상 없는 부위(망토·귀걸이·
+// 목걸이·반지)도 레코드에 5칸 벡터가 이미 할당돼 있고, 표 상한만 올리면
+// 실제로 소켓이 생긴다(실측 2026-09-08: 마녀의 반지 0 -> 2칸). 어느
+// 부위를 건드릴지는 규칙이 정하지 화면 밖에서 막을 일이 아니다.
+bool socket_cap_target(std::uint32_t max_sockets, std::uint16_t equip_type,
+                       std::uint32_t want);
+
+// 소켓 벡터가 다섯 칸 고정이라 이보다 크게 올릴 이유가 없다.
+// (0x234F930 이 `mov edx,5` 로 확보하고 `cmp r8b,5` 로 끊는다.)
+inline constexpr std::uint32_t kSocketSlotMax = 5;
+
+// ---------------------------------------------------------- 부위(묶음)
+//
+// 부위는 **(분류 `+0xA3`, 장비타입 `+0x42`)** 쌍이다. 분류만으로는
+// 갑옷(3/5)과 망토(3/75)가 안 갈린다 - 실측에서 한 분류에 여러 장비타입이
+// 섞이는 자리가 여럿이었다. 이 빌드에서 장비 묶음은 92개다.
+struct SocketPart {
+    std::uint8_t category = 0;
+    std::uint16_t equip_type = 0xFFFF;
+
+    bool operator==(const SocketPart& o) const {
+        return category == o.category && equip_type == o.equip_type;
+    }
+};
+
+struct SocketPartInfo {
+    SocketPart part;
+    std::size_t count = 0;         // 그 부위의 아이템 종 수
+    std::size_t with_socket = 0;   // 그중 원래 소켓이 있는 종 수
+    std::uint32_t table_cap = 0;   // 그 부위의 원래 상한 최대값
+    std::string sample;            // 보기 아이템 이름(같은 분류 구분용)
+};
+
+// 지금 표에 있는 장비를 부위로 묶어 낸다. 분류·장비타입 순으로 정렬된다.
+// 표가 아직 없으면 빈 목록.
+std::vector<SocketPartInfo> socket_parts();
+
+// 부위별로 원하는 칸 수. `want == 0` 이면 그 부위는 안 건드린다.
+struct SocketCapRule {
+    SocketPart part;
+    std::uint32_t want = 0;
+};
+
+// **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 표에 직접
+// 쓴다(equip.cpp 의 제자리 쓰기와 같은 규약). 별도 프로세스인 probe 가
+// 부르면 자기 메모리를 쓰게 된다.
+//
+// 이미 걸려 있으면 먼저 되돌리고 새로 건다. 되돌릴 수 있게 원본을 기억한다.
+SocketCapResult socket_cap_apply(const mem::Reader& reader,
+                                 const std::vector<SocketCapRule>& rules);
+
+// 올려 둔 것을 전부 원래 값으로 되돌린다. 건 적이 없으면 ok=false.
+SocketCapResult socket_cap_restore(const mem::Reader& reader);
+
+// 지금 걸려 있는가. 걸려 있으면 그 규칙.
+bool socket_cap_active();
+std::vector<SocketCapRule> socket_cap_rules();
+
 // 소켓 한 칸의 6바이트를 조립한다.
 //
-// 게임의 복사 루프(RVA 0x2094324)가 `TrItemValue +0x40 + i*6` 을
-// 그대로 옮기고 **다섯 번째 바이트만 슬롯 번호로 덮어쓴다.** 그래서
-// 순번과 꼬리 상수만 채우면 된다. 실측한 박힌 소켓이 전부 이 꼴이다.
+// 게임의 복사 루프(0x234FC31~)가 `TrItemValue +0x40 + k*6` 을 그대로
+// 옮긴 뒤 **다섯 번째 바이트만 칸 번호(k)로 덮어쓴다.** 그래서 순번과
+// 꼬리 상수만 채우면 된다.
 //
-//   24 0D FF FF 00 FF   바람 가르기 (순번 3364, 슬롯 0)
-//   8E 0C FF FF 01 FF   파괴 I      (순번 3214, 슬롯 1)
-//   [u16 순번][FF FF][슬롯][FF]
+//   24 0D FF FF 00 04   보석이 박힌 칸  [순번][FF FF][k][04]
+//   FF FF 00 00 00 04   열려 있는 빈 칸 [FFFF][00 00][k][04]
 //
-// 가운데 두 칸과 마지막 칸의 뜻은 모른다 - 표본 다섯 개가 전부
-// 같았으므로 그대로 쓴다.
+// `[2..3]` 은 채움 표시다 - 보석이 있으면 0xFFFF, 비면 0x0000
+// (equip.cpp `socket_fill_entry` 와 같은 규칙).
+//
+// `[5]` 는 **고정 상수가 아니다.** 한 판 안에서는 열린 칸이 전부 같은
+// 값인데 판이 바뀌면 달라질 수 있다(실측 다섯 판: 04 · 05 · 03 · 02 · 02).
+// 무엇이 정하는지는 모른다. 잠긴 칸은 게임이 안 건드려 풀 쓰레기값이 남는다.
+//
+// **그래서 우리가 무엇을 보내든 상관없다.** 실측 2026-09-08: 세션 값이
+// 0x05 인 판에 0x04 를 실어 지급했는데 정상으로 들어왔고, 저장·재시작
+// 뒤에는 그 판의 값(0x03)으로 게임이 덮어써 있었다. 즉 게임이 로드할
+// 때 다시 매긴다.
+//
+// 아래 상수는 그 "아무 값"이다. 예전에 쓰던 0xFF 만은 라이브 어디에도
+// 없던 값이라 피한다. 더 충실히 하려면 같은 인벤토리의 열린 칸에서
+// 살아 있는 값을 읽어 그대로 쓰면 된다(지금은 그럴 이유를 못 찾았다).
+// specs/2026-09-07-socket-grant-unlock-research.md 2.2 절.
+inline constexpr std::uint8_t kSocketOpenTail = 0x04;
+
 void make_socket_bytes(std::uint16_t gem_id, std::uint8_t out[6]);
 
 // 보석의 **아이템 키**로 위를 조립한다. 대응표를 아직 못 읽었거나
@@ -303,5 +440,22 @@ bool items_ready();
 
 // 준비되기 전에 부르면 빈 목록이다.
 const std::vector<ItemCatalogEntry>& item_catalog();
+
+// 키 -> 엔트리 색인. 어느 판(벡터)으로 만들었는지 기억해 판이 바뀌면 다시
+// 만든다. 순수 클래스라 표 없이 시험한다. 첫 번째 것이 이긴다(키가 겹치는
+// 행이 있다).
+struct ItemKeyIndex {
+    const void* built_data = nullptr;
+    std::size_t built_size = 0;
+    std::unordered_map<std::uint32_t, const ItemCatalogEntry*> map;
+
+    const ItemCatalogEntry* find(const std::vector<ItemCatalogEntry>& cat,
+                                 std::uint32_t key);
+};
+
+// 키로 아이템을 찾는다. 표가 안 올라왔거나(items_ready 전) 없으면 nullptr.
+// 지급·보관함·인벤이 저마다 6,810개를 선형 탐색하거나 자기 맵을 만들던 것을
+// 대신한다.
+const ItemCatalogEntry* item_by_key(std::uint32_t key);
 
 }  // namespace cdtb::game

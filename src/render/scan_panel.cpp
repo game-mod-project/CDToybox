@@ -8,6 +8,8 @@
 
 #include "game/camera.h"
 #include "game/freecam.h"
+#include "render/colors.h"
+#include "render/layout.h"
 
 namespace cdtb::render {
 
@@ -18,15 +20,17 @@ namespace cdtb::render {
 // 의미가 없다. 분석은 game::start_auto_analysis() 가 백그라운드에서
 // 스스로 하고, 여기서는 그 결과만 보여준다.
 void draw_camera_panel(bool* open) {
-    ImGui::SetNextWindowPos(ImVec2(60, 340), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(560, 320), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("카메라 분석", open)) {
+    if (!begin_window(Win::Camera, open)) {
         ImGui::End();
         return;
     }
+    ImGui::TextDisabled("개발 진단용입니다 - 평소에는 열 필요 없습니다.");
 
     if (!game::discovered()) {
-        ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "분석 중...");
+        // GetTime 은 오버레이가 뜬 뒤의 누적 시간이다. 분석 시작 시각은 안 잡으므로
+        // 무엇을 센 숫자인지 문구에 적는다 - 멈춘 건지 가리는 용도로는 충분하다.
+        ImGui::TextColored(col::kBusy, "분석 중... (오버레이 켜진 뒤 %.0f초)",
+                           ImGui::GetTime());
         ImGui::TextWrapped(
             "월드에 진입하면 자동으로 카메라를 찾습니다. "
             "따로 하실 일은 없습니다. 결과는 bin64\\CDToybox.log 에 "
@@ -45,9 +49,16 @@ void draw_camera_panel(bool* open) {
         {"PlayerCameraComponent", c.player_component},
         {"활성 카메라", c.active},
     };
-    for (const auto& row : rows) {
-        ImGui::Text("%-22s 0x%llX", row.label,
-                    static_cast<unsigned long long>(row.addr));
+    // 가변폭 폰트라 공백 패딩으로는 열이 안 맞는다. 표로 맞춘다.
+    if (ImGui::BeginTable("cams", 2, ImGuiTableFlags_SizingFixedFit)) {
+        for (const auto& row : rows) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(row.label);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("0x%llX", static_cast<unsigned long long>(row.addr));
+        }
+        ImGui::EndTable();
     }
 
     ImGui::Separator();
@@ -71,14 +82,13 @@ void draw_camera_panel(bool* open) {
     ImGui::Separator();
     const auto fc = game::freecam_state();
     if (fc.deferred) {
-        ImGui::TextDisabled("프리카메라: 보류 - 렌더가 읽는 값을 아직 못 찾았다");
+        ImGui::TextDisabled("프리카메라: 보류 - 렌더가 읽는 값을 아직 못 찾았습니다");
     } else if (!fc.hooked) {
-        ImGui::TextDisabled("프리카메라: 훅 대기 중");
+        ImGui::TextDisabled("프리카메라: 훅을 기다리는 중입니다");
     } else {
-        ImGui::TextColored(fc.active ? ImVec4(0.4f, 1, 0.4f, 1)
-                                     : ImVec4(0.7f, 0.7f, 0.7f, 1),
-                           "프리카메라: %s  (F9)",
-                           fc.active ? "켜짐" : "꺼짐");
+        ImGui::TextColored(fc.active ? col::kOk
+                                     : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+                           "프리카메라: %s", fc.active ? "켜짐" : "꺼짐");
         ImGui::Text("  갱신 함수 0x%llX",
                     static_cast<unsigned long long>(fc.update_fn));
         ImGui::Text("  변환 객체 0x%llX",
@@ -91,8 +101,6 @@ void draw_camera_panel(bool* open) {
 
     ImGui::End();
 }
-
-void draw_scan_panel() {}   // 제거됨. 호출부 호환을 위해 남긴다.
 
 void shutdown_scan_panel() { game::stop_auto_analysis(); }
 

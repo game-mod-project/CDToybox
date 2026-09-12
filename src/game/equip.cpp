@@ -1,25 +1,17 @@
 #include "game/equip.h"
 
-#include <cstring>
-
 #include <windows.h>
 
 #include <atomic>
 #include <mutex>
+#include <string>
 
+#include "core/write_log.h"
+#include "game/items.h"
 #include "game/player.h"
-#include "mem/scanner.h"
 
 namespace cdtb::game {
 namespace {
-
-// MGRCHAIN (Nexus 3209 CT 그대로). 코어 전역 접근 사이트의 모양.
-//   48 8B 05 <rel32 G> ... 48 8B ?? 68 48 8B ?? B8 00 00 00
-// rel32=+3, pm=u8(+0x0F), blk=u8(+0x32), mo=u32(+0x36).
-constexpr const char* kMgrChain =
-    "48 8B 05 ?? ?? ?? ?? 48 8D 54 24 ?? 48 8B 48 ?? E8 ?? ?? ?? ?? 90 44 38 "
-    "7C 24 ?? 0F 84 ?? ?? ?? ?? 48 8B ?? 24 ?? 48 85 ?? 0F 84 ?? ?? ?? ?? 48 "
-    "8B ?? 68 48 8B ?? B8 00 00 00";
 
 bool vp(std::uintptr_t p) {
     return p > 0x100000000ULL && p < 0x7FFFFFFFFFFFULL;
@@ -115,11 +107,59 @@ bool socket_fill_entry(const mem::Reader& r, std::uintptr_t entry, int k,
     const std::uintptr_t sp = rd64(r, entry + 0x60);
     if (!ptr_reads(r, sp)) return false;
     const std::uintptr_t rec = sp + static_cast<std::uintptr_t>(k) * 6;
-    if (rd8(r, rec + 4) == 0xFF) return false;  // 잠긴 소켓
+    if (rd8(r, rec + 4) == kSocketLocked) return false;  // 잠긴 소켓
     const std::uint16_t mk = (gem == 0xFFFF) ? 0 : 0xFFFF;
     if (!wr16(rec, gem)) return false;
     if (!wr16(rec + 2, mk)) return false;
     return rd16(r, rec) == gem;
+}
+
+// 잠긴 칸을 연다. **이미 열린 칸과 박힌 보석은 안 건드린다.**
+//
+// 게임의 지급 코드(0x234F930)가 하는 것과 똑같이 쓴다:
+//   레코드 +0x70 = 열 칸 수,  칸[k][4] = k
+// 그 둘이 락의 전부다 - 검증도 체크섬도 서버 토큰도 없다(실측 2026-09-08,
+// specs/2026-09-07-socket-grant-unlock-research.md 3.2·9절).
+//
+// 꼬리 바이트 `[5]` 는 판마다 달라지는 값이라 **같은 벡터의 살아 있는 칸에서
+// 가져온다.** 열린 칸이 하나도 없으면 기댈 데가 없어 상수를 쓰는데, 게임이
+// 로드할 때 다시 매기므로 문제되지 않는다(실측: 어긋난 값도 그대로 동작).
+//
+// 연 칸 수를 돌려준다. 아무것도 안 열었으면 0.
+int socket_unlock_entry(const mem::Reader& r, std::uintptr_t entry, int want) {
+    if (want < 1 || want > 5) return 0;
+    const std::uintptr_t sp = rd64(r, entry + 0x60);
+    if (!ptr_reads(r, sp)) return 0;
+
+    const int cur = static_cast<int>(rd8(r, entry + 0x70));
+    if (cur >= want || cur > 5) return 0;
+
+    // 살아 있는 꼬리 값을 찾는다. 없으면 상수.
+    std::uint8_t tail = kSocketOpenTail;
+    for (int k = 0; k < cur; ++k) {
+        const std::uintptr_t rec = sp + static_cast<std::uintptr_t>(k) * 6;
+        if (rd8(r, rec + 4) == static_cast<std::uint8_t>(k)) {
+            tail = rd8(r, rec + 5);
+            break;
+        }
+    }
+
+    int opened = 0;
+    for (int k = cur; k < want; ++k) {
+        const std::uintptr_t rec = sp + static_cast<std::uintptr_t>(k) * 6;
+        if (!wr16(rec + 0, 0xFFFF)) break;      // 보석 없음
+        if (!wr16(rec + 2, 0x0000)) break;      // 빈 칸 표시
+        if (!wr8(rec + 4, static_cast<std::uint8_t>(k))) break;   // 열림
+        if (!wr8(rec + 5, tail)) break;
+        if (rd8(r, rec + 4) != static_cast<std::uint8_t>(k)) break;
+        ++opened;
+    }
+    if (opened == 0) return 0;
+
+    const std::uint8_t n = static_cast<std::uint8_t>(cur + opened);
+    if (!wr8(entry + 0x70, n)) return 0;
+    if (rd8(r, entry + 0x70) != n) return 0;
+    return opened;
 }
 
 bool refine_set_entry(const mem::Reader& r, std::uintptr_t entry,
@@ -168,76 +208,6 @@ std::uintptr_t entry_by_instance(const mem::Reader& r, const EquipTable& t,
 }
 
 }  // namespace
-
-bool resolve_equip_globals(const mem::Rtti& rtti, const mem::Reader& reader,
-                           EquipGlobals* out) {
-    if (out == nullptr) return false;
-    const auto parsed = mem::parse_pattern(kMgrChain);
-    if (!parsed) return false;
-    const auto& img = rtti.image();
-    const mem::Range range{img.data(), img.size()};
-    const auto hits = mem::find_all(range, *parsed, 16);
-    if (hits.empty()) return false;
-
-    const std::uintptr_t base = reader.module_base();
-    EquipGlobals g;
-    bool first = true;
-    for (const std::uint8_t* m : hits) {
-        const std::size_t off = static_cast<std::size_t>(m - img.data());
-        std::int32_t rel = 0;
-        std::memcpy(&rel, m + 3, sizeof(rel));
-        const std::uintptr_t grva =
-            off + 7 + static_cast<std::uintptr_t>(static_cast<std::int64_t>(rel));
-        const std::uintptr_t gabs = base + grva;
-        const std::uint32_t pm = m[0x0F];
-        const std::uint32_t blk = m[0x32];
-        std::uint32_t mo = 0;
-        std::memcpy(&mo, m + 0x36, sizeof(mo));
-        if (first) {
-            g.g = gabs;
-            g.pm = pm;
-            g.blk = blk;
-            g.mo = mo;
-            first = false;
-        } else if (g.g != gabs || g.pm != pm || g.blk != blk || g.mo != mo) {
-            return false;  // 사이트마다 다르면 해석 실패 (자기검증)
-        }
-    }
-    *out = g;
-    return g.g != 0;
-}
-
-std::uintptr_t equip_player_actor(const mem::Reader& reader,
-                                  const EquipGlobals& g) {
-    if (!g.ok()) return 0;
-    const std::uintptr_t w = rd64(reader, g.g);
-    if (!vp(w)) return 0;
-    const std::uintptr_t pm = rd64(reader, w + g.pm);
-    if (!vp(pm)) return 0;
-    const std::uintptr_t actor = rd64(reader, pm + 0x50);
-    return vp(actor) ? actor : 0;
-}
-
-std::uintptr_t equip_component(const mem::Reader& reader, std::uintptr_t actor,
-                               std::uint32_t blk) {
-    if (!vp(actor)) return 0;
-    const std::uintptr_t sub = rd64(reader, actor + blk);
-    if (vp(sub)) {
-        const std::uintptr_t comp = rd64(reader, sub + 0x38);
-        if (vp(comp) && rd64(reader, comp + 0x08) == actor) return comp;
-        // 서브 안에서 백참조 검색
-        for (std::uint32_t o = 0; o < 0x400; o += 8) {
-            const std::uintptr_t p = rd64(reader, sub + o);
-            if (vp(p) && rd64(reader, p + 0x08) == actor) return p;
-        }
-    }
-    // 액터 안에서 백참조 검색
-    for (std::uint32_t o = 0; o < 0x400; o += 8) {
-        const std::uintptr_t p = rd64(reader, actor + o);
-        if (vp(p) && rd64(reader, p + 0x08) == actor) return p;
-    }
-    return 0;
-}
 
 bool find_equip_table(const mem::Reader& reader, std::uintptr_t comp,
                       EquipTable* out) {
@@ -296,22 +266,6 @@ bool find_equip_table(const mem::Reader& reader, std::uintptr_t comp,
     return true;
 }
 
-int socket_unlocked(const mem::Reader& reader, std::uintptr_t entry) {
-    const std::uintptr_t sp = rd64(reader, entry + 0x60);
-    if (!ptr_reads(reader, sp)) return -1;
-    int n = 0;
-    for (int k = 0; k < 5; ++k) {
-        const std::uintptr_t r = sp + static_cast<std::uintptr_t>(k) * 6;
-        const std::uint8_t ix = rd8(reader, r + 4);
-        const std::uint16_t mk = rd16(reader, r + 2);
-        if (ix == 0xFF) break;
-        if (ix != k) return -1;
-        if (mk != 0xFFFF && mk != 0) return -1;
-        ++n;
-    }
-    return n;
-}
-
 bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
                     std::vector<WornPiece>* out) {
     if (out == nullptr || !vp(t.arr) || t.stride < 8) return false;
@@ -338,7 +292,7 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
                 s.marker = rd16(reader, r + 2);
                 s.index = rd8(reader, r + 4);
                 w.sockets[k] = s;
-                if (s.index != 0xFF && s.index == k) ++w.unlocked;
+                if (s.index != kSocketLocked && s.index == k) ++w.unlocked;
             }
         }
         // 염색 레코드: entry+0x78 벡터, +0x80 개수(<=12), 16바이트/레코드.
@@ -530,8 +484,22 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         else if (op == 1) ok = refine_set_entry(reader, e, b);
         else if (op == 2) ok = dye_set_entry(reader, e, a,
                                               static_cast<std::uint8_t>(b), g, bl);
+        else if (op == 3) ok = socket_unlock_entry(reader, e, a) > 0;
         if (ok) ++wrote;
     }
+    // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
+    static const char* const kWhat[4] = {"장비 소켓", "장비 연마", "장비 염색",
+                                         "장비 소켓 열기"};
+    std::string after;
+    if (op == 0) after = "칸 " + std::to_string(a) + " 보석 순번 " + std::to_string(b);
+    else if (op == 1) after = "연마 " + std::to_string(b);
+    else if (op == 2) after = "zone 레코드 " + std::to_string(a) + " -> " +
+                              std::to_string(static_cast<int>(b)) + "," +
+                              std::to_string(static_cast<int>(g)) + "," +
+                              std::to_string(static_cast<int>(bl));
+    else after = "소켓 " + std::to_string(a) + "칸";
+    after += " (" + std::to_string(wrote) + " realm)";
+    log_write(kWhat[op], static_cast<std::uintptr_t>(instance), "-", after);
     return wrote;
 }
 
@@ -548,6 +516,27 @@ int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
                  std::uint8_t r, std::uint8_t g, std::uint8_t b) {
     return eq_write_all(reader, instance, 2, rec, r, g, b);
+}
+
+int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
+                      int want) {
+    return eq_write_all(reader, instance, 3, want, 0, 0, 0);
+}
+
+int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,
+                         int want) {
+    if (record == 0) return 0;
+    const int before = static_cast<int>(rd8(reader, record + 0x70));
+    const int opened = socket_unlock_entry(reader, record, want);
+    if (opened > 0) {
+        log_write("인벤 소켓 열기", record, std::to_string(before) + "칸",
+                  std::to_string(before + opened) + "칸 (연 칸 " +
+                      std::to_string(opened) + ")");
+    } else {
+        log_write("인벤 소켓 열기", record, std::to_string(before) + "칸",
+                  "못 열음");
+    }
+    return opened;
 }
 
 }  // namespace cdtb::game

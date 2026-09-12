@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <utility>
 
 #include "core/log.h"
@@ -16,6 +17,10 @@ constexpr const char* kActorManagerClass = ".?AVClientActorManager@pa@@";
 constexpr std::size_t kActorHolder = 0x68;
 constexpr std::size_t kHolderInfo = 0x20;
 constexpr std::size_t kInfoRow = 0x30;
+// 액터 +0x68 보관객체 안의 ClientMercenaryActorComponent 와
+// 그 안의 고용주 핸들. 자세한 근거는 actors.h 설명.
+constexpr std::size_t kHolderMercComp = 0x118;
+constexpr std::size_t kMercCompOwner = 0x18;
 
 bool read_bucket(const mem::Reader& r, std::uintptr_t at, std::uintptr_t* arr,
                  std::uint32_t* count, std::uint32_t* cap) {
@@ -54,16 +59,32 @@ bool looks_like_actor_manager(const mem::Reader& reader, std::uintptr_t manager)
     return false;
 }
 
+// 아래에 정의돼 있다. 매니저 고르기에서 먼저 쓴다.
+bool walk_actor_pointers(const mem::Reader& reader, std::uintptr_t manager,
+                         std::vector<std::uintptr_t>* out);
+
 bool find_actor_manager(const mem::Reader& reader, const mem::Rtti& rtti,
                         std::uintptr_t* out) {
     if (out == nullptr) return false;
+    // 첫 번째로 그럴듯한 것을 집으면 안 된다. 매니저는 여러 개 살아
+    // 있고(메인 화면 것이 남아 있기도 한다) 그중 빈 것을 집으면 근처
+    // 목록이 계속 비어 보인다 - 실측 2026-09-07: 월드 진입 전에 잡은
+    // 매니저를 그대로 물고 있어 액터가 1개로 나왔다(직전 세션 1703).
+    // 액터를 가장 많이 들고 있는 것을 고른다.
+    std::uintptr_t best = 0;
+    std::size_t best_n = 0;
     for (const auto addr : rtti.instances_of_class(kActorManagerClass, 8)) {
-        if (looks_like_actor_manager(reader, addr)) {
-            *out = addr;
-            return true;
+        if (!looks_like_actor_manager(reader, addr)) continue;
+        std::vector<std::uintptr_t> ptrs;
+        if (!walk_actor_pointers(reader, addr, &ptrs)) continue;
+        if (best == 0 || ptrs.size() > best_n) {
+            best = addr;
+            best_n = ptrs.size();
         }
     }
-    return false;
+    if (best == 0) return false;
+    *out = best;
+    return true;
 }
 
 bool walk_actor_pointers(const mem::Reader& reader, std::uintptr_t manager,
@@ -108,6 +129,27 @@ bool actor_character_row(const mem::Reader& reader, std::uintptr_t actor,
         return false;
     }
     *row_out = row;
+    return true;
+}
+
+bool actor_owner_handle(const mem::Reader& reader, std::uintptr_t actor,
+                        std::uint32_t* owner_out) {
+    if (actor == 0 || owner_out == nullptr) return false;
+    std::uint64_t holder = 0, comp = 0;
+    if (!reader.read_value(actor + kActorHolder, &holder) || holder == 0) return false;
+    if (!reader.read_value(static_cast<std::uintptr_t>(holder) + kHolderMercComp,
+                           &comp) ||
+        comp == 0) {
+        // 동반자 컴포넌트가 없는 액터도 있다. 그건 임자가
+        // 없는 것이 아니라 몰라서 모르는 것이다.
+        return false;
+    }
+    std::uint32_t owner = 0;
+    if (!reader.read_value(static_cast<std::uintptr_t>(comp) + kMercCompOwner,
+                           &owner)) {
+        return false;
+    }
+    *owner_out = owner;
     return true;
 }
 
@@ -193,6 +235,8 @@ bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
                 la.hirable = e->hirable;
             }
         }
+        std::uint32_t owner = 0;
+        if (actor_owner_handle(reader, a, &owner)) la.owner = owner;
         list.push_back(std::move(la));
     }
     *out = std::move(list);
@@ -204,10 +248,18 @@ bool snapshot_live_actors(const mem::Reader& reader, std::uintptr_t manager,
 namespace {
 
 std::atomic<std::uintptr_t> g_manager{0};
-// 목록은 그리는 스레드만 만들고 읽는다(패널이 버튼/주기로 refresh 를
-// 부르고 같은 프레임에서 그린다). 다른 스레드가 읽지 않으므로 판을
-// 겹쳐 둘 필요가 없다.
+// 다시 찾기에 쓴다. 처음 발견에 쓴 것을 그대로 들고 있는다.
+const mem::Rtti* g_rtti = nullptr;
+// 살아 있는 월드에서 이보다 적으면 매니저를 잘못 잡은 것으로 본다.
+constexpr std::size_t kMinPlausibleActors = 8;
+// 목록은 그리는 스레드만 만들고 참조로 읽는다(패널이 버튼/주기로 refresh 를
+// 부르고 같은 프레임에서 그린다). 명령 파일 스레드는 갈아 끼우지 않고 부탁만
+// 하며(g_refresh_requested), 읽을 때는 뮤텍스 아래에서 복사한다 - 갈아 끼우는
+// 순간과 복사가 겹치지 않으면 된다.
 std::vector<LiveActor> g_live;
+std::mutex g_live_mutex;
+std::atomic<bool> g_refresh_requested{false};
+std::atomic<std::uint64_t> g_live_generation{0};
 
 }  // namespace
 
@@ -216,21 +268,82 @@ bool discover_actor_manager(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::uintptr_t m = 0;
     if (!find_actor_manager(reader, rtti, &m)) return false;
     g_manager.store(m, std::memory_order_release);
+    g_rtti = &rtti;
     log::infof("액터 매니저 0x{:X} - 근처 목록 준비됨", m);
     return true;
+}
+
+bool actor_handle_alive(const mem::Reader& reader, std::uint32_t handle,
+                        bool* known_out) {
+    if (known_out != nullptr) *known_out = false;
+    if (handle == 0) return false;
+    const std::uintptr_t m = g_manager.load(std::memory_order_acquire);
+    if (m == 0) return false;
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> handles;
+    if (!read_actor_handles(reader, m, &handles) || handles.empty()) return false;
+    if (known_out != nullptr) *known_out = true;
+    for (const auto& hp : handles) {
+        if (hp.second == handle) return true;
+    }
+    return false;
 }
 
 bool actor_manager_ready() { return g_manager.load(std::memory_order_acquire) != 0; }
 
 bool refresh_live_actors(const mem::Reader& reader) {
-    const std::uintptr_t m = g_manager.load(std::memory_order_acquire);
+    std::uintptr_t m = g_manager.load(std::memory_order_acquire);
     if (m == 0) return false;
     std::vector<LiveActor> list;
     if (!snapshot_live_actors(reader, m, &list)) return false;
-    g_live.swap(list);
+
+    // 잡아 둔 매니저가 말라붙었으면 다시 찾는다. 월드 진입 전에 잡으면
+    // 그 뒤로 영영 비어 보인다. 살아 있는 월드에서 액터가 한 자릿수인
+    // 경우는 없다.
+    if (list.size() < kMinPlausibleActors && g_rtti != nullptr) {
+        std::uintptr_t again = 0;
+        if (find_actor_manager(reader, *g_rtti, &again) && again != 0 &&
+            again != m) {
+            std::vector<LiveActor> better;
+            if (snapshot_live_actors(reader, again, &better) &&
+                better.size() > list.size()) {
+                g_manager.store(again, std::memory_order_release);
+                log::infof("액터 매니저를 0x{:X} 로 바꿨다 - 잡아 둔 것이 "
+                           "비어 있었다({}개 -> {}개)",
+                           again, list.size(), better.size());
+                list.swap(better);
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_live_mutex);
+        g_live.swap(list);
+    }
+    g_live_generation.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 
 const std::vector<LiveActor>& live_actors() { return g_live; }
+
+std::uint64_t live_actors_generation() {
+    return g_live_generation.load(std::memory_order_acquire);
+}
+
+void live_actors_request_refresh() {
+    g_refresh_requested.store(true, std::memory_order_release);
+}
+
+void live_actors_tick(const mem::Reader& reader) {
+    if (!g_refresh_requested.exchange(false, std::memory_order_acq_rel)) return;
+    if (!refresh_live_actors(reader)) {
+        // 실패해도 세대를 올려 기다리는 쪽이 깨어나게 한다(옛 판을 받는다).
+        g_live_generation.fetch_add(1, std::memory_order_acq_rel);
+    }
+}
+
+std::vector<LiveActor> live_actors_copy() {
+    std::lock_guard<std::mutex> lock(g_live_mutex);
+    return g_live;
+}
 
 }  // namespace cdtb::game

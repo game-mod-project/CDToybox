@@ -6,6 +6,7 @@
 #include <mutex>
 #include <vector>
 
+#include "core/write_log.h"
 #include "game/equip.h"
 
 namespace cdtb::game {
@@ -13,7 +14,6 @@ namespace {
 
 constexpr std::size_t kStride = 0x90;
 constexpr std::size_t kType = 0x00;   // i32
-constexpr std::size_t kCur = 0x08;    // i64 (하위 i32 만 쓴다)
 constexpr std::size_t kMax = 0x18;    // i64 base(=최대)
 
 // 평면 오프셋(게이지 배열 base 기준).
@@ -148,9 +148,24 @@ PlayerVitals player_vitals(const mem::Reader& reader) {
     return v;
 }
 
-void player_set_godmode(bool on) { g_god.store(on, std::memory_order_release); }
-void player_set_inf_stamina(bool on) { g_sta.store(on, std::memory_order_release); }
-void player_set_inf_spirit(bool on) { g_spi.store(on, std::memory_order_release); }
+void player_set_godmode(bool on) {
+    log_write("플레이어 무적", 0,
+              g_god.load(std::memory_order_acquire) ? "on" : "off",
+              on ? "on" : "off");
+    g_god.store(on, std::memory_order_release);
+}
+void player_set_inf_stamina(bool on) {
+    log_write("플레이어 무한 스태미나", 0,
+              g_sta.load(std::memory_order_acquire) ? "on" : "off",
+              on ? "on" : "off");
+    g_sta.store(on, std::memory_order_release);
+}
+void player_set_inf_spirit(bool on) {
+    log_write("플레이어 무한 정신력", 0,
+              g_spi.load(std::memory_order_acquire) ? "on" : "off",
+              on ? "on" : "off");
+    g_spi.store(on, std::memory_order_release);
+}
 bool player_godmode() { return g_god.load(std::memory_order_acquire); }
 bool player_inf_stamina() { return g_sta.load(std::memory_order_acquire); }
 bool player_inf_spirit() { return g_spi.load(std::memory_order_acquire); }

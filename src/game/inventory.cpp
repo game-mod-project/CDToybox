@@ -29,7 +29,13 @@ constexpr std::size_t kRecEndurance = 0x40;     // u16 현재 내구도
 constexpr std::size_t kRecSharpness = 0x58;     // u16 장비 연마
 constexpr std::size_t kRecCount = 0x10;         // i64
 constexpr std::size_t kRecSockets = 0x60;       // ptr 소켓 배열
-constexpr std::size_t kRecSocketCount = 0x68;   // u32 (실측 5)
+// 벡터의 크기·용량이다. **아이템의 소켓 칸 수가 아니다** - 게임이 이
+// 배열을 언제나 5칸으로 잡아 실측이 예외 없이 5/5 다(0x234F930 이
+// `mov edx,5` 로 확보하고 `mov [r14+0x68],5` 로 굳힌다).
+constexpr std::size_t kRecSocketSize = 0x68;    // u32 (늘 5)
+// **열린 소켓 칸 수**가 여기다. TrItemValue +0x5E 가 그대로 온다.
+// 0 이면 다섯 칸이 전부 잠긴(byte[4]==0xFF) 상태다.
+constexpr std::size_t kRecOpenSockets = 0x70;   // u8
 
 constexpr std::uint16_t kEmptyIndex = 0xFFFF;
 constexpr std::uint64_t kEmptyInstance = ~0ull;
@@ -104,7 +110,8 @@ bool read_inventory_records(const mem::Reader& reader,
 
         std::uint64_t instance = 0, sockets = 0;
         std::uint16_t index = 0, temper = 0, endurance = 0, sharp = 0;
-        std::uint32_t socket_count = 0;
+        std::uint32_t socket_size = 0;
+        std::uint8_t open_sockets = 0;
         std::int64_t count = 0;
         std::memcpy(&instance, p + kRecInstanceId, sizeof(instance));
         std::memcpy(&index, p + kRecIndex, sizeof(index));
@@ -113,7 +120,8 @@ bool read_inventory_records(const mem::Reader& reader,
         std::memcpy(&sharp, p + kRecSharpness, sizeof(sharp));
         std::memcpy(&count, p + kRecCount, sizeof(count));
         std::memcpy(&sockets, p + kRecSockets, sizeof(sockets));
-        std::memcpy(&socket_count, p + kRecSocketCount, sizeof(socket_count));
+        std::memcpy(&socket_size, p + kRecSocketSize, sizeof(socket_size));
+        std::memcpy(&open_sockets, p + kRecOpenSockets, sizeof(open_sockets));
 
         // 빈 칸은 인스턴스 ID 가 전부 0xFF 이고 순번도 0xFFFF 다.
         if (instance == kEmptyInstance || index == kEmptyIndex) continue;
@@ -129,7 +137,8 @@ bool read_inventory_records(const mem::Reader& reader,
         r.sharpness = sharp;
         r.count = count;
         r.sockets = static_cast<std::uintptr_t>(sockets);
-        r.socket_count = socket_count;
+        r.socket_count = socket_size;
+        r.open_sockets = open_sockets;
         rs.push_back(r);
     }
     *out = std::move(rs);

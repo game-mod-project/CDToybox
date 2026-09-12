@@ -22,6 +22,11 @@ namespace cdtb::game {
 //
 // 획득 대상 메시지 `TrocTrHireMercenaryToTargetReq`(ID 2338) 본문은
 // 정적 분석으로 `u32 대상 액터 핸들 + u8 플래그` 5바이트다.
+//
+// 이름은 "캡처" 지만 조사용이 아니라 **생산 배관**이다. det_hire_response 가 채우는
+// g_acks 를 clan.cpp 의 획득 뒤처리(tick_hire_cleanup -> resolve_spawn_flag, 게임 메모리
+// 쓰기)가 소비하고, det_catch_summon 이 채우는 g_last_catch 를 request_catch 가 쓴다.
+// 지우면 "획득 직후 소환 먹통" 이 조용히 되살아난다(2026-09-10 죽은 코드 정리 때 확인).
 
 // 페이로드 머리를 푼다. 길이가 모자라면 false.
 bool decode_message_header(const std::uint8_t* payload, std::size_t len,
@@ -34,28 +39,18 @@ bool decode_hire_to_target(const std::uint8_t* payload, std::size_t len,
 // 16진 덤프. cap 바이트까지만 찍고 넘치면 "…" 를 붙인다.
 std::string hex_bytes(const std::uint8_t* p, std::size_t n, std::size_t cap);
 
-// 마지막으로 잡힌 획득 대상. valid 가 false 면 아직 없다.
-struct HireTargetCapture {
-    bool valid = false;
-    std::uint32_t handle = 0;
-    std::uint8_t flag = 0;
-};
-HireTargetCapture last_hire_target();
-
-// 잡힌 메시지 수(전체).
-int companion_capture_count();
-
 // 역직렬화 훅을 건다. 한 번만. 하나라도 걸리면 true.
 bool companion_capture_install(const mem::Rtti& rtti,
                                const mem::Reader& reader);
-bool companion_capture_installed();
 
 // 고용 작업 함수 추적 (진단).
 //
 // `TrocTrHireMercenaryToTargetReq`(2338) 역직렬화는 게이트를 지난 뒤
-// **RVA 0x2ADE280** 을 부르고, 그 함수가 낸 u32 코드가 0 이면 성공,
+// **RVA 0x2AE02C0** 을 부르고, 그 함수가 낸 u32 코드가 0 이면 성공,
 // 아니면 그 코드를 0x3f5 태그로 클라이언트에 오류 알림으로 보낸다
-// (역직렬화 0x2960CA0 실측, 2026-09-06).
+// (역직렬화 0x2960CA0 실측, 2026-09-06. 1.0.0.2850 갱신(2026-09-11)에서
+// 역직렬화 0x29623E0 의 +0x180 호출로 다시 뽑았다 - 동반자 작업 셋이 전부
+// +0x2040 밀렸다. specs/2026-09-11-game-update-2850.md).
 //
 //   rcx = MercenaryClanActorComponent ([[세션액터+0x68]+0x110])
 //   rdx = &결과 u32      r8 = &핸들 u32      r9d = 0
@@ -63,18 +58,24 @@ bool companion_capture_installed();
 //
 // 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
 // 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
-inline constexpr std::uint64_t kHireWorkRva = 0x2ADE280;
+inline constexpr std::uint64_t kHireWorkRva = 0x2AE02C0;   // 2760 까지 0x2ADE280
 
-// 소환 작업 함수. 2894 처리기(RVA 0x29621E0)가 관문을 통과한 뒤
-// 이것을 부른다 - 정상 소환에서 실제로 일하는 자리다.
+// 소환 작업 함수. 2894 처리기(RVA 0x29621E0; 2850 빌드는 역직렬화 0x2963920 →
+// 0x2B7B130 의 +0x155)가 관문을 통과한 뒤 이것을 부른다 - 정상 소환에서
+// 실제로 일하는 자리다. 프롤로그(mov rax,rsp / [rax+0x20],r9 / [rax+0x18],r8)는
+// 2850 에서도 그대로다.
 //
-//   f(문객체, u32* 결과, u64 용병번호, float* 좌표)
+//   f(용병단 컴포넌트, u32* 결과, u64 용병번호, float* 좌표)
+//
+// 첫 인자는 문 객체가 아니라 고용 경로와 같은 용병단 컴포넌트
+// [[액터+0x68]+0x110] 이다(2850 래퍼 0x2B7B270: mov rcx,[rdi+0x68] /
+// mov rcx,[rcx+0x110] / call). 리뷰 관찰 2026-09-11 로 정정.
 //
 // 획득한 개체가 지역 재적재 전에는 소환이 안 되는데, 그때 클라이언트가
 // 2894 를 아예 안 보낸다(실측 2026-09-06). 그래서 이 함수가 불리기는
 // 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
 // 알 수 있다. 읽고 찍기만 한다.
-inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2AD1640;   // 2760 까지 0x2ACF600
 // 마지막 소환 결과. 코드 0 이 성공이다.
 //
 // 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).
@@ -84,6 +85,8 @@ inline constexpr std::uint64_t kSpawnWorkRva = 0x2ACF600;
 //
 // 이것을 몰라서 "획득한 개체는 재적재가 필요하다"고 오진했다.
 // 화면에 코드를 띄워 다음에는 바로 알아보게 한다.
+//
+// roster_panel 이 매 프레임 읽어 소환 거부 문구를 띄운다 - 조사용 아님, 지우지 말 것.
 struct SpawnWorkResult {
     bool valid = false;
     std::uint64_t merc_no = 0;
@@ -95,10 +98,9 @@ SpawnWorkResult last_spawn_work();
 // 쓸 수 있다 - 화면에는 "쿨타임으로 보임" 정도로만 적는다.
 inline constexpr std::uint32_t kSpawnCooldownCode = 0x533C0A53;
 
+// 소환 작업 결과를 last_spawn_work 로 넘기는 생산 훅. 진단용이 아니다.
 bool companion_spawn_trace_install(const mem::Reader& reader);
-bool companion_spawn_trace_installed();
 bool companion_hire_trace_install(const mem::Reader& reader);
-bool companion_hire_trace_installed();
 // 마지막 결과 코드(0 이면 성공). 아직 없으면 valid=false.
 struct HireWorkResult {
     bool valid = false;
@@ -108,6 +110,33 @@ struct HireWorkResult {
 };
 HireWorkResult last_hire_work();
 
+// 획득 응답(`TrocTrResponseHiredMercenaryToTargetAck`, 2107) 에서 꾹낸
+// 새 동반자 번호. 본문 20바이트 = {u32 사용자, u32 대상, u32 사용자,
+// u64 MercenaryNo} 이고 번호는 본문 +12 에 있다(실측 2026-09-09).
+//
+// 이것이 필요한 이유: 2338 획득은 명부 레코드의 +0x50 에 **그 순간의
+// 야생 액터 핸들**을 박아 둘다. 그 액터는 곳 사라지는데 값은 남아
+// 게임이 "이미 소환됨" 으로 오판하고, 그러면 그 개체는 소환도
+// 해제도 안 된다. 지금까지 지역 이동·세이브 로드로만 풀리던 그것이다.
+inline constexpr std::uint16_t kHireAckId = 2107;
+
+struct HireAck {
+    bool valid = false;
+    std::uint64_t merc_no = 0;
+    unsigned long long at_ms = 0;
+    bool handled = false;   // 뒤처리를 끝냈나
+};
+// 응답을 여러 개 기억한다. 칸이 하나면 연속 획득에서 앞의 것이
+// 덮어쓰여 뒤처리가 전부 누락된다 - 실측 2026-09-09: 8번 연속
+// 획득에서 뒤처리 로그가 한 줄도 없었다.
+inline constexpr int kHireAckSlots = 16;
+
+// 아직 뒤처리를 안 한 응답을 모아 낸다. 반환값은 채운 개수.
+int pending_hire_acks(HireAck* out, int cap);
+// 그 번호의 응답을 끝났다고 표시한다.
+void mark_hire_ack_handled(std::uint64_t merc_no);
+
+// ----------------------------------------------------------------------
 // ----------------------------------------------------------------------
 // 아이템 사용 구동 (`TrocTrUseItemByItemInfoReq`, ID 2976)
 //
@@ -193,6 +222,101 @@ bool request_hire_target(std::uintptr_t session, std::uint32_t handle,
 bool hire_target_ready();
 // 그란트 패널과 같은 규칙으로 서버 세션을 고른다. 없으면 0.
 std::uintptr_t companion_pick_session();
+
+// ----------------------------------------------------------------------
+// 알에서 깬 개체 거두기 (`TrocTrCatchBySummonReq`, ID 2386)
+//
+// **이름과 달리 야생 개체를 잡는 경로가 아니다.** 처음에 그렇게 읽고
+// 임의의 야생 동물에게 쏴 봤지만 아무 일도 일어나지 않았다. 사용자가
+// 알려 준 실제 절차는 이렇다(2026-09-07):
+//
+//   와이번 알 -> 둥지에 올리기 -> 5분 대기 -> 부화 -> 획득
+//
+// 그래서 캡처된 두 메시지의 뜻은 이렇다.
+//
+//   2676 아이템 사용  = 알을 둥지에 올린다 (본문의 매번 다른 u64 가 알)
+//   2386 이 메시지    = 부화한 개체를 거둔다
+//
+// 와이어는 머리 5 + 본문 8 바이트다.
+//
+//   52 09 00 08 00 | 01 00 10 A0 | 0D 37 10 B0
+//
+//   첫째 u32 = 0xA0100001 - 네 표본이 전부 같다. 둥지로 보인다.
+//              액터 매니저가 아닌 별도 매니저에서 조회된다(0x2B7CE20).
+//   둘째 u32 = 부화체 액터 핸들 (0xB010 = 일반 액터)
+//
+// 처리기(역직렬화 0x28A7860 -> 작업 0x2B7CDF0)는 첫째 핸들이 그 매니저에
+// 없으면 오류 코드만 쓰고 끝낸다. 우리가 쏜 것이 조용히 아무 일도 못 한
+// 이유다 - 둥지도 부화체도 없었다.
+//
+// 그러니 이 메시지만으로는 새 동반자를 얻을 수 없다. 알을 지급해
+// (render/roster_panel 의 동반자 아이템 탭) 게임의 절차를 그대로
+// 밟는 것이 실제로 되는 길이다. 조립·해석은 표본이 있으니 남겨 둔다.
+// ----------------------------------------------------------------------
+// 소지품으로 고용 (`TrocTrHireMercenaryFromInventoryReq`, ID 2454)
+//
+// **종을 골라 등록하는 데는 쓸 수 없다.** 실측으로 끝까지 확인했다
+// (2026-09-07). 인자가 종을 가리키지 않는다.
+//
+//   [ID 2454][00][본문길이 4][u16 A][u16 B]
+//
+//   A = 컨테이너 종류 (1..21). 등록 작업이 표(0x8752A40)로 A -> A-1 로
+//       옮긴다. 그 표는 21행이고 키 1..21, 값 0..20 이 전부다 -
+//       실제로 열어서 읽었다. 범위 밖이면 코드 0x73353994.
+//   B = **그 컨테이너 안의 슬롯 번호.** 조회(0x2078A70)가
+//       [컨테이너] + B * 0xC8 로 슬롯을 집는다. 슬롯 수를 넘거나 빈
+//       슬롯이면 코드 0x06306EB0.
+//
+// 즉 **종은 그 슬롯에 든 아이템이 정한다.** 동행의 부적이 6종뿐이니
+// 이 길의 한계도 6종이다. 원하는 종을 임의로 올릴 수는 없다.
+//
+// 남겨 두는 이유: 부적을 인벤토리에서 손으로 쓰지 않고 구동으로
+// 쓸 수 있고, 거부 코드를 읽는 훅이 붙어 있어 다른 조사에 쓸모가 있다.
+//
+// 처리기 사슬:
+//   역직렬화 0x2965510 -> 작업 0x2AD1FC0
+//   rcx = [[세션액터+0x68]+0x110]  MercenaryClanActorComponent
+//   rdx = &결과 u32 (0 이면 성공)   r8w = A   r9w = B
+inline constexpr std::uint16_t kHireFromInvId = 2454;
+inline constexpr std::size_t kHireInvWireLen = 5 + 4;
+
+// 머리 5바이트 + 본문 4바이트(u16 A, u16 B)를 조립한다.
+bool build_hire_inv_wire(std::uint16_t a, std::uint16_t b, std::uint8_t* out,
+                         std::size_t cap, std::size_t* len_out);
+// 본문 4바이트를 읽는다. 길이나 ID 가 다르면 false.
+bool decode_hire_inv(const std::uint8_t* payload, std::size_t len,
+                     std::uint16_t* a_out, std::uint16_t* b_out);
+// 2454 를 게임 스레드에서 구동한다.
+bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
+                                 std::uint16_t b);
+bool hire_from_inventory_ready();
+
+inline constexpr std::uint16_t kCatchBySummonId = 2386;
+inline constexpr std::size_t kCatchWireLen = 5 + 8;
+// 표본 네 개가 전부 이 값이었다. 세션마다 달라질 수 있으니 캡처에서
+// 본 값이 있으면 그것을 먼저 쓴다.
+inline constexpr std::uint32_t kCatchSelfDefault = 0xA0100001;
+
+// 게임이 보낸 붙잡기에서 읽어 둔 것. 아직 없으면 valid=false.
+struct CatchCapture {
+    bool valid = false;
+    std::uint32_t self = 0;
+    std::uint32_t target = 0;
+};
+CatchCapture last_catch();
+
+// 본문 8바이트(u32 잡는쪽, u32 대상)를 읽는다. 길이가 다르면 false.
+bool decode_catch(const std::uint8_t* payload, std::size_t len,
+                  std::uint32_t* self_out, std::uint32_t* target_out);
+// 머리 5바이트 + 본문 8바이트를 조립한다.
+bool build_catch_wire(std::uint32_t self, std::uint32_t target,
+                      std::uint8_t* out, std::size_t cap, std::size_t* len_out);
+// 2386 을 게임 스레드에서 구동한다. self 가 0 이면 캡처에서 본 값,
+// 그것도 없으면 kCatchSelfDefault 를 쓴다.
+bool request_catch(std::uintptr_t session, std::uint32_t target,
+                   std::uint32_t self = 0);
+// 2386 이 해석돼 있는가.
+bool catch_ready();
 
 // ----------------------------------------------------------------------
 // 명령 파일 (DLL 옆 cdtoybox_cmd.txt)
