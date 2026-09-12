@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 
+#include "core/log.h"
 #include "core/write_log.h"
 #include "game/actors.h"
 #include "game/items.h"
@@ -446,9 +447,39 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);   // both-realms 쓰기 대상 전체
     std::uintptr_t prefer = 0;
+    std::vector<EquipTable> known;
+    std::vector<EquipCharacter> prev_chars;
+    std::uint16_t prev_row = kEquipAutoCharacter;
     {
         std::lock_guard<std::mutex> lk(g_eq_mutex);
         prefer = g_eq_player_table.arr;   // 이전 선택 유지(동률 안정화)
+        known = g_eq_tables;
+        prev_chars = g_eq_chars;
+        prev_row = g_eq_current_row;
+    }
+    // 힙 스캔은 매번 완전하지 않다(영역 읽기가 실패하면 그 영역을 통째로 건너뛴다 - 실측
+    // 2026-09-12: 잇단 두 스캔이 26개/29개였고 웅카 서버 테이블이 한 번은 빠져, 첫 일괄
+    // 쓰기가 한쪽 realm 에만 갔다). 전에 찾아 둔 테이블은 지금도 같은 자리에서 검증되면
+    // 남긴다 - 후보 목록에서 캐릭터가 사라졌다 나타났다 하지 않고, both-realms 쓰기가
+    // 양쪽을 다 찾는다. 검증은 스캔과 같은 조건(find_equip_table + 실제아이템 >= 3)이라
+    // 풀린 뒤 딴 것이 들어앉은 자리는 떨어진다(읽기는 VirtualQuery 로 보호된다).
+    {
+        std::vector<WornPiece> chk;
+        for (const auto& k : known) {
+            bool present = false;
+            for (const auto& t : tabs) {
+                if (t.arr == k.arr) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present) continue;
+            EquipTable again;
+            if (!find_equip_table(reader, k.comp, &again) || again.arr != k.arr) continue;
+            again.comp = k.comp;
+            if (!read_worn_gear(reader, again, &chk) || chk.size() < 3) continue;
+            tabs.push_back(again);
+        }
     }
     // 캐릭터 후보: 정신력 풀이 있고 착용 테이블로 보이는 것 중 행을 푼 것. realm 마다 하나씩
     // 오므로 행으로 합치고 조각 수는 큰 쪽을 둔다.
@@ -492,6 +523,28 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<WornPiece> pieces;
     const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces, want);
     const std::uint16_t cur = ok ? table_character_row(reader, pt) : kEquipAutoCharacter;
+    // 후보나 표시 캐릭터가 바뀌면 한 줄 남긴다(20초 주기 재탐색은 조용히) - "콤보에 웅카가
+    // 없다" 를 로그로 가릴 수 있게.
+    bool changed = chars.size() != prev_chars.size() || cur != prev_row;
+    for (std::size_t i = 0; !changed && i < chars.size(); ++i) {
+        changed = chars[i].row != prev_chars[i].row || chars[i].pieces != prev_chars[i].pieces;
+    }
+    if (changed) {
+        const auto label = [](std::uint16_t row) -> std::string {
+            if (row == kEquipAutoCharacter) return "자동";
+            const RosterEntry* e = character_by_row(row);
+            return e != nullptr && !e->display().empty() ? e->display()
+                                                          : "행 " + std::to_string(row);
+        };
+        std::string list;
+        for (const auto& c : chars) {
+            if (!list.empty()) list += " ";
+            list += label(c.row) + "(" + std::to_string(c.pieces) + ")";
+        }
+        log::infof("장비 캐릭터 후보 {}개: {} - 선택 {} → 표시 {} (테이블 {}개{})",
+                   chars.size(), list, label(want), ok ? label(cur) : "없음", tabs.size(),
+                   ok ? "" : ", 착용 테이블 못 찾음");
+    }
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_tables = std::move(tabs);
     g_eq_chars = std::move(chars);

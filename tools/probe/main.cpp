@@ -2176,6 +2176,51 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     for (const char* n : kKnown) cmd_cheat_one(rt, reader, n);
 }
 
+// 장비 창의 캐릭터 후보를 DLL 과 같은 코드(equip_discover)로 계산해 보인다 - "웅카가 콤보에
+// 없다/골라도 안 바뀐다" 를 가른다. 인자로 캐릭터 행을 주면 그 선택으로 고른 결과까지 본다.
+void cmd_equipchars(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                    char** argv) {
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터 실패\n");
+        return;
+    }
+    const std::uint16_t want =
+        argc > 2 ? static_cast<std::uint16_t>(std::strtoul(argv[2], nullptr, 0))
+                 : game::kEquipAutoCharacter;
+    game::equip_select_character(want);
+    game::equip_discover(rt, reader);
+    std::vector<game::EquipTable> tabs;
+    game::equip_tables_copy(&tabs);
+    std::printf("테이블 %zu개, 선택 %u, 현재 %u, 소화 %u, ready=%d\n", tabs.size(), want,
+                game::equip_current_character(), game::equip_resolved_character(),
+                game::equip_ready() ? 1 : 0);
+    for (const auto& t : tabs) {
+        std::uint64_t ch = 0;
+        reader.read_value(t.comp + 0x08, &ch);
+        if (!game::char_is_player(reader, static_cast<std::uintptr_t>(ch))) continue;
+        std::uint16_t row = 0xFFFF;
+        game::actor_character_row(reader, static_cast<std::uintptr_t>(ch), &row);
+        std::vector<game::WornPiece> ps;
+        game::read_worn_gear(reader, t, &ps);
+        const game::RosterEntry* e = game::character_by_row(row);
+        std::printf("  comp=0x%llX arr=0x%llX 조각 %zu 행 %u %s playable=%d\n",
+                    (unsigned long long)t.comp, (unsigned long long)t.arr, ps.size(), row,
+                    e != nullptr ? e->display().c_str() : "?",
+                    game::is_playable_character_row(reader, row) ? 1 : 0);
+    }
+    const auto chars = game::equip_characters();
+    std::printf("후보 %zu개\n", chars.size());
+    for (const auto& c : chars) {
+        const game::RosterEntry* e = game::character_by_row(c.row);
+        std::printf("  행 %u 조각 %d %s\n", c.row, c.pieces,
+                    e != nullptr ? e->display().c_str() : "?");
+    }
+    std::vector<game::WornPiece> pieces;
+    game::equip_snapshot(&pieces);
+    std::printf("스냅샷 조각 %zu개 (테이블 comp=0x%llX)\n", pieces.size(),
+                (unsigned long long)game::equip_player_comp());
+}
+
 void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                char** argv) {
     if (argc > 2 && std::strcmp(argv[2], "diag") == 0) {
@@ -3713,6 +3758,7 @@ int main(int argc, char** argv) {
     if (cmd == "aob") { cmd_aob(rt, reader, argc, argv); return 0; }
     if (cmd == "invsock") { cmd_invsock(rt, reader); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
+    if (cmd == "equipchars") { cmd_equipchars(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
