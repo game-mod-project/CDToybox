@@ -48,13 +48,16 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
     jrel8(0x79, &to_done);          // jns  done   델타 >= 0 -> 데미지가 아니다
     add({0x66, 0x83, 0xFA, 0x00});  // cmp  dx, 0
     jrel8(0x75, &to_done);          // jne  done   Health 가 아니다
+    // 두 realm 의 root 를 나란히 두고 둘 다 맞춰 본다(nofall_cave.h 의 설명 참고).
+    // 꺼져 있으면 두 칸이 0 이고, rcx 는 0 일 수 없으므로 어느 쪽도 맞지 않아 빠진다.
+    std::vector<Fixup> to_mine;
     add({0x48, 0xB8});
-    addq(static_cast<std::uint64_t>(vars + kNofallOwner));  // mov rax, &owner
-    add({0x48, 0x8B, 0x00});        // mov  rax, [rax]
-    add({0x48, 0x85, 0xC0});        // test rax, rax
-    jrel8(0x74, &to_done);          // je   done   꺼졌거나 아직 root 를 모른다
-    add({0x48, 0x39, 0xC1});        // cmp  rcx, rax
+    addq(static_cast<std::uint64_t>(vars + kNofallOwner));  // mov rax, &owners
+    add({0x48, 0x3B, 0x08});        // cmp  rcx, [rax]      realm 1
+    jrel8(0x74, &to_mine);          // je   mine
+    add({0x48, 0x3B, 0x48, 0x08});  // cmp  rcx, [rax+8]    realm 2
     jrel8(0x75, &to_done);          // jne  done   내가 맞은 게 아니다
+    const std::size_t mine_at = b.size();   // mine:
     add({0x48, 0x8B, 0x44, 0x24, 0x38});        // mov rax, [rsp+0x38] sourceCtx
     add({0x48, 0x3D, 0x00, 0x00, 0x01, 0x00});  // cmp rax, 0x10000
     jrel8(0x72, &to_zero);          // jb   zero   출처가 아예 없다
@@ -98,7 +101,8 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
         }
         return true;
     };
-    if (!patch(to_zero, out.zero_at) || !patch(to_done, out.done_at)) {
+    if (!patch(to_zero, out.zero_at) || !patch(to_done, out.done_at) ||
+        !patch(to_mine, mine_at)) {
         out.why = "rel8 분기가 사거리를 벗어난다";
         out.zero_at = out.done_at = out.deref_at = 0;
         return out;
@@ -130,6 +134,7 @@ NofallCave nofall_build_observe_cave(const std::uint8_t* orig,
     std::vector<std::uint8_t> b;
     std::vector<Fixup> to_done;
     std::vector<Fixup> to_dx;
+    std::vector<Fixup> to_hit;
 
     auto add = [&](std::initializer_list<std::uint8_t> xs) {
         for (auto x : xs) b.push_back(x);
@@ -164,11 +169,13 @@ NofallCave nofall_build_observe_cave(const std::uint8_t* orig,
     at_var(kNofallLastR9, {0x4C, 0x89, 0x08});   // mov [rax], r9
 
     // rcx 가 내 root 인가?
-    at_var(kNofallOwner, {0x48, 0x8B, 0x00});  // mov rax, [rax]
-    add({0x48, 0x85, 0xC0});                   // test rax, rax
-    jrel8(0x74, &to_dx);                       // je  chk_dx   root 를 아직 모른다
-    add({0x48, 0x39, 0xC1});                   // cmp rcx, rax
+    add({0x48, 0xB8});
+    addq(static_cast<std::uint64_t>(vars + kNofallOwner));  // mov rax, &owners
+    add({0x48, 0x3B, 0x08});                   // cmp rcx, [rax]     realm 1
+    jrel8(0x74, &to_hit);                      // je  hit
+    add({0x48, 0x3B, 0x48, 0x08});             // cmp rcx, [rax+8]   realm 2
     jrel8(0x75, &to_dx);                       // jne chk_dx
+    const std::size_t hit_at = b.size();       // hit:
     add({0x48, 0xB8});
     addq(static_cast<std::uint64_t>(vars + kNofallRcxHit));
     add({0xF0, 0x48, 0xFF, 0x00});             // lock inc qword [rax]
@@ -196,7 +203,8 @@ NofallCave nofall_build_observe_cave(const std::uint8_t* orig,
         }
         return true;
     };
-    if (!patch(to_dx, dx_at) || !patch(to_done, done_at)) {
+    if (!patch(to_dx, dx_at) || !patch(to_done, done_at) ||
+        !patch(to_hit, hit_at)) {
         out.why = "rel8 분기가 사거리를 벗어난다";
         return out;
     }

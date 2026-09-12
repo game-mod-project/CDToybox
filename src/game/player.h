@@ -41,6 +41,11 @@ bool player_ready();
 // 고정된 플레이어 char. 없으면 0.
 std::uintptr_t player_char();
 
+// 지금 고른 캐릭터의 **모든 realm root**(클라+서버)를 모은다. 게이지 배열이 아니라
+// 그 한 단계 앞인 root 다 - 데미지 디스패처가 rcx 로 넘기는 것이 이 root 이기
+// 때문이다(2026-09-12 실측). 낙사 방지가 쓴다. 넣은 개수를 돌려준다.
+int player_roots(const mem::Reader& reader, std::uintptr_t* out, int max);
+
 struct PlayerVitals {
     std::int32_t hp_cur = 0, hp_max = 0;
     std::int32_t sta_cur = 0, sta_max = 0;

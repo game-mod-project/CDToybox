@@ -27,21 +27,29 @@
 
 namespace cdtb::game {
 
-// vars 블록(32바이트) 레이아웃. 전부 qword.
-inline constexpr std::size_t kNofallOwner = 0;        // 내 root (0 이면 꺼짐)
-inline constexpr std::size_t kNofallZeroed = 8;       // 취소함 횟수
-inline constexpr std::size_t kNofallLetThrough = 16;  // 통과시킴 횟수
+// vars 블록(64바이트) 레이아웃. 전부 qword.
+//
+// **root 가 두 칸인 이유**: 플레이어는 클라·서버 두 realm 으로 존재하고, 데미지
+// 디스패처가 rcx 로 넘기는 것은 **서버 root** 다(2026-09-12 실측: rcx 0x…1E99880 이
+// 서버 char 의 [+0x68]+0x20+0x18 과 일치). 그런데 player_char() 는 장비 창의 캐릭터
+// 선택을 따라가므로 어느 realm 이 잡힐지 보장되지 않는다 - 클라 쪽이 잡힌 실행에서는
+// 훅이 한 번도 안 물렸다. 그래서 같은 캐릭터의 두 realm root 를 **나란히** 두고
+// 케이브가 둘 다 맞춰 본다(게이지 freeze 가 both-realms 인 것과 같은 이유).
+inline constexpr std::size_t kNofallOwner = 0;        // 내 root #1 (0 이면 꺼짐)
+inline constexpr std::size_t kNofallOwner2 = 8;       // 내 root #2 (다른 realm, 없으면 0)
+inline constexpr std::size_t kNofallZeroed = 16;      // 취소함 횟수
+inline constexpr std::size_t kNofallLetThrough = 24;  // 통과시킴 횟수
 inline constexpr std::size_t kNofallVarsSize = 64;
 
 // **진단(관찰) 모드** 전용 칸. 적용 모드에서는 쓰이지 않는다.
 // 관찰 케이브는 r9 를 **건드리지 않는다** - 무엇이 지나가는지 세기만 한다.
 // 그래서 켠 채로 평소처럼 놀아도 게임 동작이 달라지지 않는다.
-inline constexpr std::size_t kNofallEvents = 8;    // 피해 이벤트(r9 < 0)
-inline constexpr std::size_t kNofallRcxHit = 16;   // 그중 rcx == 내 root
-inline constexpr std::size_t kNofallDxZero = 24;   // 그중 dx == 0
-inline constexpr std::size_t kNofallLastRcx = 32;  // 마지막으로 본 rcx
-inline constexpr std::size_t kNofallLastRdx = 40;  // 마지막 rdx(하위 16비트가 dx)
-inline constexpr std::size_t kNofallLastR9 = 48;   // 마지막 델타
+inline constexpr std::size_t kNofallEvents = 16;    // 피해 이벤트(r9 < 0)
+inline constexpr std::size_t kNofallRcxHit = 24;   // 그중 rcx == 내 root(두 칸 중 하나)
+inline constexpr std::size_t kNofallDxZero = 32;   // 그중 dx == 0
+inline constexpr std::size_t kNofallLastRcx = 40;  // 마지막으로 본 rcx
+inline constexpr std::size_t kNofallLastRdx = 48;  // 마지막 rdx(하위 16비트가 dx)
+inline constexpr std::size_t kNofallLastR9 = 56;   // 마지막 델타
 
 // 사이트에서 복사하는 원본 길이. 디스패처의 첫 명령 `mov [rsp+8], rbx` 가 정확히
 // 5바이트라 E9 rel32 가 딱 떨어진다(NOP 패딩이 필요 없다).

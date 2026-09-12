@@ -40,7 +40,7 @@ std::atomic<std::uint64_t> g_faults{0};
 // 사이트 패치와 root 는 정상). 두 관문(dx == 0 = Health, rcx == 내 root)이 정적
 // 분석으로 못 박은 적 없는 가정이라, 어느 쪽이 튕기는지 세어 보고 정한다.
 // 가려내고 나면 false 로 되돌린다.
-constexpr bool kObserveOnly = true;
+constexpr bool kObserveOnly = false;
 // 마지막으로 owner 에 써 넣은 값. 같은 값을 매 프레임 다시 쓰지 않으려는 것이다.
 // nofall_set 이 owner 를 직접 건드리므로 그쪽에서 반드시 무효화해야 한다 -
 // 안 하면 껐다 켰을 때 "root 가 그대로" 라 다시 안 써져 보호가 안 켜진다.
@@ -296,7 +296,10 @@ void nofall_set(bool on) {
               on ? "on" : "off");
     g_enabled.store(on, std::memory_order_release);
     // 끄면 root 를 지운다 -> 케이브의 `test rax,rax / je done` 이 곧바로 빠진다.
-    if (!on) vars_write(kNofallOwner, 0);
+    if (!on) {
+        vars_write(kNofallOwner, 0);
+        vars_write(kNofallOwner2, 0);
+    }
     g_last_owner.store(kOwnerUnknown, std::memory_order_release);
 }
 
@@ -313,6 +316,7 @@ bool nofall_observing() { return kObserveOnly; }
 NofallDiag nofall_diag() {
     NofallDiag d;
     d.owner = vars_read(kNofallOwner);
+    d.owner2 = vars_read(kNofallOwner2);
     d.events = vars_read(kNofallEvents);
     d.rcx_hit = vars_read(kNofallRcxHit);
     d.dx_zero = vars_read(kNofallDxZero);
@@ -326,22 +330,26 @@ void nofall_refresh(const mem::Reader& reader) {
     if (g_state.load(std::memory_order_acquire) != 2) return;
     if (g_vars == 0) return;
     std::uint64_t want = 0;
+    std::uint64_t want2 = 0;
     if (g_enabled.load(std::memory_order_acquire)) {
-        // 디스패처의 rcx 와 비교할 대상. player.h 의 게이지 체인과 같은 자리다.
+        // 디스패처의 rcx 와 비교할 대상. 같은 캐릭터가 클라·서버 두 realm 으로
+        // 존재하고 디스패처는 **서버 root** 를 넘긴다(2026-09-12 실측) - 어느 쪽이
+        // 잡힐지 보장되지 않아 둘 다 먹인다(nofall_cave.h 의 설명 참고).
         // 캐릭터 교체·지역 이동으로 바뀌므로 캐시하지 않고 매번 다시 계산한다.
-        // 한 단계라도 끊기면 0 을 써서 **보호를 끈다** - 낡은 root 를 남기면 그
+        // 하나도 못 구하면 0 을 써서 **보호를 끈다** - 낡은 root 를 남기면 그
         // 주소를 물려받은 다른 개체의 피해까지 지울 수 있다.
-        const std::uintptr_t ch = player_char();
-        const std::uintptr_t actor = vp(ch) ? rq(reader, ch + 0x68) : 0;
-        const std::uintptr_t mark = vp(actor) ? rq(reader, actor + 0x20) : 0;
-        const std::uintptr_t root = vp(mark) ? rq(reader, mark + 0x18) : 0;
-        if (vp(root)) want = static_cast<std::uint64_t>(root);
+        std::uintptr_t roots[2]{};
+        const int n = player_roots(reader, roots, 2);
+        if (n > 0) want = static_cast<std::uint64_t>(roots[0]);
+        if (n > 1) want2 = static_cast<std::uint64_t>(roots[1]);
     }
-    // 값이 그대로면 쓰지 않는다 - owner 와 두 카운터가 같은 캐시 라인이라,
-    // 렌더 스레드의 초당 60회 저장이 게임 스레드들의 lock inc 와 부딪힌다.
-    if (g_last_owner.load(std::memory_order_acquire) == want) return;
+    // 값이 그대로면 쓰지 않는다 - owner 와 카운터가 같은 캐시 라인이라, 렌더
+    // 스레드의 초당 60회 저장이 게임 스레드들의 lock inc 와 부딪힌다.
+    const std::uint64_t key = want ^ (want2 * 0x9E3779B97F4A7C15ULL);
+    if (g_last_owner.load(std::memory_order_acquire) == key) return;
     vars_write(kNofallOwner, want);
-    g_last_owner.store(want, std::memory_order_release);
+    vars_write(kNofallOwner2, want2);
+    g_last_owner.store(key, std::memory_order_release);
 }
 
 }  // namespace cdtb::game
