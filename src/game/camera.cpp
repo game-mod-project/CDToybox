@@ -87,19 +87,37 @@ bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
                    CameraSet* out) {
     CameraSet found;
 
-    // 이름으로 진짜를 고른다. 후보에는 vtable 값을 우연히 담은
-    // 메모리가 섞여 있다.
-    found.free_cam = pick_named(
-        reader, rtti.instances_of_class(".?AVFreeCamCamera@pa@@", 16),
-        "FreeCamera");
-    found.photo_cam = pick_named(
-        reader, rtti.instances_of_class(".?AVPhotoCamera@pa@@", 16),
-        "PhotoCamera");
+    // 네 클래스의 인스턴스를 힙 한 번 훑기로 모은다. instances_of_class 는 vtable 마다 힙
+    // 전체를 읽으므로(이 넷은 vtable 7개 = 힙 전수 7회) 월드 안에서 122초가 걸렸다(실측
+    // 2026-09-12) - 카메라를 못 잡은 통과가 한 바퀴 더 돌면 그 사이 이름 채우기가 뒤로
+    // 밀려 창마다 "불러오는 중" 이 길어졌다. 후보에는 vtable 값을 우연히 담은 메모리가
+    // 섞여 있어 이름으로 진짜를 고른다. 상한은 네 클래스가 나눠 쓰고 낮은 주소부터 채우므로
+    // (실측 후보 합계 14개) 닿으면 경고를 남긴다 - 미확보가 이어질 때 "객체가 아직 없다" 와
+    // 가르기 위해서다(리뷰 C-2).
+    constexpr std::size_t kScanMax = 1024;
+    const std::vector<std::string> kClasses = {
+        ".?AVFreeCamCamera@pa@@", ".?AVPhotoCamera@pa@@", ".?AVCameraManager@pa@@",
+        ".?AVPlayerCameraComponent@pa@@"};
+    std::vector<std::uintptr_t> free_cams, photo_cams, managers, comps;
+    const auto scanned = rtti.find_objects_of(kClasses, kScanMax);
+    for (const auto& f : scanned) {
+        if (f.cls == kClasses[0]) free_cams.push_back(f.address);
+        else if (f.cls == kClasses[1]) photo_cams.push_back(f.address);
+        else if (f.cls == kClasses[2]) managers.push_back(f.address);
+        else if (f.cls == kClasses[3]) comps.push_back(f.address);
+    }
+    log::infof("카메라 후보(힙 한 번 훑기): 프리캠 {} 포토캠 {} 매니저 {} 플레이어 컴포넌트 {}",
+               free_cams.size(), photo_cams.size(), managers.size(), comps.size());
+    if (scanned.size() >= kScanMax) {
+        log::warnf("카메라 후보가 상한 {}개에 닿았다 - 가짜 후보가 많아 진짜를 놓쳤을 수 있다",
+                   kScanMax);
+    }
+    found.free_cam = pick_named(reader, free_cams, "FreeCamera");
+    found.photo_cam = pick_named(reader, photo_cams, "PhotoCamera");
 
     // CameraManager 는 이름이 없다. +0x18 이 방금 찾은 프리카메라를
     // 가리키는지로 검증한다.
-    for (const auto a :
-         rtti.instances_of_class(".?AVCameraManager@pa@@", 16)) {
+    for (const auto a : managers) {
         std::uint64_t slot = 0;
         if (!reader.read(a + 0x18, &slot, sizeof(slot))) continue;
         if (found.free_cam != 0 && slot == found.free_cam) {
@@ -110,9 +128,6 @@ bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
 
     // PlayerCameraComponent 도 이름이 없다. +0x88 이 가리키는 곳에서
     // 0x28 을 빼면 활성 카메라이고, 그 이름이 "PlayerCamera" 여야 한다.
-    const auto comps =
-        rtti.instances_of_class(".?AVPlayerCameraComponent@pa@@", 16);
-    log::infof("PlayerCameraComponent 후보 {}개", comps.size());
     for (const auto a : comps) {
         std::uint64_t icam = 0;
         if (!reader.read(a + 0x88, &icam, sizeof(icam))) {

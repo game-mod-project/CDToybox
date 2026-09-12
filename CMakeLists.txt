@@ -145,6 +145,7 @@ add_executable(cdtb_tests
     tests/core_helpers_tests.cpp
     tests/table_sort_tests.cpp
     tests/input_filter_tests.cpp
+    tests/rtti_tests.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
     src/game/grant.cpp

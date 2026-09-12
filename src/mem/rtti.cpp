@@ -218,11 +218,7 @@ std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
 
 std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
                                             std::size_t max) const {
-    std::vector<Found> out;
-    if (image_.empty()) return out;
-
-    const std::uintptr_t mb = r_.module_base();
-    const std::uintptr_t me = mb + r_.module_size();
+    if (image_.empty()) return {};
 
     // vtable 해석은 색인에서 가져온다. 예전에는 여기서 이미지 전체를
     // 8바이트씩 훑으며 `class_of_vtable` 을 불렀는데, 이 함수를 부르는
@@ -235,7 +231,37 @@ std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
         if (cls.find(substring) == std::string::npos) continue;
         matching.emplace_back(vt, &cls);
     }
+    return scan_heap(matching, max);
+}
+
+std::vector<Rtti::Found> Rtti::find_objects_of(const std::vector<std::string>& names,
+                                               std::size_t max) const {
+    if (image_.empty() || names.empty()) return {};
+    ensure_index();
+    std::vector<std::pair<std::uintptr_t, const std::string*>> matching;
+    for (const auto& [vt, ti] : vtable_cls_) {
+        const std::string& cls = types_[ti].name;
+        for (const auto& n : names) {
+            if (cls == n) {
+                matching.emplace_back(vt, &cls);
+                break;
+            }
+        }
+    }
+    return scan_heap(matching, max);
+}
+
+// 힙 영역을 한 번 훑어 matching 의 vtable 값을 담은 8바이트 자리를 전부 모은다. 영역 하나를
+// 통째로 읽다 실패하면 그 영역은 건너뛴다 - 스캔이 매번 완전하지 않은 이유(game/equip.cpp
+// 가 캐시로 메운다). max 는 전체 상한이라 여러 클래스를 모을 때는 넉넉히 준다.
+std::vector<Rtti::Found> Rtti::scan_heap(
+    const std::vector<std::pair<std::uintptr_t, const std::string*>>& matching,
+    std::size_t max) const {
+    std::vector<Found> out;
     if (matching.empty()) return out;
+
+    const std::uintptr_t mb = r_.module_base();
+    const std::uintptr_t me = mb + r_.module_size();
 
     std::vector<std::uint8_t> buf;
     for (const auto& reg : r_.heap_regions()) {
