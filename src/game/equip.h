@@ -6,7 +6,7 @@
 #include "mem/reader.h"
 #include "mem/rtti.h"
 
-// 착용 장비(worn gear) 에디터의 읽기 계층. 소켓·연마·염색을 다룬다 -
+// 착용 장비(worn gear) 에디터의 읽기 계층. 소켓·담금질·연마·염색을 다룬다 -
 // 인벤토리 컨테이너 핸들도 NPC 도 필요 없다. 힙에서 `EquipSlotActorComponent`
 // 를 전부 찾아(collect_equip_tables) 슬롯 태그가 서로 다른 것으로 착용 배열을
 // 유도하고(find_equip_table), 정신력 풀 + 착용 조각 최다로 플레이어 것을
@@ -55,7 +55,12 @@ struct WornPiece {
     std::uintptr_t entry = 0;
     std::uint64_t instance = 0;   // +0x00, both-realms 매칭 키
     std::uint32_t key = 0;        // +0x08 하위16, 아이템 순번
-    std::uint16_t refine = 0;     // +0x0A
+    // +0x0A 담금질(툴팁 게이지 10칸, 상한 ItemCatalogEntry::max_temper). 이식 원본(Trinity)이
+    // "refinement" 라 불러 오래 "연마" 로 표시됐는데, 인벤토리 레코드 +0x0A 와 같은 자리라
+    // 담금질이다(실측 2026-09-12: 창에서 10 을 쓴 장비가 전부 +0x0A = 10, +0x58 은 0).
+    std::uint16_t temper = 0;
+    // +0x58 장비 연마(툴팁 "장비 연마 N/100", 상한 max_sharpness). 인벤토리 레코드와 같은 자리.
+    std::uint16_t sharpness = 0;
     std::uint16_t slot_tag = 0;   // +(stride-8)
     int unlocked = 0;             // 열린 소켓 수
     WornSocket sockets[5]{};      // entry+0x60 벡터
@@ -77,6 +82,28 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
 // 실패면 false.
 bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
                       EquipTable* table_out, std::vector<WornPiece>* pieces_out);
+
+// ------------------------------------------------------------------ 캐릭터 선택
+// 월드에 있는 플레이어형 캐릭터(정신력 풀 보유)마다 하나. 클리프·웅카·데미안은 번갈아
+// 조종하는데 "조각 최다" 규칙은 늘 클리프를 골라, 웅카로 플레이해도 클리프 장비만 보였다
+// (사용자 보고 2026-09-12). 캐릭터 행은 comp+0x08 의 캐릭터 객체에서 actor_character_row
+// 로 푼다(실측: 조각 21 = 행 0 클리프, 16 = 행 5 웅카, 11 = 행 3 데미안). 행을 못 푼
+// 테이블은 후보에 안 든다(자동 선택에는 든다). 이름은 로스터(character_by_row)에서 그릴
+// 때 푼다 - 발견 시점에 로스터가 아직 없을 수 있다.
+struct EquipCharacter {
+    std::uint16_t row = 0xFFFF;   // 캐릭터 행
+    int pieces = 0;               // 착용 조각 수(서로 다른 슬롯, realm 중 큰 것)
+};
+inline constexpr std::uint16_t kEquipAutoCharacter = 0xFFFF;   // 자동(조각 최다)
+
+// 마지막 발견의 후보 목록(행 오름차순). 캐시 복사.
+std::vector<EquipCharacter> equip_characters();
+// 보여 줄 캐릭터를 고른다(kEquipAutoCharacter = 자동). 다음 발견 주기에 반영된다 - 부르는
+// 쪽이 equip_request_refresh 로 당긴다. 고른 캐릭터가 월드에 없으면 자동으로 돌아간다.
+void equip_select_character(std::uint16_t row);
+std::uint16_t equip_selected_character();
+// 지금 캐시된 테이블의 캐릭터 행(못 풀었으면 kEquipAutoCharacter).
+std::uint16_t equip_current_character();
 
 // ------------------------------------------------------------------ 캐시/발견
 // 분석 스레드에서 주기적으로 부른다(힙 스캔이라 값싸지 않음). 플레이어
@@ -113,9 +140,13 @@ void equip_refresh_pieces(const mem::Reader& reader);
 int eq_write_socket(const mem::Reader& reader, std::uint64_t instance,
                     int k, std::uint16_t gem);
 
-// 연마(refinement)를 설정한다.
-int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
+// 담금질(+0x0A)을 설정한다. 상한은 부르는 쪽이 표(max_temper)로 자른다.
+int eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
                     std::uint16_t level);
+
+// 장비 연마(+0x58)를 설정한다. 상한은 부르는 쪽이 표(max_sharpness)로 자른다.
+int eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
+                       std::uint16_t level);
 
 // 염색 레코드 rec 의 RGB 를 설정한다.
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,

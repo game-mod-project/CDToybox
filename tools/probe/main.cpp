@@ -2217,8 +2217,8 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         game::read_worn_gear(reader, t, &ps);
         std::printf("worn pieces: %zu\n", ps.size());
         for (const auto& w : ps) {
-            std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
-                        (unsigned long long)w.instance, w.key, w.refine,
+            std::printf("  inst=0x%llX key=%u temper=%u sharp=%u slot=%u unlocked=%d  sock:",
+                        (unsigned long long)w.instance, w.key, w.temper, w.sharpness,
                         w.slot_tag, w.unlocked);
             for (int k = 0; k < 5; ++k)
                 std::printf(" [%u m%X i%02X]", w.sockets[k].gem,
@@ -2239,8 +2239,8 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::printf("player table arr=0x%llX cnt=%u stride=0x%X  pieces=%zu\n",
                 (unsigned long long)t.arr, t.cnt, t.stride, ps.size());
     for (const auto& w : ps) {
-        std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
-                    (unsigned long long)w.instance, w.key, w.refine,
+        std::printf("  inst=0x%llX key=%u temper=%u sharp=%u slot=%u unlocked=%d  sock:",
+                    (unsigned long long)w.instance, w.key, w.temper, w.sharpness,
                     w.slot_tag, w.unlocked);
         for (int k = 0; k < 5; ++k)
             std::printf(" [%u m%X i%02X]", w.sockets[k].gem,

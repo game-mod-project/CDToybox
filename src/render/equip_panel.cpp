@@ -11,12 +11,14 @@
 
 #include "game/equip.h"
 #include "game/items.h"
+#include "game/roster.h"
 #include "mem/reader.h"
 #include "render/confirm.h"
 #include "render/gem_picker.h"
 #include "render/item_style.h"
 #include "render/layout.h"
 #include "render/notice.h"
+#include "render/overlay.h"
 #include "render/table_sort_imgui.h"
 
 namespace cdtb::render {
@@ -27,7 +29,10 @@ int g_sock_k = -1;               // 그 장비의 칸
 bool g_sock_open_req = false;    // 다음 프레임에 팝업을 연다
 GemPicker g_sock_picker;         // 칸 팝업 안의 보석 목록 상태
 Notice g_notice;
-std::map<std::uint64_t, int> g_refine_edit;
+// 담금질·연마 편집값. 인스턴스별로 유지한다 - 매 프레임 스냅샷으로 덮으면 입력이
+// 리셋돼 값이 안 바뀐다.
+std::map<std::uint64_t, int> g_temper_edit;
+std::map<std::uint64_t, int> g_sharp_edit;
 
 // 염색 팝업 대상과 편집값. 편집값은 (인스턴스,rec)별로 유지한다 -
 // 매 프레임 스냅샷으로 덮으면 드래그 중 값이 리셋된다.
@@ -208,6 +213,143 @@ void draw_dye_popup(const mem::Reader& reader,
     ImGui::EndPopup();
 }
 
+// 캐릭터 선택을 바꾼다 - 발견을 당기고, ini 에 남기고, 편집 중이던 값은 버린다(다른
+// 캐릭터의 장비에 옛 입력이 붙지 않게).
+void select_character(std::uint16_t row) {
+    game::equip_select_character(row);
+    game::equip_request_refresh();
+    overlay::set_equip_character_setting(
+        row == game::kEquipAutoCharacter ? -1 : static_cast<int>(row));
+    g_temper_edit.clear();
+    g_sharp_edit.clear();
+    notice_set(&g_notice, NoticeLevel::Ok,
+               "캐릭터를 바꿨습니다 - 목록이 곧 갱신됩니다 (최대 수 초).");
+}
+
+// 캐릭터 행의 표시명. 로스터가 아직 없으면 행 번호로.
+std::string character_label(std::uint16_t row) {
+    if (row == game::kEquipAutoCharacter) return "자동 (착용 조각 최다)";
+    const game::RosterEntry* e = game::character_by_row(row);
+    if (e != nullptr && !e->display().empty()) return e->display();
+    return "행 " + std::to_string(row);
+}
+
+// 캐릭터 콤보. 월드에 있는 플레이어형(정신력 풀) 캐릭터만 후보다 - 클리프·웅카·데미안은
+// 번갈아 조종하는데 창은 "조각 최다" 규칙으로 늘 클리프만 보였다(사용자 보고 2026-09-12).
+// 조종 중인 캐릭터를 자동으로 따라가는 것은 세션 전역 사슬이 2850 에서 끊겨 아직 없다
+// (roster.h main_character_row) - 고르는 것은 사람 몫이고 선택은 ini 에 남는다.
+void draw_character_picker() {
+    const std::vector<game::EquipCharacter> chars = game::equip_characters();
+    const std::uint16_t want = game::equip_selected_character();
+    const std::uint16_t cur = game::equip_current_character();
+    const std::string preview = character_label(want);
+    ImGui::SetNextItemWidth(240.0f);
+    if (ImGui::BeginCombo("캐릭터", preview.c_str())) {
+        if (ImGui::Selectable("자동 (착용 조각 최다)",
+                              want == game::kEquipAutoCharacter)) {
+            select_character(game::kEquipAutoCharacter);
+        }
+        for (const auto& c : chars) {
+            char lb[160];
+            std::snprintf(lb, sizeof(lb), "%s (조각 %d)##c%u",
+                          character_label(c.row).c_str(), c.pieces,
+                          static_cast<unsigned>(c.row));
+            if (ImGui::Selectable(lb, want == c.row)) select_character(c.row);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    const std::string shown =
+        cur == game::kEquipAutoCharacter ? std::string("?") : character_label(cur);
+    if (want != game::kEquipAutoCharacter && cur != want) {
+        ImGui::TextDisabled("(고른 캐릭터가 월드에 없어 자동으로 보입니다: %s)",
+                            shown.c_str());
+    } else {
+        ImGui::TextDisabled("표시 중: %s - 플레이어 치트 창의 표시도 이 캐릭터입니다.",
+                            shown.c_str());
+    }
+}
+
+// 담금질·연마 칸 하나. cap 이 0 이면 그 값이 없는 아이템(재료 등)이라 "-". 입력은
+// 인스턴스별로 유지한다. 클라·서버 모두 쓴다.
+void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
+                     bool temper, int cap, std::map<std::uint64_t, int>& edits) {
+    const char* what = temper ? "담금질" : "연마";
+    if (cap <= 0) {
+        ImGui::TextDisabled("-");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("이 아이템에는 %s 값이 없습니다.", what);
+        return;
+    }
+    const int cur = temper ? w.temper : w.sharpness;
+    int& v = edits.try_emplace(w.instance, cur).first->second;
+    ImGui::SetNextItemWidth(80.0f);
+    ImGui::InputInt(temper ? "##tp" : "##sh", &v, 1, 10);
+    if (v < 0) v = 0;
+    if (v > cap) v = cap;
+    ImGui::SameLine();
+    ImGui::TextDisabled("/%d", cap);
+    ImGui::SameLine();
+    if (ImGui::SmallButton(temper ? "적용##tp" : "적용##sh")) {
+        const std::uint16_t lv = static_cast<std::uint16_t>(v);
+        const int wc = temper ? game::eq_write_temper(reader, w.instance, lv)
+                              : game::eq_write_sharpness(reader, w.instance, lv);
+        if (wc >= 2) {
+            notice_set(&g_notice, NoticeLevel::Ok,
+                       "{} {} 을 적용했습니다 (클라·서버 모두). 벗었다 다시 착용하면"
+                       " 화면에 반영됩니다.",
+                       what, v);
+        } else if (wc == 1) {
+            notice_set(&g_notice, NoticeLevel::Warn,
+                       "{} {} 을 한쪽만 적용했습니다 - 다시 시도하세요.", what, v);
+        } else {
+            notice_set(&g_notice, NoticeLevel::Bad, "{} 쓰기 실패.", what);
+        }
+        game::equip_refresh_pieces(reader);
+    }
+}
+
+// 착용 장비 전부를 표의 상한까지(담금질 max_temper / 연마 max_sharpness). 상한 0 인
+// 것(그 값이 없는 아이템)은 건너뛴다. 클라·서버 모두 쓴다.
+void bulk_write(const mem::Reader& reader, const std::vector<game::WornPiece>& pieces,
+                bool temper) {
+    const char* what = temper ? "담금질" : "연마";
+    const auto& cat = game::item_catalog();
+    int done = 0, part = 0, skipped = 0;
+    for (const auto& w : pieces) {
+        const game::ItemCatalogEntry* e = w.key < cat.size() ? &cat[w.key] : nullptr;
+        const int cap = e == nullptr ? 0
+                        : temper     ? static_cast<int>(e->max_temper)
+                                     : static_cast<int>(e->max_sharpness);
+        if (cap <= 0) {
+            ++skipped;
+            continue;
+        }
+        const std::uint16_t lv = static_cast<std::uint16_t>(cap);
+        const int wc = temper ? game::eq_write_temper(reader, w.instance, lv)
+                              : game::eq_write_sharpness(reader, w.instance, lv);
+        if (wc >= 2) {
+            ++done;
+        } else if (wc == 1) {
+            ++part;
+        }
+    }
+    g_temper_edit.clear();
+    g_sharp_edit.clear();
+    game::equip_refresh_pieces(reader);
+    if (done + part == 0) {
+        notice_set(&g_notice, NoticeLevel::Warn,
+                   "쓴 것이 없습니다 ({} 값이 없는 장비 {}개 건너뜀).", what, skipped);
+    } else if (part > 0) {
+        notice_set(&g_notice, NoticeLevel::Warn,
+                   "{}개 {} 최대, {}개는 한쪽만 적용됐습니다 - 다시 시도하세요.", done,
+                   what, part);
+    } else {
+        notice_set(&g_notice, NoticeLevel::Ok,
+                   "{}개 {} 최대 (건너뜀 {}개). 벗었다 다시 착용하면 화면에 반영됩니다.",
+                   done, what, skipped);
+    }
+}
+
 }  // namespace
 
 void draw_equip_panel(bool* open) {
@@ -218,13 +360,15 @@ void draw_equip_panel(bool* open) {
     const mem::LocalReader reader;
 
     if (ImGui::Button("다시 읽기")) {
-        g_refine_edit.clear();
+        g_temper_edit.clear();
+        g_sharp_edit.clear();
         g_dye_edit.clear();
         game::equip_request_refresh();
     }
     ImGui::SameLine();
     ImGui::TextDisabled("잠긴 칸은 '열기' 로 엽니다. 툴팁에 다 보이려면"
                         " 인벤토리 창의 '소켓 상한' 도 올려야 합니다.");
+    draw_character_picker();
 
     std::vector<game::WornPiece> pieces;
     if (!game::equip_snapshot(&pieces)) {
@@ -234,37 +378,12 @@ void draw_equip_panel(bool* open) {
         return;
     }
 
-    // 착용 장비 전부 최대 연마(10). 착용 목록은 전부 장비라 연마 불가
-    // 판정이 필요 없다(참고 모드는 인벤 전체라 gear 만 골랐다). 클라·서버
-    // 모두 쓴다.
-    if (confirm_button("전부 연마 10")) {
-        int done = 0, part = 0;
-        for (const auto& w : pieces) {
-            const int wc = game::eq_write_refine(reader, w.instance, 10);
-            if (wc >= 2) {
-                ++done;
-            } else if (wc == 1) {
-                ++part;
-            }
-        }
-        g_refine_edit.clear();
-        game::equip_refresh_pieces(reader);
-        if (done + part == 0) {
-            notice_set(&g_notice, NoticeLevel::Warn,
-                       "쓴 것이 없습니다 (대상 없음).");
-        } else if (part > 0) {
-            notice_set(&g_notice, NoticeLevel::Warn,
-                       "{}개 연마 10, {}개는 한쪽만 적용됐습니다 - 다시"
-                       " 시도하세요.",
-                       done, part);
-        } else {
-            notice_set(&g_notice, NoticeLevel::Ok,
-                       "{}개 연마 10. 벗었다 다시 착용하면 화면에 반영됩니다.",
-                       done);
-        }
-    }
+    // 착용 장비 전부 담금질·연마 최대. 상한은 아이템마다 표에서 온다(bulk_write).
+    if (confirm_button("전부 담금질 최대")) bulk_write(reader, pieces, true);
     ImGui::SameLine();
-    ImGui::TextDisabled("(착용 장비 전체를 +10 으로)");
+    if (confirm_button("전부 연마 최대")) bulk_write(reader, pieces, false);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(아이템 표의 상한까지)");
 
     // 착용 장비 전부 5칸 개방. 이미 열린 칸과 박힌 보석은 안 건드린다.
     ImGui::SameLine();
@@ -304,13 +423,14 @@ void draw_equip_panel(bool* open) {
                                    ImGuiTableFlags_Resizable |
                                    ImGuiTableFlags_Sortable |
                                    ImGuiTableFlags_SortTristate;
-    if (ImGui::BeginTable("worn", 5, kF)) {
+    if (ImGui::BeginTable("worn", 6, kF)) {
         ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthFixed |
                                             ImGuiTableColumnFlags_DefaultSort,
                                 90.0f);
         ImGui::TableSetupColumn("장비", ImGuiTableColumnFlags_WidthStretch,
                                 1.0f);
-        ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("담금질", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+        ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed, 170.0f);
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch |
                                             ImGuiTableColumnFlags_NoSort,
                                 2.0f);
@@ -348,9 +468,12 @@ void draw_equip_panel(bool* open) {
                     return cmp3(std::string(na != nullptr ? na : ""),
                                 std::string(nb != nullptr ? nb : ""));
                 }
+                case 2:
+                    return cmp3(static_cast<long long>(a->temper),
+                                static_cast<long long>(b->temper));
                 default:
-                    return cmp3(static_cast<long long>(a->refine),
-                                static_cast<long long>(b->refine));
+                    return cmp3(static_cast<long long>(a->sharpness),
+                                static_cast<long long>(b->sharpness));
             }
         });
 
@@ -381,34 +504,16 @@ void draw_equip_panel(bool* open) {
                 ImGui::Text("(카탈로그 순번 %u)", w.key);
             }
 
-            ImGui::TableNextColumn();   // 연마 - 기존 InputInt + 적용 코드 그대로
-            // 편집값은 인스턴스별로 유지한다. 매 프레임 스냅샷으로 덮으면
-            // 입력이 리셋돼 값이 안 바뀐다(연마가 안 먹던 원인).
-            int& rf = g_refine_edit.try_emplace(w.instance, w.refine)
-                          .first->second;
-            ImGui::SetNextItemWidth(100.0f);
-            ImGui::InputInt("##rf", &rf, 1, 1);
-            if (rf < 0) rf = 0;
-            if (rf > 2000) rf = 2000;
-            ImGui::SameLine();
-            if (ImGui::SmallButton("적용")) {
-                const int wc = game::eq_write_refine(
-                    reader, w.instance, static_cast<std::uint16_t>(rf));
-                if (wc >= 2) {
-                    notice_set(&g_notice, NoticeLevel::Ok,
-                               "연마 {} 을 적용했습니다 (클라·서버 모두)."
-                               " 벗었다 다시 착용하면 화면에 반영됩니다.",
-                               rf);
-                } else if (wc == 1) {
-                    notice_set(&g_notice, NoticeLevel::Warn,
-                               "연마 {} 을 한쪽만 적용했습니다 - 다시"
-                               " 시도하세요.",
-                               rf);
-                } else {
-                    notice_set(&g_notice, NoticeLevel::Bad, "연마 쓰기 실패.");
-                }
-                game::equip_refresh_pieces(reader);
-            }
+            // 담금질(+0x0A, 툴팁 게이지 10칸)과 장비 연마(+0x58, "장비 연마 N/100").
+            // 상한은 표에서 - 표가 없으면 게임 기본(10·100)으로 둔다.
+            ImGui::TableNextColumn();   // 담금질
+            draw_level_cell(reader, w, true,
+                            e != nullptr ? static_cast<int>(e->max_temper) : 10,
+                            g_temper_edit);
+            ImGui::TableNextColumn();   // 연마
+            draw_level_cell(reader, w, false,
+                            e != nullptr ? static_cast<int>(e->max_sharpness) : 100,
+                            g_sharp_edit);
 
             ImGui::TableNextColumn();   // 소켓 - 칸마다 버튼 하나, 칸 안에서 흘린다
             for (int k = 0; k < 5; ++k) {
