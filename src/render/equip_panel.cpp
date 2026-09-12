@@ -289,7 +289,7 @@ void draw_character_picker() {
         ImGui::TextDisabled("(고른 캐릭터가 월드에 없어 자동으로 보입니다: %s)",
                             shown.c_str());
     } else {
-        ImGui::TextDisabled("표시 중: %s (치트 표시·낙사 학습도 이 캐릭터; 목록은 20초마다"
+        ImGui::TextDisabled("표시 중: %s (치트 표시·낙사 판정도 이 캐릭터; 목록은 20초마다"
                             " 갱신)",
                             shown.c_str());
     }
