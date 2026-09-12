@@ -31,7 +31,17 @@ namespace cdtb::game {
 inline constexpr std::size_t kNofallOwner = 0;        // 내 root (0 이면 꺼짐)
 inline constexpr std::size_t kNofallZeroed = 8;       // 취소함 횟수
 inline constexpr std::size_t kNofallLetThrough = 16;  // 통과시킴 횟수
-inline constexpr std::size_t kNofallVarsSize = 32;
+inline constexpr std::size_t kNofallVarsSize = 64;
+
+// **진단(관찰) 모드** 전용 칸. 적용 모드에서는 쓰이지 않는다.
+// 관찰 케이브는 r9 를 **건드리지 않는다** - 무엇이 지나가는지 세기만 한다.
+// 그래서 켠 채로 평소처럼 놀아도 게임 동작이 달라지지 않는다.
+inline constexpr std::size_t kNofallEvents = 8;    // 피해 이벤트(r9 < 0)
+inline constexpr std::size_t kNofallRcxHit = 16;   // 그중 rcx == 내 root
+inline constexpr std::size_t kNofallDxZero = 24;   // 그중 dx == 0
+inline constexpr std::size_t kNofallLastRcx = 32;  // 마지막으로 본 rcx
+inline constexpr std::size_t kNofallLastRdx = 40;  // 마지막 rdx(하위 16비트가 dx)
+inline constexpr std::size_t kNofallLastR9 = 48;   // 마지막 델타
 
 // 사이트에서 복사하는 원본 길이. 디스패처의 첫 명령 `mov [rsp+8], rbx` 가 정확히
 // 5바이트라 E9 rel32 가 딱 떨어진다(NOP 패딩이 필요 없다).
@@ -61,5 +71,15 @@ struct NofallCave {
 NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
                              std::uintptr_t site,
                              std::size_t cave_max = kNofallCaveSize);
+
+// **관찰 전용 케이브.** r9 를 절대 건드리지 않고, 디스패처를 지나는 것을 센다:
+//   [8]  피해 이벤트(r9 < 0)            <- 여기가 0 이면 이 함수가 피해 경로가 아니다
+//   [16] 그중 rcx == 내 root            <- 여기가 0 이면 rcx 가정이 틀렸다
+//   [24] 그중 dx == 0                   <- 여기가 0 이면 "0 = Health" 가 틀렸다
+//   [32/40/48] 마지막 rcx / rdx / r9    <- 진짜 값을 눈으로 본다
+// 적용 케이브가 한 번도 안 물릴 때 **어느 관문이 튕기는지**를 한 번에 가른다.
+NofallCave nofall_build_observe_cave(const std::uint8_t* orig,
+                                     std::uintptr_t vars, std::uintptr_t site,
+                                     std::size_t cave_max = kNofallCaveSize);
 
 }  // namespace cdtb::game

@@ -64,4 +64,20 @@ std::uint64_t nofall_let_through();
 // 정상이고, 오르면 그 판정이 이 빌드에서 불안정하다는 신호다(피해는 통과시킨다).
 std::uint64_t nofall_faults();
 
+// 진단(관찰) 모드인가. 이 모드의 케이브는 **r9 를 건드리지 않는다** - 무엇이
+// 디스패처를 지나는지 세기만 하므로 게임 동작이 달라지지 않는다. 적용 케이브가
+// 한 번도 안 물릴 때 어느 관문이 튕기는지 가르려고 둔다.
+bool nofall_observing();
+
+struct NofallDiag {
+    std::uint64_t events = 0;    // 피해 이벤트(r9 < 0)
+    std::uint64_t rcx_hit = 0;   // 그중 rcx == 내 root
+    std::uint64_t dx_zero = 0;   // 그중 dx == 0
+    std::uint64_t last_rcx = 0;  // 마지막으로 본 rcx
+    std::uint64_t last_rdx = 0;  // 마지막 rdx (하위 16비트가 dx)
+    std::uint64_t last_r9 = 0;   // 마지막 델타
+    std::uint64_t owner = 0;     // 지금 먹이고 있는 내 root
+};
+NofallDiag nofall_diag();
+
 }  // namespace cdtb::game

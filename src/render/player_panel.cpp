@@ -58,6 +58,22 @@ void draw_player_panel(bool* open) {
         // 이 두 숫자가 판별식이 맞는지 보는 **유일한** 수단이다.
         // 판정 기준은 아래 툴팁과 nofall.h 의 검증 절차가 정본이다 - 여기에
         // 옮겨 적지 않는다(예전에 주석만 옛 기준으로 남아 툴팁과 모순됐다).
+        if (game::nofall_observing()) {
+            // 진단 빌드: 케이브가 r9 를 건드리지 않는다. 무엇이 디스패처를
+            // 지나는지 세기만 하므로, 켠 채로 평소처럼 노시면 된다.
+            const auto d = game::nofall_diag();
+            ImGui::TextDisabled("진단 빌드 - 막지 않고 세기만 합니다");
+            ImGui::Text("피해 %llu / rcx 일치 %llu / dx==0 %llu",
+                        static_cast<unsigned long long>(d.events),
+                        static_cast<unsigned long long>(d.rcx_hit),
+                        static_cast<unsigned long long>(d.dx_zero));
+            ImGui::Text("마지막 rcx 0x%llX (내 root 0x%llX)",
+                        static_cast<unsigned long long>(d.last_rcx),
+                        static_cast<unsigned long long>(d.owner));
+            ImGui::Text("마지막 dx %llu / 델타 %lld",
+                        static_cast<unsigned long long>(d.last_rdx & 0xFFFF),
+                        static_cast<long long>(d.last_r9));
+        } else {
         ImGui::Text("취소함 %llu / 통과시킴 %llu",
                     static_cast<unsigned long long>(game::nofall_zeroed()),
                     static_cast<unsigned long long>(
@@ -73,6 +89,7 @@ void draw_player_panel(bool* open) {
                 "  통과시킴이 안 오르고 취소함만 오르면 모든 피해가 지워지는 "
                 "것이니 바로 끄고 알려 주십시오.\n"
                 "  둘 다 안 오르면 훅이 안 물린 것입니다(판정 불가).");
+        }
         }
         // 폴트 가드가 끼어들었다면 그 사실을 숨기지 않는다 - 가해자 판정이
         // 이 빌드에서 불안정하다는 뜻이다(피해는 통과시키므로 위험하지는 않다).
