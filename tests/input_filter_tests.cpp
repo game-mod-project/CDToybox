@@ -5,6 +5,7 @@ using cdtb::input::decode_raw_mouse;
 using cdtb::input::legacy_gate_step;
 using cdtb::input::LegacyGateState;
 using cdtb::input::mask_key_state;
+using cdtb::input::raw_answered;
 using cdtb::input::RawMouseDecoded;
 using cdtb::input::Swallow;
 using cdtb::input::swallow_message;
@@ -104,7 +105,7 @@ TEST(legacy_gate_dies_after_grace_of_motion_without_messages) {
     CHECK(legacy_gate_step(s, 9800, true, 9010, 300));
 }
 
-TEST(legacy_gate_short_motion_does_not_kill) {
+TEST(legacy_gate_restarts_the_count_after_a_pause) {
     LegacyGateState s;
     // 한 번도 창 메시지가 안 왔어도(0) 짧게 움직인 것만으로는 안 죽는다
     CHECK(!legacy_gate_step(s, 1000, true, 0, 300));
@@ -113,6 +114,32 @@ TEST(legacy_gate_short_motion_does_not_kill) {
     CHECK(!legacy_gate_step(s, 1500, true, 0, 300));
     CHECK(!legacy_gate_step(s, 1700, true, 0, 300));
     CHECK(legacy_gate_step(s, 1800, true, 0, 300));
+}
+
+TEST(legacy_gate_boundaries_at_exactly_grace) {
+    LegacyGateState s;
+    // 마지막 창 메시지가 정확히 grace 전이면 아직 살아 있음(<=)
+    CHECK(!legacy_gate_step(s, 1300, true, 1000, 300));
+    // 1300 부터 이어진 움직임이 정확히 grace 가 되는 1600 에 끊김(>=), 창 메시지는 1000 (300 넘음)
+    CHECK(!legacy_gate_step(s, 1450, true, 1000, 300));
+    CHECK(legacy_gate_step(s, 1600, true, 1000, 300));
+    // 정확히 grace 만큼 쉰 것은 같은 움직임(> 가 아님) - 1000 시작, 1300 에 이어진 지 300
+    LegacyGateState t;
+    CHECK(!legacy_gate_step(t, 1000, true, 0, 300));
+    CHECK(legacy_gate_step(t, 1300, true, 0, 300));
+    // 한 ms 라도 더 쉬면 새 움직임 - 처음부터
+    LegacyGateState u;
+    CHECK(!legacy_gate_step(u, 1000, true, 0, 300));
+    CHECK(!legacy_gate_step(u, 1301, true, 0, 300));
+}
+
+TEST(raw_answered_by_a_window_message_around_its_arrival) {
+    CHECK(raw_answered(1000, 1000, 32));    // 같은 틱
+    CHECK(raw_answered(1000, 1016, 32));    // 다음 틱
+    CHECK(raw_answered(1000, 5000, 32));    // 뒤에 온 창 메시지는 모두 답이다
+    CHECK(raw_answered(1000, 968, 32));     // 틱 오차 안에서 앞서도 답이다(창 메시지가 먼저 풀린 경우)
+    CHECK(!raw_answered(1000, 967, 32));    // 오차 밖의 옛 메시지는 답이 아니다
+    CHECK(!raw_answered(1000, 0, 32));      // 한 번도 안 옴
 }
 
 TEST(legacy_gate_idle_keeps_alive) {

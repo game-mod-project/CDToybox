@@ -28,7 +28,7 @@
 > ✅ **2026-09-12 (릴리스 뒤):** 오버레이 창에서 마우스가 굳던 원인 확정·수정 - 게임 마우스룩은
 > 창에 WM_MOUSEMOVE 를 안 주고 백엔드는 그 메시지를 한 번 받으면 GetCursorPos 대체 경로를
 > 끈다. 좌표를 프레임마다 직접 넣고, 창 메시지가 끊기면 raw input 으로 버튼·휠을 합성(1.1.1).
-> 시험 461개.
+> 시험 463개.
 **목표:** 패스파인더 ToyBox 급의 인게임 도구 모음
 
 이 문서는 "지금 무엇이 되고, 무엇이 안 되고, 왜 그런가"를 한 곳에
@@ -85,10 +85,13 @@
   창에 WM_MOUSEMOVE 를 안 준다 - 그 상태로 열면 소프트 커서가 그 자리에 굳는다(사용자 보고
   2026-09-12, 진단 로그로 확정, 해결). 렌더 스레드가 프레임마다(백엔드 NewFrame 뒤)
   포그라운드면 `GetCursorPos` 를 ImGui 좌표로 직접 넣고, 창 메시지가 끊긴 것이 실측되면
-  (300ms 넘게 움직이는데 창 메시지 없음, `legacy_gate_step`) 펌프 스레드가 WM_INPUT 에서
-  모아 둔 버튼·휠을 넣는다(`decode_raw_mouse`). 창 메시지가 살아 있으면 raw 쪽은 버린다
-  (휠 중복 방지). 게임이 마우스룩에서 왜 창 메시지를 안 주는지(펌프 필터인지 NOLEGACY
-  재등록인지)는 닫을 때의 `raw 등록 flags` 로 다음 실행에서 가린다.
+  펌프 스레드가 WM_INPUT 에서 모아 둔 버튼·휠을 넣는다(`decode_raw_mouse`). 끊김의 증거는
+  둘 - 300ms 이상 이어서 움직이는데 창 메시지 없음(`legacy_gate_step`), 또는 raw 버튼·휠이
+  50ms 넘게 창 메시지로 답을 못 받음(`raw_answered`, 움직임 없이 누른 첫 클릭을 잃지 않게).
+  창 메시지가 살아 있으면 답 받은 raw 는 버린다(휠 중복 방지). 끊김→회복 전환과 닫을 때는
+  합성으로 내린 채 남은 버튼을 떼어 주고, 다른 창이 앞에 있으면 판정도 입력도 쉰다(리뷰
+  M-1~M-3). 게임이 마우스룩에서 왜 창 메시지를 안 주는지(펌프 필터인지 NOLEGACY 재등록인지)
+  는 닫을 때의 `raw 등록 flags` 로 다음 실행에서 가린다.
 - **진단:** 열고 닫을 때 로그에 한 줄씩(`커서 가드 열기: 카운터 -1 → 0`, `커서 가드 닫기:
   카운터 … 가두기 다시 걺/풂 … 막음 SetCursorPos N ClipCursor M …`), 닫을 때 `마우스 진단:
   창 메시지 이동 N 버튼 N 휠 N, raw 마우스 N …, 창 메시지 끊김/살아 있음, raw 등록 flags`
@@ -627,7 +630,7 @@ tools/probe/  외부 분석 도구, 명령 55개 (items · loc · inv* · equip 
               clan · roster · setspecies · aob · heapfind · dumpimage …)
 tools/rtti/   실행 파일 정적 분석 (find_class · cheat_report · disasm ·
               fields = 게임이 알려 주는 필드 이름)
-tests/        461개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-12)
+tests/        463개 (전부 통과 - `build\cdtb_tests.exe` 실측 2026-09-12)
 scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 ```
 

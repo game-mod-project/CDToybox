@@ -2,8 +2,11 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <atomic>
+#include <format>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "core/log.h"
@@ -12,9 +15,16 @@
 namespace cdtb::input {
 namespace {
 
-constexpr unsigned long long kGraceMs = 300;   // 이만큼 움직였는데 창 메시지가 없으면 끊김
-constexpr size_t kPendingCap = 256;            // 렌더가 멎어도 무한정 쌓이지 않게
-constexpr float kWheelDelta = 120.0f;          // WHEEL_DELTA
+constexpr unsigned long long kGraceMs = 300;       // 이만큼 이어서 움직이는데 창 메시지가 없으면 끊김
+constexpr unsigned long long kAnswerSlackMs = 32;  // 틱 해상도(≈16ms)의 두 배 - raw 와 창 메시지 짝 맞추기
+constexpr unsigned long long kHoldMs = 50;         // raw 버튼·휠이 이만큼 답을 못 받으면 끊김 증거
+constexpr size_t kPendingCap = 256;                // 렌더가 멎어도 무한정 쌓이지 않게
+constexpr float kWheelDelta = 120.0f;              // WHEEL_DELTA
+
+struct PendingRaw {
+    RawMouseDecoded ev;
+    unsigned long long at_ms;   // 펌프 스레드가 WM_INPUT 을 처리한 시각
+};
 
 // 펌프 스레드가 쓰고 렌더 스레드가 읽는다
 std::atomic<unsigned long long> g_last_legacy_ms{0};
@@ -24,36 +34,40 @@ std::atomic<unsigned> g_n_legacy_wheel{0};
 std::atomic<unsigned> g_n_raw{0};
 std::atomic<unsigned> g_n_raw_dropped{0};
 std::mutex g_pending_mutex;
-std::vector<RawMouseDecoded> g_pending;
+std::vector<PendingRaw> g_pending;
 
 // 렌더 스레드만
 bool g_open = false;
 LegacyGateState g_gate;
 POINT g_last_os{};
+std::vector<PendingRaw> g_held;   // 펌프에서 가져왔지만 아직 넣을지 버릴지 못 정한 것
+unsigned g_synth_down = 0;        // 합성으로 내린 버튼 비트 - 전환·닫기 때 떼어 준다(리뷰 M-2)
 unsigned g_n_synth_button = 0;
 unsigned g_n_synth_wheel = 0;
 unsigned g_n_flip = 0;
 bool g_dead_logged = false;
 
-// 게임이 마우스 raw input 을 어떤 플래그로 등록해 뒀는지(RIDEV_NOLEGACY 0x30 이면 창
-// 메시지가 애초에 안 만들어진다) - 진단용.
-unsigned raw_mouse_flags() {
+// 게임이 마우스 raw input 을 어떤 플래그로 등록해 뒀는지(RIDEV_NOLEGACY 0x30 이 섞이면 창
+// 메시지가 애초에 안 만들어진다) - 진단용. 조회 실패는 "?" 로, 마우스 등록이 없으면 "등록 없음"
+// 으로 가른다(0 과 섞지 않는다, 리뷰 M-4). 첫 호출(버퍼 NULL)의 반환값은 문서상 (UINT)-1 +
+// ERROR_INSUFFICIENT_BUFFER 이고 실측으로는 0 이라, 반환값은 안 보고 개수만 본다.
+std::string raw_mouse_flags_text() {
     UINT count = 0;
-    if (::GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE)) != 0 ||
-        count == 0) {
-        return 0;
-    }
+    ::GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE));
+    if (count == 0) return "?";
     std::vector<RAWINPUTDEVICE> devs(count);
     const UINT got =
         ::GetRegisteredRawInputDevices(devs.data(), &count, sizeof(RAWINPUTDEVICE));
-    if (got == static_cast<UINT>(-1)) return 0;
+    if (got == static_cast<UINT>(-1)) return "?";
+    bool found = false;
     unsigned flags = 0;
     for (UINT i = 0; i < got; ++i) {
         if (devs[i].usUsagePage == 0x01 && devs[i].usUsage == 0x02) {
             flags |= devs[i].dwFlags;
+            found = true;
         }
     }
-    return flags;
+    return found ? std::format("{:#x}", flags) : std::string("등록 없음");
 }
 
 HWND overlay_hwnd() {
@@ -61,11 +75,54 @@ HWND overlay_hwnd() {
     return vp != nullptr ? static_cast<HWND>(vp->PlatformHandleRaw) : nullptr;
 }
 
-std::vector<RawMouseDecoded> take_pending() {
-    std::vector<RawMouseDecoded> out;
+// 펌프 스레드가 모아 둔 것을 렌더 스레드의 대기 목록으로 옮긴다.
+void pull_pending() {
+    std::vector<PendingRaw> got;
+    {
+        std::lock_guard<std::mutex> lock(g_pending_mutex);
+        got.swap(g_pending);
+    }
+    for (const PendingRaw& p : got) {
+        if (g_held.size() >= kPendingCap) break;
+        g_held.push_back(p);
+    }
+}
+
+void drop_pending() {
     std::lock_guard<std::mutex> lock(g_pending_mutex);
-    out.swap(g_pending);
-    return out;
+    g_pending.clear();
+}
+
+// 합성으로 내린 채 남은 버튼을 뗀다(리뷰 M-2). 이미 떼어졌으면 ImGui 가 같은 상태를 거른다.
+void release_synth_down(ImGuiIO& io) {
+    for (int b = 0; b < 5; ++b) {
+        if (g_synth_down & (1u << b)) io.AddMouseButtonEvent(b, false);
+    }
+    g_synth_down = 0;
+}
+
+void feed_held(ImGuiIO& io) {
+    for (const PendingRaw& p : g_held) {
+        for (int b = 0; b < 5; ++b) {
+            if (p.ev.down & (1u << b)) {
+                io.AddMouseButtonEvent(b, true);
+                g_synth_down |= 1u << b;
+                ++g_n_synth_button;
+            }
+            if (p.ev.up & (1u << b)) {
+                io.AddMouseButtonEvent(b, false);
+                g_synth_down &= ~(1u << b);
+                ++g_n_synth_button;
+            }
+        }
+        if (p.ev.wheel != 0 || p.ev.hwheel != 0) {
+            // 백엔드와 같은 규약: 세로는 delta/120, 가로는 부호를 뒤집는다.
+            io.AddMouseWheelEvent(-static_cast<float>(p.ev.hwheel) / kWheelDelta,
+                                  static_cast<float>(p.ev.wheel) / kWheelDelta);
+            ++g_n_synth_wheel;
+        }
+    }
+    g_held.clear();
 }
 
 }  // namespace
@@ -93,12 +150,13 @@ void mouse_on_raw(HRAWINPUT handle) {
     const RawMouseDecoded d =
         decode_raw_mouse(ri.data.mouse.usButtonFlags, ri.data.mouse.usButtonData);
     if (d.down == 0 && d.up == 0 && d.wheel == 0 && d.hwheel == 0) return;   // 이동만
+    const PendingRaw p{d, ::GetTickCount64()};
     std::lock_guard<std::mutex> lock(g_pending_mutex);
     if (g_pending.size() >= kPendingCap) {
         g_n_raw_dropped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    g_pending.push_back(d);
+    g_pending.push_back(p);
 }
 
 void mouse_sync(bool overlay_visible) {
@@ -107,6 +165,8 @@ void mouse_sync(bool overlay_visible) {
     if (overlay_visible) {
         g_gate = LegacyGateState{};
         ::GetCursorPos(&g_last_os);
+        g_held.clear();
+        g_synth_down = 0;
         g_n_synth_button = 0;
         g_n_synth_wheel = 0;
         g_n_flip = 0;
@@ -116,20 +176,29 @@ void mouse_sync(bool overlay_visible) {
         g_n_legacy_wheel.store(0, std::memory_order_relaxed);
         g_n_raw.store(0, std::memory_order_relaxed);
         g_n_raw_dropped.store(0, std::memory_order_relaxed);
-        take_pending();
+        drop_pending();
         return;
     }
-    take_pending();
-    // 한 줄 진단: 열린 동안 창 메시지가 왔는지, raw 만 왔는지, 무엇을 합성했는지.
+    drop_pending();
+    g_held.clear();
+    // 합성으로 내린 채 닫으면 다음에 열 때 눌린 채 시작한다(숨긴 동안은 NewFrame 이 안 돌아
+    // 상태가 언 채다, 리뷰 M-2). 해체 경로에서는 컨텍스트가 아직 살아 있지만(teardown 이 뒤)
+    // 초기화 실패 경로를 위해 확인한다. 큐에 얹힌 뗌은 다음에 열 때 첫 NewFrame 이 처리한다.
+    if (g_synth_down != 0 && ImGui::GetCurrentContext() != nullptr) {
+        release_synth_down(ImGui::GetIO());
+    }
+    g_synth_down = 0;
+    // 한 줄 진단: 열린 동안 창 메시지가 왔는지, raw 만 왔는지, 무엇을 합성했는지. "끊김 판정
+    // 없음" 은 "창 메시지가 온다" 가 아니라 증거가 없었다는 뜻이다 - 창 메시지 수로 가른다.
     log::infof("마우스 진단: 창 메시지 이동 {} 버튼 {} 휠 {}, raw 마우스 {} (넘쳐 버림 {}), "
-               "합성 버튼 {} 휠 {}, 창 메시지 {} (전환 {}회), raw 등록 flags {:#x}",
+               "합성 버튼 {} 휠 {}, 판정 {} (전환 {}회), raw 등록 flags {}",
                g_n_legacy_move.load(std::memory_order_relaxed),
                g_n_legacy_button.load(std::memory_order_relaxed),
                g_n_legacy_wheel.load(std::memory_order_relaxed),
                g_n_raw.load(std::memory_order_relaxed),
                g_n_raw_dropped.load(std::memory_order_relaxed), g_n_synth_button,
-               g_n_synth_wheel, g_gate.dead ? "끊김" : "살아 있음", g_n_flip,
-               raw_mouse_flags());
+               g_n_synth_wheel, g_gate.dead ? "끊김" : "끊김 판정 없음", g_n_flip,
+               raw_mouse_flags_text());
 }
 
 void mouse_feed_frame() {
@@ -137,52 +206,64 @@ void mouse_feed_frame() {
     const HWND hwnd = overlay_hwnd();
     POINT os{};
     if (hwnd == nullptr || !::GetCursorPos(&os)) {
-        take_pending();
+        drop_pending();
+        g_held.clear();
         return;
     }
     const bool moved = os.x != g_last_os.x || os.y != g_last_os.y;
     g_last_os = os;
     const unsigned long long now = ::GetTickCount64();
+    pull_pending();
+    // 다른 창이 앞에 있으면 판정도 입력도 쉰다(리뷰 M-3: 밖에서 움직인 것을 끊김으로 오판해
+    // 돌아온 첫 휠이 두 번 간다). raw input 은 INPUTSINK 라 뒤에 있어도 오므로 모아 둔 것은
+    // 버리고, 움직임은 돌아온 뒤부터 새로 센다. 포커스를 잃으면 백엔드가 ImGui 의 버튼을 전부
+    // 뗀다(WM_KILLFOCUS → AddFocusEvent) - 우리가 내린 것도 같이 풀리므로 마스크만 비운다.
+    if (::GetForegroundWindow() != hwnd) {
+        g_held.clear();
+        g_synth_down = 0;
+        g_gate.last_move_ms = 0;
+        g_gate.run_start_ms = 0;
+        return;
+    }
+    const unsigned long long last_legacy = g_last_legacy_ms.load(std::memory_order_relaxed);
     const bool was_dead = g_gate.dead;
-    const bool dead = legacy_gate_step(
-        g_gate, now, moved, g_last_legacy_ms.load(std::memory_order_relaxed), kGraceMs);
+    bool dead = legacy_gate_step(g_gate, now, moved, last_legacy, kGraceMs);
+    const char* why = "커서가 이어서 움직이는 동안 창 메시지가 없다";
+    if (!dead) {
+        // 창 메시지가 답한 raw 는 버린다 - 백엔드가 그 창 메시지로 이미 넣었다.
+        g_held.erase(std::remove_if(g_held.begin(), g_held.end(),
+                                    [&](const PendingRaw& p) {
+                                        return raw_answered(p.at_ms, last_legacy,
+                                                            kAnswerSlackMs);
+                                    }),
+                     g_held.end());
+        // 답을 못 받은 채 kHoldMs 를 넘긴 것이 있으면 그것이 끊김의 증거다(리뷰 M-1: 연 직후
+        // 움직이지 않고 누른 클릭이 사라지지 않게). 나머지는 답을 기다리며 남긴다.
+        if (!g_held.empty() && now - g_held.front().at_ms >= kHoldMs) {
+            g_gate.dead = true;
+            dead = true;
+            why = "raw 버튼·휠이 창 메시지로 답을 못 받았다";
+        }
+    }
+    ImGuiIO& io = ImGui::GetIO();
     if (dead != was_dead) {
         ++g_n_flip;
         if (dead && !g_dead_logged) {
-            log::infof("마우스: 창 메시지가 끊겼다 - 커서는 움직이는데 {}ms 넘게 WM_MOUSEMOVE "
-                       "가 없다, raw input 으로 버튼·휠을 넣는다 (raw 등록 flags {:#x})",
-                       kGraceMs, raw_mouse_flags());
+            log::infof("마우스: 창 마우스 메시지가 끊겼다({}; 기준 움직임 {}ms 이상·답 {}ms) - "
+                       "raw input 으로 버튼·휠을 넣는다 (raw 등록 flags {})",
+                       why, kGraceMs, kHoldMs, raw_mouse_flags_text());
             g_dead_logged = true;
         }
+        // 끊김→회복: 합성으로 내린 채 남은 버튼을 뗀다 - 짝 up 은 창 메시지로도 raw 로도 안
+        // 들어온다(리뷰 M-2).
+        if (!dead) release_synth_down(io);
     }
-    const std::vector<RawMouseDecoded> pending = take_pending();
-    // 백엔드와 같은 조건 - 다른 창이 앞에 있으면 넣지 않는다. raw input 은 INPUTSINK 라
-    // 뒤에 있어도 오므로 모아 둔 것도 버린다.
-    if (::GetForegroundWindow() != hwnd) return;
-    ImGuiIO& io = ImGui::GetIO();
     POINT client = os;
     if (::ScreenToClient(hwnd, &client)) {
         io.AddMousePosEvent(static_cast<float>(client.x), static_cast<float>(client.y));
     }
-    if (!dead) return;   // 창 메시지가 살아 있으면 백엔드가 이미 넣었다
-    for (const RawMouseDecoded& ev : pending) {
-        for (int b = 0; b < 5; ++b) {
-            if (ev.down & (1u << b)) {
-                io.AddMouseButtonEvent(b, true);
-                ++g_n_synth_button;
-            }
-            if (ev.up & (1u << b)) {
-                io.AddMouseButtonEvent(b, false);
-                ++g_n_synth_button;
-            }
-        }
-        if (ev.wheel != 0 || ev.hwheel != 0) {
-            // 백엔드와 같은 규약: 세로는 delta/120, 가로는 부호를 뒤집는다.
-            io.AddMouseWheelEvent(-static_cast<float>(ev.hwheel) / kWheelDelta,
-                                  static_cast<float>(ev.wheel) / kWheelDelta);
-            ++g_n_synth_wheel;
-        }
-    }
+    if (!dead) return;   // 창 메시지가 살아 있으면 백엔드가 넣는다 - 답을 기다리는 raw 는 남는다
+    feed_held(io);
 }
 
 }  // namespace cdtb::input
