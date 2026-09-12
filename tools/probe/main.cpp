@@ -2195,10 +2195,13 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             std::int32_t hpmax = 0;
             if (arr) reader.read_value(arr + 0x18, &hpmax);
             const bool isp = game::char_is_player(reader, ch);
+            // 캐릭터 행(comp+0x08 의 캐릭터 객체에서 actor_character_row). 못 풀면 65535.
+            std::uint16_t row = 0xFFFF;
+            game::actor_character_row(reader, static_cast<std::uintptr_t>(ch), &row);
             std::printf("  [%s] comp=0x%llX pieces=%zu char=0x%llX gauge=%s "
-                        "hpmax=%d player=%d\n",
+                        "hpmax=%d player=%d row=%u\n",
                         o.cls.c_str(), (unsigned long long)o.address, ps.size(),
-                        (unsigned long long)ch, arr ? "Y" : "N", hpmax, isp);
+                        (unsigned long long)ch, arr ? "Y" : "N", hpmax, isp, row);
         }
         return;
     }
@@ -2217,8 +2220,8 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         game::read_worn_gear(reader, t, &ps);
         std::printf("worn pieces: %zu\n", ps.size());
         for (const auto& w : ps) {
-            std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
-                        (unsigned long long)w.instance, w.key, w.refine,
+            std::printf("  inst=0x%llX key=%u temper=%u sharp=%u slot=%u unlocked=%d  sock:",
+                        (unsigned long long)w.instance, w.key, w.temper, w.sharpness,
                         w.slot_tag, w.unlocked);
             for (int k = 0; k < 5; ++k)
                 std::printf(" [%u m%X i%02X]", w.sockets[k].gem,
@@ -2239,8 +2242,8 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::printf("player table arr=0x%llX cnt=%u stride=0x%X  pieces=%zu\n",
                 (unsigned long long)t.arr, t.cnt, t.stride, ps.size());
     for (const auto& w : ps) {
-        std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
-                    (unsigned long long)w.instance, w.key, w.refine,
+        std::printf("  inst=0x%llX key=%u temper=%u sharp=%u slot=%u unlocked=%d  sock:",
+                    (unsigned long long)w.instance, w.key, w.temper, w.sharpness,
                     w.slot_tag, w.unlocked);
         for (int k = 0; k < 5; ++k)
             std::printf(" [%u m%X i%02X]", w.sockets[k].gem,

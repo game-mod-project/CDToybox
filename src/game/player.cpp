@@ -105,9 +105,18 @@ void rebuild_player_arrs(const mem::Reader& reader, std::uintptr_t primary) {
 }
 
 void player_discover(const mem::Reader& reader) {
-    // 스티키: 고정된 char 의 게이지 배열이 아직 유효(Health 게이트)하면 유지.
+    // 힙 스캔 없음: equip 이 고른 플레이어 comp(장비 창의 캐릭터 선택을 따른다)를 쓴다.
+    // NPC 방지로 char_is_player 를 한 번 더 확인한다.
+    const std::uintptr_t comp = equip_player_comp();
+    const std::uintptr_t want = comp != 0 ? q(reader, comp, 0x08) : 0;
+    const bool want_ok = want != 0 && char_is_player(reader, want);
+    // 스티키: 고정된 char 의 게이지 배열이 아직 유효(Health 게이트)하면 유지 - 단 장비 쪽이
+    // **다른** 캐릭터를 골랐으면(웅카로 바꿈) 그쪽으로 옮긴다. freeze 대상은 어차피 플레이어형
+    // 전원의 realm 배열이라(rebuild_player_arrs) 옮겨가는 것은 표시용 주 배열(g_arr)과
+    // 낙사 학습의 게이트(nofall_identify 가 player_char() 를 본다)다 - 고른 캐릭터가 곧 조종
+    // 중인 캐릭터일 때 오히려 맞는 방향이다(리뷰 E-3).
     const std::uintptr_t cached = g_char.load(std::memory_order_acquire);
-    if (cached != 0) {
+    if (cached != 0 && (!want_ok || want == cached)) {
         const std::uintptr_t arr = player_gauge_array(reader, cached);
         if (arr != 0) {
             g_arr.store(arr, std::memory_order_release);
@@ -116,14 +125,9 @@ void player_discover(const mem::Reader& reader) {
         }
         // 게이트 실패(지역이동·캐릭전환) - 아래에서 다시 잡는다.
     }
-    // 힙 스캔 없음: equip 이 이미 고른 플레이어 comp 를 쓴다. NPC 방지로
-    // char_is_player 를 한 번 더 확인한 뒤에만 고정한다.
-    const std::uintptr_t comp = equip_player_comp();
-    if (comp == 0) return;
-    const std::uintptr_t ch = q(reader, comp, 0x08);
-    if (!char_is_player(reader, ch)) return;   // 아니면 이전 고정 유지
-    const std::uintptr_t arr = player_gauge_array(reader, ch);
-    g_char.store(ch, std::memory_order_release);
+    if (!want_ok) return;   // 아니면 이전 고정 유지
+    const std::uintptr_t arr = player_gauge_array(reader, want);
+    g_char.store(want, std::memory_order_release);
     g_arr.store(arr, std::memory_order_release);
     rebuild_player_arrs(reader, arr);
 }

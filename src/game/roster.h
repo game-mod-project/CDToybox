@@ -318,7 +318,14 @@ inline constexpr std::size_t kSessionCharRowOff = 0x100;
 // 지금 조종 중인 캐릭터의 행. 못 읽으면 0xFFFF.
 std::uint16_t main_character_row(const mem::Reader& reader);
 
-// 그 캐릭터 행이 플레이어블인가 (주인공이거나 Mercenary_Main).
+// 주인공 행. 세션 전역 사슬이 2850 갱신에서 끊겨 main_character_row 가 0xFFFF 를 돌려주는
+// 동안에도 주인공은 플레이어블이어야 하므로 표의 첫 행으로 본다 - 실측: 사슬이 살아 있던
+// 2760 까지 값 0, 2850 에서도 장비 컴포넌트의 캐릭터 사슬로 조각 최다(21) 캐릭터가 행 0
+// = Kliff(2026-09-12). 이름을 박는 것이 아니라 표의 첫 행이라는 구조에 기댄다.
+inline constexpr std::uint16_t kProtagonistRow = 0;
+
+// 그 캐릭터 행이 플레이어블인가 (주인공이거나 Mercenary_Main). 주인공은 조종 중 사슬의
+// 값이거나 kProtagonistRow - 웅카를 조종하는 동안에도 클리프는 플레이어블이다.
 bool is_playable_character_row(const mem::Reader& reader, std::uint32_t row);
 
 }  // namespace cdtb::game

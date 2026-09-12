@@ -35,6 +35,7 @@
 #include "render/scan_panel.h"
 #include "game/actors.h"
 #include "game/clan.h"
+#include "game/equip.h"
 #include "game/freecam.h"
 #include "game/items.h"
 #include "game/player.h"
@@ -523,6 +524,11 @@ using namespace detail;
 void set_config(const Config& cfg, const std::wstring& ini_path) {
     g_cfg = cfg;
     g_ini_path = ini_path;
+    // 장비 창의 캐릭터 선택을 되살린다. 발견은 분석 스레드가 한다.
+    cdtb::game::equip_select_character(
+        cfg.equip_character_row < 0
+            ? cdtb::game::kEquipAutoCharacter
+            : static_cast<std::uint16_t>(cfg.equip_character_row));
 }
 
 void show_window(cdtb::render::Win w) {
@@ -544,6 +550,14 @@ bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts) {
     // 부위 목록을 한 번이라도 저장하면 (구) 일괄 설정은 뜻을 잃는다.
     // 둘이 남아 있으면 다음 실행에 어느 쪽이 걸릴지 헷갈린다.
     g_cfg.socket_cap = 0;
+    if (g_ini_path.empty()) return false;
+    return cdtb::config::save(g_ini_path, g_cfg);
+}
+
+int equip_character_setting() { return g_cfg.equip_character_row; }
+
+bool set_equip_character_setting(int row) {
+    g_cfg.equip_character_row = row < 0 ? -1 : row;
     if (g_ini_path.empty()) return false;
     return cdtb::config::save(g_ini_path, g_cfg);
 }

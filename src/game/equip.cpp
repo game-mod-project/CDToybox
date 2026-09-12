@@ -2,13 +2,16 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <string>
 
 #include "core/write_log.h"
+#include "game/actors.h"
 #include "game/items.h"
 #include "game/player.h"
+#include "game/roster.h"
 
 namespace cdtb::game {
 namespace {
@@ -162,10 +165,16 @@ int socket_unlock_entry(const mem::Reader& r, std::uintptr_t entry, int want) {
     return opened;
 }
 
-bool refine_set_entry(const mem::Reader& r, std::uintptr_t entry,
+bool temper_set_entry(const mem::Reader& r, std::uintptr_t entry,
                       std::uint16_t lvl) {
     if (!wr16(entry + 0x0A, lvl)) return false;
     return rd16(r, entry + 0x0A) == lvl;
+}
+
+bool sharpness_set_entry(const mem::Reader& r, std::uintptr_t entry,
+                         std::uint16_t lvl) {
+    if (!wr16(entry + 0x58, lvl)) return false;
+    return rd16(r, entry + 0x58) == lvl;
 }
 
 bool dye_set_entry(const mem::Reader& r, std::uintptr_t entry, int rec,
@@ -280,7 +289,8 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
         w.entry = e;
         w.instance = rd64(reader, e + 0x00);
         w.key = key;
-        w.refine = rd16(reader, e + 0x0A);
+        w.temper = rd16(reader, e + 0x0A);
+        w.sharpness = rd16(reader, e + 0x58);
         w.slot_tag = static_cast<std::uint16_t>(rd32(reader, e + (t.stride - 8)) &
                                                 0xFFFF);
         const std::uintptr_t sp = rd64(reader, e + 0x60);
@@ -345,10 +355,36 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
 // 배열에 밀려 불안정했다. 대신 **서로 다른 슬롯 태그 수**로 고른다(진짜
 // 착용은 슬롯마다 하나). prefer_arr 가 여전히 좋은 후보면 그대로 유지해
 // 매 주기 목록이 튀지 않게 한다.
+// 테이블의 캐릭터 행. comp+0x08 이 액터 매니저가 세는 캐릭터 객체라 actor_character_row 로
+// 푼다(실측 2026-09-12: 서버 조각 21/16/11 → 행 0/5/3). 못 풀면 kEquipAutoCharacter.
+static std::uint16_t table_character_row(const mem::Reader& reader,
+                                         const EquipTable& t) {
+    if (t.comp == 0) return kEquipAutoCharacter;
+    const std::uintptr_t ch =
+        static_cast<std::uintptr_t>(rd64(reader, t.comp + 0x08));
+    std::uint16_t row = kEquipAutoCharacter;
+    if (!vp(ch) || !actor_character_row(reader, ch, &row)) return kEquipAutoCharacter;
+    return row;
+}
+
 bool pick_player_table(const mem::Reader& reader,
                        const std::vector<EquipTable>& tabs,
                        std::uintptr_t prefer_arr, EquipTable* table_out,
-                       std::vector<WornPiece>* pieces_out) {
+                       std::vector<WornPiece>* pieces_out,
+                       std::uint16_t want_row) {
+    // 고른 캐릭터가 있으면 그 캐릭터의 테이블(서버·클라)만 후보로 삼는다. 월드에 없으면
+    // 아래 자동(정신력 풀 + 조각 최다)으로 돌아간다.
+    if (want_row != kEquipAutoCharacter) {
+        std::vector<EquipTable> mine;
+        for (const auto& t : tabs) {
+            if (table_character_row(reader, t) == want_row) mine.push_back(t);
+        }
+        if (!mine.empty() &&
+            pick_player_table(reader, mine, prefer_arr, table_out, pieces_out,
+                              kEquipAutoCharacter)) {
+            return true;
+        }
+    }
     EquipTable best;
     int bestScore = 0;
     std::vector<WornPiece> bestPieces, tmp;
@@ -388,7 +424,8 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
                       EquipTable* table_out, std::vector<WornPiece>* pieces_out) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);
-    return pick_player_table(reader, tabs, 0, table_out, pieces_out);
+    return pick_player_table(reader, tabs, 0, table_out, pieces_out,
+                             kEquipAutoCharacter);
 }
 
 // -------------------------------------------------------------------- 캐시
@@ -397,8 +434,12 @@ std::mutex g_eq_mutex;
 std::vector<EquipTable> g_eq_tables;   // both-realms 테이블(발견 캐시)
 std::vector<WornPiece> g_eq_pieces;    // 플레이어 착용장비
 EquipTable g_eq_player_table;           // 플레이어 테이블(빠른 재읽기용)
+std::vector<EquipCharacter> g_eq_chars; // 월드의 플레이어형 캐릭터(행 오름차순)
+std::uint16_t g_eq_current_row = kEquipAutoCharacter;   // 캐시된 테이블의 캐릭터
+std::uint16_t g_eq_resolved_want = kEquipAutoCharacter; // 마지막 발견이 소화한 선택
 bool g_eq_ready = false;
 std::atomic<bool> g_eq_refresh{false};
+std::atomic<std::uint16_t> g_eq_want_row{kEquipAutoCharacter};   // 렌더 스레드가 고른다
 }  // namespace
 
 void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
@@ -409,15 +450,56 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
         std::lock_guard<std::mutex> lk(g_eq_mutex);
         prefer = g_eq_player_table.arr;   // 이전 선택 유지(동률 안정화)
     }
-    // 플레이어 = 정신력 풀 보유 + 착용 조각 최다(pick_player_table 이 점수화).
+    // 캐릭터 후보: 정신력 풀이 있고 착용 테이블로 보이는 것 중 행을 푼 것. realm 마다 하나씩
+    // 오므로 행으로 합치고 조각 수는 큰 쪽을 둔다.
+    std::vector<EquipCharacter> chars;
+    std::vector<WornPiece> tmp;
+    for (const auto& t : tabs) {
+        if (t.comp == 0) continue;
+        const std::uintptr_t ch =
+            static_cast<std::uintptr_t>(rd64(reader, t.comp + 0x08));
+        if (!char_is_player(reader, ch)) continue;
+        if (!read_worn_gear(reader, t, &tmp)) continue;
+        const int dt = distinct_tags(tmp);
+        const int n = static_cast<int>(tmp.size());
+        if (n == 0 || dt * 2 < n) continue;
+        const std::uint16_t row = table_character_row(reader, t);
+        if (row == kEquipAutoCharacter) continue;
+        // 정신력 풀은 동행(companion)에도 있다 - 플레이어블(주인공·Mercenary_Main)만 후보다
+        // (리뷰 E-1: 7조각짜리 동반자(행 5654)가 콤보에 들고, 고르면 치트·낙사 앵커까지
+        // 그쪽으로 옮겨갔다).
+        if (!is_playable_character_row(reader, row)) continue;
+        EquipCharacter* found = nullptr;
+        for (auto& c : chars) {
+            if (c.row == row) {
+                found = &c;
+                break;
+            }
+        }
+        if (found == nullptr) {
+            chars.push_back(EquipCharacter{row, dt});
+        } else if (dt > found->pieces) {
+            found->pieces = dt;
+        }
+    }
+    std::sort(chars.begin(), chars.end(),
+              [](const EquipCharacter& a, const EquipCharacter& b) {
+                  return a.row < b.row;
+              });
+    // 고른 캐릭터(없으면 자동 = 정신력 풀 보유 + 착용 조각 최다, pick_player_table 이 점수화).
+    const std::uint16_t want = g_eq_want_row.load(std::memory_order_relaxed);
     EquipTable pt;
     std::vector<WornPiece> pieces;
-    const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces);
+    const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces, want);
+    const std::uint16_t cur = ok ? table_character_row(reader, pt) : kEquipAutoCharacter;
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_tables = std::move(tabs);
+    g_eq_chars = std::move(chars);
+    g_eq_resolved_want = want;   // 실패해도 "이 선택을 봤다" 는 남긴다(창의 갱신 중 표시)
     if (ok) {
         g_eq_player_table = pt;
         g_eq_pieces = std::move(pieces);
+        g_eq_current_row = cur;
         g_eq_ready = true;
     }
 }
@@ -438,6 +520,29 @@ void equip_refresh_pieces(const mem::Reader& reader) {
 std::uintptr_t equip_player_comp() {
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     return g_eq_ready ? g_eq_player_table.comp : 0;
+}
+
+std::vector<EquipCharacter> equip_characters() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_chars;
+}
+
+void equip_select_character(std::uint16_t row) {
+    g_eq_want_row.store(row, std::memory_order_relaxed);
+}
+
+std::uint16_t equip_selected_character() {
+    return g_eq_want_row.load(std::memory_order_relaxed);
+}
+
+std::uint16_t equip_current_character() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_ready ? g_eq_current_row : kEquipAutoCharacter;
+}
+
+std::uint16_t equip_resolved_character() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_resolved_want;
 }
 
 void equip_tables_copy(std::vector<EquipTable>* out) {
@@ -466,7 +571,7 @@ bool equip_take_refresh() {
     return g_eq_refresh.exchange(false, std::memory_order_acq_rel);
 }
 
-// op: 0=socket 1=refine 2=dye
+// op: 0=socket 1=temper 2=dye 3=unlock 4=sharpness
 static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
                         int op, int a, std::uint16_t b, std::uint8_t g,
                         std::uint8_t bl) {
@@ -481,18 +586,20 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         if (e == 0) continue;
         bool ok = false;
         if (op == 0) ok = socket_fill_entry(reader, e, a, b);
-        else if (op == 1) ok = refine_set_entry(reader, e, b);
+        else if (op == 1) ok = temper_set_entry(reader, e, b);
         else if (op == 2) ok = dye_set_entry(reader, e, a,
                                               static_cast<std::uint8_t>(b), g, bl);
         else if (op == 3) ok = socket_unlock_entry(reader, e, a) > 0;
+        else if (op == 4) ok = sharpness_set_entry(reader, e, b);
         if (ok) ++wrote;
     }
     // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
-    static const char* const kWhat[4] = {"장비 소켓", "장비 연마", "장비 염색",
-                                         "장비 소켓 열기"};
+    static const char* const kWhat[5] = {"장비 소켓", "장비 담금질", "장비 염색",
+                                         "장비 소켓 열기", "장비 연마"};
     std::string after;
     if (op == 0) after = "칸 " + std::to_string(a) + " 보석 순번 " + std::to_string(b);
-    else if (op == 1) after = "연마 " + std::to_string(b);
+    else if (op == 1) after = "담금질 " + std::to_string(b);
+    else if (op == 4) after = "연마 " + std::to_string(b);
     else if (op == 2) after = "zone 레코드 " + std::to_string(a) + " -> " +
                               std::to_string(static_cast<int>(b)) + "," +
                               std::to_string(static_cast<int>(g)) + "," +
@@ -508,9 +615,14 @@ int eq_write_socket(const mem::Reader& reader, std::uint64_t instance, int k,
     return eq_write_all(reader, instance, 0, k, gem, 0, 0);
 }
 
-int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
+int eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
                     std::uint16_t level) {
     return eq_write_all(reader, instance, 1, 0, level, 0, 0);
+}
+
+int eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
+                       std::uint16_t level) {
+    return eq_write_all(reader, instance, 4, 0, level, 0, 0);
 }
 
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
