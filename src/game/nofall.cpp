@@ -261,8 +261,14 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::memcpy(g_orig, orig, kNofallOrigSize);
     guard.done = true;
     g_state.store(2, std::memory_order_release);
-    log::infof("낙사 훅 설치: site=0x{:X} cave=0x{:X} 케이브 {}바이트", site,
-               g_cave, code.code.size());
+    // vars 주소를 남기는 이유: 취소함/통과시킴 카운터는 패널에만 뜨는데, 화면을
+    // 못 보는 상황(로그만 받는 경우)에서도 probe dump <vars> 24 로 읽을 수 있어야
+    // 판별식이 맞는지 밖에서 확인할 수 있다. 레이아웃은 [0]=root [8]=취소함
+    // [16]=통과시킴 이다.
+    log::infof(
+        "낙사 훅 설치: site=0x{:X} cave=0x{:X} 케이브 {}바이트 vars=0x{:X}"
+        " ([0]=root [8]=취소함 [16]=통과시킴)",
+        site, g_cave, code.code.size(), g_vars);
     return true;
 }
 

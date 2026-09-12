@@ -52,8 +52,9 @@ void draw_player_panel(bool* open) {
     if (game::nofall_installed()) {
         bool nf = game::nofall_enabled();
         if (ImGui::Checkbox("낙사 방지", &nf)) game::nofall_set(nf);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(낙하·출처 없는 환경 피해를 막습니다)");
+        // 같은 줄(SameLine)에 붙이면 창 폭에서 잘린다 - 실측 2026-09-12 화면에서
+        // "...환경 피해를 막습니" 로 끝났다. 아래 줄로 내리고 폭에 맞춰 감싼다.
+        ImGui::TextWrapped("낙하와 출처 없는 환경 피해를 막습니다.");
         // 이 두 숫자가 판별식이 맞는지 보는 **유일한** 수단이다.
         // 판정 기준은 아래 툴팁과 nofall.h 의 검증 절차가 정본이다 - 여기에
         // 옮겨 적지 않는다(예전에 주석만 옛 기준으로 남아 툴팁과 모순됐다).
