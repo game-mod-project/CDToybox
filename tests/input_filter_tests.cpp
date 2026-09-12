@@ -1,7 +1,11 @@
 #include "harness.h"
 #include "input/filter.h"
 
+using cdtb::input::decode_raw_mouse;
+using cdtb::input::legacy_gate_step;
+using cdtb::input::LegacyGateState;
 using cdtb::input::mask_key_state;
+using cdtb::input::RawMouseDecoded;
 using cdtb::input::Swallow;
 using cdtb::input::swallow_message;
 
@@ -67,4 +71,82 @@ TEST(input_filter_ime_and_unichar) {
     CHECK(swallow_message(0x010F, true, false, -1) == Swallow::No);         // 포커스 없으면 통과
     CHECK(swallow_message(0x0286, true, false, -1) == Swallow::No);
     CHECK(swallow_message(0x010F, false, true, -1) == Swallow::No);
+}
+
+// ---- 창 메시지 끊김 판정 (마우스룩에서 WM_MOUSEMOVE 가 안 오는 굳음, 2026-09-12)
+
+TEST(legacy_gate_stays_alive_while_window_messages_arrive) {
+    LegacyGateState s;
+    // 움직이는 동안 창 메시지가 바로바로 온다 - 몇 초를 움직여도 살아 있음
+    for (unsigned long long t = 1000; t <= 4000; t += 16) {
+        CHECK(!legacy_gate_step(s, t, true, t, 300));
+    }
+    // 펌프 스레드가 적은 시각이 now 보다 클 수도 있다 - "방금" 으로 본다
+    CHECK(!legacy_gate_step(s, 4016, true, 4020, 300));
+}
+
+TEST(legacy_gate_dies_after_grace_of_motion_without_messages) {
+    LegacyGateState s;
+    const unsigned long long legacy = 500;   // 마지막 창 메시지는 오래전
+    CHECK(!legacy_gate_step(s, 1000, true, legacy, 300));
+    CHECK(!legacy_gate_step(s, 1200, true, legacy, 300));   // 200ms - 아직
+    CHECK(!legacy_gate_step(s, 1299, true, legacy, 300));
+    CHECK(legacy_gate_step(s, 1300, true, legacy, 300));    // 300ms 이어서 움직임
+    // 멈춰도 판정은 남는다 - 가만히 있다 클릭해도 합성이 이어진다
+    CHECK(legacy_gate_step(s, 5000, false, legacy, 300));
+    CHECK(legacy_gate_step(s, 9000, false, legacy, 300));
+    // 창 메시지가 오면 곧바로 산다(같은 프레임의 raw 는 버려져 휠이 두 번 안 간다)
+    CHECK(!legacy_gate_step(s, 9016, false, 9010, 300));
+    CHECK(!legacy_gate_step(s, 9032, true, 9010, 300));
+    // 다시 끊기면 다시 죽는다 - 새 움직임부터 센다
+    CHECK(!legacy_gate_step(s, 9500, true, 9010, 300));
+    CHECK(!legacy_gate_step(s, 9700, true, 9010, 300));
+    CHECK(legacy_gate_step(s, 9800, true, 9010, 300));
+}
+
+TEST(legacy_gate_short_motion_does_not_kill) {
+    LegacyGateState s;
+    // 한 번도 창 메시지가 안 왔어도(0) 짧게 움직인 것만으로는 안 죽는다
+    CHECK(!legacy_gate_step(s, 1000, true, 0, 300));
+    CHECK(!legacy_gate_step(s, 1100, true, 0, 300));
+    // 400ms 쉬고 다시 - 새 움직임이라 처음부터 센다
+    CHECK(!legacy_gate_step(s, 1500, true, 0, 300));
+    CHECK(!legacy_gate_step(s, 1700, true, 0, 300));
+    CHECK(legacy_gate_step(s, 1800, true, 0, 300));
+}
+
+TEST(legacy_gate_idle_keeps_alive) {
+    LegacyGateState s;
+    // 한 번도 안 움직였으면 살아 있음 - 창 메시지가 없어도 죽일 근거가 없다
+    CHECK(!legacy_gate_step(s, 1000, false, 0, 300));
+    CHECK(!legacy_gate_step(s, 9000, false, 0, 300));
+    CHECK(!legacy_gate_step(s, 9000, false, 500, 300));
+}
+
+TEST(decode_raw_mouse_buttons_and_wheel) {
+    // 왼 눌림(0x1), 오른 뗌(0x8), 가운데 눌림(0x10)
+    RawMouseDecoded d = decode_raw_mouse(0x0001u | 0x0008u | 0x0010u, 0);
+    CHECK_EQ(d.down, 0b00101u);
+    CHECK_EQ(d.up, 0b00010u);
+    CHECK_EQ(d.wheel, 0);
+    CHECK_EQ(d.hwheel, 0);
+    // X1 눌림(0x40), X2 뗌(0x200) → ImGui 버튼 3·4
+    d = decode_raw_mouse(0x0040u | 0x0200u, 0);
+    CHECK_EQ(d.down, 0b01000u);
+    CHECK_EQ(d.up, 0b10000u);
+    // 세로 휠 뒤로: 데이터는 부호 있는 16비트
+    d = decode_raw_mouse(0x0400u, static_cast<unsigned short>(-120));
+    CHECK_EQ(d.wheel, -120);
+    CHECK_EQ(d.hwheel, 0);
+    CHECK_EQ(d.down, 0u);
+    CHECK_EQ(d.up, 0u);
+    // 가로 휠
+    d = decode_raw_mouse(0x0800u, 120);
+    CHECK_EQ(d.hwheel, 120);
+    CHECK_EQ(d.wheel, 0);
+    // 이동만 있는 보고: 플래그가 없으면 데이터는 무시
+    d = decode_raw_mouse(0, 120);
+    CHECK_EQ(d.wheel, 0);
+    CHECK_EQ(d.hwheel, 0);
+    CHECK_EQ(d.down, 0u);
 }

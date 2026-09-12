@@ -22,4 +22,34 @@ Swallow swallow_message(unsigned msg, bool overlay_visible, bool want_keyboard,
 // 켜져 있으면 늘, 키보드는 글자 입력칸에 포커스가 있을 때만.
 bool mask_key_state(int vk, bool overlay_visible, bool want_keyboard);
 
+// 창 마우스 메시지(WM_MOUSEMOVE·버튼·휠)가 끊겼는지 판정한다. 게임의 마우스룩에서는
+// OS 커서가 창 안에서 움직여도 창에 WM_MOUSEMOVE 가 안 들어오고(실측 2026-09-12: 열린
+// 동안 커서는 움직였는데 ImGui 좌표가 멎음), 백엔드는 WM_MOUSEMOVE 를 한 번이라도 받아
+// 추적 중이면 GetCursorPos 대체 경로를 끈다. 이 판정이 참이면 버튼·휠을 raw input 에서
+// 합성한다(mouse.h). 렌더 스레드가 프레임마다 부른다. 규칙:
+//  - 창 메시지가 grace 안에 왔으면 곧바로 살아 있음(false) - 합성하면 휠이 두 번 간다.
+//  - OS 커서가 grace 이상 이어서 움직이는데 그동안 창 메시지가 없으면 끊김(true).
+//  - 커서가 안 움직이는 동안은 이전 판정을 유지한다(가만히 있다 클릭해도 합성이 이어진다).
+// 시각은 ms 단조 시계(GetTickCount64). last_legacy_ms 는 다른 스레드가 적어 now 보다
+// 클 수 있다 - 그때는 "방금" 으로 본다. 0 은 "한 번도 안 옴".
+struct LegacyGateState {
+    unsigned long long last_move_ms = 0;   // 마지막으로 OS 커서가 움직인 시각
+    unsigned long long run_start_ms = 0;   // 지금 이어지는 움직임이 시작된 시각
+    bool dead = false;
+};
+bool legacy_gate_step(LegacyGateState& s, unsigned long long now_ms, bool os_moved,
+                      unsigned long long last_legacy_ms,
+                      unsigned long long grace_ms = 300);
+
+// RAWMOUSE 의 usButtonFlags/usButtonData 를 ImGui 버튼 번호(0 왼 1 오른 2 가운데 3 X1
+// 4 X2)의 비트마스크와 휠 값(WHEEL_DELTA=120 단위, 부호 있음)으로 푼다. 이동만 있는
+// 보고는 전부 0 이다.
+struct RawMouseDecoded {
+    unsigned down = 0;   // 비트 b 가 1 이면 버튼 b 눌림
+    unsigned up = 0;     // 비트 b 가 1 이면 버튼 b 뗌
+    int wheel = 0;       // 세로 휠, 앞으로 밀면 양수
+    int hwheel = 0;      // 가로 휠, 오른쪽이 양수
+};
+RawMouseDecoded decode_raw_mouse(unsigned button_flags, unsigned short button_data);
+
 }  // namespace cdtb::input

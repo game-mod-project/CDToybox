@@ -104,6 +104,7 @@ add_library(cdtoybox SHARED
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
+    src/input/mouse.cpp
     src/proxy/exports.def
 )
 set_target_properties(cdtoybox PROPERTIES

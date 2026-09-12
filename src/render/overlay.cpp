@@ -17,6 +17,7 @@
 #include "core/slowlog.h"
 #include "core/vk_name.h"
 #include "input/cursor.h"
+#include "input/mouse.h"
 #include "input/wndproc.h"
 #include "render/colors.h"
 #include "render/d3d12_hook.h"
@@ -600,6 +601,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         }
         cdtb::render::stash_flush();   // 해체 전에 저장 대기 중인 보관함 변경을 쓴다
         input::cursor_guard_sync(false);
+        input::mouse_sync(false);
         input::cursor_guard_remove();
         teardown(queue);
         log::infof("오버레이 비활성화 완료 - 토글 키로 재초기화 가능");
@@ -618,6 +620,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
             // 못 미치므로, 열려 있던 가드는 여기서 닫는다(리뷰 H4). is_visible 은
             // g_ready 가 꺼져 이미 false 라 디투어는 통과 중이다.
             input::cursor_guard_sync(false);
+            input::mouse_sync(false);
             teardown(queue);
             g_frame_stage = kStageIdle;
             return;
@@ -632,6 +635,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         input::cursor_guard_install(&cdtb::overlay::is_visible);
     }
     input::cursor_guard_sync(cdtb::overlay::is_visible());
+    input::mouse_sync(cdtb::overlay::is_visible());
 
     // 플레이어 치트 freeze 는 **가시성과 무관하게** 매 Present(~16ms) 적용한다.
     // 예전엔 아래 !g_visible return 뒤에 있어, 게임하려 오버레이를 숨기면
@@ -720,54 +724,14 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    // 마우스 좌표(와 창 메시지가 끊겼을 때의 버튼·휠)를 직접 넣는다. 백엔드의 대체
+    // 경로는 WM_MOUSEMOVE 를 한 번 받으면 꺼지는데 게임의 마우스룩은 그 메시지를 안
+    // 준다(굳음의 원인, mouse.h). 큐에 얹히므로 ImGui::NewFrame 이 함께 처리한다.
+    input::mouse_feed_frame();
     ImGui::NewFrame();
 
     // 게임의 키 상태 조회를 거를지 - 글자 입력칸에 포커스가 있을 때만.
     input::cursor_guard_set_want_keyboard(ImGui::GetIO().WantCaptureKeyboard);
-
-    // 진단(굳음 보고 2026-09-12, 리뷰 H1): 열린 동안 OS 포인터는 창 안에서 움직이는데
-    // ImGui 좌표가 멎으면 한 번 남긴다 - 소프트 커서가 굳어 보이는 원인 후보(포커스
-    // 창이 바뀌어 백엔드의 GetCursorPos 대체 경로가 안 돌거나, 추적 영역이 꺼짐).
-    // 2초마다 견주고, 1초 넘게 안 그린 뒤(닫혔다 다시 열림)엔 기준을 새로 잡는다.
-    {
-        static POINT s_os{};
-        static ImVec2 s_im{};
-        static ULONGLONG s_frame_ms = 0, s_cmp_ms = 0;
-        static bool s_logged = false;
-        const ULONGLONG now = ::GetTickCount64();
-        const ImGuiIO& io = ImGui::GetIO();
-        if (now - s_frame_ms > 1000) {
-            s_logged = false;
-            s_cmp_ms = now;
-            ::GetCursorPos(&s_os);
-            s_im = io.MousePos;
-        }
-        s_frame_ms = now;
-        if (now - s_cmp_ms >= 2000) {
-            POINT os{};
-            ::GetCursorPos(&os);
-            const ImVec2 im = io.MousePos;
-            const HWND hwnd =
-                static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw);
-            POINT client = os;
-            RECT rc{};
-            const bool inside = hwnd != nullptr && ::ScreenToClient(hwnd, &client) &&
-                                ::GetClientRect(hwnd, &rc) && ::PtInRect(&rc, client);
-            const bool os_moved = os.x != s_os.x || os.y != s_os.y;
-            const bool im_moved = im.x != s_im.x || im.y != s_im.y;
-            if (!s_logged && inside && os_moved && !im_moved) {
-                log::warnf("오버레이 포인터 진단: OS 커서는 창 안에서 움직였는데 ImGui 좌표가 "
-                           "멎었다 (ImGui {},{} / OS 클라 {},{} / 포그라운드 {} / "
-                           "WantCaptureMouse {})",
-                           im.x, im.y, client.x, client.y,
-                           ::GetForegroundWindow() == hwnd, io.WantCaptureMouse);
-                s_logged = true;
-            }
-            s_os = os;
-            s_im = im;
-            s_cmp_ms = now;
-        }
-    }
 
     g_frame_stage = kStageDrawUi;
     draw_ui();
