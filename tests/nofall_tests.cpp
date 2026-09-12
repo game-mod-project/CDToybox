@@ -12,6 +12,7 @@ using cdtb::game::kNofallOwner;
 using cdtb::game::kNofallVarsSize;
 using cdtb::game::kNofallZeroed;
 using cdtb::game::nofall_build_cave;
+using cdtb::game::nofall_build_observe_cave;
 using cdtb::game::NofallCave;
 
 namespace {
@@ -402,4 +403,79 @@ TEST(nofall_cave_every_rel8_displacement_is_in_range) {
     CHECK(at == body);
     // jns / jne(dx) / je(owner) / jne(rcx) / jb / jne(shr) / jb / jmp = 8
     CHECK(branches == 8);
+}
+
+TEST(nofall_observe_cave_never_touches_r9) {
+    // **진단 케이브의 핵심 계약.** 관찰 모드는 세기만 하고 피해를 건드리지 않는다 -
+    // 그래서 켠 채로 평소처럼 놀아도 게임 동작이 달라지지 않는다. r9 를 쓰는
+    // 인코딩(`xor r9d,r9d` = 45 33 C9, `mov r9,...`)이 하나도 없어야 한다.
+    const NofallCave c = nofall_build_observe_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    for (std::size_t i = 0; i + 3 <= c.code.size(); ++i) {
+        const bool xor_r9 = c.code[i] == 0x45 && c.code[i + 1] == 0x33 &&
+                            c.code[i + 2] == 0xC9;
+        CHECK(!xor_r9);
+    }
+    // r9 는 읽기만 한다: test r9,r9 (4D 85 C9) 와 mov [rax],r9 (4C 89 08).
+    CHECK(find_bytes(c.code, {0x4D, 0x85, 0xC9}) >= 0);
+    CHECK(find_bytes(c.code, {0x4C, 0x89, 0x08}) > 0);
+    // 게임 포인터를 따라가지 않으므로 폴트 가드가 필요 없다.
+    CHECK(c.deref_at == 0);
+}
+
+TEST(nofall_observe_cave_golden_bytes) {
+    // 골든 바이트열(capstone 으로 따로 디스어셈블해 확인한 138바이트).
+    // 분기는 chk_dx(0x61)·done(0x75) 두 곳으로만 가고, 꼬리는 원본 5바이트 +
+    // jmp [rip+0] + site+5 다.
+    static const std::uint8_t kGolden[] = {
+        0x9C, 0x50, 0x4D, 0x85, 0xC9, 0x79, 0x6E, 0x48, 0xB8, 0x08, 0x10,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0xF0, 0x48, 0xFF, 0x00, 0x48,
+        0xB8, 0x20, 0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x48, 0x89,
+        0x08, 0x48, 0xB8, 0x28, 0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+        0x48, 0x89, 0x10, 0x48, 0xB8, 0x30, 0x10, 0x00, 0x00, 0x00, 0x02,
+        0x00, 0x00, 0x4C, 0x89, 0x08, 0x48, 0xB8, 0x00, 0x10, 0x00, 0x00,
+        0x00, 0x02, 0x00, 0x00, 0x48, 0x8B, 0x00, 0x48, 0x85, 0xC0, 0x74,
+        0x13, 0x48, 0x39, 0xC1, 0x75, 0x0E, 0x48, 0xB8, 0x10, 0x10, 0x00,
+        0x00, 0x00, 0x02, 0x00, 0x00, 0xF0, 0x48, 0xFF, 0x00, 0x66, 0x83,
+        0xFA, 0x00, 0x75, 0x0E, 0x48, 0xB8, 0x18, 0x10, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0xF0, 0x48, 0xFF, 0x00, 0x58, 0x9D, 0x48, 0x89,
+        0x5C, 0x24, 0x08, 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00, 0x55, 0x98,
+        0x71, 0x41, 0x01, 0x00, 0x00, 0x00,
+    };
+    const NofallCave c = nofall_build_observe_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    CHECK(c.code.size() == sizeof(kGolden));
+    CHECK(std::memcmp(c.code.data(), kGolden, sizeof(kGolden)) == 0);
+    CHECK(c.zero_at == 0x61);   // chk_dx
+    CHECK(c.done_at == 0x75);
+    // 꼬리 점프는 site+5 로 돌아간다.
+    CHECK(qword_at(c.code, c.code.size() - 8) == kSite + kNofallOrigSize);
+}
+
+TEST(nofall_observe_cave_counts_into_the_right_slots) {
+    using cdtb::game::kNofallDxZero;
+    using cdtb::game::kNofallEvents;
+    using cdtb::game::kNofallLastR9;
+    using cdtb::game::kNofallLastRcx;
+    using cdtb::game::kNofallLastRdx;
+    using cdtb::game::kNofallRcxHit;
+    const NofallCave c = nofall_build_observe_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    std::vector<std::uint64_t> imms;
+    for (std::size_t i = 0; i + 10 <= c.code.size(); ++i) {
+        if (c.code[i] == 0x48 && c.code[i + 1] == 0xB8) {
+            imms.push_back(qword_at(c.code, i + 2));
+        }
+    }
+    // 피해 / rcx / rdx / r9 / owner / rcx일치 / dx0 = 7개, 이 순서여야 한다.
+    CHECK(imms.size() == 7);
+    CHECK(imms[0] == kVars + kNofallEvents);
+    CHECK(imms[1] == kVars + kNofallLastRcx);
+    CHECK(imms[2] == kVars + kNofallLastRdx);
+    CHECK(imms[3] == kVars + kNofallLastR9);
+    CHECK(imms[4] == kVars + kNofallOwner);
+    CHECK(imms[5] == kVars + kNofallRcxHit);
+    CHECK(imms[6] == kVars + kNofallDxZero);
+    // 칸이 vars 블록 안에 들어가야 한다.
+    CHECK(kNofallVarsSize >= kNofallLastR9 + 8);
 }
