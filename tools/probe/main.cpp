@@ -2178,22 +2178,37 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 
 // 장비 창의 캐릭터 후보를 DLL 과 같은 코드(equip_discover)로 계산해 보인다 - "웅카가 콤보에
 // 없다/골라도 안 바뀐다" 를 가른다. 인자로 캐릭터 행을 주면 그 선택으로 고른 결과까지 본다.
+// 발견을 두 번 돌려 두 번째가 캐시 되살리기 경로를 밟게 한다(스캔이 빠뜨린 것을 캐시가
+// 건지는지 테이블 수로 보인다). 전 경로 읽기 전용.
 void cmd_equipchars(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                     char** argv) {
     if (!game::discover_roster(rt, reader)) {
         std::printf("로스터 실패\n");
         return;
     }
-    const std::uint16_t want =
-        argc > 2 ? static_cast<std::uint16_t>(std::strtoul(argv[2], nullptr, 0))
-                 : game::kEquipAutoCharacter;
+    std::uint16_t want = game::kEquipAutoCharacter;
+    if (argc > 2) {
+        char* end = nullptr;
+        const unsigned long v = std::strtoul(argv[2], &end, 0);
+        if (end == argv[2] || *end != 0 || v > 0xFFFE) {
+            std::printf("사용법: equipchars [캐릭터 행 0..65534]\n");
+            return;
+        }
+        want = static_cast<std::uint16_t>(v);
+    }
     game::equip_select_character(want);
     game::equip_discover(rt, reader);
+    std::vector<game::EquipTable> first;
+    game::equip_tables_copy(&first);
+    game::equip_discover(rt, reader);   // 두 번째: 캐시 되살리기 경로
     std::vector<game::EquipTable> tabs;
     game::equip_tables_copy(&tabs);
-    std::printf("테이블 %zu개, 선택 %u, 현재 %u, 소화 %u, ready=%d\n", tabs.size(), want,
-                game::equip_current_character(), game::equip_resolved_character(),
-                game::equip_ready() ? 1 : 0);
+    std::size_t revived = 0;
+    for (const auto& t : tabs) revived += t.missed > 0 ? 1 : 0;
+    std::printf("테이블 1차 %zu개 → 2차 %zu개(캐시에서 되살림 %zu개), 선택 %u, 현재 %u, 소화 %u, "
+                "ready=%d (아래는 플레이어형만)\n",
+                first.size(), tabs.size(), revived, want, game::equip_current_character(),
+                game::equip_resolved_character(), game::equip_ready() ? 1 : 0);
     for (const auto& t : tabs) {
         std::uint64_t ch = 0;
         reader.read_value(t.comp + 0x08, &ch);
@@ -2203,16 +2218,17 @@ void cmd_equipchars(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         std::vector<game::WornPiece> ps;
         game::read_worn_gear(reader, t, &ps);
         const game::RosterEntry* e = game::character_by_row(row);
-        std::printf("  comp=0x%llX arr=0x%llX 조각 %zu 행 %u %s playable=%d\n",
+        std::printf("  comp=0x%llX arr=0x%llX 조각 %zu 행 %u %s playable=%d%s\n",
                     (unsigned long long)t.comp, (unsigned long long)t.arr, ps.size(), row,
                     e != nullptr ? e->display().c_str() : "?",
-                    game::is_playable_character_row(reader, row) ? 1 : 0);
+                    game::is_playable_character_row(reader, row) ? 1 : 0,
+                    t.missed > 0 ? " (되살림)" : "");
     }
     const auto chars = game::equip_characters();
     std::printf("후보 %zu개\n", chars.size());
     for (const auto& c : chars) {
         const game::RosterEntry* e = game::character_by_row(c.row);
-        std::printf("  행 %u 조각 %d %s\n", c.row, c.pieces,
+        std::printf("  행 %u 슬롯 %d %s\n", c.row, c.pieces,
                     e != nullptr ? e->display().c_str() : "?");
     }
     std::vector<game::WornPiece> pieces;
