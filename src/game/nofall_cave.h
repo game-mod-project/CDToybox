@@ -11,7 +11,11 @@
 // 판정한다(관찰 학습 없음):
 //
 //   델타(r9) < 0  &&  statusId(dx) == 0(Health)  &&  rcx == 내 root
-//   &&  sourceCtx([rsp+0x38]) 뒤에 가해자가 없다   ->  r9 = 0  (낙하 취소)
+//   &&  sourceCtx([rsp+0x38]) 뒤에 가해자가 없다   ->  r9 = 0
+//
+// **이 판별식은 "낙하" 가 아니라 "가해자가 없는 Health 피해" 다.** 낙하가 대표적인
+// 경우일 뿐, 출처 없는 환경 피해(익사·지형·지속 피해)도 같이 취소된다. 사용자에게
+// 그렇게 알려야 한다 - "낙하만 막는다" 고 적으면 모르는 사이 부분 갓모드가 된다.
 //
 // 하나라도 어긋나면 아무것도 하지 않고 원본 명령으로 흘려보낸다.
 // rcx·rdx·r8 은 건드리지 않는다. rax 와 플래그는 저장·복원하고, r9 만 의도적으로
@@ -33,13 +37,18 @@ inline constexpr std::size_t kNofallVarsSize = 32;
 // 5바이트라 E9 rel32 가 딱 떨어진다(NOP 패딩이 필요 없다).
 inline constexpr std::size_t kNofallOrigSize = 5;
 
-// 케이브에 잡아 주는 실행 메모리 크기. 실제 조립 결과는 124바이트다.
+// 케이브에 잡아 주는 실행 메모리 크기. 실제 조립 결과는 126바이트다.
 inline constexpr std::size_t kNofallCaveSize = 256;
 
 struct NofallCave {
     std::vector<std::uint8_t> code;
     bool ok = false;
     const char* why = "";  // ok 가 거짓일 때만 채운다
+
+    // 케이브 안의 오프셋. 설치 쪽이 주소를 계산할 때 쓴다(하드코딩 금지).
+    std::size_t zero_at = 0;   // r9 를 0 으로 만드는 갈래
+    std::size_t done_at = 0;   // rax·플래그를 되돌리고 원본으로 나가는 자리
+    std::size_t deref_at = 0;  // `mov rax,[rax+0x68]` - **폴트가 날 수 있는 유일한 명령**
 };
 
 // 케이브 바이트열을 만든다. rel8 분기가 사거리를 벗어나거나 길이가 상한을 넘으면

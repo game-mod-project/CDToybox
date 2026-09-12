@@ -30,6 +30,7 @@
 #include "game/inventory.h"
 #include "game/items.h"
 #include "game/nofall.h"
+#include "game/nofall_cave.h"
 #include "game/localization.h"
 #include "game/player.h"
 #include "game/roster.h"

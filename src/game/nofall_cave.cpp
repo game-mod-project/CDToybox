@@ -57,25 +57,32 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
     jrel8(0x75, &to_done);          // jne  done   내가 맞은 게 아니다
     add({0x48, 0x8B, 0x44, 0x24, 0x38});        // mov rax, [rsp+0x38] sourceCtx
     add({0x48, 0x3D, 0x00, 0x00, 0x01, 0x00});  // cmp rax, 0x10000
-    jrel8(0x72, &to_zero);          // jb   zero   출처가 없다 -> 세상이 때렸다
+    jrel8(0x72, &to_zero);          // jb   zero   출처가 아예 없다
     add({0x48, 0xC1, 0xE8, 0x2F});  // shr  rax, 47
     jrel8(0x75, &to_done);          // jne  done   말이 안 되는 포인터는 안 건드린다
     add({0x48, 0x8B, 0x44, 0x24, 0x38});        // mov rax, [rsp+0x38]
+    // 케이브에서 게임 메모리를 만지는 **유일한** 명령이다. 앞의 두 검사는 "매핑돼
+    // 있음" 을 보장하지 못하므로(센티널·해제 직후 포인터), 여기서 액세스 위반이 날
+    // 수 있다. nofall.cpp 가 이 주소를 VEH 로 지켜 폴트 시 done 으로 떨군다
+    // (= 판정 불가는 그대로 통과. 안전한 쪽).
+    out.deref_at = b.size();
     add({0x48, 0x8B, 0x40, 0x68});              // mov rax, [rax+0x68] 가해자
     add({0x48, 0x3D, 0x00, 0x00, 0x01, 0x00});  // cmp rax, 0x10000
-    jrel8(0x72, &to_zero);          // jb   zero   뒤에 아무도 없다 -> 낙하다
+    jrel8(0x72, &to_zero);          // jb   zero   뒤에 아무도 없다
     add({0x48, 0xB8});
     addq(static_cast<std::uint64_t>(vars + kNofallLetThrough));
-    add({0x48, 0xFF, 0x00});        // inc  qword [rax]
+    // lock 이 붙어야 한다 - 전투 코드 39곳이 여러 스레드에서 들어오고, 이 두 숫자는
+    // 판별식이 맞는지 보는 **유일한** 장치라 증가가 하나라도 유실되면 안 된다.
+    add({0xF0, 0x48, 0xFF, 0x00});  // lock inc qword [rax]
     jrel8(0xEB, &to_done);          // jmp  done   진짜 가해자다 - 통과시킨다
 
-    const std::size_t zero_at = b.size();
+    out.zero_at = b.size();
     add({0x45, 0x33, 0xC9});        // zero: xor r9d, r9d   (데미지 0)
     add({0x48, 0xB8});
     addq(static_cast<std::uint64_t>(vars + kNofallZeroed));
-    add({0x48, 0xFF, 0x00});        // inc  qword [rax]
+    add({0xF0, 0x48, 0xFF, 0x00});  // lock inc qword [rax]
 
-    const std::size_t done_at = b.size();
+    out.done_at = b.size();
     add({0x58, 0x9D});              // done: pop rax / popfq
     for (std::size_t i = 0; i < kNofallOrigSize; ++i) b.push_back(orig[i]);
     add({0xFF, 0x25, 0x00, 0x00, 0x00, 0x00});  // jmp [rip+0]
@@ -91,12 +98,14 @@ NofallCave nofall_build_cave(const std::uint8_t* orig, std::uintptr_t vars,
         }
         return true;
     };
-    if (!patch(to_zero, zero_at) || !patch(to_done, done_at)) {
+    if (!patch(to_zero, out.zero_at) || !patch(to_done, out.done_at)) {
         out.why = "rel8 분기가 사거리를 벗어난다";
+        out.zero_at = out.done_at = out.deref_at = 0;
         return out;
     }
     if (b.size() > kNofallCaveSize) {
         out.why = "케이브가 상한을 넘는다";
+        out.zero_at = out.done_at = out.deref_at = 0;
         return out;
     }
 

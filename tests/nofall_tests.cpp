@@ -52,8 +52,16 @@ TEST(nofall_cave_builds_and_fits) {
     const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
     CHECK(c.ok);
     CHECK(c.code.size() <= kNofallCaveSize);
-    // 실제 조립 길이는 124바이트다. 상한 256 에 여유가 있어야 한다.
-    CHECK(c.code.size() == 124);
+    // 실제 조립 길이는 126바이트다. 상한 256 에 여유가 있어야 한다.
+    CHECK(c.code.size() == 126);
+    // 노출한 오프셋이 실제 자리와 맞아야 한다 - 설치 쪽이 VEH 주소를 여기서 뽑는다.
+    CHECK(c.zero_at < c.done_at);
+    CHECK(c.done_at < c.code.size());
+    CHECK(c.deref_at < c.zero_at);
+    CHECK(c.code[c.zero_at] == 0x45);      // xor r9d, r9d
+    CHECK(c.code[c.done_at] == 0x58);      // pop rax
+    CHECK(c.code[c.deref_at] == 0x48 && c.code[c.deref_at + 1] == 0x8B &&
+          c.code[c.deref_at + 2] == 0x40 && c.code[c.deref_at + 3] == 0x68);
 }
 
 TEST(nofall_cave_rejects_null_and_zero_addresses) {
@@ -62,6 +70,11 @@ TEST(nofall_cave_rejects_null_and_zero_addresses) {
     CHECK(!nofall_build_cave(kOrig, kVars, 0).ok);
     // 실패는 이유를 남겨야 한다(설치 거부 로그에 쓴다).
     CHECK(nofall_build_cave(nullptr, kVars, kSite).why[0] != '\0');
+    // 실패했으면 오프셋도 비어 있어야 한다 - 설치 쪽이 잘못된 VEH 주소를
+    // 잡는 일이 없게.
+    const NofallCave bad = nofall_build_cave(kOrig, 0, kSite);
+    CHECK(bad.code.empty());
+    CHECK(bad.zero_at == 0 && bad.done_at == 0 && bad.deref_at == 0);
 }
 
 TEST(nofall_cave_saves_and_restores_rax_and_flags) {
@@ -124,8 +137,9 @@ TEST(nofall_cave_zeroes_r9_only_on_the_zero_path) {
     CHECK(c.code[at + 3] == 0x48 && c.code[at + 4] == 0xB8);
     CHECK(qword_at(c.code, static_cast<std::size_t>(at) + 5) ==
           kVars + kNofallZeroed);
-    CHECK(c.code[at + 13] == 0x48 && c.code[at + 14] == 0xFF &&
-          c.code[at + 15] == 0x00);  // inc qword [rax]
+    CHECK(c.code[at + 13] == 0xF0 && c.code[at + 14] == 0x48 &&
+          c.code[at + 15] == 0xFF && c.code[at + 16] == 0x00);
+                                     // lock inc qword [rax]
 }
 
 TEST(nofall_cave_early_exits_jump_past_the_zero_path) {
@@ -140,7 +154,7 @@ TEST(nofall_cave_early_exits_jump_past_the_zero_path) {
     CHECK(rel8_target(c.code, 5) == done);
     // Health 게이트: cmp dx,0 (66 83 FA 00) 뒤의 jne(75) 도 done 으로.
     const std::ptrdiff_t dx = find_bytes(c.code, {0x66, 0x83, 0xFA, 0x00});
-    CHECK(dx == 7);
+    CHECK(dx > 0);
     CHECK(c.code[dx + 4] == 0x75);
     CHECK(rel8_target(c.code, static_cast<std::size_t>(dx) + 4) == done);
 }
@@ -199,4 +213,74 @@ TEST(nofall_cave_tracks_site_and_vars_addresses) {
     CHECK(a.code != b.code);
     const std::size_t n = b.code.size();
     CHECK(qword_at(b.code, n - 8) == kSite + 0x40 + kNofallOrigSize);
+}
+
+TEST(nofall_cave_counters_are_locked) {
+    const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    // 카운터는 판별식 검증의 유일한 장치다. 전투 코드 39곳이 여러 스레드에서
+    // 들어오므로 증가가 유실되면 안 된다 - `inc` 둘 다 lock 이어야 한다.
+    int locked = 0, bare = 0;
+    for (std::size_t i = 0; i + 4 <= c.code.size(); ++i) {
+        if (c.code[i] == 0x48 && c.code[i + 1] == 0xFF && c.code[i + 2] == 0x00) {
+            if (i > 0 && c.code[i - 1] == 0xF0) {
+                ++locked;
+            } else {
+                ++bare;
+            }
+        }
+    }
+    CHECK(locked == 2);
+    CHECK(bare == 0);
+}
+
+TEST(nofall_cave_touches_only_rax_flags_and_r9) {
+    const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    // 계약: 케이브는 rax·플래그·(zero 갈래의) r9 말고는 아무 레지스터도 바꾸지
+    // 않는다. rcx/rdx/r8 은 디스패처가 그대로 쓸 인자다. 원본 5바이트(rbx 저장)
+    // 뒤는 꼬리라 세지 않는다.
+    const std::size_t body = c.done_at + 2;  // pop rax / popfq 까지
+    // 목적지가 rcx(001)/rdx(010)/r8 인 mov·xor·add 류가 없어야 한다. 여기서는
+    // 실제로 쓰이는 인코딩만 확인한다: REX.W 있는 89/8B/33/31 의 ModRM 목적지.
+    for (std::size_t i = 0; i + 3 <= body; ++i) {
+        const std::uint8_t rex = c.code[i];
+        if ((rex & 0xF0) != 0x40) continue;
+        const std::uint8_t op = c.code[i + 1];
+        if (op != 0x89 && op != 0x8B && op != 0x33 && op != 0x31) continue;
+        const std::uint8_t modrm = c.code[i + 2];
+        if ((modrm & 0xC0) != 0xC0) continue;  // 레지스터 목적지만 본다
+        const int dst = (op == 0x8B || op == 0x33) ? ((modrm >> 3) & 7)
+                                                   : (modrm & 7);
+        const bool wide_dst = (rex & 0x04) != 0;   // REX.R
+        const bool wide_rm = (rex & 0x01) != 0;    // REX.B
+        const bool ext = (op == 0x8B || op == 0x33) ? wide_dst : wide_rm;
+        // rax(000, 확장 아님) 과 r9(001, 확장) 만 허용한다.
+        const bool is_rax = (dst == 0 && !ext);
+        const bool is_r9 = (dst == 1 && ext);
+        CHECK(is_rax || is_r9);
+    }
+}
+
+TEST(nofall_cave_golden_bytes) {
+    // 골든 바이트열. 조립이 조금이라도 달라지면 여기서 잡힌다 - 케이브는 손으로
+    // 검증한(capstone 디스어셈블) 산물이라, 의도치 않은 변경은 전부 회귀다.
+    // 값을 고칠 때는 반드시 디스어셈블을 다시 돌려 의도한 변경인지 확인할 것.
+    static const std::uint8_t kGolden[] = {
+        0x9C, 0x50, 0x4D, 0x85, 0xC9, 0x79, 0x62, 0x66, 0x83, 0xFA, 0x00, 0x75,
+        0x5C, 0x48, 0xB8, 0x00, 0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x48,
+        0x8B, 0x00, 0x48, 0x85, 0xC0, 0x74, 0x4A, 0x48, 0x39, 0xC1, 0x75, 0x45,
+        0x48, 0x8B, 0x44, 0x24, 0x38, 0x48, 0x3D, 0x00, 0x00, 0x01, 0x00, 0x72,
+        0x27, 0x48, 0xC1, 0xE8, 0x2F, 0x75, 0x32, 0x48, 0x8B, 0x44, 0x24, 0x38,
+        0x48, 0x8B, 0x40, 0x68, 0x48, 0x3D, 0x00, 0x00, 0x01, 0x00, 0x72, 0x10,
+        0x48, 0xB8, 0x10, 0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0xF0, 0x48,
+        0xFF, 0x00, 0xEB, 0x11, 0x45, 0x33, 0xC9, 0x48, 0xB8, 0x08, 0x10, 0x00,
+        0x00, 0x00, 0x02, 0x00, 0x00, 0xF0, 0x48, 0xFF, 0x00, 0x58, 0x9D, 0x48,
+        0x89, 0x5C, 0x24, 0x08, 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00, 0x55, 0x98,
+        0x71, 0x41, 0x01, 0x00, 0x00, 0x00,
+    };
+    const NofallCave c = nofall_build_cave(kOrig, kVars, kSite);
+    CHECK(c.ok);
+    CHECK(c.code.size() == sizeof(kGolden));
+    CHECK(std::memcmp(c.code.data(), kGolden, sizeof(kGolden)) == 0);
 }

@@ -113,7 +113,7 @@ void player_discover(const mem::Reader& reader) {
     // 스티키: 고정된 char 의 게이지 배열이 아직 유효(Health 게이트)하면 유지 - 단 장비 쪽이
     // **다른** 캐릭터를 골랐으면(웅카로 바꿈) 그쪽으로 옮긴다. freeze 대상은 어차피 플레이어형
     // 전원의 realm 배열이라(rebuild_player_arrs) 옮겨가는 것은 표시용 주 배열(g_arr)과
-    // 낙사 학습의 게이트(nofall_identify 가 player_char() 를 본다)다 - 고른 캐릭터가 곧 조종
+    // 낙사 root 계산의 게이트(nofall_refresh 가 player_char() 를 본다)다 - 고른 캐릭터가 곧 조종
     // 중인 캐릭터일 때 오히려 맞는 방향이다(리뷰 E-3).
     const std::uintptr_t cached = g_char.load(std::memory_order_acquire);
     if (cached != 0 && (!want_ok || want == cached)) {
