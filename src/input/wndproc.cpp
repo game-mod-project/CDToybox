@@ -6,6 +6,7 @@
 
 #include "core/log.h"
 #include "input/filter.h"
+#include "input/mouse.h"
 #include "render/overlay.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT,
@@ -23,6 +24,10 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
+
+    // 창 마우스 메시지가 오는지 늘 적어 둔다(닫혀 있을 때도) - 열린 동안 끊기면
+    // 렌더 스레드가 raw input 으로 버튼·휠을 합성한다(mouse.h).
+    if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) mouse_note_legacy(msg);
 
     const bool visible = overlay::is_visible();
 
@@ -44,6 +49,10 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (::GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_HEADER,
                                   &h, &n, sizeof(RAWINPUTHEADER)) == sizeof(h)) {
                 raw_type = static_cast<int>(h.dwType);
+                // 버튼·휠을 모아 둔다 - 창 메시지가 끊긴 동안의 대체 입력(mouse.h).
+                if (h.dwType == RIM_TYPEMOUSE) {
+                    mouse_on_raw(reinterpret_cast<HRAWINPUT>(lp));
+                }
             } else {
                 // 못 읽으면 게임에 넘긴다(fail-open). 그것을 로그로 알 수 있어야
                 // 한다.
