@@ -76,6 +76,12 @@ public:
     std::vector<Found> find_objects(const std::string& substring,
                                     std::size_t max) const;
 
+    // 이름이 정확히 일치하는 **여러** 클래스의 인스턴스를 힙 한 번 훑기로 모두 찾는다.
+    // instances_of_class 를 클래스마다 부르면 힙 전체를 그 수만큼 읽는다 - 카메라 탐색이
+    // 네 클래스로 월드 안에서 122초였다(2026-09-12). Found::cls 로 가른다.
+    std::vector<Found> find_objects_of(const std::vector<std::string>& names,
+                                       std::size_t max) const;
+
     // 모듈 이미지에서 8바이트 값이 저장된 위치. 전역 포인터 탐색용.
     std::vector<std::uintptr_t> find_qword(std::uint64_t value,
                                            std::size_t max) const;
@@ -117,6 +123,10 @@ public:
 private:
     std::vector<std::uintptr_t> instances_of_vtable(std::uintptr_t vtable,
                                                     std::size_t max) const;
+    // 힙을 한 번 훑어 matching 의 vtable 값을 담은 자리를 모은다(find_objects 계열의 공통 몸통).
+    std::vector<Found> scan_heap(
+        const std::vector<std::pair<std::uintptr_t, const std::string*>>& matching,
+        std::size_t max) const;
 
     // --- 이미지 색인 (한 번만 만든다) ---
     //

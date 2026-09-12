@@ -87,19 +87,26 @@ bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
                    CameraSet* out) {
     CameraSet found;
 
-    // 이름으로 진짜를 고른다. 후보에는 vtable 값을 우연히 담은
-    // 메모리가 섞여 있다.
-    found.free_cam = pick_named(
-        reader, rtti.instances_of_class(".?AVFreeCamCamera@pa@@", 16),
-        "FreeCamera");
-    found.photo_cam = pick_named(
-        reader, rtti.instances_of_class(".?AVPhotoCamera@pa@@", 16),
-        "PhotoCamera");
+    // 네 클래스의 인스턴스를 힙 한 번 훑기로 모은다. 클래스마다 따로 훑으면 힙 전체를
+    // 네 번 읽어 월드 안에서 122초가 걸렸다(실측 2026-09-12) - 카메라를 못 잡은 통과가
+    // 한 바퀴 더 돌면 그 사이 이름 채우기가 뒤로 밀려 창마다 "불러오는 중" 이 길어졌다.
+    // 후보에는 vtable 값을 우연히 담은 메모리가 섞여 있어 이름으로 진짜를 고른다.
+    static const std::vector<std::string> kClasses = {
+        ".?AVFreeCamCamera@pa@@", ".?AVPhotoCamera@pa@@", ".?AVCameraManager@pa@@",
+        ".?AVPlayerCameraComponent@pa@@"};
+    std::vector<std::uintptr_t> free_cams, photo_cams, managers, comps;
+    for (const auto& f : rtti.find_objects_of(kClasses, 1024)) {
+        if (f.cls == kClasses[0]) free_cams.push_back(f.address);
+        else if (f.cls == kClasses[1]) photo_cams.push_back(f.address);
+        else if (f.cls == kClasses[2]) managers.push_back(f.address);
+        else if (f.cls == kClasses[3]) comps.push_back(f.address);
+    }
+    found.free_cam = pick_named(reader, free_cams, "FreeCamera");
+    found.photo_cam = pick_named(reader, photo_cams, "PhotoCamera");
 
     // CameraManager 는 이름이 없다. +0x18 이 방금 찾은 프리카메라를
     // 가리키는지로 검증한다.
-    for (const auto a :
-         rtti.instances_of_class(".?AVCameraManager@pa@@", 16)) {
+    for (const auto a : managers) {
         std::uint64_t slot = 0;
         if (!reader.read(a + 0x18, &slot, sizeof(slot))) continue;
         if (found.free_cam != 0 && slot == found.free_cam) {
@@ -110,8 +117,6 @@ bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
 
     // PlayerCameraComponent 도 이름이 없다. +0x88 이 가리키는 곳에서
     // 0x28 을 빼면 활성 카메라이고, 그 이름이 "PlayerCamera" 여야 한다.
-    const auto comps =
-        rtti.instances_of_class(".?AVPlayerCameraComponent@pa@@", 16);
     log::infof("PlayerCameraComponent 후보 {}개", comps.size());
     for (const auto a : comps) {
         std::uint64_t icam = 0;
