@@ -98,6 +98,7 @@ add_library(cdtoybox SHARED
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/nofall_cave.cpp
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/spec_heal.cpp
@@ -146,6 +147,8 @@ add_executable(cdtb_tests
     tests/table_sort_tests.cpp
     tests/input_filter_tests.cpp
     tests/rtti_tests.cpp
+    tests/nofall_tests.cpp
+    src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
     src/game/grant.cpp
@@ -199,6 +202,7 @@ add_executable(cdtb_probe
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/nofall_cave.cpp
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/spec_heal.cpp

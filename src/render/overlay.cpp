@@ -38,6 +38,7 @@
 #include "game/equip.h"
 #include "game/freecam.h"
 #include "game/items.h"
+#include "game/nofall.h"
 #include "game/player.h"
 #include "game/specguard.h"
 #include "game/spawnguard.h"
@@ -657,6 +658,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     {
         const mem::LocalReader reader;
         cdtb::game::player_apply(reader);
+        // 낙사 방지가 비교할 내 root. 캐릭터 교체·지역 이동으로 바뀌므로
+        // 캐시하지 않고 여기서 매번 다시 계산한다(분석 통과는 너무 느리다).
+        cdtb::game::nofall_refresh(reader);
         // 명령 파일 스레드가 부탁한 근처 액터 갱신은 여기(렌더 스레드)서 한다.
         cdtb::game::live_actors_tick(reader);
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).

@@ -53,7 +53,20 @@ void draw_player_panel(bool* open) {
         bool nf = game::nofall_enabled();
         if (ImGui::Checkbox("낙사 방지", &nf)) game::nofall_set(nf);
         ImGui::SameLine();
-        ImGui::TextDisabled("(첫 낙하 한 번은 피해를 받습니다 - 그때 대상을 학습합니다)");
+        ImGui::TextDisabled("(첫 낙하부터 막습니다)");
+        // 이 두 숫자가 판별식이 맞는지 보는 **유일한** 수단이다. 「무적」을 끈
+        // 채로 낮은 데서 떨어지면 취소함이 오르고, 적에게 맞으면 통과시킴만
+        // 올라야 한다. 맞는 동안 취소함이 오르면 조용한 갓모드이니 바로 끈다.
+        ImGui::Text("취소함 %llu / 통과시킴 %llu",
+                    static_cast<unsigned long long>(game::nofall_zeroed()),
+                    static_cast<unsigned long long>(
+                        game::nofall_let_through()));
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "취소함 = 낙하로 보고 피해를 0 으로 만든 횟수.\n"
+                "통과시킴 = 가해자가 있어 그대로 둔 횟수.\n"
+                "적에게 맞는 동안 취소함이 오르면 끄고 알려 주십시오.");
+        }
     } else if (game::nofall_unsupported()) {
         ImGui::TextDisabled(
             "낙사 방지: 이 게임 빌드에서 훅 지점을 못 찾았습니다"

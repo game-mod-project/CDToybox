@@ -4,35 +4,57 @@
 
 #include <atomic>
 #include <cstring>
-#include <optional>
-#include <vector>
 
 #include "core/log.h"
 #include "core/write_log.h"
+#include "game/nofall_cave.h"
 #include "game/player.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
 namespace {
 
-// 낙하 누적값 쓰기 사이트. 변위(??)는 런타임에 원본에서 복사한다.
+// 데미지/스테이터스 디스패처의 진입점. 2850 이미지 전량 스캔에서 **1곳**이다
+// (RVA 0x01719850). 프롤로그만으로는 32곳이라 본문 네 명령까지 묶어야 유일해진다.
+// 다음 게임 갱신에서 깨지면 뒤쪽을 풀어 가며 다시 찾는다 - `48 83 EC ??` 로 프레임
+// 크기를 와일드카드하거나, 본문 13바이트
+// `49 8B C1 49 8B E8 0F B7 DA 48 8B F1 4D 85 C9` 로 찾아 **-0x14** 하면 사이트다.
 constexpr const char* kSite =
-    "48 89 5F ?? 48 8B 5C 24 ?? 48 89 77 ?? 66 89 6F";
+    "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70 "
+    "49 8B C1 49 8B E8 0F B7 DA 48 8B F1 4D 85 C9";
 
 std::atomic<bool> g_installed{false};
 std::atomic<bool> g_unsupported{false};
 std::atomic<bool> g_enabled{false};
 std::uintptr_t g_site = 0;
 std::uintptr_t g_cave = 0;
-std::uintptr_t g_vars = 0;    // [0]=objAddr(케이브가 기록한 faller), [8]=playerAddr
-std::uint8_t g_orig[9]{};
+std::uintptr_t g_vars = 0;  // [0]=내 root, [8]=취소함, [16]=통과시킴
+std::uint8_t g_orig[kNofallOrigSize]{};
 
 bool vp(std::uintptr_t p) {
     return p > 0x10000ULL && p < 0x7FFFFFFFFFFFULL;
 }
-std::uint64_t rq(const mem::Reader& r, std::uintptr_t a) {
+std::uintptr_t rq(const mem::Reader& r, std::uintptr_t a) {
     std::uint64_t v = 0;
-    return r.read_value(a, &v) ? v : 0;
+    return r.read_value(a, &v) ? static_cast<std::uintptr_t>(v) : 0;
+}
+
+// vars 는 우리가 잡은 메모리라 항상 유효하지만, 해제 경로와 엇갈릴 수 있으니
+// 읽기·쓰기 모두 SEH 로 감싼다.
+std::uint64_t vars_read(std::size_t off) {
+    if (g_vars == 0) return 0;
+    __try {
+        return *reinterpret_cast<volatile std::uint64_t*>(g_vars + off);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+void vars_write(std::size_t off, std::uint64_t v) {
+    if (g_vars == 0) return;
+    __try {
+        *reinterpret_cast<volatile std::uint64_t*>(g_vars + off) = v;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 }
 
 // target 에서 ±2GB 안의 실행 가능 메모리를 잡는다(E9 rel32 점프용).
@@ -53,27 +75,13 @@ void* alloc_near(std::uintptr_t target, std::size_t size) {
     return nullptr;
 }
 
-// 플레이어 액터 체인 블록에서 faller 포인터를 찾는다(참고 모드 refIn 과 동일).
-bool ref_in(const mem::Reader& r, std::uintptr_t base, std::size_t range,
-            std::uint64_t target) {
-    if (!vp(base)) return false;
-    std::vector<std::uint8_t> buf(range);
-    if (!r.read(base, buf.data(), buf.size())) return false;
-    for (std::size_t k = 0; k + 8 <= buf.size(); k += 8) {
-        std::uint64_t v = 0;
-        std::memcpy(&v, buf.data() + k, 8);
-        if (v == target) return true;
-    }
-    return false;
-}
-
 }  // namespace
 
 bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_installed.load(std::memory_order_acquire)) return true;
     // 한 번 "이 빌드 미지원" 으로 갈렸으면 다시 보지 않는다. 이미지는
     // 세션 중에 바뀌지 않으므로 결과가 달라질 수 없다. 이것이 없어
-    // 2.4초마다 같은 WARN 을 썯고, 로그 728줄 중 289줄(40%)이 그것만으로
+    // 2.4초마다 같은 WARN 을 썼고, 로그 728줄 중 289줄(40%)이 그것만으로
     // 채워져 조사 로그가 묻혔다(실측 2026-09-09).
     if (g_unsupported.load(std::memory_order_acquire)) return false;
     if (!rtti.loaded()) return false;
@@ -83,82 +91,70 @@ bool nofall_install(const mem::Rtti& rtti, const mem::Reader& reader) {
     const auto& img = rtti.image();
     const mem::Range range{img.data(), img.size()};
     const auto hits = mem::find_all(range, *parsed, 2);
-    if (hits.size() != 1) {   // 유일하지 않으면 패치 금지(안전)
+    if (hits.size() != 1) {  // 유일하지 않으면 패치 금지(안전)
         g_unsupported.store(true, std::memory_order_release);
-        log::warnf("낙사: 사이트 시그니처가 유일하지 않다({}) - 설치 안 함",
+        log::warnf("낙사: 디스패처 시그니처가 유일하지 않다({}) - 설치 안 함",
                    hits.size());
         return false;
     }
     const std::uint64_t rva = static_cast<std::uint64_t>(hits[0] - img.data());
     const std::uintptr_t site = reader.module_base() + rva;
 
-    // 원본 9바이트(2개 명령: mov[rdi+d],rbx / mov rbx,[rsp+d])를 라이브에서 복사.
-    std::uint8_t orig[9]{};
+    // 사이트 첫 명령 `mov [rsp+8], rbx` 가 정확히 5바이트다. 라이브에서 복사한다.
+    std::uint8_t orig[kNofallOrigSize]{};
     if (!reader.read(site, orig, sizeof(orig))) return false;
 
-    void* vars = VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT,
-                              PAGE_READWRITE);
+    void* vars = VirtualAlloc(nullptr, kNofallVarsSize,
+                              MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (vars == nullptr) return false;
-    std::memset(vars, 0, 32);
-    const std::uintptr_t objAddr = reinterpret_cast<std::uintptr_t>(vars);
-    const std::uintptr_t playerAddr = objAddr + 8;
+    std::memset(vars, 0, kNofallVarsSize);
+    const std::uintptr_t vars_at = reinterpret_cast<std::uintptr_t>(vars);
 
-    void* cave = alloc_near(site, 128);
+    void* cave = alloc_near(site, kNofallCaveSize);
     if (cave == nullptr) {
         VirtualFree(vars, 0, MEM_RELEASE);
         return false;
     }
 
-    // 케이브 조립(참고 모드와 동일).
-    std::vector<std::uint8_t> b;
-    auto add = [&](std::initializer_list<std::uint8_t> xs) {
-        for (auto x : xs) b.push_back(x);
-    };
-    auto addq = [&](std::uint64_t v) {
-        for (int i = 0; i < 8; ++i) b.push_back((v >> (i * 8)) & 0xFF);
-    };
-    add({0x50, 0x9C});                       // push rax / pushfq
-    add({0x48, 0xB8}); addq(objAddr);        // mov rax, objAddr
-    add({0x48, 0x89, 0x38});                 // mov [rax], rdi (누가 떨어지나 기록)
-    add({0x48, 0xB8}); addq(playerAddr);     // mov rax, playerAddr
-    add({0x48, 0x8B, 0x00});                 // mov rax, [rax] (학습된 플레이어)
-    add({0x48, 0x39, 0xF8});                 // cmp rax, rdi
-    add({0x74, 0x08});                       // je skip
-    add({0x9D, 0x58});                       // popfq / pop rax
-    add({orig[0], orig[1], orig[2], orig[3]});      // 원본 누적 쓰기
-    add({0xEB, 0x02});                       // jmp after
-    add({0x9D, 0x58});                       // skip: popfq / pop rax
-    add({orig[4], orig[5], orig[6], orig[7], orig[8]});  // after: mov rbx,[rsp+d]
-    add({0xFF, 0x25, 0x00, 0x00, 0x00, 0x00});      // jmp [rip+0]
-    addq(static_cast<std::uint64_t>(site + 9));
+    // 케이브의 꼬리 점프는 원본 명령을 실행한 뒤 site+5 로 돌아간다.
+    const NofallCave code = nofall_build_cave(orig, vars_at, site);
+    if (!code.ok) {
+        g_unsupported.store(true, std::memory_order_release);
+        log::warnf("낙사: 케이브 조립 실패({}) - 설치 안 함", code.why);
+        VirtualFree(cave, 0, MEM_RELEASE);
+        VirtualFree(vars, 0, MEM_RELEASE);
+        return false;
+    }
 
-    std::memcpy(cave, b.data(), b.size());
-    FlushInstructionCache(GetCurrentProcess(), cave, b.size());
+    std::memcpy(cave, code.code.data(), code.code.size());
+    FlushInstructionCache(GetCurrentProcess(), cave, code.code.size());
 
-    // 사이트 패치: E9 rel32(케이브로) + 4 NOP = 9바이트.
+    // 사이트 패치: E9 rel32(케이브로) **5바이트만**. 첫 명령이 정확히 5바이트라
+    // NOP 패딩이 필요 없다.
     const std::int32_t rel = static_cast<std::int32_t>(
         reinterpret_cast<std::uintptr_t>(cave) - (site + 5));
-    std::uint8_t patch[9] = {0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
+    std::uint8_t patch[kNofallOrigSize] = {0xE9, 0, 0, 0, 0};
     std::memcpy(patch + 1, &rel, 4);
 
     DWORD old = 0;
-    if (!VirtualProtect(reinterpret_cast<void*>(site), 9,
+    if (!VirtualProtect(reinterpret_cast<void*>(site), kNofallOrigSize,
                         PAGE_EXECUTE_READWRITE, &old)) {
         VirtualFree(cave, 0, MEM_RELEASE);
         VirtualFree(vars, 0, MEM_RELEASE);
         return false;
     }
-    std::memcpy(reinterpret_cast<void*>(site), patch, 9);
-    VirtualProtect(reinterpret_cast<void*>(site), 9, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(site), 9);
+    std::memcpy(reinterpret_cast<void*>(site), patch, kNofallOrigSize);
+    VirtualProtect(reinterpret_cast<void*>(site), kNofallOrigSize, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(site),
+                          kNofallOrigSize);
 
     g_site = site;
     g_cave = reinterpret_cast<std::uintptr_t>(cave);
-    g_vars = objAddr;
-    std::memcpy(g_orig, orig, 9);
+    g_vars = vars_at;
+    std::memcpy(g_orig, orig, kNofallOrigSize);
     g_installed.store(true, std::memory_order_release);
-    log::infof("낙사 훅 설치: site=0x{:X} cave=0x{:X}", site,
-               reinterpret_cast<std::uintptr_t>(cave));
+    log::infof("낙사 훅 설치: site=0x{:X} cave=0x{:X} 케이브 {}바이트", site,
+               g_cave, code.code.size());
     return true;
 }
 
@@ -172,48 +168,31 @@ void nofall_set(bool on) {
               g_enabled.load(std::memory_order_acquire) ? "on" : "off",
               on ? "on" : "off");
     g_enabled.store(on, std::memory_order_release);
-    if (!on && g_vars != 0) {
-        // 학습된 플레이어를 지운다 -> 케이브의 cmp 가 절대 안 맞아 정상 낙사.
-        __try {
-            *reinterpret_cast<volatile std::uint64_t*>(g_vars + 8) = 0;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-        }
-    }
+    // 끄면 root 를 지운다 -> 케이브의 `test rax,rax / je done` 이 곧바로 빠진다.
+    if (!on) vars_write(kNofallOwner, 0);
 }
 
 bool nofall_enabled() { return g_enabled.load(std::memory_order_acquire); }
 
-void nofall_identify(const mem::Reader& reader) {
+std::uint64_t nofall_zeroed() { return vars_read(kNofallZeroed); }
+std::uint64_t nofall_let_through() { return vars_read(kNofallLetThrough); }
+
+void nofall_refresh(const mem::Reader& reader) {
     if (!g_installed.load(std::memory_order_acquire)) return;
-    if (!g_enabled.load(std::memory_order_acquire)) return;
     if (g_vars == 0) return;
-    // 이미 학습됐으면 그대로.
-    if (rq(reader, g_vars + 8) != 0) return;
-    // 케이브가 기록한 마지막 faller.
-    const std::uint64_t faller = rq(reader, g_vars);
-    if (!vp(faller)) return;
-    // 플레이어 액터 체인에 그 faller 가 참조돼 있으면 = 내가 떨어진 것.
-    // player_char() = 스티키로 고정된 플레이어 char(게이지 체인의 actor 역할).
-    const std::uintptr_t actor = player_char();
-    if (!vp(actor)) return;
-    const std::uintptr_t p1 = rq(reader, actor + 0x68);
-    const std::uintptr_t p2 = vp(p1) ? rq(reader, p1 + 0x20) : 0;
-    const std::uintptr_t p3 = vp(p2) ? rq(reader, p2 + 0x18) : 0;
-    const struct {
-        std::uintptr_t base;
-        std::size_t range;
-    } blocks[] = {{actor, 0x8000}, {p1, 0x2000}, {p2, 0x2000}, {p3, 0x2000}};
-    for (const auto& e : blocks) {
-        if (ref_in(reader, e.base, e.range, faller)) {
-            __try {
-                *reinterpret_cast<volatile std::uint64_t*>(g_vars + 8) = faller;
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                return;
-            }
-            log::infof("낙사: 플레이어 faller 학습 0x{:X}", faller);
-            return;
-        }
+    if (!g_enabled.load(std::memory_order_acquire)) {
+        vars_write(kNofallOwner, 0);
+        return;
     }
+    // 디스패처의 rcx 와 비교할 대상. player.h 의 게이지 체인과 같은 자리다.
+    // 캐릭터 교체·지역 이동으로 바뀌므로 캐시하지 않고 매번 다시 계산한다.
+    // 한 단계라도 끊기면 0 을 써서 **보호를 끈다** - 낡은 root 를 남기면 그 주소를
+    // 물려받은 다른 개체의 피해까지 지울 수 있다.
+    const std::uintptr_t ch = player_char();
+    const std::uintptr_t actor = vp(ch) ? rq(reader, ch + 0x68) : 0;
+    const std::uintptr_t mark = vp(actor) ? rq(reader, actor + 0x20) : 0;
+    const std::uintptr_t root = vp(mark) ? rq(reader, mark + 0x18) : 0;
+    vars_write(kNofallOwner, vp(root) ? static_cast<std::uint64_t>(root) : 0);
 }
 
 }  // namespace cdtb::game

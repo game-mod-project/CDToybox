@@ -29,6 +29,7 @@
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
+#include "game/nofall.h"
 #include "game/localization.h"
 #include "game/player.h"
 #include "game/roster.h"
@@ -2240,6 +2241,65 @@ void cmd_equipchars(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // 분석 스레드의 통과 한 바퀴를 흉내 낸다 - 힙 한 번 훑기(prefetch) 뒤 단계들이 캐시에서
 // 내는지, 단계마다 얼마나 걸리는지 잰다. 인자 "old" 를 주면 미리 훑기 없이(예전처럼 단계마다
 // 힙을 읽으며) 돌려 견준다. 전 경로 읽기 전용(게임 메모리를 읽기만 한다).
+// 낙사 훅을 **설치하지 않고** 점검만 한다. 디스패처 AOB 가 이 빌드에서 유일한지,
+// 케이브가 조립되는지, 그 바이트가 무엇인지 찍는다. 게임 갱신으로 AOB 가 깨졌을 때
+// 가장 먼저 돌려 볼 명령이다. 전 경로 읽기 전용(게임 메모리를 쓰지 않는다).
+void cmd_nofall(const mem::Rtti& rt, const mem::Reader& reader) {
+    // nofall.cpp 의 kSite 와 같은 문자열이어야 한다(둘이 갈리면 여기가 거짓말을 한다).
+    const char* kSite =
+        "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70 "
+        "49 8B C1 49 8B E8 0F B7 DA 48 8B F1 4D 85 C9";
+    const auto parsed = mem::parse_pattern(kSite);
+    if (!parsed) {
+        std::printf("AOB 를 해석하지 못했습니다\n");
+        return;
+    }
+    std::printf("AOB 바이트 수 %zu\n", parsed->size());
+    if (!rt.loaded()) {
+        std::printf("이미지를 못 읽었습니다\n");
+        return;
+    }
+    const auto& img = rt.image();
+    const mem::Range range{img.data(), img.size()};
+    const auto hits = mem::find_all(range, *parsed, 8);
+    std::printf("사이트 후보 %zu곳\n", hits.size());
+    for (const auto* h : hits) {
+        const std::uint64_t rva = static_cast<std::uint64_t>(h - img.data());
+        std::printf("  RVA 0x%08llX  VA 0x%llX\n", (unsigned long long)rva,
+                    (unsigned long long)(reader.module_base() + rva));
+    }
+    if (hits.size() != 1) {
+        std::printf("유일하지 않으므로 모드는 설치를 거부합니다\n");
+        return;
+    }
+    const std::uint64_t rva = static_cast<std::uint64_t>(hits[0] - img.data());
+    const std::uintptr_t site = reader.module_base() + rva;
+
+    std::uint8_t orig[game::kNofallOrigSize]{};
+    if (!reader.read(site, orig, sizeof(orig))) {
+        std::printf("사이트 원본 바이트를 못 읽었습니다\n");
+        return;
+    }
+    std::printf("원본 %zu바이트:", game::kNofallOrigSize);
+    for (auto b : orig) std::printf(" %02X", b);
+    std::printf("\n");
+
+    // vars 주소는 점검용 가짜다(할당하지 않는다).
+    const auto built = game::nofall_build_cave(orig, 0x20000001000ULL, site);
+    if (!built.ok) {
+        std::printf("케이브 조립 실패: %s\n", built.why);
+        return;
+    }
+    std::printf("케이브 %zu바이트 (상한 %zu):\n", built.code.size(),
+                game::kNofallCaveSize);
+    for (std::size_t i = 0; i < built.code.size(); ++i) {
+        if (i % 16 == 0) std::printf("  %04zX ", i);
+        std::printf(" %02X", built.code[i]);
+        if (i % 16 == 15) std::printf("\n");
+    }
+    if (built.code.size() % 16 != 0) std::printf("\n");
+}
+
 void cmd_passscan(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                   char** argv) {
     const bool old = argc > 2 && std::strcmp(argv[2], "old") == 0;
@@ -3818,6 +3878,7 @@ int main(int argc, char** argv) {
     if (cmd == "invsock") { cmd_invsock(rt, reader); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
     if (cmd == "passscan") { cmd_passscan(rt, reader, argc, argv); return 0; }
+    if (cmd == "nofall") { cmd_nofall(rt, reader); return 0; }
     if (cmd == "equipchars") { cmd_equipchars(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {

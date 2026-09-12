@@ -436,10 +436,10 @@ void auto_analysis_loop() {
         // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
         player_discover(reader);
 
-        // 낙사 방지(No Fall Damage). 훅은 한 번 설치(자기검증), 매 주기 플레이어
-        // faller 학습을 시도한다(플레이어가 한 번 떨어져야 학습됨).
+        // 낙사 방지(No Fall Damage). 훅 설치는 RTTI 이미지가 있어야 해서 여기서
+        // 한 번만 한다(자기검증). 내 root 갱신은 **렌더 틱**(overlay.cpp)이 맡는다 -
+        // 통과 한 바퀴는 수십 초라, 캐릭터를 바꾸면 낡은 root 로 남는 창이 너무 길다.
         nofall_install(rtti, reader);
-        nofall_identify(reader);
         specguard_install(reader);   // 백업(렌더 루프가 먼저 설치)
         heal_special_items(reader);   // 특수아이템 표시 보정
 
