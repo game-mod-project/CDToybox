@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 
+#include "core/log.h"
 #include "core/write_log.h"
 #include "game/actors.h"
 #include "game/items.h"
@@ -406,7 +407,10 @@ bool pick_player_table(const mem::Reader& reader,
             const std::uintptr_t ch = rd64(reader, t.comp + 0x08);
             if (char_is_player(reader, ch)) score += 10000;
         }
-        if (t.arr == prefer_arr && dt >= 3) score += 1;   // 동률 안정화만
+        // 동률 안정화만. 되살린 표(missed > 0)는 못 받는다 - 지역 이동으로 새 표가 잡혔는데
+        // 옛 표가 되살아나 prefer 로 이기면 표시가 옛 표에 고착된다(리뷰 K-1). 생 스캔 결과가
+        // tabs 앞쪽이라 동률이면 생 스캔이 이긴다.
+        if (t.arr == prefer_arr && dt >= 3 && t.missed == 0) score += 1;
         if (t.stride == 0xD0) score += 1;                 // 확정 stride 우대
         if (score > bestScore) {
             bestScore = score;
@@ -437,6 +441,8 @@ EquipTable g_eq_player_table;           // 플레이어 테이블(빠른 재읽�
 std::vector<EquipCharacter> g_eq_chars; // 월드의 플레이어형 캐릭터(행 오름차순)
 std::uint16_t g_eq_current_row = kEquipAutoCharacter;   // 캐시된 테이블의 캐릭터
 std::uint16_t g_eq_resolved_want = kEquipAutoCharacter; // 마지막 발견이 소화한 선택
+std::uint16_t g_eq_log_row = kEquipAutoCharacter;       // 로그 판정용: 마지막 발견의 표시 행
+bool g_eq_log_ok = false;                                // 로그 판정용: 마지막 발견 성공 여부
 bool g_eq_ready = false;
 std::atomic<bool> g_eq_refresh{false};
 std::atomic<std::uint16_t> g_eq_want_row{kEquipAutoCharacter};   // 렌더 스레드가 고른다
@@ -446,9 +452,58 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);   // both-realms 쓰기 대상 전체
     std::uintptr_t prefer = 0;
+    std::vector<EquipTable> known;
+    std::vector<EquipCharacter> prev_chars;
+    std::uint16_t prev_row = kEquipAutoCharacter;
+    bool prev_ok = false;
     {
         std::lock_guard<std::mutex> lk(g_eq_mutex);
         prefer = g_eq_player_table.arr;   // 이전 선택 유지(동률 안정화)
+        known = g_eq_tables;
+        prev_chars = g_eq_chars;
+        prev_row = g_eq_log_row;   // 실패도 반영된 로그용 상태(리뷰 K-3)
+        prev_ok = g_eq_log_ok;
+    }
+    // 힙 스캔은 매번 완전하지 않다(영역 하나를 통째로 읽다 실패하면 그 영역 전부를 건너뛴다 -
+    // 실측 2026-09-12: 잇단 스캔이 26/29/28/16개였고 웅카 서버 테이블이 한 번은 빠져, 첫 일괄
+    // 쓰기가 한쪽 realm 에만 갔다). 전에 찾아 둔 테이블은 지금도 같은 자리에서 검증되면
+    // 남긴다 - 후보 목록에서 캐릭터가 사라졌다 나타났다 하지 않고, both-realms 쓰기가
+    // 양쪽을 다 찾는다. 검증: vtable 이 아직 EquipSlotActorComponent 이고(class_of_object),
+    // 스캔과 같은 조건(find_equip_table 로 같은 arr·stride + 실제아이템 >= 3)을 지난다.
+    // 읽기는 SEH 로 감싸여 풀린 페이지는 false 로 떨어지고, 커밋된 채 재사용된 자리는
+    // vtable·구조 점수·조각 수가 거른다(리뷰 K-2·O-2). 되살린 표는 연속 kReviveMaxMisses 회를
+    // 넘기면 버리고 한 번에 kReviveMax 개까지만 - 캐시가 자라지 않게(리뷰 K-4).
+    constexpr int kReviveMaxMisses = 15;   // 20초 주기면 5분
+    constexpr std::size_t kReviveMax = 64;
+    std::size_t revived = 0;
+    {
+        std::vector<WornPiece> chk;
+        for (const auto& k : known) {
+            if (revived >= kReviveMax) break;
+            bool present = false;
+            for (const auto& t : tabs) {
+                if (t.arr == k.arr) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present) continue;
+            if (k.missed + 1 > kReviveMaxMisses) continue;
+            if (rtti.class_of_object(k.comp).find("EquipSlotActorComponent") ==
+                std::string::npos) {
+                continue;
+            }
+            EquipTable again;
+            if (!find_equip_table(reader, k.comp, &again) || again.arr != k.arr ||
+                again.stride != k.stride) {
+                continue;
+            }
+            again.comp = k.comp;
+            again.missed = k.missed + 1;
+            if (!read_worn_gear(reader, again, &chk) || chk.size() < 3) continue;
+            tabs.push_back(again);
+            ++revived;
+        }
     }
     // 캐릭터 후보: 정신력 풀이 있고 착용 테이블로 보이는 것 중 행을 푼 것. realm 마다 하나씩
     // 오므로 행으로 합치고 조각 수는 큰 쪽을 둔다.
@@ -492,7 +547,32 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<WornPiece> pieces;
     const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces, want);
     const std::uint16_t cur = ok ? table_character_row(reader, pt) : kEquipAutoCharacter;
+    // 후보나 표시 캐릭터, 성공 여부가 바뀌면 한 줄 남긴다(20초 주기 재탐색은 조용히 - 실패가
+    // 이어져도 한 번만) - "콤보에 웅카가 없다" 를 로그로 가릴 수 있게.
+    bool changed = chars.size() != prev_chars.size() || cur != prev_row || ok != prev_ok;
+    for (std::size_t i = 0; !changed && i < chars.size(); ++i) {
+        changed = chars[i].row != prev_chars[i].row || chars[i].pieces != prev_chars[i].pieces;
+    }
+    if (changed) {
+        const auto label = [](std::uint16_t row) -> std::string {
+            if (row == kEquipAutoCharacter) return "자동";
+            const RosterEntry* e = character_by_row(row);
+            return e != nullptr && !e->display().empty() ? e->display()
+                                                          : "행 " + std::to_string(row);
+        };
+        std::string list;
+        for (const auto& c : chars) {
+            if (!list.empty()) list += " ";
+            list += label(c.row) + "(" + std::to_string(c.pieces) + ")";
+        }
+        log::infof("장비 캐릭터 후보 {}개: {} - 선택 {} → 표시 {} (테이블 {}개, 캐시에서 되살림 "
+                   "{}개{})",
+                   chars.size(), list, label(want), ok ? label(cur) : "없음", tabs.size(),
+                   revived, ok ? "" : ", 착용 테이블 못 찾음");
+    }
     std::lock_guard<std::mutex> lk(g_eq_mutex);
+    g_eq_log_row = cur;
+    g_eq_log_ok = ok;
     g_eq_tables = std::move(tabs);
     g_eq_chars = std::move(chars);
     g_eq_resolved_want = want;   // 실패해도 "이 선택을 봤다" 는 남긴다(창의 갱신 중 표시)
