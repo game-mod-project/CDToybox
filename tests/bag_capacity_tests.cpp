@@ -10,7 +10,7 @@ using cdtb::game::kBagTargetMax;
 using cdtb::game::bag_kind_branch;
 using cdtb::game::bag_kind_cap;
 using cdtb::game::bag_kind_rules;
-using cdtb::game::bag_kind_selected;
+using cdtb::game::bag_kind_known;
 using cdtb::game::bag_resolve_branch;
 using cdtb::game::plan_bag_expand;
 
@@ -175,6 +175,35 @@ TEST(bag_plan_marks_the_shapes_it_recognized) {
     CHECK(!plan_bag_expand(900, 850, 850, 0, kSlots, 700).same);
 }
 
+TEST(bag_repair_fixes_only_the_sum_we_broke) {
+    // **실측 2026-09-13.** 리로드에서 게임은 +0x14(용량 240)와 +0x18(갈래 190)은
+    // 되돌리면서 +0x16(합계)은 우리가 쓴 408 을 그대로 뒀다. 그러면 우리 모델이
+    // 영영 거부하는 모양이 남는다. 합계를 갈래 합으로 맞추면 240/190/190/0 -
+    // 처음 실측값이 그대로 나온다.
+    const auto p = cdtb::game::plan_bag_repair(240, 408, 190, 0);
+    CHECK(p.apply);
+    CHECK(p.sum == 190);
+    CHECK(p.base == 50);    // 가방의 알려진 기본 슬롯과 같다
+
+    // 멀쩡한 것은 건드리지 않는다.
+    CHECK(!cdtb::game::plan_bag_repair(240, 190, 190, 0).apply);
+    CHECK(!cdtb::game::plan_bag_repair(440, 200, 0, 200).apply);
+    CHECK(!cdtb::game::plan_bag_repair(700, 650, 650, 0).apply);
+
+    // 갈래 합이 용량을 넘으면 우리가 만든 모양이 아니다 - 안 건드린다.
+    CHECK(!cdtb::game::plan_bag_repair(240, 999, 300, 100).apply);
+    CHECK(!cdtb::game::plan_bag_repair(190, 999, 190, 0).apply);   // 기본 0
+    CHECK(!cdtb::game::plan_bag_repair(-1, 0, 0, 0).apply);
+    // 건너뛸 때는 이유를 남긴다.
+    CHECK(cdtb::game::plan_bag_repair(240, 190, 190, 0).skip[0] != '\0');
+
+    // 고친 결과는 **반드시** 우리 모델이 받아들이는 모양이어야 한다 - 안 그러면
+    // 고치고도 그 컨테이너를 계속 거부한다.
+    const auto after = plan_bag_expand(240, p.sum, 190, 0, kSlots, 700);
+    CHECK(after.apply);
+    CHECK(after.base == 50);
+}
+
 TEST(bag_plan_target_zero_changes_nothing) {
     // 0 은 "복원" 이 아니라 "바꿀 것 없음" 이다.
     CHECK(!plan_bag_expand(240, 190, 190, 0, kSlots, 0).apply);
@@ -188,20 +217,17 @@ TEST(bag_kind_filter_never_touches_the_small_slots) {
     // 2026-09-13 실측 18개 컨테이너의 종류와 용량:
     //   1 가방 240 / 7 보관함 440 / 4 300 / 9 300 / 11 300 / 8·12 240
     //   0·2·3 20 / 10·19 50 / 13 5 / 14~18 10
-    CHECK(bag_kind_selected(1, false));   // 가방은 언제나
-    CHECK(bag_kind_selected(1, true));
-    CHECK(!bag_kind_selected(7, false));  // 보관함은 켰을 때만
-    CHECK(bag_kind_selected(7, true));
-    CHECK(bag_kind_selected(9, true));
-    CHECK(bag_kind_selected(11, true));
+    CHECK(bag_kind_known(1));    // 가방
+    CHECK(bag_kind_known(7));    // 보관함
+    CHECK(bag_kind_known(9));
+    CHECK(bag_kind_known(11));
     // 종류 4 는 혼자 +0x20 에 8칸짜리 보조 배열을 단다(실측). 정체를 확인할
     // 때까지 뺀다 - 용량만 올리고 그쪽을 두는 것은 모르는 모양을 건드리는 것이다.
-    CHECK(!bag_kind_selected(4, true));
+    CHECK(!bag_kind_known(4));
     // 작은 칸(용량 5·10·20·50)과 나머지는 어느 쪽이든 절대 건드리지 않는다.
     for (const std::uint16_t k :
          {0, 2, 3, 5, 6, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 99}) {
-        CHECK(!bag_kind_selected(k, false));
-        CHECK(!bag_kind_selected(k, true));
+        CHECK(!bag_kind_known(k));
     }
 }
 
@@ -221,15 +247,14 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
         CHECK(r.branch == kBagBranchA || r.branch == kBagBranchB);
         CHECK(bag_kind_branch(r.kind) == r.branch);
         CHECK(bag_resolve_branch(kBagBranchAuto, r.kind) == r.branch);
-        // storage_only 가 거짓이면 언제나, 참이면 켰을 때만.
-        CHECK(bag_kind_selected(r.kind, true));
-        CHECK(bag_kind_selected(r.kind, false) == !r.storage_only);
+        // 표에 있는 종류는 전부 "안다". 실제로 건드릴지는 **목표값**이 정한다
+        // (0 이면 안 건드린다) - 종류마다 목표가 따로 있기 때문이다.
+        CHECK(bag_kind_known(r.kind));
     }
     // 표에 없는 종류는 상한이 0 이고 어느 쪽이든 안 건드린다.
     for (const std::uint16_t k : {0, 2, 3, 4, 5, 6, 8, 10, 12, 13, 99}) {
         CHECK(bag_kind_cap(k) == 0);
-        CHECK(!bag_kind_selected(k, false));
-        CHECK(!bag_kind_selected(k, true));
+        CHECK(!bag_kind_known(k));
     }
 }
 
