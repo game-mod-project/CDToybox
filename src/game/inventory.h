@@ -213,6 +213,9 @@ struct BagKindRule {
 // (실측 2026-09-13) 그 정체를 모른다(리뷰 지적 11).
 std::span<const BagKindRule> bag_kind_rules();
 
+// 표의 길이. 목표 배열이 이 길이여야 한다.
+inline constexpr std::size_t kBagKindCount = 4;
+
 // 이 종류의 상한. 표에 없으면 0(= 안 건드린다).
 int bag_kind_cap(std::uint16_t kind);
 
@@ -270,13 +273,20 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
                         int branch = kBagBranchA,
                         int limit = kBagTargetMax);
 
-// 이 종류를 건드릴 것인가(bag_kind_rules 를 읽는다).
-// 가방(1)은 언제나, 보관함류(7·9·11)는 storage 가 참일 때만,
-// 작은 칸(용량 5·10·20·50)은 **절대** 건드리지 않는다 - 그것까지 부풀린 것이
-// 2026-09-05 "리로드 후 지급 손상" 의 유력한 원인이다. 종류 4 는 혼자 +0x20 에
-// 8칸짜리 보조 배열을 달아(실측) 정체를 모르므로 뺀다(리뷰 지적 11).
+// 우리가 아는 종류인가(= 표에 있는가). 작은 칸(용량 5·10·20·50)은 **절대**
+// 건드리지 않는다 - 그것까지 부풀린 것이 2026-09-05 "리로드 후 지급 손상" 의
+// 유력한 원인이다. 종류 4 는 혼자 +0x20 에 8칸짜리 보조 배열을 달아(실측) 정체를
+// 모르므로 뺀다(리뷰 지적 11).
 // 헤더로 올린 이유: 시험이 이 거르개를 덮을 수 있어야 한다(리뷰 지적 8).
-bool bag_kind_selected(std::uint16_t kind, bool storage);
+//
+// **"건드릴 것인가" 는 이제 목표값이 정한다** - 종류마다 목표가 따로 있고 0 이면
+// 안 건드린다. 예전에는 "보관함도 함께" 체크 하나로 셋을 한꺼번에 켰는데, 그러면
+// 상한을 종류별로 둬 놓고 목표는 하나라 실제로는 종류별 조절이 안 됐다.
+bool bag_kind_known(std::uint16_t kind);
+
+// 종류별 지금 용량(+0x14)을 bag_kind_rules() 와 **같은 순서**로 채운다. 못 읽은
+// 칸은 0 이다. 화면이 "지금 얼마인지" 를 옆에 내려고 쓴다.
+void bag_current_caps(const mem::Reader& reader, std::span<int> out);
 
 struct BagResult {
     int changed = 0;   // 실제로 쓴 컨테이너 수(realm 합산)
@@ -293,11 +303,35 @@ struct BagResult {
     const char* last_skip = "";   // 마지막으로 건너뛴 이유(화면·로그에 낸다)
 };
 
-// 가방(종류 1)을, storage 가 참이면 보관함류(종류 7·9·11 - 4 는 다른 구조를 달아
-// 뺐다, bag_kind_selected 참고)도 함께 target 슬롯으로
-// 맞춘다. 클라·서버 두 realm 에 같이 쓴다. **모드(주입 DLL)에서만** 부른다.
-BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
-                     int branch = kBagBranchA);
+// targets 는 bag_kind_rules() 와 **같은 순서·같은 길이**(kBagKindCount)다.
+// 0 이면 그 종류는 건드리지 않는다. 길이가 다르면 아무것도 안 한다 - 조용히
+// 절반만 쓰는 길을 만들지 않는다.
+// 클라·서버 두 realm 에 같이 쓴다. **모드(주입 DLL)에서만** 부른다.
+BagResult bag_expand(const mem::Reader& reader, std::span<const int> targets,
+                     int branch = kBagBranchAuto);
+
+// ------------------------------------------------------------- 손상 복구
+//
+// **우리가 어긋뜨린 합계(+0x16)를 갈래 합으로 되돌린다.** 실측 2026-09-13: 리로드
+// 에서 게임은 `+0x14`(용량)와 `+0x18`(갈래 A)은 되돌리면서 `+0x16`(합계)은 우리가
+// 쓴 값을 그대로 뒀다. 그러면 `+0x16 != +0x18 + +0x1A` 인 모양이 남고, 우리 모델
+// 검사가 그 컨테이너를 **영영** 거부한다(자동 재적용도 10바퀴 돌다 포기한다).
+//
+// 고치는 것은 합계 한 칸뿐이다. 용량도 갈래도 안 건드린다 - 실측 18개가 전부
+// 지키는 불변식으로 되돌릴 뿐이라, 서버 가방의 경우 240/190/190/0 이라는 처음
+// 실측값이 그대로 나온다.
+struct BagRepairPlan {
+    bool apply = false;
+    const char* skip = "";
+    int sum = 0;    // +0x16 에 쓸 값 = a + b
+    int base = 0;   // 그 결과의 기본 슬롯(= cap - sum). 0 보다 커야 한다
+};
+BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b);
+
+// 고칠 것이 몇 개인가(화면이 버튼을 낼지 정한다). 읽기만 한다.
+int bag_broken_count(const mem::Reader& reader);
+// 고친다. **모드에서만** 부른다.
+BagResult bag_repair(const mem::Reader& reader);
 
 // 마지막 확장 전의 원래 값으로 되돌린다. 기억해 둔 것이 없으면 아무것도 안 한다.
 BagResult bag_restore(const mem::Reader& reader);
@@ -381,7 +415,7 @@ bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
 // 한 번 적용했다면 그 설정을 기억해 두었다가, 인벤토리가 새로 잡힐 때 한 번 더 건다.
 //
 // 사용자가 직접 누른 것을 그대로 되풀이할 뿐이다 - 스스로 값을 정하지 않는다.
-void bag_auto_set(int target, bool storage, int branch);
+void bag_auto_set(std::span<const int> targets, int branch);
 void bag_auto_clear();      // 되돌리기와 화면 체크 해제가 부른다
 bool bag_auto_on();
 // 분석 루프가 매 바퀴 부른다. 무장돼 있고 인벤토리가 **새 세대로** 잡혔을 때만 쓴다

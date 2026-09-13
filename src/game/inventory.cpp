@@ -508,12 +508,41 @@ int bag_resolve_branch(int chosen, std::uint16_t kind) {
     return bag_kind_branch(kind);   // 자동(그리고 모르는 값)은 종류별 칸
 }
 
-bool bag_kind_selected(std::uint16_t kind, bool storage) {
+bool bag_kind_known(std::uint16_t kind) {
     for (const auto& r : kKindRules) {
-        if (r.kind != kind) continue;
-        return !r.storage_only || storage;
+        if (r.kind == kind) return true;
     }
     return false;
+}
+
+// 표에서 이 종류가 몇 번째인가. 못 찾으면 -1.
+int bag_kind_index(std::uint16_t kind) {
+    for (std::size_t i = 0; i < std::size(kKindRules); ++i) {
+        if (kKindRules[i].kind == kind) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b) {
+    BagRepairPlan p;
+    if (cap < 0 || sum < 0 || a < 0 || b < 0) {
+        p.skip = "값이 음수다";
+        return p;
+    }
+    if (a + b == sum) {
+        p.skip = "고칠 것이 없다";
+        return p;
+    }
+    // 갈래 합이 용량을 넘으면 기본 슬롯이 0 이하가 된다 - 우리가 만든 모양이
+    // 아니다(우리는 갈래를 용량 이하로만 쓴다). 모르는 것은 안 건드린다.
+    p.base = cap - (a + b);
+    if (p.base <= 0) {
+        p.skip = "고쳐도 기본 슬롯이 0 이하다";
+        return p;
+    }
+    p.sum = a + b;
+    p.apply = true;
+    return p;
 }
 
 namespace {
@@ -532,8 +561,10 @@ std::mutex g_bag_op_mtx;
 
 // 로드 뒤 자동 다시 적용에 쓰는 설정. 사용자가 적용을 눌렀을 때만 무장된다.
 std::atomic<bool> g_auto_on{false};
-std::atomic<int> g_auto_target{0};
-std::atomic<bool> g_auto_storage{false};
+// 종류별 목표. 원자 배열이 아니라 뮤텍스로 지킨다 - 네 칸이 **한 벌로** 읽혀야
+// 한다(반쯤 갱신된 목표로 쓰면 사용자가 누른 적 없는 조합이 걸린다).
+std::mutex g_auto_mtx;
+int g_auto_targets[kBagKindCount] = {0, 0, 0, 0};
 std::atomic<int> g_auto_branch{kBagBranchA};
 std::atomic<unsigned> g_auto_gen{0};       // 이 세대에는 이미 했다
 std::atomic<unsigned> g_auto_try_gen{0};   // 지금 어느 세대를 두고 재시도 중인가
@@ -556,14 +587,18 @@ void remember_seen(const BagSeen& seen) {
 }
 
 // 한 컴포넌트의 대상 컨테이너에 계획을 적용한다.
-void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
-              bool storage, bool remember, int branch, int realm, BagResult* r) {
+void apply_to(const mem::Reader& reader, std::uintptr_t comp,
+              std::span<const int> targets, bool remember, int branch,
+              int realm, BagResult* r) {
     if (comp == 0) return;
     std::vector<InventoryContainer> cs;
     if (!read_inventory_containers(reader, comp, &cs)) return;
     const int before = r->changed;
     for (const auto& c : cs) {
-        if (!bag_kind_selected(c.kind, storage)) continue;
+        const int ki = bag_kind_index(c.kind);
+        if (ki < 0) continue;                      // 우리가 아는 종류가 아니다
+        const int target = targets[static_cast<std::size_t>(ki)];
+        if (target <= 0) continue;                 // 이 종류는 안 건드린다
         std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
         if (!reader.read_value(c.address + 0x14, &cap) ||
             !reader.read_value(c.address + 0x16, &sum) ||
@@ -788,19 +823,26 @@ namespace {
 // 잠금을 **이미 쥔 채** 부른다. 자동 재적용이 "무장됐나" 를 잠금 안에서 다시 보고
 // 이어서 쓰려면, 같은 비재귀 뮤텍스를 두 번 잡지 않도록 알맹이가 따로 있어야 한다
 // (재검토 경미 1).
-BagResult bag_expand_locked(const mem::Reader& reader, int target, bool storage,
-                            int branch) {
+BagResult bag_expand_locked(const mem::Reader& reader,
+                            std::span<const int> targets, int branch) {
     // **백업을 비우지 않는다.** (realm, 종류)당 첫 원본만 남기므로 여러 번 눌러도
     // 처음 값이 지켜진다(리뷰 지적 3). 비우는 것은 되돌리기 성공뿐이다.
     BagResult r;
-    apply_to(reader, inventory_component(), target, storage, true, branch, 0,
-             &r);
-    apply_to(reader, inventory_component_client(), target, storage, true, branch,
-             1, &r);
+    apply_to(reader, inventory_component(), targets, true, branch, 0, &r);
+    apply_to(reader, inventory_component_client(), targets, true, branch, 1, &r);
     // 새 기록이 생겼으면 "기록이 사라졌습니다" 안내는 더 이상 참이 아니다.
     if (r.changed > 0) g_backup_dropped.store(false, std::memory_order_release);
-    log::infof("가방 확장: 목표 {} 칸 {} -> 바꾼 것 {}개({} realm), 건너뜀 {},"
-               " 실패 {}", target,
+    std::string want;
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        if (targets[i] <= 0) continue;
+        if (!want.empty()) want += " ";
+        want += kKindRules[i].name;
+        want += " ";
+        want += std::to_string(targets[i]);
+    }
+    if (want.empty()) want = "(없음)";
+    log::infof("가방 확장: 목표 [{}] 칸 {} -> 바꾼 것 {}개({} realm), 건너뜀 {},"
+               " 실패 {}", want,
                branch == kBagBranchA   ? "A(+0x18) 강제"
                : branch == kBagBranchB ? "B(+0x1A) 강제"
                                        : "종류별(가방 A · 보관함류 B)",
@@ -810,15 +852,103 @@ BagResult bag_expand_locked(const mem::Reader& reader, int target, bool storage,
 
 }  // namespace
 
-BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
+BagResult bag_expand(const mem::Reader& reader, std::span<const int> targets,
                      int branch) {
+    // 길이가 다르면 아무것도 안 한다. 조용히 절반만 쓰는 길을 만들지 않는다.
+    BagResult r;
+    if (targets.size() != kBagKindCount) {
+        r.last_skip = "목표 배열의 길이가 표와 다릅니다";
+        return r;
+    }
     std::lock_guard<std::mutex> op(g_bag_op_mtx);
-    return bag_expand_locked(reader, target, storage, branch);
+    return bag_expand_locked(reader, targets, branch);
 }
 
-void bag_auto_set(int target, bool storage, int branch) {
-    g_auto_target.store(target, std::memory_order_release);
-    g_auto_storage.store(storage, std::memory_order_release);
+void bag_current_caps(const mem::Reader& reader, std::span<int> out) {
+    for (auto& v : out) v = 0;
+    if (out.size() != kBagKindCount) return;
+    std::vector<InventoryContainer> cs;
+    if (!read_inventory_containers(reader, inventory_component(), &cs)) return;
+    for (const auto& c : cs) {
+        const int ki = bag_kind_index(c.kind);
+        if (ki < 0) continue;
+        std::uint16_t cap = 0;
+        if (reader.read_value(c.address + 0x14, &cap)) {
+            out[static_cast<std::size_t>(ki)] = cap;
+        }
+    }
+}
+
+namespace {
+
+// 한 컴포넌트에서 고칠 컨테이너를 센다(세기만 하거나, 실제로 고친다).
+void repair_in(const mem::Reader& reader, std::uintptr_t comp, bool write,
+               BagResult* r) {
+    if (comp == 0) return;
+    std::vector<InventoryContainer> cs;
+    if (!read_inventory_containers(reader, comp, &cs)) return;
+    const int before = r->changed;
+    for (const auto& c : cs) {
+        if (!bag_kind_known(c.kind)) continue;
+        std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+        if (!reader.read_value(c.address + 0x14, &cap) ||
+            !reader.read_value(c.address + 0x16, &sum) ||
+            !reader.read_value(c.address + 0x18, &a) ||
+            !reader.read_value(c.address + 0x1A, &b)) {
+            ++r->fail;
+            continue;
+        }
+        const BagRepairPlan p = plan_bag_repair(cap, sum, a, b);
+        if (!p.apply) continue;   // 멀쩡한 것은 세지도 않는다
+        if (!write) {
+            ++r->changed;   // 세기만 할 때는 "고칠 것" 의 수다
+            continue;
+        }
+        log_write("가방 합계 복구", c.address + 0x16, std::to_string(sum),
+                  std::to_string(p.sum));
+        const bool ok =
+            bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum));
+        std::uint16_t back = 0;
+        if (ok && reader.read_value(c.address + 0x16, &back) &&
+            back == static_cast<std::uint16_t>(p.sum)) {
+            ++r->changed;
+            log::infof("가방 합계 복구: 0x{:X} 종류 {} 합계 {} -> {} (용량 {},"
+                       " 기본 {})", c.address, c.kind, sum, p.sum, cap, p.base);
+        } else {
+            ++r->fail;
+            log::warnf("가방 합계 복구 실패: 0x{:X} 종류 {}", c.address, c.kind);
+        }
+    }
+    if (r->changed > before) ++r->realms;
+}
+
+}  // namespace
+
+int bag_broken_count(const mem::Reader& reader) {
+    BagResult r;
+    repair_in(reader, inventory_component(), false, &r);
+    repair_in(reader, inventory_component_client(), false, &r);
+    return r.changed;
+}
+
+BagResult bag_repair(const mem::Reader& reader) {
+    std::lock_guard<std::mutex> op(g_bag_op_mtx);
+    BagResult r;
+    repair_in(reader, inventory_component(), true, &r);
+    repair_in(reader, inventory_component_client(), true, &r);
+    log::infof("가방 합계 복구: 고친 것 {}개({} realm), 실패 {}", r.changed,
+               r.realms, r.fail);
+    return r;
+}
+
+void bag_auto_set(std::span<const int> targets, int branch) {
+    if (targets.size() != kBagKindCount) return;
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        for (std::size_t i = 0; i < kBagKindCount; ++i) {
+            g_auto_targets[i] = targets[i];
+        }
+    }
     g_auto_branch.store(branch, std::memory_order_release);
     // 지금 세대에는 방금 손으로 걸었다. 이 다음 **새로 생긴** 것부터가 대상이다.
     g_auto_gen.store(g_inv_gen.load(std::memory_order_acquire), std::memory_order_release);
@@ -840,7 +970,11 @@ void bag_auto_tick(const mem::Reader& reader) {
     if (g_auto_try_gen.exchange(gen, std::memory_order_acq_rel) != gen) {
         g_auto_tries.store(0, std::memory_order_release);
     }
-    const int target = g_auto_target.load(std::memory_order_acquire);
+    int want[kBagKindCount] = {0, 0, 0, 0};
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        for (std::size_t i = 0; i < kBagKindCount; ++i) want[i] = g_auto_targets[i];
+    }
     BagResult r;
     {
         // **잠금을 쥔 채 다시 확인한다.** 검사와 쓰기 사이에 렌더 스레드의
@@ -849,9 +983,8 @@ void bag_auto_tick(const mem::Reader& reader) {
         // (재검토 경미 1).
         std::lock_guard<std::mutex> op(g_bag_op_mtx);
         if (!g_auto_on.load(std::memory_order_acquire)) return;
-        r = bag_expand_locked(
-            reader, target, g_auto_storage.load(std::memory_order_acquire),
-            g_auto_branch.load(std::memory_order_acquire));
+        r = bag_expand_locked(reader, want,
+                              g_auto_branch.load(std::memory_order_acquire));
     }
     // 아직 끝이 아닌 두 가지. 둘 다 "다음 바퀴에 다시" 가 맞다.
     //   * 대상 컨테이너를 **하나도 못 봤다** - 로드 도중에는 레코드 배열이 아직
@@ -880,8 +1013,8 @@ void bag_auto_tick(const mem::Reader& reader) {
         return;
     }
     g_auto_gen.store(gen, std::memory_order_release);
-    log::infof("인벤토리가 새로 생겼다 - 가방 확장을 다시 걸었다 (목표 {}, 바꾼 것"
-               " {}개, 건너뜀 {})", target, r.changed, r.skip);
+    log::infof("인벤토리가 새로 생겼다 - 가방 확장을 다시 걸었다 (바꾼 것 {}개,"
+               " 건너뜀 {})", r.changed, r.skip);
 }
 
 bool bag_has_backup() {
