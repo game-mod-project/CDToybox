@@ -937,8 +937,10 @@ bool find_backup(int realm, std::uint16_t kind, BagBackup* out) {
 }
 
 // 한 컴포넌트를 훑는다. write 가 거짓이면 세기만 한다.
+// record_only 면 기록에서 나온 계획만 쓴다 - 자동 경로가 짐작으로 쓰지 않게.
 void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
-               bool write, BagResult* r, BagBrokenCount* n) {
+               bool write, BagResult* r, BagBrokenCount* n,
+               bool record_only = false) {
     if (comp == 0) return;
     std::vector<InventoryContainer> cs;
     if (!read_inventory_containers(reader, comp, &cs)) return;
@@ -968,6 +970,7 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
             }
             continue;
         }
+        if (record_only && !p.from_record) continue;
         if (!write) {
             if (n != nullptr) {
                 ++n->fixable;
@@ -1035,6 +1038,18 @@ BagBrokenCount bag_broken_count(const mem::Reader& reader) {
     return n;
 }
 
+namespace {
+
+// 잠금을 **이미 쥔 채** 부른다. 자동 재적용이 걸기 전에 쓰는 길이다.
+BagResult repair_recorded_locked(const mem::Reader& reader) {
+    BagResult r;
+    repair_in(reader, inventory_component(), 0, true, &r, nullptr, true);
+    repair_in(reader, inventory_component_client(), 1, true, &r, nullptr, true);
+    return r;
+}
+
+}  // namespace
+
 BagResult bag_repair(const mem::Reader& reader) {
     std::lock_guard<std::mutex> op(g_bag_op_mtx);
     BagResult r;
@@ -1087,6 +1102,13 @@ void bag_auto_tick(const mem::Reader& reader) {
         // (재검토 경미 1).
         std::lock_guard<std::mutex> op(g_bag_op_mtx);
         if (!g_auto_on.load(std::memory_order_acquire)) return;
+        // **걸기 전에 우리가 낸 손상을 치운다.** 안 하면 가방(종류 1)이 리로드마다
+        // `cap < sum` 으로 밀려, 자동 재적용이 그 컨테이너를 영영 건너뛴다.
+        const BagResult fix = repair_recorded_locked(reader);
+        if (fix.changed > 0) {
+            log::infof("가방 자동 복구: 걸기 전에 {}개를 원본으로 되돌렸다",
+                       fix.changed);
+        }
         r = bag_expand_locked(reader, want,
                               g_auto_branch.load(std::memory_order_acquire));
     }

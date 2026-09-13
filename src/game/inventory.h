@@ -349,7 +349,8 @@ struct BagBrokenCount {
 };
 // 읽기만 한다. 화면이 버튼과 문구를 정하는 데 쓴다.
 BagBrokenCount bag_broken_count(const mem::Reader& reader);
-// 고친다. **모드에서만** 부른다.
+// 고친다. **모드에서만** 부른다. 화면 버튼이 부르는 길이라 기록 없는 짐작도
+// 포함한다(화면이 그때 한 번 더 묻는다).
 BagResult bag_repair(const mem::Reader& reader);
 
 // 마지막 확장 전의 원래 값으로 되돌린다. 기억해 둔 것이 없으면 아무것도 안 한다.
@@ -437,6 +438,16 @@ bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
 void bag_auto_set(std::span<const int> targets, int branch);
 void bag_auto_clear();      // 되돌리기와 화면 체크 해제가 부른다
 bool bag_auto_on();
+// 자동 재적용은 걸기 **전에** 기록이 있는 손상을 먼저 치운다. 가방(종류 1)은
+// 리로드에서 `+0x14`·`+0x18` 은 게임이 되돌리는데 `+0x16` 만 우리 값이 살아남아
+// (실측 2026-09-13, 두 번 재현) `cap < sum` 인 모양이 남는다. 그대로 두면 리로드
+// 때마다 서버 가방 하나가 밀리고 사용자가 매번 [고치기] 를 눌러야 한다 - 그건
+// 기능이 아니라 숙제다.
+//
+// **기록이 있는 것만** 치운다. 기록의 원본을 그대로 되돌리는 길이라 우리가 낸
+// 손상을 우리가 치우는 것이고, 짐작으로 쓰는 길(기록 없는 모양 추정)은 여기 절대
+// 들어오지 않는다 - 그쪽은 화면이 한 번 더 묻는 버튼으로만 간다.
+//
 // 분석 루프가 매 바퀴 부른다. 무장돼 있고 인벤토리가 **새 세대로** 잡혔을 때만 쓴다
 // (주소가 아니라 세대다 - 힙이 같은 자리를 돌려주면 주소 비교는 조용히 실패한다).
 void bag_auto_tick(const mem::Reader& reader);
