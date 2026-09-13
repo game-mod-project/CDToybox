@@ -21,7 +21,6 @@ BagSeen bag_seen(std::uintptr_t addr) {
     s.kind = 1;
     s.address = addr;
     s.cap = 240;
-    s.sum = 190;
     s.a = 190;
     s.b = 0;
     return s;
@@ -34,7 +33,7 @@ BagBackup applied_bag(std::uintptr_t addr) {
     s.understood = true;
     s.known = true;
     s.want_cap = 300;
-    s.want_sum = 250;
+    s.want_exp = 250;
     bag_backup_upsert(v, s);
     return v.front();
 }
@@ -49,7 +48,7 @@ TEST(bag_backup_keeps_the_first_original_and_follows_the_address) {
     first.changed = true;
     first.known = true;
     first.want_cap = 300;
-    first.want_sum = 250;
+    first.want_exp = 250;
     bag_backup_upsert(v, first);
     CHECK(v.size() == 1);
     CHECK(v[0].cap == 240);
@@ -59,12 +58,10 @@ TEST(bag_backup_keeps_the_first_original_and_follows_the_address) {
     BagSeen after = first;
     after.address = 0x2000;
     after.cap = 300;
-    after.sum = 250;
     after.a = 250;
     bag_backup_upsert(v, after);
     CHECK(v.size() == 1);
     CHECK(v[0].cap == 240);        // 최초 원본
-    CHECK(v[0].sum == 190);
     CHECK(v[0].a == 190);
     CHECK(v[0].address == 0x2000);  // 주소만 따라간다
 }
@@ -78,17 +75,16 @@ TEST(bag_backup_follows_the_address_even_when_nothing_was_written) {
     first.changed = true;
     first.known = true;
     first.want_cap = 300;
-    first.want_sum = 250;
+    first.want_exp = 250;
     bag_backup_upsert(v, first);
 
     BagSeen skipped = bag_seen(0x2000);
     skipped.cap = 300;          // 저장에서 살아 돌아온 값
-    skipped.sum = 250;
     skipped.a = 250;
     skipped.changed = false;    // 쓸 것이 없어 건너뛰었다
     skipped.known = true;
     skipped.want_cap = 300;
-    skipped.want_sum = 250;
+    skipped.want_exp = 250;
     bag_backup_upsert(v, skipped);
     CHECK(v.size() == 1);
     CHECK(v[0].address == 0x2000);
@@ -113,18 +109,17 @@ TEST(bag_backup_rebaselines_when_someone_else_changed_the_container) {
     first.understood = true;
     first.known = true;
     first.want_cap = 300;
-    first.want_sum = 250;
+    first.want_exp = 250;
     bag_backup_upsert(v, first);
 
     // (1) 우리 값이 저장에서 그대로 살아 돌아왔다 - 원본을 다시 잡지 않는다.
     BagSeen survived = bag_seen(0x2000);
     survived.cap = 300;
-    survived.sum = 250;
     survived.a = 250;
     survived.understood = true;
     survived.known = true;
     survived.want_cap = 300;
-    survived.want_sum = 250;
+    survived.want_exp = 250;
     bag_backup_upsert(v, survived);
     CHECK(v.size() == 1);
     CHECK(v[0].cap == 240);
@@ -133,17 +128,15 @@ TEST(bag_backup_rebaselines_when_someone_else_changed_the_container) {
     //     되돌아갈 자리는 옛 240 이 아니라 지금 이 290 이다.
     BagSeen bought = bag_seen(0x3000);
     bought.cap = 290;
-    bought.sum = 240;
     bought.a = 240;
     bought.changed = true;
     bought.understood = true;
     bought.known = true;
     bought.want_cap = 300;
-    bought.want_sum = 250;
+    bought.want_exp = 250;
     bag_backup_upsert(v, bought);
     CHECK(v.size() == 1);
     CHECK(v[0].cap == 290);   // **구매한 50칸을 지키는 줄**
-    CHECK(v[0].sum == 240);
     CHECK(v[0].a == 240);
     // 같은 seen 으로 한 번 더 불려도(쓰기 전/후 두 번 부른다) 결과가 같다.
     bag_backup_upsert(v, bought);
@@ -162,7 +155,6 @@ TEST(bag_backup_does_not_rebaseline_before_it_knows_what_it_wrote) {
 
     BagSeen weird = bag_seen(0x1000);
     weird.cap = 999;
-    weird.sum = 900;
     weird.understood = true;
     bag_backup_upsert(v, weird);
     CHECK(v[0].cap == 240);   // 다시 잡지 않았다
@@ -177,14 +169,12 @@ TEST(bag_backup_rebaseline_follows_what_plan_calls_understood) {
     // 작다"·"이미 목표보다 크다" 도 재기준을 부른다 - 그 사이 누가 컨테이너를
     // 키워 놓았다는 뜻이므로 옳은 방향이다(옛 원본을 쓰면 남의 칸을 지운다).
     const auto seen_from = [](const cdtb::game::BagPlan& p, std::uint16_t cap,
-                              std::uint16_t sum, std::uint16_t a,
-                              std::uint16_t b) {
+                              std::uint16_t a, std::uint16_t b) {
         BagSeen s;
         s.realm = 0;
         s.kind = 1;
         s.address = 0x2000;
         s.cap = cap;
-        s.sum = sum;
         s.a = a;
         s.b = b;
         s.understood = p.understood;
@@ -198,23 +188,23 @@ TEST(bag_backup_rebaseline_follows_what_plan_calls_understood) {
     first.understood = true;
     first.known = true;
     first.want_cap = 300;
-    first.want_sum = 250;
+    first.want_exp = 250;
     bag_backup_upsert(v, first);
 
     // (1) 모양을 못 알아본 컨테이너는 원본을 갈지 않는다.
-    const auto bad = cdtb::game::plan_bag_expand(100, 200, 0, 0, 1460, 300);
-    CHECK(!bad.understood);
-    bag_backup_upsert(v, seen_from(bad, 100, 200, 0, 0));
+    const auto bad = cdtb::game::plan_bag_expand(100, 150, 0, 1460, 300);
+    CHECK(!bad.understood);   // 확장(150)이 용량(100)보다 크다
+    bag_backup_upsert(v, seen_from(bad, 100, 150, 0));
     CHECK(v[0].cap == 240);
 
     // (2) "이미 목표보다 크다" 는 알아본 것이다 - 그 사이 누가 키웠다는 뜻이므로
     //     지금 값이 새 원본이 된다.
-    const auto big = cdtb::game::plan_bag_expand(500, 450, 450, 0, 1460, 300);
+    const auto big = cdtb::game::plan_bag_expand(500, 450, 0, 1460, 300);
     CHECK(!big.apply);
     CHECK(big.understood);
-    bag_backup_upsert(v, seen_from(big, 500, 450, 450, 0));
+    bag_backup_upsert(v, seen_from(big, 500, 450, 0));
     CHECK(v[0].cap == 500);
-    CHECK(v[0].sum == 450);
+    CHECK(v[0].a == 450);
 }
 
 TEST(bag_backup_separates_realms_and_kinds) {
@@ -259,7 +249,7 @@ TEST(bag_restore_refuses_when_someone_else_changed_it) {
     // 캐릭터 교체: 기본 슬롯(cap - sum)이 다르다.
     BagBackup other = s;
     other.want_cap = 300;
-    other.want_sum = 200;   // 기본 100 - 우리 가방(기본 50)이 아니다
+    other.want_exp = 200;   // 기본 100 - 우리 가방(기본 50)이 아니다
     CHECK(bag_restore_blocked(other, 300, 200, 100) != nullptr);
     // 무엇을 써 놓았는지 모르는 기록은 되돌리지 않는다.
     BagBackup unknown = s;
@@ -287,12 +277,11 @@ TEST(bag_backup_does_not_rebaseline_on_a_shape_it_does_not_understand) {
     first.understood = true;
     first.known = true;
     first.want_cap = 300;
-    first.want_sum = 250;
+    first.want_exp = 250;
     bag_backup_upsert(v, first);
 
     BagSeen weird = bag_seen(0x1000);
     weird.cap = 100;          // 용량이 확장 합계보다 작다 - 우리 모델이 아니다
-    weird.sum = 200;
     weird.understood = false;
     bag_backup_upsert(v, weird);
     CHECK(v[0].cap == 240);   // 원본은 그대로
@@ -307,9 +296,9 @@ TEST(bag_restore_sees_when_there_is_nothing_to_undo) {
     // **게이트 경미 5.** 지금 값이 원본 그대로면 되돌릴 것이 없다. 막힘으로 치면
     // 버튼이 켜진 채 "적용한 뒤 값이 바뀌었습니다" 만 반복한다.
     const BagBackup s = applied_bag(0x1000);
-    CHECK(bag_restore_already_original(s, 240, 190, 190, 0));
-    CHECK(!bag_restore_already_original(s, 300, 250, 250, 0));
-    CHECK(!bag_restore_already_original(s, 240, 190, 0, 190));   // 갈래가 다르다
+    CHECK(bag_restore_already_original(s, 240, 190, 0));
+    CHECK(!bag_restore_already_original(s, 300, 250, 0));
+    CHECK(!bag_restore_already_original(s, 240, 0, 190));   // 갈래가 다르다
 }
 
 TEST(auto_reapply_waits_for_a_new_generation_and_both_realms) {
