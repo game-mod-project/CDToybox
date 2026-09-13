@@ -484,6 +484,11 @@ constexpr BagKindRule kKindRules[] = {
     {9, kBagTargetMax, true, kBagBranchB, "종류 9"},
     {11, kBagTargetMax, true, kBagBranchB, "종류 11"},
 };
+// **두 손글씨 숫자가 같다** 에 종류별 배선 전체가 걸려 있다. 표를 늘리고 이 상수를
+// 안 고치면 apply_to 가 targets(span) **밖을 읽고**(UB) 그 쓰레기가 곧 목표값이
+// 되며, 화면은 새 슬라이더를 조용히 안 그린다 - 셋 다 컴파일도 시험도 통과한다.
+static_assert(std::size(kKindRules) == kBagKindCount,
+              "종류 표와 목표 배열의 길이가 어긋났다");
 
 }  // namespace
 
@@ -932,8 +937,10 @@ bool find_backup(int realm, std::uint16_t kind, BagBackup* out) {
 }
 
 // 한 컴포넌트를 훑는다. write 가 거짓이면 세기만 한다.
+// record_only 면 기록에서 나온 계획만 쓴다 - 자동 경로가 짐작으로 쓰지 않게.
 void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
-               bool write, BagResult* r, BagBrokenCount* n) {
+               bool write, BagResult* r, BagBrokenCount* n,
+               bool record_only = false) {
     if (comp == 0) return;
     std::vector<InventoryContainer> cs;
     if (!read_inventory_containers(reader, comp, &cs)) return;
@@ -963,6 +970,7 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
             }
             continue;
         }
+        if (record_only && !p.from_record) continue;
         if (!write) {
             if (n != nullptr) {
                 ++n->fixable;
@@ -1017,12 +1025,30 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
 }  // namespace
 
 BagBrokenCount bag_broken_count(const mem::Reader& reader) {
+    // **쓰기 잠금을 잡고 센다.** apply_to 는 갈래 -> 합계 -> 용량을 따로 쓰므로
+    // 그 사이에는 언제나 `a+b != sum` 이다. 잠금 없이 세면 자동 재적용이 도는
+    // 프레임에 [고치기] 와 "고칠 컨테이너 N개" 가 깜빡인다(쓰기 사고로는 안
+    // 이어진다 - bag_repair 가 값을 다시 읽는다 - 그래도 헛것을 보이지 않는다).
+    // 읽기 전용이고 이 잠금은 언제나 g_bag_mtx 보다 바깥이라 교착은 없다.
+    std::lock_guard<std::mutex> op(g_bag_op_mtx);
     BagResult r;
     BagBrokenCount n;
     repair_in(reader, inventory_component(), 0, false, &r, &n);
     repair_in(reader, inventory_component_client(), 1, false, &r, &n);
     return n;
 }
+
+namespace {
+
+// 잠금을 **이미 쥔 채** 부른다. 자동 재적용이 걸기 전에 쓰는 길이다.
+BagResult repair_recorded_locked(const mem::Reader& reader) {
+    BagResult r;
+    repair_in(reader, inventory_component(), 0, true, &r, nullptr, true);
+    repair_in(reader, inventory_component_client(), 1, true, &r, nullptr, true);
+    return r;
+}
+
+}  // namespace
 
 BagResult bag_repair(const mem::Reader& reader) {
     std::lock_guard<std::mutex> op(g_bag_op_mtx);
@@ -1076,6 +1102,13 @@ void bag_auto_tick(const mem::Reader& reader) {
         // (재검토 경미 1).
         std::lock_guard<std::mutex> op(g_bag_op_mtx);
         if (!g_auto_on.load(std::memory_order_acquire)) return;
+        // **걸기 전에 우리가 낸 손상을 치운다.** 안 하면 가방(종류 1)이 리로드마다
+        // `cap < sum` 으로 밀려, 자동 재적용이 그 컨테이너를 영영 건너뛴다.
+        const BagResult fix = repair_recorded_locked(reader);
+        if (fix.changed > 0) {
+            log::infof("가방 자동 복구: 걸기 전에 {}개를 원본으로 되돌렸다",
+                       fix.changed);
+        }
         r = bag_expand_locked(reader, want,
                               g_auto_branch.load(std::memory_order_acquire));
     }
