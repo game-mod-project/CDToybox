@@ -184,6 +184,9 @@ void draw_knowledge(const mem::Reader& reader) {
                 const game::KnowWrite w =
                     game::know_learn(reader, e.number, e.need_level);
                 if (w.changed > 0) {
+                    // **기억해 둔다.** 이 쓰기는 저장을 못 넘고 리로드가 컴포넌트를
+                    // 새로 만들므로, 분석 스레드가 모자랄 때마다 다시 건다.
+                    game::know_auto_remember(e.number, e.need_level);
                     notice_set(&s_note, NoticeLevel::Ok,
                                "{}번을 레벨 {} 로 - realm {}개",
                                e.number, e.need_level, w.changed);
@@ -196,8 +199,20 @@ void draw_knowledge(const mem::Reader& reader) {
         }
         ImGui::EndTable();
     }
-    ImGui::TextDisabled("배우기를 누르면 두 realm 의 표에 레벨을 씁니다."
-                        " 저장에 남는지는 아직 확인되지 않았습니다.");
+    const int kept = static_cast<int>(game::know_auto_list().size());
+    if (kept > 0) {
+        ImGui::TextColored(col::kOk, "자동 재적용 %d개", kept);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("잊기")) game::know_auto_forget();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "기억을 지웁니다. 이미 쓴 레벨을 되돌리지는 않습니다 -\n"
+                "다음 리로드부터 다시 안 걸 뿐입니다.");
+        }
+    }
+    ImGui::TextWrapped(
+        "이 쓰기는 저장을 넘지 못합니다(실측). 게임을 새로 켜면 사라지므로, 건 것을"
+        " 기억해 두었다가 리로드 뒤에 다시 겁니다. 기억은 이번 실행 동안만 남습니다.");
 }
 
 // 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로

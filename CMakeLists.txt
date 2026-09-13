@@ -213,6 +213,7 @@ add_executable(cdtb_probe
     src/game/actors.cpp
     src/game/clan.cpp
     src/game/skillpoint.cpp
+    src/game/knowledge.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp

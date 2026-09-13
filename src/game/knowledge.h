@@ -144,4 +144,30 @@ struct KnowWrite {
 // 필요할 때 만들고, 읽는 쪽에 널 가드가 있다.
 KnowWrite know_learn(const mem::Reader& reader, int number, int level);
 
+// ------------------------------------------------------------ 자동 재적용
+//
+// **지식 레벨 쓰기는 저장을 못 넘는다.** 실측 2026-09-14: 전날 건 번호들이 게임을 새로
+// 켜니 전부 쓰기 **이전** 값이었다(5089: 1 -> 0, 4712: 3 -> 1). 같은 세션 안의 리로드는
+// 넘지만 파일에는 안 남는다. 그래서 가방과 같은 모양으로, 이번 실행에서 사용자가 건 것을
+// 기억했다가 모자라면 다시 건다.
+//
+// 가방과 다른 점 하나: 여기서는 **세대 카운터가 필요 없다.** 레벨은 단조 증가로만 쓰고
+// (모자랄 때만, 낮추는 일이 없다) 검사가 값싸므로, 매 바퀴 "모자란가" 만 보면 된다.
+// 그래서 리로드든 재탐색이든 주소가 어떻게 바뀌든 저절로 따라간다.
+struct KnowWant {
+    int number = 0;
+    int level = 0;
+};
+
+// 같은 번호면 **높은 레벨**로 합친다. 순수 - 시험한다.
+void know_auto_upsert(std::vector<KnowWant>* v, int number, int level);
+
+void know_auto_remember(int number, int level);
+void know_auto_forget();
+std::vector<KnowWant> know_auto_list();
+
+// 분석 스레드에서 부른다. 기억해 둔 것이 모자라면 다시 건다 - 충분하면 읽기만 하고
+// 아무것도 안 쓴다(평소에는 로그도 안 남는다).
+void know_auto_tick(const mem::Reader& reader);
+
 }  // namespace cdtb::game

@@ -121,3 +121,39 @@ TEST(the_measured_offsets_are_pinned) {
     CHECK(cdtb::game::kTagSkillTree == 3);
     CHECK(cdtb::game::kModeAnyOf == 1);
 }
+
+TEST(know_auto_upsert_never_lowers_a_remembered_level) {
+    // **낮추면 안 된다.** 낮은 값으로 덮으면 재적용이 이미 올려 둔 레벨을 되돌리려
+    // 들고, know_learn 이 "이미 그 레벨 이상" 으로 건너뛰어 조용히 굳는다.
+    std::vector<cdtb::game::KnowWant> v;
+    cdtb::game::know_auto_upsert(&v, 100, 1);
+    CHECK(v.size() == 1);
+    CHECK(v[0].number == 100);
+    CHECK(v[0].level == 1);
+    cdtb::game::know_auto_upsert(&v, 100, 3);
+    CHECK(v.size() == 1);
+    CHECK(v[0].level == 3);
+    cdtb::game::know_auto_upsert(&v, 100, 2);   // 낮추기 시도
+    CHECK(v[0].level == 3);
+}
+
+TEST(know_auto_upsert_rejects_nonsense) {
+    std::vector<cdtb::game::KnowWant> v;
+    cdtb::game::know_auto_upsert(nullptr, 1, 1);   // 널이어도 안 죽는다
+    cdtb::game::know_auto_upsert(&v, -1, 1);
+    cdtb::game::know_auto_upsert(&v, 1, 0);        // 레벨 0 = 미습득, 기억할 것이 없다
+    cdtb::game::know_auto_upsert(&v, 1, -5);
+    CHECK(v.empty());
+    cdtb::game::know_auto_upsert(&v, 0, 1);        // 번호 0 은 유효하다
+    CHECK(v.size() == 1);
+}
+
+TEST(know_auto_upsert_keeps_separate_numbers_apart) {
+    std::vector<cdtb::game::KnowWant> v;
+    cdtb::game::know_auto_upsert(&v, 10, 2);
+    cdtb::game::know_auto_upsert(&v, 20, 1);
+    cdtb::game::know_auto_upsert(&v, 10, 5);
+    CHECK(v.size() == 2);
+    CHECK(v[0].number == 10 && v[0].level == 5);
+    CHECK(v[1].number == 20 && v[1].level == 1);
+}

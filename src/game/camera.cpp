@@ -14,6 +14,7 @@
 #include "game/equip.h"
 #include "game/actors.h"
 #include "game/clan.h"
+#include "game/knowledge.h"
 #include "game/skillpoint.h"
 #include "game/companion.h"
 #include "game/grant.h"
@@ -424,6 +425,11 @@ void auto_analysis_loop() {
             knowledge_check_alive(reader);
             if (!knowledge_ready()) discover_knowledge(rtti, reader, spin);
         }
+        // 지식 레벨 쓰기는 저장을 못 넘고, 리로드는 컴포넌트를 새로 만든다. 이번
+        // 실행에서 사용자가 건 것이 모자라면 다시 건다(건 것이 없으면 즉시 반환).
+        // **장비 게이트 밖에 둔다** - 재적용은 탐색과 달리 힙을 안 훑어 값싸고,
+        // 장비를 못 읽는 동안에도 지식 컴포넌트만 살아 있으면 걸 수 있다.
+        know_auto_tick(reader);
 
         // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
         // 표보다 늦어서, 앞의 루프들이 먼저 끝나면 못 잡은 채로
