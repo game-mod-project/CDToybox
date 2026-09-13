@@ -2,6 +2,8 @@
 #include "harness.h"
 
 using cdtb::game::BagPlan;
+using cdtb::game::kBagBranchA;
+using cdtb::game::kBagBranchB;
 using cdtb::game::kBagEngineMax;
 using cdtb::game::kBagTargetMax;
 using cdtb::game::bag_kind_selected;
@@ -25,14 +27,55 @@ TEST(bag_plan_derives_base_from_the_sum_not_one_branch) {
     CHECK(store.base == 240);
 }
 
+TEST(bag_plan_writes_the_branch_you_choose) {
+    // **2026-09-13.** B(+0x1A)에 넣은 60 이 세이브·로드에서 사라졌다. 어느 칸이
+    // 저장되는 쪽인지 배포를 거듭하지 않고 가리려고 칸을 고를 수 있게 했다.
+    // 어느 쪽을 고르든 반대 칸은 그대로 두고, 결과 용량은 같아야 한다.
+    const BagPlan a = plan_bag_expand(240, 190, 190, 0, kSlots, 700, kBagBranchA);
+    CHECK(a.apply);
+    CHECK(a.branch == kBagBranchA);
+    CHECK(a.other == 0);            // +0x1A 는 그대로
+    CHECK(a.expand == 650);         // +0x18 이 190 -> 650
+    CHECK(a.sum == 650);
+    CHECK(a.capacity == 700);
+
+    const BagPlan b = plan_bag_expand(240, 190, 190, 0, kSlots, 700, kBagBranchB);
+    CHECK(b.apply);
+    CHECK(b.branch == kBagBranchB);
+    CHECK(b.other == 190);          // +0x18 은 그대로
+    CHECK(b.expand == 460);         // +0x1A 가 0 -> 460
+    CHECK(b.sum == 650);
+    CHECK(b.capacity == 700);
+
+    // 기본값은 A 다 - 가방의 기존 확장이 거기 있고, B 는 리로드에서 사라진 칸이다.
+    const BagPlan d = plan_bag_expand(240, 190, 190, 0, kSlots, 700);
+    CHECK(d.branch == kBagBranchA);
+    CHECK(d.expand == a.expand);
+}
+
+TEST(bag_plan_branch_a_grows_the_bags_own_expansion) {
+    // 사용자가 실제로 쓸 값(300)에서, A 는 가방이 원래 갖고 있던 190 을 250 으로
+    // 키우고 B 는 0 인 채로 둔다. 이 모양이 "정당하게 산 확장" 과 구분되지 않는
+    // 상태이고, 그래서 저장에 남을 가능성이 있는 쪽이다.
+    const BagPlan p = plan_bag_expand(240, 190, 190, 0, kSlots, 300, kBagBranchA);
+    CHECK(p.apply);
+    CHECK(p.expand == 250);
+    CHECK(p.other == 0);
+    CHECK(p.capacity == 300);
+}
+
 TEST(bag_plan_leaves_the_other_branch_alone) {
-    // +0x18(a)은 건드리지 않는다. 그래야 엔진이 합계를 sum 으로 재계산하든 max 로
-    // 재계산하든 결과가 목표 이하가 된다(max 면 오히려 작아진다 - 안전한 쪽).
-    const BagPlan p = plan_bag_expand(240, 190, 190, 0, kSlots, 700);
-    CHECK(p.expand_b == 700 - 50 - 190);   // = 460
-    CHECK(p.sum == 190 + p.expand_b);      // = 650
-    CHECK(p.capacity == 700);
-    CHECK(p.base + p.sum == p.capacity);
+    // 고르지 않은 칸은 계획에 값으로 실려 나갈 뿐 바뀌지 않는다. 그래야 엔진이
+    // 합계를 sum 으로 재계산하든 max 로 재계산하든 결과가 목표 이하가 된다
+    // (max 면 오히려 작아진다 - 안전한 쪽).
+    for (const int branch : {kBagBranchA, kBagBranchB}) {
+        const BagPlan p = plan_bag_expand(440, 200, 0, 200, kSlots, 700, branch);
+        CHECK(p.apply);
+        CHECK(p.other == (branch == kBagBranchA ? 200 : 0));
+        CHECK(p.sum == p.other + p.expand);
+        CHECK(p.capacity == p.base + p.sum);
+        CHECK(p.capacity == 700);
+    }
 }
 
 TEST(bag_plan_clamps_to_the_screen_max) {
@@ -63,15 +106,24 @@ TEST(bag_plan_skips_shapes_it_does_not_understand) {
     CHECK(!plan_bag_expand(240, 190, 190, 0, 0, 700).apply);
     // 건너뛸 때는 이유를 남긴다(로그·화면에 쓴다).
     CHECK(plan_bag_expand(100, 200, 0, 0, kSlots, 700).skip[0] != '\0');
+    // 칸을 골라도 거르개는 그대로다 - 모르는 모양은 어느 칸으로도 안 쓴다.
+    CHECK(!plan_bag_expand(500, 200, 150, 100, kSlots, 700, kBagBranchA).apply);
+    CHECK(!plan_bag_expand(500, 200, 150, 100, kSlots, 700, kBagBranchB).apply);
 }
 
 TEST(bag_plan_does_nothing_when_already_there) {
     // 이미 목표면 쓰지 않는다 - 같은 값을 다시 쓰며 로그를 더럽히지 않는다.
-    const BagPlan p = plan_bag_expand(240, 190, 190, 0, kSlots, 700);
-    const BagPlan again =
-        plan_bag_expand(p.capacity, p.sum, 190, p.expand_b, kSlots, 700);
-    CHECK(!again.apply);
-    CHECK(again.skip[0] != '\0');
+    // **자동 다시 적용이 이 길을 탄다**: 리로드 없이 한 바퀴 더 돌아도 조용하다.
+    for (const int branch : {kBagBranchA, kBagBranchB}) {
+        const BagPlan p =
+            plan_bag_expand(240, 190, 190, 0, kSlots, 700, branch);
+        const int a2 = branch == kBagBranchA ? p.expand : p.other;
+        const int b2 = branch == kBagBranchA ? p.other : p.expand;
+        const BagPlan again =
+            plan_bag_expand(p.capacity, p.sum, a2, b2, kSlots, 700, branch);
+        CHECK(!again.apply);
+        CHECK(again.skip[0] != '\0');
+    }
 }
 
 TEST(bag_plan_refuses_to_shrink) {
@@ -79,8 +131,13 @@ TEST(bag_plan_refuses_to_shrink) {
     // (원본을 기억해 두고 그대로 되돌린다 - 옛 restore 는 확장을 0 으로 써서
     // 가방의 190 을 날렸고 그건 복원이 아니었다).
     CHECK(!plan_bag_expand(240, 190, 190, 0, kSlots, 10).apply);
-    // 이미 목표보다 큰 경우도 건드리지 않는다.
-    CHECK(!plan_bag_expand(900, 850, 850, 0, kSlots, 700).apply);
+    // 이미 목표보다 큰 경우도 건드리지 않는다. **두 칸을 다 확인한다** - 큰 값이
+    // 우리가 덮어쓸 칸에 있으면 옛 검사(`expand < 0`)는 걸리지 않았고, 그대로
+    // 900 짜리 가방을 700 으로 깎았다(2026-09-13, 이 줄이 잡았다).
+    CHECK(!plan_bag_expand(900, 850, 850, 0, kSlots, 700, kBagBranchA).apply);
+    CHECK(!plan_bag_expand(900, 850, 850, 0, kSlots, 700, kBagBranchB).apply);
+    CHECK(!plan_bag_expand(900, 850, 0, 850, kSlots, 700, kBagBranchA).apply);
+    CHECK(!plan_bag_expand(900, 850, 0, 850, kSlots, 700, kBagBranchB).apply);
 }
 
 TEST(bag_plan_target_zero_changes_nothing) {
@@ -117,27 +174,39 @@ TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
     // 속성 시험. 작은 범위를 전수로 돌며 "쓸 값이 나왔다면 반드시 성립해야 하는 것"
     // 을 확인한다. 핵심은 마지막의 a + b == sum 이다 - 모델 검사에 구멍이
     // 생기면 그 줄에서 걸린다(나머지는 정의상 성립하는 항등식이다).
-    for (int a = 0; a <= 300; a += 50) {
-        for (int b = 0; b <= 300; b += 50) {
-            for (int extra = -50; extra <= 50; extra += 25) {
-                const int sum = a + b + extra;
-                for (int base = 1; base <= 300; base += 100) {
-                    const int cap = base + sum;
-                    for (const int target : {50, 240, 300, 700, 9999}) {
-                        const auto p =
-                            plan_bag_expand(cap, sum, a, b, 1460, target);
-                        if (!p.apply) continue;
-                        CHECK(p.capacity <= cdtb::game::kBagEngineMax);
-                        CHECK(p.capacity <= cdtb::game::kBagTargetMax);
-                        CHECK(p.capacity == p.base + p.sum);
-                        CHECK(p.sum == a + p.expand_b);
-                        CHECK(p.expand_b >= 0);
-                        CHECK(p.base > 0);
-                        // **이 한 줄이 지적 2 의 회귀를 잡는다** - 쓸 값이
-                        // 나왔다면 입력 모델이 성립했어야 한다. 나머지는
-                        // plan 안에서 정의상 성립하는 항등식이라 못 잡는다
-                        // (리뷰 재검토 B-8).
-                        CHECK(a + b == sum);
+    // **두 칸을 다 돈다** - 칸을 고를 수 있게 된 뒤로는 한쪽만 돌면 나머지 절반의
+    // 산술이 시험 밖에 남는다.
+    for (const int branch : {kBagBranchA, kBagBranchB}) {
+        for (int a = 0; a <= 300; a += 50) {
+            for (int b = 0; b <= 300; b += 50) {
+                for (int extra = -50; extra <= 50; extra += 25) {
+                    const int sum = a + b + extra;
+                    for (int base = 1; base <= 300; base += 100) {
+                        const int cap = base + sum;
+                        for (const int target : {50, 240, 300, 700, 9999}) {
+                            const auto p = plan_bag_expand(cap, sum, a, b, 1460,
+                                                           target, branch);
+                            if (!p.apply) continue;
+                            CHECK(p.capacity <= cdtb::game::kBagEngineMax);
+                            CHECK(p.capacity <= cdtb::game::kBagTargetMax);
+                            CHECK(p.capacity == p.base + p.sum);
+                            CHECK(p.sum == p.other + p.expand);
+                            CHECK(p.expand >= 0);
+                            CHECK(p.base > 0);
+                            // **절대 줄이지 않는다.** 확장 기능이 용량을 깎으면
+                            // 밖으로 밀려난 아이템이 어떻게 되는지 모른다.
+                            CHECK(p.capacity >= cap);
+                            // 고르지 않은 칸은 **현재 값 그대로** 실린다. 이 줄이
+                            // 없으면 "반대 칸을 건드리지 않는다" 는 약속이 시험
+                            // 밖에 남는다.
+                            CHECK(p.other == (branch == kBagBranchA ? b : a));
+                            CHECK(p.branch == branch);
+                            // **이 한 줄이 지적 2 의 회귀를 잡는다** - 쓸 값이
+                            // 나왔다면 입력 모델이 성립했어야 한다. 나머지는
+                            // plan 안에서 정의상 성립하는 항등식이라 못 잡는다
+                            // (리뷰 재검토 B-8).
+                            CHECK(a + b == sum);
+                        }
                     }
                 }
             }
