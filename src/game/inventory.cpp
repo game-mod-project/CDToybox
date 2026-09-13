@@ -829,17 +829,26 @@ void bag_auto_tick(const mem::Reader& reader) {
     // 아직 끝이 아닌 두 가지. 둘 다 "다음 바퀴에 다시" 가 맞다.
     //   * 대상 컨테이너를 **하나도 못 봤다** - 로드 도중에는 레코드 배열이 아직
     //     0 이라 목록에 아예 안 잡힌다(read_inventory_containers 의 거르개).
-    //   * 봤지만 **모양을 못 알아봤다** - 아직 채워지는 중이다. 실측 2026-09-13:
-    //     재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 이 이유로 밀렸고,
-    //     세대는 소모돼 그 로드에서는 한쪽 realm 에만 걸린 채 끝났다.
-    if (r.changed + r.skip == 0 || r.unknown > 0) {
+    //   * 봤지만 **하나도 못 바꾼 채 모양만 못 알아봤다** - 아직 채워지는 중이다.
+    //     실측 2026-09-13: 재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 이
+    //     이유로 밀렸고(그 바퀴의 changed 는 0), 세대는 소모돼 그 로드에서는 한쪽
+    //     realm 에만 걸린 채 끝났다.
+    //
+    // **changed 를 조건에 섞는 것이 중요하다.** unknown 만 보면, 영영 모양을 모르는
+    // 컨테이너가 하나라도 있는 판에서 첫 바퀴에 다 됐는데도 10바퀴를 더 돌고
+    // 실패처럼 읽히는 WARN 을 남긴다(리뷰 B-2).
+    const bool nothing_seen = r.changed + r.skip == 0;
+    const bool still_becoming = r.unknown > 0 && r.changed == 0;
+    if (nothing_seen || still_becoming) {
         const int n = g_auto_tries.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (n >= kAutoGiveUp) {
             g_auto_gen.store(gen, std::memory_order_release);
-            log::warnf("가방 자동 다시 적용: {}바퀴 동안 {} - 이 세대는 포기한다",
-                       n,
-                       r.changed + r.skip == 0 ? "가방 컨테이너를 못 봤다"
-                                               : "컨테이너 모양을 못 알아봤다");
+            // **그 바퀴의 수를 그대로 싣는다.** "N바퀴 동안 <마지막 이유>" 는
+            // 앞선 바퀴가 다른 이유였을 때 진단을 틀린 데로 끈다 - 이 변경 자체가
+            // 로그 한 줄에 속아서 생긴 것이다(리뷰 B-4).
+            log::warnf("가방 자동 다시 적용: {}바퀴째 - 바꾼 것 {}, 건너뜀 {},"
+                       " 모르는 모양 {} - 이 세대는 포기한다",
+                       n, r.changed, r.skip, r.unknown);
         }
         return;
     }

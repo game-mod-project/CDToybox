@@ -82,6 +82,7 @@ add_library(cdtoybox SHARED
     src/render/layout_table.cpp
     src/render/layout.cpp
     src/render/log_filter.cpp
+    src/render/log_view.cpp
     src/render/log_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
@@ -146,6 +147,7 @@ add_executable(cdtb_tests
     tests/ui_state_tests.cpp
     tests/layout_tests.cpp
     tests/log_ring_tests.cpp
+    tests/log_view_tests.cpp
     tests/core_helpers_tests.cpp
     tests/table_sort_tests.cpp
     tests/input_filter_tests.cpp
@@ -172,6 +174,7 @@ add_executable(cdtb_tests
     src/render/confirm_state.cpp
     src/render/layout_table.cpp
     src/render/log_filter.cpp
+    src/render/log_view.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)

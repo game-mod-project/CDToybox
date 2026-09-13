@@ -46,9 +46,14 @@ struct RingLine {
 // `since` 보다 큰 줄을 out 에 **덧붙인다**(비우지 않는다).
 // 반환값은 **놓친 줄 수** - 고리가 한 바퀴 돌아 그 사이가 사라졌으면 0 보다 크다.
 // 화면이 그 수를 내야 사용자가 "왜 중간이 비지" 를 혼자 겪지 않는다.
-std::uint64_t ring_since(std::uint64_t since, std::vector<RingLine>* out);
+//
+// total 을 주면 지금까지 쓴 줄 수도 **같은 잠금 안에서** 받아 간다. write 는 잠금을
+// 쥔 채 줄마다 디스크 flush 를 하므로(의도된 설계다), 화면이 프레임마다 잠금을 두 번
+// 잡으면 로그가 몰아칠 때 프레임이 튄다.
+std::uint64_t ring_since(std::uint64_t since, std::vector<RingLine>* out,
+                         std::uint64_t* total = nullptr);
 
-// 지금까지 쓴 줄 수(= 마지막 일련번호).
+// 지금까지 쓴 줄 수(= 마지막 일련번호). 화면은 ring_since 의 total 을 쓴다.
 std::uint64_t ring_count();
 
 // 위 둘의 알맹이. 전역을 건드리지 않아 시험이 그대로 부를 수 있다 - 안 그러면

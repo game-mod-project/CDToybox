@@ -168,6 +168,55 @@ TEST(bag_backup_does_not_rebaseline_before_it_knows_what_it_wrote) {
     CHECK(v[0].cap == 240);   // 다시 잡지 않았다
 }
 
+TEST(bag_backup_rebaseline_follows_what_plan_calls_understood) {
+    // **검토 B-1.** plan 의 understood 와 upsert 의 재기준은 따로 시험돼 있었지만
+    // 둘을 잇는 배선은 어느 시험도 안 지났다 - understood 를 세우는 줄을 옮겨도
+    // 시험이 전부 통과했다. 여기서 plan 이 내는 값을 그대로 upsert 에 흘린다.
+    //
+    // 지금 계약: 모양 검사를 통과하면 understood 다. 그래서 "목표가 기본 슬롯보다
+    // 작다"·"이미 목표보다 크다" 도 재기준을 부른다 - 그 사이 누가 컨테이너를
+    // 키워 놓았다는 뜻이므로 옳은 방향이다(옛 원본을 쓰면 남의 칸을 지운다).
+    const auto seen_from = [](const cdtb::game::BagPlan& p, std::uint16_t cap,
+                              std::uint16_t sum, std::uint16_t a,
+                              std::uint16_t b) {
+        BagSeen s;
+        s.realm = 0;
+        s.kind = 1;
+        s.address = 0x2000;
+        s.cap = cap;
+        s.sum = sum;
+        s.a = a;
+        s.b = b;
+        s.understood = p.understood;
+        return s;
+    };
+
+    // 기록을 하나 만든다(원본 240/190/190/0, 우리가 써 놓은 값 300/250).
+    std::vector<BagBackup> v;
+    BagSeen first = bag_seen(0x1000);
+    first.changed = true;
+    first.understood = true;
+    first.known = true;
+    first.want_cap = 300;
+    first.want_sum = 250;
+    bag_backup_upsert(v, first);
+
+    // (1) 모양을 못 알아본 컨테이너는 원본을 갈지 않는다.
+    const auto bad = cdtb::game::plan_bag_expand(100, 200, 0, 0, 1460, 300);
+    CHECK(!bad.understood);
+    bag_backup_upsert(v, seen_from(bad, 100, 200, 0, 0));
+    CHECK(v[0].cap == 240);
+
+    // (2) "이미 목표보다 크다" 는 알아본 것이다 - 그 사이 누가 키웠다는 뜻이므로
+    //     지금 값이 새 원본이 된다.
+    const auto big = cdtb::game::plan_bag_expand(500, 450, 450, 0, 1460, 300);
+    CHECK(!big.apply);
+    CHECK(big.understood);
+    bag_backup_upsert(v, seen_from(big, 500, 450, 450, 0));
+    CHECK(v[0].cap == 500);
+    CHECK(v[0].sum == 450);
+}
+
 TEST(bag_backup_separates_realms_and_kinds) {
     std::vector<BagBackup> v;
     for (int realm = 0; realm < 2; ++realm) {
