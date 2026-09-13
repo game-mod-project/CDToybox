@@ -259,6 +259,15 @@ void draw_skill_gates() {
         " 조사한 뒤에 넣습니다.");
 }
 
+// 스킬 계열 절 셋. **스탯 게이지와 아무 상관이 없다** - 결속·지식은 지식 컴포넌트만
+// 있으면 되고, 관문은 코드 패치라 아무것도 필요 없다. 그래서 게이지를 못 잡은
+// 상태에서도 그린다.
+void draw_skill_sections(const mem::Reader& reader) {
+    draw_skill_bond(reader);
+    draw_skill_gates();
+    draw_knowledge(reader);
+}
+
 }  // namespace
 
 void draw_player_panel(bool* open) {
@@ -269,8 +278,13 @@ void draw_player_panel(bool* open) {
     const mem::LocalReader reader;
 
     if (!game::player_ready()) {
+        // **여기서 통째로 돌아가면 안 된다.** 예전에는 그랬고, 그래서 세이브를
+        // 불러 게이지를 다시 잡는 동안 지식 표를 열 방법이 아예 없었다
+        // (사용자 화면 확인 2026-09-13). 게이지에 안 매달리는 절들은 그려 준다.
         ImGui::TextDisabled("월드에 들어가면 스탯 게이지를 잡습니다 (자동).");
         ImGui::TextDisabled("장비가 읽힌 뒤에 활성화됩니다.");
+        ImGui::Separator();
+        draw_skill_sections(reader);
         ImGui::End();
         return;
     }
@@ -357,9 +371,7 @@ void draw_player_panel(bool* open) {
         "매 주기 현재=최대로 채웁니다. 정신력 풀로 플레이어를 식별하므로 주변"
         " NPC 에는 영향이 없습니다. 발열·탈것 화염 게이지는 건드리지 않습니다.");
 
-    draw_skill_bond(reader);
-    draw_skill_gates();
-    draw_knowledge(reader);
+    draw_skill_sections(reader);
     ImGui::End();
 }
 
