@@ -481,10 +481,11 @@ void draw_bag_expand() {
                          : "이번 실행에서 확장한 적이 없습니다.");
     }
 
-    // **손상 복구.** 리로드에서 게임은 +0x14 와 +0x18 은 되돌리면서 +0x16(합계)은
-    // 우리가 쓴 값을 그대로 둔다(실측 2026-09-13). 그러면 우리 모델이 영영
-    // 거부하는 모양이 남아, 그 컨테이너는 확장도 되돌리기도 안 된다.
-    // 고칠 것이 있을 때만 버튼을 낸다 - 없는 버튼은 설명할 것도 없다.
+    // **합계 칸 정리 - 이제는 미용이다.** 새 산술은 +0x16 을 읽지도 쓰지도 않으므로
+    // 낡은 합계가 기능을 막지 않는다. 다만 옛 코드가 세이브에 남긴 값이라(실측:
+    // 게임 재시작을 넘어 464·650 이 살아 왔다) 치울 수단은 있어야 한다.
+    // **경고색으로 내지 않는다** - 급한 일이 아니고, 급한 것처럼 보이면 사용자가
+    // 필요도 없는 쓰기를 누른다(검토 중대 2).
     const auto broken = game::bag_broken_count(reader);
     if (broken.fixable > 0) {
         ImGui::SameLine();
@@ -493,8 +494,8 @@ void draw_bag_expand() {
         // 갈래인지 코드는 가릴 수 없다), 한 번 더 묻는다. 이 창에서 혈통 검사
         // 없이 쓰는 유일한 길이라 화면이 관문 노릇을 한다(검토 중대 1).
         const bool all_known = broken.from_record == broken.fixable;
-        const bool go = all_known ? ImGui::Button("고치기")
-                                  : confirm_small_button("고치기", false);
+        const bool go = all_known ? ImGui::Button("합계 정리")
+                                  : confirm_small_button("합계 정리", false);
         if (go) {
             const auto r = game::bag_repair(reader);
             s_msg = "고친 것 " + std::to_string(r.changed) + "개, 실패 " +
@@ -504,8 +505,11 @@ void draw_bag_expand() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(
                 "확장 합계(+0x16)가 두 갈래의 합과 어긋난 컨테이너가 있습니다.\n"
-                "리로드에서 게임이 용량과 갈래만 되돌리고 합계는 우리 값을\n"
-                "그대로 두면 그렇게 됩니다.\n"
+                "예전 판이 그 칸에 쓴 값이 세이브에 남아 생깁니다.\n"
+                "\n"
+                "지금은 눌러도 되고 안 눌러도 됩니다 - 지금 판은 그 칸을\n"
+                "읽지도 쓰지도 않아 기능에 아무 영향이 없습니다. 세이브를\n"
+                "깔끔하게 두고 싶을 때만 쓰십시오.\n"
                 "\n"
                 "이번 실행에 적용한 기록이 있으면 그 원본 그대로 되돌립니다.\n"
                 "기록이 없으면 모양만 보고 합계를 갈래 합으로 맞춥니다 - 그건\n"
@@ -514,19 +518,22 @@ void draw_bag_expand() {
         }
         ImGui::SameLine();
         if (all_known) {
-            ImGui::TextColored(col::kWarn, "고칠 컨테이너 %d개 (기록 있음)",
-                               broken.fixable);
+            ImGui::TextDisabled("정리할 컨테이너 %d개 (기록 있음, 급하지 않습니다)",
+                                broken.fixable);
         } else {
-            ImGui::TextColored(col::kWarn, "고칠 컨테이너 %d개 (그중 기록 없음 %d)",
-                               broken.fixable, broken.fixable - broken.from_record);
+            ImGui::TextDisabled("정리할 컨테이너 %d개 (그중 기록 없음 %d,"
+                                " 급하지 않습니다)",
+                                broken.fixable,
+                                broken.fixable - broken.from_record);
         }
     }
     if (broken.stuck > 0) {
-        // 안전한 조치가 없는 모양이다. 용량(+0x14)은 엔진이 재계산하는 캐시라
-        // 우리가 쓸 값이 없다 - 말해 주지 않으면 "왜 이것만 안 되지" 를 혼자 겪는다.
-        ImGui::TextColored(col::kBad,
-                           "컨테이너 %d개는 고칠 수 없습니다 - 게임을 완전히 껐다 "
-                           "켜야 풀립니다.", broken.stuck);
+        // 우리가 모양을 못 알아본 컨테이너다. 대개는 **아직 채워지는 중**이라
+        // 잠시 뒤면 저절로 풀린다(예전 문구는 "게임을 껐다 켜야 한다" 였는데,
+        // 그건 낡은 합계가 막던 시절의 조치라 지금은 틀린 지시다).
+        ImGui::TextDisabled("컨테이너 %d개는 아직 모양을 못 알아봤습니다 - 대개"
+                            " 만들어지는 중이니 잠시 뒤 다시 보십시오.",
+                            broken.stuck);
     }
 
     if (!s_msg.empty()) ImGui::TextWrapped("%s", s_msg.c_str());

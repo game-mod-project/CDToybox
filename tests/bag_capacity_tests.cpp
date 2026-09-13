@@ -134,6 +134,55 @@ TEST(bag_plan_never_exceeds_the_physical_array) {
     CHECK(p.capacity == 300);
 }
 
+TEST(bag_plan_refuses_a_container_whose_branches_are_not_filled_yet) {
+    // **검토 치명 1 의 회귀 시험.** 옛 `합계 = A+B` 검사는 두 가지를 막고 있었는데
+    // 재설계가 하나만 산술로 대체했다. 남은 하나가 이것이다 - 리로드 도중 용량은
+    // 채워졌는데 갈래가 아직 0 인 순간:
+    //     cap 240 / a 0 / b 0   (참 기본 50, +0x16 은 190 이지만 우리는 안 읽는다)
+    // 유도하면 base = 240 이 나오고(참값 50), 그대로 쓰면 고른 갈래에
+    // `300 - 240 - 0 = 60` 을 써서 **정당한 확장 190 을 60 으로 지운다.**
+    // 그 상태가 백업의 "원본" 으로 박히면 되돌리기도 190 을 못 되찾는다.
+    // 2026-09-05 사고의 기전 그 자체다.
+    const int bag_base = cdtb::game::bag_kind_base_max(1);
+    CHECK(bag_base == 50);
+    const BagPlan bad =
+        plan_bag_expand(240, 0, 0, kSlots, 300, kBagBranchA, kBagTargetMax,
+                        bag_base);
+    CHECK(!bad.apply);
+    CHECK(!bad.understood);   // 자동 재적용이 "아직" 으로 알아듣는다
+    CHECK(bad.skip[0] != '\0');
+
+    // 제대로 채워진 컨테이너는 그대로 통과한다(관문이 쓰던 것을 막지 않는다).
+    const BagPlan ok =
+        plan_bag_expand(240, 190, 0, kSlots, 300, kBagBranchA, kBagTargetMax,
+                        bag_base);
+    CHECK(ok.apply);
+    CHECK(ok.base == 50);
+    CHECK(ok.expand == 250);
+
+    // 우리가 이미 늘려 둔 뒤에도 기본 슬롯은 그대로라 계속 통과한다.
+    const BagPlan again =
+        plan_bag_expand(700, 650, 0, kSlots, 700, kBagBranchA, kBagTargetMax,
+                        bag_base);
+    CHECK(again.base == 50);
+    CHECK(again.understood);
+
+    // 보관함도 같다(기본 240). 갈래가 비면 base 440 이 나와 거부된다.
+    const int st_base = cdtb::game::bag_kind_base_max(7);
+    CHECK(st_base == 240);
+    CHECK(!plan_bag_expand(440, 0, 0, kSlots, 500, kBagBranchB, kBagTargetMax,
+                           st_base)
+               .understood);
+    CHECK(plan_bag_expand(440, 0, 200, kSlots, 500, kBagBranchB, kBagTargetMax,
+                          st_base)
+              .understood);
+
+    // base_max 가 0(모르는 종류)이면 검사하지 않는다 - 그런 종류는 애초에 표에
+    // 없어 건드리지 않는다.
+    CHECK(plan_bag_expand(240, 0, 0, kSlots, 300, kBagBranchA, kBagTargetMax, 0)
+              .understood);
+}
+
 TEST(bag_plan_skips_shapes_it_does_not_understand) {
     // 용량이 확장보다 작다 - 우리 모델이 아니다. (예전에는 이 검사가 +0x16 을
     // 봤고, 그 낡은 값 때문에 멀쩡한 컨테이너를 영영 거부했다.)
@@ -213,6 +262,10 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
         CHECK(r.name != nullptr && r.name[0] != '\0');
         CHECK(bag_kind_cap(r.kind) == r.cap);
         CHECK(bag_kind_known(r.kind));
+        // **기본 슬롯이 없으면 갈래 안 채워진 컨테이너를 못 막는다.**
+        CHECK(r.base_max > 0);
+        CHECK(r.base_max <= r.cap);
+        CHECK(cdtb::game::bag_kind_base_max(r.kind) == r.base_max);
         CHECK(r.branch == kBagBranchA || r.branch == kBagBranchB);
         CHECK(bag_kind_branch(r.kind) == r.branch);
         CHECK(bag_resolve_branch(kBagBranchAuto, r.kind) == r.branch);
@@ -231,6 +284,7 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
     for (const std::uint16_t k :
          {0, 2, 3, 4, 5, 6, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 99}) {
         CHECK(bag_kind_cap(k) == 0);
+        CHECK(cdtb::game::bag_kind_base_max(k) == 0);
         CHECK(!bag_kind_known(k));
     }
 }
@@ -327,9 +381,11 @@ TEST(bag_plan_holds_its_invariants_across_the_whole_range) {
                     const int cap = base + a + b;
                     for (const int target : {50, 240, 300, 700, 9999}) {
                         for (const int limit : {0, 300, 700, 9999}) {
+                            // base_max 는 이 격자의 base 를 그대로 준다 -
+                            // 관문이 정상 입력을 막지 않는지도 같이 본다.
                             const auto p = plan_bag_expand(cap, a, b, 1460,
                                                            target, branch,
-                                                           limit);
+                                                           limit, base);
                             if (!p.apply) continue;
                             const int eff =
                                 (limit <= 0 || limit > kBagTargetMax)

@@ -394,7 +394,7 @@ std::vector<std::string> inventory_scan_classes() {
 // ------------------------------------------------------ 가방·보관함 확장
 
 BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
-                        int branch, int limit) {
+                        int branch, int limit, int base_max) {
     BagPlan p;
     p.branch = branch == kBagBranchB ? kBagBranchB : kBagBranchA;
     // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
@@ -415,6 +415,15 @@ BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
     p.base = cap - exp;   // **여기가 핵심** - 한 갈래가 아니라 두 갈래의 합으로
     if (p.base <= 0) {
         p.skip = "기본 슬롯이 0 이하다";
+        return p;
+    }
+    // **유도값이 이 종류의 기본 슬롯보다 크면 우리가 잘못 읽은 것이다.**
+    // 갈래가 아직 안 채워진 컨테이너(cap 240, a 0, b 0)를 보면 base 가 240 으로
+    // 나오는데 참값은 50 이다. 그대로 쓰면 고른 갈래에 60 을 써서 정당한 확장 190 을
+    // 지운다 - 2026-05 사고의 기전 그 자체다(검토 치명 1).
+    // base_max 가 0 이면 모르는 종류라 검사하지 않는다(그런 종류는 애초에 안 건드린다).
+    if (base_max > 0 && p.base > base_max) {
+        p.skip = "기본 슬롯 유도가 실측보다 크다 - 아직 채워지는 중이다";
         return p;
     }
     // 여기까지 왔으면 우리가 아는 모양이다. 아래의 건너뜀은 전부 "알아보고 나서
@@ -476,13 +485,16 @@ namespace {
 //
 // 종류 9·11 은 기본 = 천장 = 300 이라 늘릴 근거가 따로 없지만, 같은 시스템 한계를
 // 쓰므로 상한은 같이 둔다 - 사용자가 이미 쓰고 있는 길을 근거 없이 막지 않는다.
+// base_max 는 실측 기본 슬롯이다(2026-09-13): 가방 240-190=50, 보관함 440-200=240,
+// 9·11 은 확장이 0 이라 300 이 그대로 기본이다. CT 소스도 가방을 defaultSlot 50 /
+// maxSlot 240 으로 적어 유도와 일치한다.
 constexpr BagKindRule kKindRules[] = {
-    {1, kBagTargetMax, false, kBagBranchA, "가방"},
-    {7, kBagTargetMax, true, kBagBranchB, "보관함"},
+    {1, kBagTargetMax, 50, false, kBagBranchA, "가방"},
+    {7, kBagTargetMax, 240, true, kBagBranchB, "보관함"},
     // 9·11 은 확장 칸이 둘 다 0 이라 어느 쪽이 제 칸인지 실측으로 못 가린다.
     // 보관함류이므로 보관함과 같은 칸(= 세이브의 _varyExpandSlotCount)을 쓴다.
-    {9, kBagTargetMax, true, kBagBranchB, "종류 9"},
-    {11, kBagTargetMax, true, kBagBranchB, "종류 11"},
+    {9, kBagTargetMax, 300, true, kBagBranchB, "종류 9"},
+    {11, kBagTargetMax, 300, true, kBagBranchB, "종류 11"},
 };
 // **두 손글씨 숫자가 같다** 에 종류별 배선 전체가 걸려 있다. 표를 늘리고 이 상수를
 // 안 고치면 apply_to 가 targets(span) **밖을 읽고**(UB) 그 쓰레기가 곧 목표값이
@@ -493,6 +505,13 @@ static_assert(std::size(kKindRules) == kBagKindCount,
 }  // namespace
 
 std::span<const BagKindRule> bag_kind_rules() { return kKindRules; }
+
+int bag_kind_base_max(std::uint16_t kind) {
+    for (const auto& r : kKindRules) {
+        if (r.kind == kind) return r.base_max;
+    }
+    return 0;
+}
 
 int bag_kind_cap(std::uint16_t kind) {
     for (const auto& r : kKindRules) {
@@ -656,7 +675,8 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
         const BagPlan p = plan_bag_expand(cap, a, b,
                                           static_cast<int>(c.slots), target,
                                           bag_resolve_branch(branch, c.kind),
-                                          bag_kind_cap(c.kind));
+                                          bag_kind_cap(c.kind),
+                                          bag_kind_base_max(c.kind));
         BagSeen seen;
         seen.realm = realm;
         seen.kind = c.kind;
@@ -672,8 +692,15 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
             // "다 했다" 로 끝낸다.
             if (!p.understood) ++r->unknown;
             r->last_skip = p.skip;   // 화면·로그에 이유를 낸다(리뷰 지적 10)
-            log::infof("가방 건너뜀: 종류 {} 0x{:X} - {}", c.kind, c.address,
-                       p.skip);
+            // **네 값을 그대로 싣는다.** "4개가 밀렸다" 만 적힌 옛 로그로는 어느
+            // 조건이 일하고 있었는지 알 수 없어, 관문을 지우면서 무엇을 잃는지
+            // 확인할 수 없었다(검토 치명 1의 지적). +0x16 은 산술에 안 쓰지만
+            // 진단에는 싣는다.
+            std::uint16_t diag_sum = 0;
+            reader.read_value(c.address + 0x16, &diag_sum);
+            log::infof("가방 건너뜀: 종류 {} 0x{:X} - {} (용량 {} 합계 {} A {} B {}"
+                       " 기본유도 {})", c.kind, c.address, p.skip, cap, diag_sum,
+                       a, b, static_cast<int>(cap) - a - b);
             // **주소만이라도 갱신한다.** "이미 그 값이다" 는 우리가 쓴 값이 세이브에
             // 남아 로드 뒤에도 그대로인 경우의 판정이다 - 그때 주소를 안 고치면
             // 이 기능이 성공했을 때만 되돌리기가 잠긴다(리뷰 치명 1).
@@ -964,7 +991,9 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
             // 되돌리기도 안 되므로 화면이 그 사실을 말해야 한다 - 안 그러면
             // "왜 이것만 안 되지" 를 사용자가 혼자 겪는다(검토 중대 2).
             if (n != nullptr &&
-                !plan_bag_expand(cap, a, b, static_cast<int>(c.slots), 700)
+                !plan_bag_expand(cap, a, b, static_cast<int>(c.slots), 700,
+                                 kBagBranchA, kBagTargetMax,
+                                 bag_kind_base_max(c.kind))
                      .understood) {
                 ++n->stuck;
             }
@@ -1037,18 +1066,6 @@ BagBrokenCount bag_broken_count(const mem::Reader& reader) {
     return n;
 }
 
-namespace {
-
-// 잠금을 **이미 쥔 채** 부른다. 자동 재적용이 걸기 전에 쓰는 길이다.
-BagResult repair_recorded_locked(const mem::Reader& reader) {
-    BagResult r;
-    repair_in(reader, inventory_component(), 0, true, &r, nullptr, true);
-    repair_in(reader, inventory_component_client(), 1, true, &r, nullptr, true);
-    return r;
-}
-
-}  // namespace
-
 BagResult bag_repair(const mem::Reader& reader) {
     std::lock_guard<std::mutex> op(g_bag_op_mtx);
     BagResult r;
@@ -1101,13 +1118,10 @@ void bag_auto_tick(const mem::Reader& reader) {
         // (재검토 경미 1).
         std::lock_guard<std::mutex> op(g_bag_op_mtx);
         if (!g_auto_on.load(std::memory_order_acquire)) return;
-        // **걸기 전에 우리가 낸 손상을 치운다.** 안 하면 가방(종류 1)이 리로드마다
-        // `cap < sum` 으로 밀려, 자동 재적용이 그 컨테이너를 영영 건너뛴다.
-        const BagResult fix = repair_recorded_locked(reader);
-        if (fix.changed > 0) {
-            log::infof("가방 자동 복구: 걸기 전에 {}개를 원본으로 되돌렸다",
-                       fix.changed);
-        }
+        // **자동 복구는 없앴다.** 새 산술은 +0x16 을 안 읽으므로 낡은 합계가 더는
+        // 아무것도 막지 않는다. 그런데 그 쓰기는 **세이브에 남는 유일한 쓰기**라,
+        // 기능적 명분이 없어진 뒤에도 자동으로 계속하는 것은 정당하지 않다
+        // (검토 중대 3). 치우고 싶으면 화면의 [정리] 를 누르면 된다.
         r = bag_expand_locked(reader, want,
                               g_auto_branch.load(std::memory_order_acquire));
     }
