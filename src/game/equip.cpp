@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <chrono>
 #include <string>
 
 #include "core/log.h"
@@ -435,6 +436,10 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
 // -------------------------------------------------------------------- 캐시
 namespace {
 std::mutex g_eq_mutex;
+// 장비 표를 **언제부터** 못 읽고 있나(0 이면 멀쩡하다). 분석 스레드 한 곳에서만
+// 읽고 쓴다. 지역 이동의 순간적인 실패로 재탐색을 부르지 않을 만큼 넉넉히 둔다.
+std::chrono::steady_clock::time_point g_eq_dead_since;
+constexpr auto kEquipDeadFor = std::chrono::seconds(10);
 std::vector<EquipTable> g_eq_tables;   // both-realms 테이블(발견 캐시)
 std::vector<WornPiece> g_eq_pieces;    // 플레이어 착용장비
 EquipTable g_eq_player_table;           // 플레이어 테이블(빠른 재읽기용)
@@ -592,7 +597,27 @@ void equip_refresh_pieces(const mem::Reader& reader) {
         pt = g_eq_player_table;
     }
     std::vector<WornPiece> pieces;
-    if (!read_worn_gear(reader, pt, &pieces)) return;
+    if (!read_worn_gear(reader, pt, &pieces)) {
+        // **실패를 센다.** 게임은 세이브를 불러올 때 컴포넌트를 새로 만든다(인벤토리
+        // 에서 실측했다). 예전에는 여기서 조용히 돌아가기만 해서 g_eq_ready 가 참인
+        // 채 죽은 표를 들고 있었고, 그러면 camera 의 `!equip_ready()` 재탐색이 영영
+        // 안 돌았다. 플레이어 치트가 그것을 따라가므로 화면이 -1/-1 을 그렸다
+        // (사용자 화면 확인 2026-09-13).
+        //
+        // 지역 이동 중에는 잠깐 못 읽을 수 있으니 **경과 시간**으로 잰다.
+        const auto now = std::chrono::steady_clock::now();
+        if (g_eq_dead_since.time_since_epoch().count() == 0) {
+            g_eq_dead_since = now;
+            return;
+        }
+        if (now - g_eq_dead_since < kEquipDeadFor) return;
+        g_eq_dead_since = {};
+        log::warnf("장비 컴포넌트 0x{:X} 를 계속 못 읽는다 - 다시 찾는다", pt.comp);
+        std::lock_guard<std::mutex> lk(g_eq_mutex);
+        g_eq_ready = false;   // camera 의 !equip_ready() 가 재탐색을 돌린다
+        return;
+    }
+    g_eq_dead_since = {};
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_pieces = std::move(pieces);
 }
