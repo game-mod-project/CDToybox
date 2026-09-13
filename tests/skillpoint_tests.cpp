@@ -12,6 +12,8 @@
 using cdtb::game::BondPlan;
 using cdtb::game::kBondAddMax;
 using cdtb::game::kBondCeiling;
+using cdtb::game::BondBackup;
+using cdtb::game::bond_restore_blocked;
 using cdtb::game::plan_bond_add;
 
 TEST(bond_add_raises_have_and_total_together) {
@@ -90,4 +92,63 @@ TEST(bond_add_never_produces_a_negative_screen_value) {
             }
         }
     }
+}
+
+TEST(bond_restore_allows_exactly_what_we_wrote) {
+    // 되돌리기 기록: 처음 본 1/151 에서 11/161 로 만들었다.
+    BondBackup b;
+    b.realm = 0;
+    b.have = 1;
+    b.total = 151;
+    b.wrote_have = 11;
+    b.wrote_total = 161;
+    CHECK(bond_restore_blocked(b, 11, 161) == nullptr);
+}
+
+TEST(bond_restore_refuses_when_the_game_gave_or_took_bonds) {
+    // **검토 치명 2 의 회귀 시험.** 더한 뒤 사용자가 게임에서 결속을 정당하게
+    // 얻거나 쓰면, 옛 원본을 그대로 쓰는 것은 그 결속을 지우는 일이 된다.
+    // 가방에서 같은 관문이 없어 "돈 주고 산 칸을 지우는" 길이 열렸었다.
+    BondBackup b;
+    b.realm = 0;
+    b.have = 1;
+    b.total = 151;
+    b.wrote_have = 11;
+    b.wrote_total = 161;
+
+    // 게임이 5를 더 줬다(16/166). 되돌리면 그 5가 사라진다.
+    CHECK(bond_restore_blocked(b, 16, 166) != nullptr);
+    // 사용자가 결속을 썼다(0/161). 되돌리면 안 가진 1을 주고 누적을 내린다.
+    CHECK(bond_restore_blocked(b, 0, 161) != nullptr);
+    // 보유만 맞고 총합이 다른 경우도 막는다.
+    CHECK(bond_restore_blocked(b, 11, 171) != nullptr);
+    // 막을 때는 이유를 남긴다(화면·로그에 그대로 낸다).
+    CHECK(bond_restore_blocked(b, 16, 166)[0] != '\0');
+}
+
+TEST(bond_restore_refuses_records_that_do_not_know_what_they_wrote) {
+    // 쓰기가 실패해 무엇을 써 놓았는지 모르는 기록은 되돌리지 않는다 -
+    // 그 상태에서 옛 원본을 쓰면 지금 값이 무엇이든 덮어쓰게 된다.
+    BondBackup b;
+    b.realm = 0;
+    b.have = 1;
+    b.total = 151;
+    CHECK(b.wrote_have == 0 && b.wrote_total == 0);
+    CHECK(bond_restore_blocked(b, 11, 161) != nullptr);
+    // 값을 못 읽은 경우도 막는다.
+    BondBackup w = b;
+    w.wrote_have = 11;
+    w.wrote_total = 161;
+    CHECK(bond_restore_blocked(w, -1, 161) != nullptr);
+}
+
+TEST(bond_restore_refuses_when_it_would_be_an_increase) {
+    // 복원이 **증가**가 되는 상황은 우리가 만든 것이 아니다.
+    BondBackup b;
+    b.realm = 0;
+    b.have = 1;
+    b.total = 151;
+    b.wrote_have = 11;
+    b.wrote_total = 140;   // 지금 총합이 원본보다 작다
+    CHECK(bond_restore_blocked(b, 11, 140) != nullptr);
 }

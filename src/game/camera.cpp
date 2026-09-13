@@ -417,10 +417,18 @@ void auto_analysis_loop() {
         if (!clan_ready() || clan_rtti() == nullptr) discover_clan(rtti, reader);
 
         // 스킬 포인트(어비스 결속). 지식 컴포넌트도 월드에 들어가야 생긴다.
-        // 못 찾은 동안에만 훑고, 찾으면 곧장 돌아온다.
-        if (!knowledge_ready()) discover_knowledge(rtti, reader);
+        // **월드 게이트 + 스로틀이 둘 다 필요하다** - find_objects_of 는 프리페치
+        // 밖이라 부를 때마다 힙 전수를 읽는데, 이 루프는 2초에 한 바퀴다. 인벤토리
+        // 탐색이 같은 이유로 5바퀴 주기와 포기 카운터를 두고 있다.
+        // 장비가 잡혔다는 것이 곧 월드 안이라는 뜻이라 그것을 게이트로 쓴다.
+        if (equip_ready()) {
+            knowledge_check_alive(reader);
+            if (!knowledge_ready()) discover_knowledge(rtti, reader, spin);
+        }
         // 지식 레벨 쓰기는 저장을 못 넘고, 리로드는 컴포넌트를 새로 만든다. 이번
         // 실행에서 사용자가 건 것이 모자라면 다시 건다(건 것이 없으면 즉시 반환).
+        // **장비 게이트 밖에 둔다** - 재적용은 탐색과 달리 힙을 안 훑어 값싸고,
+        // 장비를 못 읽는 동안에도 지식 컴포넌트만 살아 있으면 걸 수 있다.
         know_auto_tick(reader);
 
         // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
