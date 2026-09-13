@@ -3,12 +3,15 @@
 
 using cdtb::game::BagPlan;
 using cdtb::game::kBagBranchA;
+using cdtb::game::kBagBranchAuto;
 using cdtb::game::kBagBranchB;
 using cdtb::game::kBagEngineMax;
 using cdtb::game::kBagTargetMax;
+using cdtb::game::bag_kind_branch;
 using cdtb::game::bag_kind_cap;
 using cdtb::game::bag_kind_rules;
 using cdtb::game::bag_kind_selected;
+using cdtb::game::bag_resolve_branch;
 using cdtb::game::plan_bag_expand;
 
 namespace {
@@ -214,6 +217,10 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
         CHECK(cdtb::game::kBagTargetMax <= cdtb::game::kBagEngineMax);
         CHECK(r.name != nullptr && r.name[0] != '\0');
         CHECK(bag_kind_cap(r.kind) == r.cap);
+        // 칸도 표에서 나온다. 둘이 갈라지면 "건드리는데 칸을 모르는 종류" 가 생긴다.
+        CHECK(r.branch == kBagBranchA || r.branch == kBagBranchB);
+        CHECK(bag_kind_branch(r.kind) == r.branch);
+        CHECK(bag_resolve_branch(kBagBranchAuto, r.kind) == r.branch);
         // storage_only 가 거짓이면 언제나, 참이면 켰을 때만.
         CHECK(bag_kind_selected(r.kind, true));
         CHECK(bag_kind_selected(r.kind, false) == !r.storage_only);
@@ -224,6 +231,55 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
         CHECK(!bag_kind_selected(k, false));
         CHECK(!bag_kind_selected(k, true));
     }
+}
+
+TEST(bag_branch_is_per_kind_and_matches_where_the_expansion_lives) {
+    // **2026-09-13 조사가 뒤집은 것이다.** 한 칸을 모든 종류에 강요하면 반드시
+    // 절반이 남의 칸을 쓴다 - 가방의 +0x1A(가방에게는 남의 칸)에 넣은 값이
+    // 리로드에서 사라진 것이 그것이다.
+    //
+    // 실측: 가방은 확장 190 을 +0x18 에, 보관함은 200 을 +0x1A 에 단다.
+    // 상류 소스(CT v5.0 2605~2618)도 +0x1A 를 보관함 세이브의
+    // _varyExpandSlotCount 로 적으면서 "가방과는 다른 것" 이라고 못박는다.
+    CHECK(bag_kind_branch(1) == kBagBranchA);    // 가방
+    CHECK(bag_kind_branch(7) == kBagBranchB);    // 보관함
+    CHECK(bag_kind_branch(9) == kBagBranchB);
+    CHECK(bag_kind_branch(11) == kBagBranchB);
+    // 표에 없는 종류는 안 건드리므로 값은 무해한 기본이면 된다.
+    CHECK(bag_kind_branch(99) == kBagBranchA);
+
+    // 자동은 종류별 칸으로 풀린다.
+    CHECK(bag_resolve_branch(kBagBranchAuto, 1) == kBagBranchA);
+    CHECK(bag_resolve_branch(kBagBranchAuto, 7) == kBagBranchB);
+    // 강제는 종류를 무시한다(시험용 경로).
+    CHECK(bag_resolve_branch(kBagBranchA, 7) == kBagBranchA);
+    CHECK(bag_resolve_branch(kBagBranchB, 1) == kBagBranchB);
+    // 모르는 값은 강제가 아니라 자동으로 떨어진다 - 화면이 이상한 값을 줘도
+    // 남의 칸을 쓰지 않는다.
+    for (const int weird : {-1, 3, 99}) {
+        CHECK(bag_resolve_branch(weird, 1) == kBagBranchA);
+        CHECK(bag_resolve_branch(weird, 7) == kBagBranchB);
+    }
+}
+
+TEST(bag_branch_default_leaves_each_kinds_own_expansion_growing) {
+    // 자동으로 풀린 칸으로 계획을 세우면, 그 종류가 **원래 쓰던 칸**이 자란다.
+    // 가방 240/190/190/0 목표 300 -> +0x18 이 190 에서 250 으로.
+    const BagPlan bag = plan_bag_expand(240, 190, 190, 0, kSlots, 300,
+                                        bag_resolve_branch(kBagBranchAuto, 1));
+    CHECK(bag.apply);
+    CHECK(bag.branch == kBagBranchA);
+    CHECK(bag.expand == 250);
+    CHECK(bag.other == 0);        // +0x1A 는 그대로
+
+    // 보관함 440/200/0/200 목표 500 -> +0x1A 가 200 에서 260 으로.
+    const BagPlan st = plan_bag_expand(440, 200, 0, 200, kSlots, 500,
+                                       bag_resolve_branch(kBagBranchAuto, 7));
+    CHECK(st.apply);
+    CHECK(st.branch == kBagBranchB);
+    CHECK(st.expand == 260);
+    CHECK(st.other == 0);         // +0x18 은 그대로
+    CHECK(st.capacity == 500);
 }
 
 TEST(bag_plan_obeys_the_per_kind_limit) {

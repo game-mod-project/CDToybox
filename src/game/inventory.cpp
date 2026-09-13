@@ -463,14 +463,26 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
 namespace {
 
 // 실측 천장(2026-09-13): 가방 240 / 보관함 440 / 9·11 은 300.
-// 상한은 아직 **전부 700** 이다 - 보관함류의 엔진 한계를 말한 근거를 못 찾았고,
-// 근거 없이 낮추면 기능을 죽이고 근거 없이 올리면 세이브를 죽인다. 조사 결과가
-// 나오면 이 표의 숫자만 고치면 된다(구조는 이미 종류별이다).
+//
+// **상한은 전부 700 이고, 이제 그 값에 보관함 근거도 있다**(2026-09-13 조사).
+// 보관함만의 상한을 적은 문장은 상류 문서에도 실행 파일에도 없고, 대신 상류 둘 다
+// 732 를 *모든 컨테이너*에 걸리는 선으로 다룬다 - ASI 의 "모든 보관함 확장" 버튼도
+// "732 초과는 거부" 라고 적힌 그 입력칸의 값을 쓴다. 확장 초과를 막는 오류 코드도
+// `eErrNoTryOverExpandInventorySlot` 하나뿐이고 보관함 전용 경로가 없다.
+//
+// 다만 종류별 **데이터 천장**(`InventoryInfo._maxSlotCount`)은 따로 있다 - 보관함은
+// 440 이고, `+0x14` 가 재계산되면 그리로 되돌 수 있다. 그건 상한이 아니라 "우리 값이
+// 지워질 수 있는 선" 이라 자동 재적용이 맡는다.
+//
+// 종류 9·11 은 기본 = 천장 = 300 이라 늘릴 근거가 따로 없지만, 같은 시스템 한계를
+// 쓰므로 상한은 같이 둔다 - 사용자가 이미 쓰고 있는 길을 근거 없이 막지 않는다.
 constexpr BagKindRule kKindRules[] = {
-    {1, kBagTargetMax, false, "가방"},
-    {7, kBagTargetMax, true, "보관함"},
-    {9, kBagTargetMax, true, "종류 9"},
-    {11, kBagTargetMax, true, "종류 11"},
+    {1, kBagTargetMax, false, kBagBranchA, "가방"},
+    {7, kBagTargetMax, true, kBagBranchB, "보관함"},
+    // 9·11 은 확장 칸이 둘 다 0 이라 어느 쪽이 제 칸인지 실측으로 못 가린다.
+    // 보관함류이므로 보관함과 같은 칸(= 세이브의 _varyExpandSlotCount)을 쓴다.
+    {9, kBagTargetMax, true, kBagBranchB, "종류 9"},
+    {11, kBagTargetMax, true, kBagBranchB, "종류 11"},
 };
 
 }  // namespace
@@ -482,6 +494,18 @@ int bag_kind_cap(std::uint16_t kind) {
         if (r.kind == kind) return r.cap;
     }
     return 0;
+}
+
+int bag_kind_branch(std::uint16_t kind) {
+    for (const auto& r : kKindRules) {
+        if (r.kind == kind) return r.branch;
+    }
+    return kBagBranchA;
+}
+
+int bag_resolve_branch(int chosen, std::uint16_t kind) {
+    if (chosen == kBagBranchA || chosen == kBagBranchB) return chosen;
+    return bag_kind_branch(kind);   // 자동(그리고 모르는 값)은 종류별 칸
 }
 
 bool bag_kind_selected(std::uint16_t kind, bool storage) {
@@ -550,7 +574,8 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
         }
         const BagPlan p = plan_bag_expand(cap, sum, a, b,
                                           static_cast<int>(c.slots), target,
-                                          branch, bag_kind_cap(c.kind));
+                                          bag_resolve_branch(branch, c.kind),
+                                          bag_kind_cap(c.kind));
         BagSeen seen;
         seen.realm = realm;
         seen.kind = c.kind;
@@ -776,8 +801,10 @@ BagResult bag_expand_locked(const mem::Reader& reader, int target, bool storage,
     if (r.changed > 0) g_backup_dropped.store(false, std::memory_order_release);
     log::infof("가방 확장: 목표 {} 칸 {} -> 바꾼 것 {}개({} realm), 건너뜀 {},"
                " 실패 {}", target,
-               branch == kBagBranchB ? "B(+0x1A)" : "A(+0x18)", r.changed,
-               r.realms, r.skip, r.fail);
+               branch == kBagBranchA   ? "A(+0x18) 강제"
+               : branch == kBagBranchB ? "B(+0x1A) 강제"
+                                       : "종류별(가방 A · 보관함류 B)",
+               r.changed, r.realms, r.skip, r.fail);
     return r;
 }
 
@@ -829,17 +856,26 @@ void bag_auto_tick(const mem::Reader& reader) {
     // 아직 끝이 아닌 두 가지. 둘 다 "다음 바퀴에 다시" 가 맞다.
     //   * 대상 컨테이너를 **하나도 못 봤다** - 로드 도중에는 레코드 배열이 아직
     //     0 이라 목록에 아예 안 잡힌다(read_inventory_containers 의 거르개).
-    //   * 봤지만 **모양을 못 알아봤다** - 아직 채워지는 중이다. 실측 2026-09-13:
-    //     재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 이 이유로 밀렸고,
-    //     세대는 소모돼 그 로드에서는 한쪽 realm 에만 걸린 채 끝났다.
-    if (r.changed + r.skip == 0 || r.unknown > 0) {
+    //   * 봤지만 **하나도 못 바꾼 채 모양만 못 알아봤다** - 아직 채워지는 중이다.
+    //     실측 2026-09-13: 재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 이
+    //     이유로 밀렸고(그 바퀴의 changed 는 0), 세대는 소모돼 그 로드에서는 한쪽
+    //     realm 에만 걸린 채 끝났다.
+    //
+    // **changed 를 조건에 섞는 것이 중요하다.** unknown 만 보면, 영영 모양을 모르는
+    // 컨테이너가 하나라도 있는 판에서 첫 바퀴에 다 됐는데도 10바퀴를 더 돌고
+    // 실패처럼 읽히는 WARN 을 남긴다(리뷰 B-2).
+    const bool nothing_seen = r.changed + r.skip == 0;
+    const bool still_becoming = r.unknown > 0 && r.changed == 0;
+    if (nothing_seen || still_becoming) {
         const int n = g_auto_tries.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (n >= kAutoGiveUp) {
             g_auto_gen.store(gen, std::memory_order_release);
-            log::warnf("가방 자동 다시 적용: {}바퀴 동안 {} - 이 세대는 포기한다",
-                       n,
-                       r.changed + r.skip == 0 ? "가방 컨테이너를 못 봤다"
-                                               : "컨테이너 모양을 못 알아봤다");
+            // **그 바퀴의 수를 그대로 싣는다.** "N바퀴 동안 <마지막 이유>" 는
+            // 앞선 바퀴가 다른 이유였을 때 진단을 틀린 데로 끈다 - 이 변경 자체가
+            // 로그 한 줄에 속아서 생긴 것이다(리뷰 B-4).
+            log::warnf("가방 자동 다시 적용: {}바퀴째 - 바꾼 것 {}, 건너뜀 {},"
+                       " 모르는 모양 {} - 이 세대는 포기한다",
+                       n, r.changed, r.skip, r.unknown);
         }
         return;
     }

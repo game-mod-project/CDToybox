@@ -55,15 +55,21 @@ std::uint64_t ring_collect(const std::vector<RingLine>& ring,
     }
     for (std::uint64_t s = from; s <= total; ++s) {
         const RingLine& l = ring[static_cast<std::size_t>((s - 1) % cap)];
-        // 번호가 안 맞으면 그 칸은 이미 다음 바퀴에 덮였다. 건너뛴다.
+        // **이 함수는 반드시 g_mutex 를 쥔 채 불러야 한다.** 아래 번호 검사는 값싼
+        // 이중 방어일 뿐, 잠금을 대신하지 못한다 - 잠금을 빼면 쓰는 쪽의
+        // `slot.text.assign()` 이 문자열 버퍼를 다시 잡는 동안 여기서 그 문자열을
+        // 복사하게 되어 UB 다. 검사는 복사 **전에** 한 번 도는 비교라 그 창을
+        // 막을 수 없다(리뷰 A-4).
         if (l.seq != s) continue;
         out->push_back(l);
     }
     return missed;
 }
 
-std::uint64_t ring_since(std::uint64_t since, std::vector<RingLine>* out) {
+std::uint64_t ring_since(std::uint64_t since, std::vector<RingLine>* out,
+                         std::uint64_t* total) {
     std::lock_guard lock(g_mutex);
+    if (total != nullptr) *total = g_total;
     return ring_collect(g_ring, g_total, since, out);
 }
 
@@ -93,6 +99,16 @@ void init(const std::wstring& path) {
 void write(Level level, std::string_view message) {
     std::lock_guard lock(g_mutex);
 
+    // 파일이 없으면 표준 출력으로 낸다. 명령줄 도구(cdtb_probe)가 같은 코드를
+    // 돌릴 때 결과를 볼 수 있어야 한다. **그쪽에는 시각도 고리도 만들지 않는다** -
+    // printf 는 시각을 안 찍고 고리를 읽을 화면도 없어, 줄마다 tzdb 조회와 문자열
+    // 두 벌, 150KB 상주 고리가 그냥 버려진다(리뷰 A-3).
+    if (!g_file.is_open()) {
+        std::printf("%s %.*s\n", level_tag(level),
+                    static_cast<int>(message.size()), message.data());
+        return;
+    }
+
     // 시각을 **먼저** 만든다. 파일과 화면이 같은 글자를 쓰게 하려면 한 자리에서
     // 나와야 한다. 실패해도 로그 한 줄 때문에 예외를 던지지는 않는다 - 이 함수는
     // 훅 안에서도 불린다.
@@ -110,14 +126,6 @@ void write(Level level, std::string_view message) {
     // 창이 안 열려 있어도 쌓아 둔다. 열었을 때 직전 상황이 보여야 쓸모가 있다.
     if (g_ring.empty()) g_ring.resize(kRingLines);
     ring_push(g_ring, g_total, level, stamp, message);
-
-    // 파일이 없으면 표준 출력으로 낸다. 명령줄 도구(cdtb_probe)가
-    // 같은 코드를 돌릴 때 결과를 볼 수 있어야 한다.
-    if (!g_file.is_open()) {
-        std::printf("%s %.*s\n", level_tag(level),
-                    static_cast<int>(message.size()), message.data());
-        return;
-    }
 
     g_file << std::format("[{}] {} {}\n", stamp, level_tag(level), message);
 
