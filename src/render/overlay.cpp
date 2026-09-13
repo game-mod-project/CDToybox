@@ -27,6 +27,7 @@
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
 #include "render/item_panel.h"
+#include "render/log_panel.h"
 #include "render/roster_panel.h"
 #include "render/equip_panel.h"
 #include "render/player_panel.h"
@@ -393,6 +394,7 @@ void draw_windows() {
     if (shown(Win::Equip)) cdtb::render::draw_equip_panel(&shown(Win::Equip));
     if (shown(Win::Player)) cdtb::render::draw_player_panel(&shown(Win::Player));
     if (shown(Win::Camera)) cdtb::render::draw_camera_panel(&shown(Win::Camera));
+    if (shown(Win::Log)) cdtb::render::draw_log_panel(&shown(Win::Log));
 }
 
 // 게임 exe 의 버전. 한 번 읽어 둔다 - 매 프레임 자원을 뒤질 이유가 없다.
