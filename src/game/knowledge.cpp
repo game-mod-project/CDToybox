@@ -322,4 +322,68 @@ KnowWrite know_learn(const mem::Reader& reader, int number, int level) {
     return w;
 }
 
+// ------------------------------------------------------------ 자동 재적용
+
+namespace {
+std::mutex g_auto_mtx;
+std::vector<KnowWant> g_auto;
+}  // namespace
+
+void know_auto_upsert(std::vector<KnowWant>* v, int number, int level) {
+    if (v == nullptr || number < 0 || level < 1) return;
+    for (auto& e : *v) {
+        if (e.number != number) continue;
+        // **낮추지 않는다.** 낮은 값으로 덮으면 재적용이 이미 올려 둔 것을 되돌리려
+        // 들고, 그러면 know_learn 이 "이미 그 레벨 이상" 으로 건너뛰어 조용히 굳는다.
+        if (level > e.level) e.level = level;
+        return;
+    }
+    v->push_back(KnowWant{number, level});
+}
+
+void know_auto_remember(int number, int level) {
+    std::lock_guard<std::mutex> lk(g_auto_mtx);
+    know_auto_upsert(&g_auto, number, level);
+}
+
+void know_auto_forget() {
+    std::lock_guard<std::mutex> lk(g_auto_mtx);
+    if (g_auto.empty()) return;
+    log::infof("지식 자동 재적용 해제: {}개를 잊는다",
+               static_cast<int>(g_auto.size()));
+    g_auto.clear();
+}
+
+std::vector<KnowWant> know_auto_list() {
+    std::lock_guard<std::mutex> lk(g_auto_mtx);
+    return g_auto;
+}
+
+void know_auto_tick(const mem::Reader& reader) {
+    std::vector<KnowWant> want;
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        if (g_auto.empty()) return;   // 사용자가 건 것이 없으면 아무 일도 안 한다
+        want = g_auto;
+    }
+    int again = 0;
+    for (const KnowWant& w : want) {
+        // 두 realm 중 **어느 쪽이든** 모자라면 다시 건다. 한쪽만 보면 다른 쪽이
+        // 조용히 어긋난 채 남는다(결속에서 같은 자리를 놓쳤었다).
+        bool low = false;
+        for (int realm = 0; realm < 2 && !low; ++realm) {
+            KnowTable t;
+            if (!know_table(reader, realm, &t)) continue;
+            const int now = know_level(reader, t, w.number);
+            if (now >= 0 && now < w.level) low = true;
+        }
+        if (!low) continue;
+        const KnowWrite r = know_learn(reader, w.number, w.level);
+        if (r.changed > 0) ++again;
+    }
+    if (again > 0) {
+        log::infof("지식 자동 재적용: {}개를 다시 걸었다", again);
+    }
+}
+
 }  // namespace cdtb::game
