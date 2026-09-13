@@ -1,4 +1,13 @@
 #include "game/inventory.h"
+#include "core/write_log.h"
+
+#include <vector>
+
+#include <string>
+
+#include <mutex>
+
+#include <windows.h>
 
 #include <atomic>
 #include <cstring>
@@ -182,31 +191,83 @@ namespace {
 
 constexpr const char* kInventoryClass =
     ".?AVServerInventoryActorComponent@pa@@";
+// 같은 인벤토리가 클라·서버 두 벌로 존재한다. 가방 확장은 화면 숫자의 출처가
+// 어느 쪽인지 확정되지 않아 **둘 다** 쓴다(장비·게이지의 both-realms 와 같은 이유).
+constexpr const char* kInventoryClassClient =
+    ".?AVClientInventoryActorComponent@pa@@";
 
 std::atomic<std::uintptr_t> g_component{0};
+std::atomic<std::uintptr_t> g_component_client{0};
 std::atomic<bool> g_rescan{false};
+// 클라를 못 찾은 채 몇 번 훑었나. 상시 루프가 10초마다 11GB 힙을 영원히 훑는 것을
+// 막는다(리뷰 재검토 B-2).
+std::atomic<int> g_client_tries{0};
+constexpr int kClientGiveUp = 12;
+
+// 내용이 든 컴포넌트인가. 빈 것이 여럿 살아 있어 그것으로 가른다.
+bool component_has_items(const mem::Reader& reader, std::uintptr_t addr,
+                         std::vector<InventoryContainer>* out) {
+    if (!read_inventory_containers(reader, addr, out)) return false;
+    for (const auto& c : *out) {
+        if (c.used > 0) return true;
+    }
+    return false;
+}
 
 }  // namespace
 
 bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_component.load(std::memory_order_acquire) != 0) return true;
+    const bool have_server = g_component.load(std::memory_order_acquire) != 0;
+    const bool have_client =
+        g_component_client.load(std::memory_order_acquire) != 0;
+    if (have_server && have_client) return true;
 
-    for (const auto addr : rtti.instances_of_class(kInventoryClass, 64)) {
-        std::vector<InventoryContainer> cs;
-        if (!read_inventory_containers(reader, addr, &cs)) continue;
-        bool any = false;
-        for (const auto& c : cs) {
-            if (c.used > 0) {
-                any = true;
-                break;
-            }
-        }
-        if (!any) continue;   // 빈 컴포넌트가 여럿 살아 있다
-        g_component.store(addr, std::memory_order_release);
-        log::infof("인벤토리 컴포넌트 0x{:X}", addr);
-        return true;
+    // 두 클래스를 **힙 한 번 훑기**로 같이 찾는다 - instances_of_class 는 vtable
+    // 마다 힙 전체를 읽어, 따로 부르면 훑기가 두 배가 된다.
+    // **아직 못 찾은 클래스만** 넣는다. find_objects_of 의 상한은 클래스별이 아니라
+    // **전체**이고 낮은 주소부터 채우므로(rtti.h), 두 이름을 늘 함께 넣으면 먼저
+    // 잡힌 쪽이 칸을 다 먹어 나머지가 잘린다 - 실측 2026-09-13 에 서버 109개·
+    // 클라 95개(합 204)라, 128 로 자르면 클라 95개 중 67개가 잘려 나갔다.
+    // 서버를 잡은 뒤에는 128칸이 전부 클라 몫이 된다(리뷰 재검토 B-2).
+    std::vector<std::string> want;
+    if (!have_server) want.emplace_back(kInventoryClass);
+    if (!have_client) want.emplace_back(kInventoryClassClient);
+    constexpr std::size_t kFindMax = 128;
+    const auto found = rtti.find_objects_of(want, kFindMax);
+    if (found.size() >= kFindMax) {
+        // 닿으면 진짜 컴포넌트가 잘려 나갈 수 있고, 증상이 "아직 없다" 와 구분되지
+        // 않는다(camera.cpp 의 같은 경고와 형태를 맞춘다).
+        log::warnf("인벤토리 후보가 상한 {}에 닿았다 - 잘렸을 수 있다", kFindMax);
     }
-    return false;
+    for (const auto& f : found) {
+        const bool is_client = f.cls == kInventoryClassClient;
+        auto& slot = is_client ? g_component_client : g_component;
+        if (slot.load(std::memory_order_acquire) != 0) continue;
+        std::vector<InventoryContainer> cs;
+        if (!component_has_items(reader, f.address, &cs)) continue;
+        slot.store(f.address, std::memory_order_release);
+        log::infof("인벤토리 컴포넌트{} 0x{:X}", is_client ? "(클라)" : "",
+                   f.address);
+    }
+    // 클라를 못 찾는 판이 있을 수 있다(내용이 빈 채로만 존재하는 경우 등).
+    // 영원히 같은 비용으로 다시 훑지 않도록 몇 번 해 보고 포기한다 - 포기해도
+    // 가방 확장은 서버 쪽에만 쓰고 패널이 "한쪽 realm 에만 썼습니다" 를 낸다.
+    if (g_component.load(std::memory_order_acquire) != 0 &&
+        g_component_client.load(std::memory_order_acquire) == 0) {
+        const int n = g_client_tries.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (n == kClientGiveUp) {
+            log::warnf("인벤토리 클라 컴포넌트를 {}번 만에 못 찾았다 - 그만 찾는다"
+                       " (가방 확장은 서버 realm 에만 간다)", n);
+        }
+    }
+    return g_component.load(std::memory_order_acquire) != 0;
+}
+
+bool inventory_both_ready() {
+    if (g_component.load(std::memory_order_acquire) == 0) return false;
+    if (g_component_client.load(std::memory_order_acquire) != 0) return true;
+    // 포기했으면 "다 찾았다" 로 쳐서 상시 루프가 멈추게 한다.
+    return g_client_tries.load(std::memory_order_acquire) >= kClientGiveUp;
 }
 
 bool inventory_ready() {
@@ -217,8 +278,18 @@ std::uintptr_t inventory_component() {
     return g_component.load(std::memory_order_acquire);
 }
 
+std::uintptr_t inventory_component_client() {
+    return g_component_client.load(std::memory_order_acquire);
+}
+
 void forget_inventory() {
     g_component.store(0, std::memory_order_release);
+    g_component_client.store(0, std::memory_order_release);
+    // 가방 백업은 **버리지 않는다.** bag_restore 가 "지금 살아 있는 컨테이너인가"
+    // 를 직접 검사하므로(낡은 주소에 쓰는 길은 그쪽에서 막힌다), 여기서 선제적으로
+    // 버리면 같은 주소로 곧 다시 잡히는 흔한 경우에 되돌릴 수단만 잃는다
+    // (리뷰 재검토 B-3).
+    g_client_tries.store(0, std::memory_order_release);
     request_inventory_rescan();
 }
 
@@ -247,6 +318,257 @@ InventoryRowText format_inventory_row(std::uint32_t endurance,
 }
 
 
-std::vector<std::string> inventory_scan_classes() { return {kInventoryClass}; }
+// 두 이름을 다 넣어야 한다. find_objects_of 는 **이름이 전부 캐시에 있을 때만**
+// 스냅숏을 쓰므로, 하나라도 빠지면 통과마다 11GB 힙을 다시 훑는다(리뷰 지적 5).
+std::vector<std::string> inventory_scan_classes() {
+    return {kInventoryClass, kInventoryClassClient};
+}
+
+
+// ------------------------------------------------------ 가방·보관함 확장
+
+BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target) {
+    BagPlan p;
+    // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
+    // 유도한 데서 시작했으므로, 모델이 안 맞으면 쓰지 않는 쪽이 맞다.
+    if (cap < 0 || sum < 0 || a < 0 || b < 0 || slots <= 0) {
+        p.skip = "값이 음수다";
+        return p;
+    }
+    if (cap < sum) {
+        p.skip = "용량이 확장 합계보다 작다";
+        return p;
+    }
+    // 한쪽이 0 이어도 검사한다. 예전에는 `a != 0 && b != 0 &&` 가 붙어 있어,
+    // 우리가 모르는 제3의 갈래가 +0x16 에 값을 넣은 모양이 그냥 통과했다 - 그러면
+    // 엔진 재계산에서 732 를 넘길 수 있었다(리뷰 지적 2). 실측 18개 전부가
+    // sum == a + b 라 무조건으로 바꿔도 쓰던 컨테이너를 하나도 잃지 않는다.
+    if (a + b != sum) {
+        p.skip = "확장 두 갈래의 합이 합계와 다르다";
+        return p;
+    }
+    p.base = cap - sum;   // **여기가 핵심** - +0x1A 가 아니라 합계로 유도한다
+    if (p.base <= 0) {
+        p.skip = "기본 슬롯이 0 이하다";
+        return p;
+    }
+    int want = target;
+    if (want > kBagTargetMax) want = kBagTargetMax;
+    if (want > kBagEngineMax) want = kBagEngineMax;   // 이중 방어
+    if (want > slots) want = slots;                   // 물리 배열을 넘지 않는다
+    if (want < p.base) {
+        p.skip = "목표가 기본 슬롯보다 작다";
+        return p;
+    }
+    // +0x18(a)은 그대로 두고 +0x1A 만 조정한다. 엔진이 합계를 sum 으로 재계산하든
+    // max 로 재계산하든 결과가 want 이하가 된다(max 면 오히려 작아진다).
+    p.expand_b = want - p.base - a;
+    if (p.expand_b < 0) {
+        p.skip = "이미 목표보다 크다";
+        return p;
+    }
+    p.sum = a + p.expand_b;
+    p.capacity = p.base + p.sum;
+    p.apply = p.capacity != cap || p.expand_b != b;
+    if (!p.apply) p.skip = "이미 그 값이다";
+    return p;
+}
+
+bool bag_kind_selected(std::uint16_t kind, bool storage) {
+    if (kind == 1) return true;   // 가방
+    if (!storage) return false;
+    // 보관함류만. 용량 5·10·20·50 짜리 작은 칸은 어느 쪽이든 건드리지 않는다 -
+    // 그것까지 부풀린 것이 2026-09-05 "리로드 후 지급 손상" 의 유력한 원인이다.
+    // **종류 4 는 뺀다**: 혼자 +0x20 에 8칸짜리 보조 배열을 다는데(실측 2026-09-13)
+    // 그 정체를 모른다. 용량만 올리고 그쪽을 두는 것은 모르는 모양을 건드리는
+    // 것이라, 확인 전까지는 7·9·11 만으로 간다(리뷰 지적 11).
+    return kind == 7 || kind == 9 || kind == 11;
+}
+
+namespace {
+
+// 확장 전 원본. 되돌리기가 **진짜 복원**이 되게 한다 - 옛 restore 는 확장을 0 으로
+// 써서 가방의 190·보관함의 200 을 날렸다(그건 복원이 아니다).
+struct BagBackup {
+    std::uintptr_t address = 0;
+    std::uint16_t kind = 0;   // 재활용된 주소를 가려내는 데 쓴다
+    std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+};
+std::mutex g_bag_mtx;
+std::vector<BagBackup> g_bag_backup;
+
+// 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
+bool bag_wr16(std::uintptr_t a, std::uint16_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint16_t*>(a) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// 한 컴포넌트의 대상 컨테이너에 계획을 적용한다.
+void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
+              bool storage, bool remember, BagResult* r) {
+    if (comp == 0) return;
+    std::vector<InventoryContainer> cs;
+    if (!read_inventory_containers(reader, comp, &cs)) return;
+    const int before = r->changed;
+    for (const auto& c : cs) {
+        if (!bag_kind_selected(c.kind, storage)) continue;
+        std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+        if (!reader.read_value(c.address + 0x14, &cap) ||
+            !reader.read_value(c.address + 0x16, &sum) ||
+            !reader.read_value(c.address + 0x18, &a) ||
+            !reader.read_value(c.address + 0x1A, &b)) {
+            ++r->fail;
+            continue;
+        }
+        const BagPlan p = plan_bag_expand(cap, sum, a, b,
+                                          static_cast<int>(c.slots), target);
+        if (!p.apply) {
+            ++r->skip;
+            r->last_skip = p.skip;   // 화면·로그에 이유를 낸다(리뷰 지적 10)
+            log::infof("가방 건너뜀: 종류 {} 0x{:X} - {}", c.kind, c.address,
+                       p.skip);
+            continue;
+        }
+        if (remember) {
+            // **주소당 첫 원본만** 남긴다. 예전에는 bag_expand 머리에서 무조건
+            // 비웠는데, 그러면 같은 값으로 한 번 더 누르기만 해도 원본이 사라져
+            // 되돌릴 수단이 영영 없어졌다(리뷰 지적 3).
+            std::lock_guard<std::mutex> lk(g_bag_mtx);
+            bool seen = false;
+            for (const auto& x : g_bag_backup) {
+                if (x.address == c.address) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                g_bag_backup.push_back(
+                    BagBackup{c.address, c.kind, cap, sum, a, b});
+            }
+        }
+        // 저장이 담는 칸 -> 합계 -> 캐시 순으로. +0x18 은 건드리지 않는다.
+        // 쓰기 성공을 **버리지 않는다** - 이 기능은 세이브에 값을 박는 유일한
+        // 기능이라, 무엇이 실제로 써졌는지 틀리게 적으면 사고 뒤 재구성이 안 된다.
+        bool ok = bag_wr16(c.address + 0x1A,
+                           static_cast<std::uint16_t>(p.expand_b));
+        ok = bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum)) && ok;
+        ok = bag_wr16(c.address + 0x14,
+                      static_cast<std::uint16_t>(p.capacity)) && ok;
+        std::uint16_t back_cap = 0, back_b = 0;
+        // **세이브가 담는 칸(+0x1A)도 되읽는다.** 화면 캐시만 보면 "화면은 700,
+        // 저장 칸은 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6).
+        const bool read_ok = reader.read_value(c.address + 0x14, &back_cap) &&
+                             reader.read_value(c.address + 0x1A, &back_b);
+        if (ok && read_ok &&
+            back_cap == static_cast<std::uint16_t>(p.capacity) &&
+            back_b == static_cast<std::uint16_t>(p.expand_b)) {
+            ++r->changed;
+            log_write("가방 용량", c.address + 0x14, std::to_string(cap),
+                      std::to_string(p.capacity));
+            log_write("가방 확장칸", c.address + 0x1A, std::to_string(b),
+                      std::to_string(p.expand_b));
+        } else {
+            // 반쯤 써진 채로 두지 않는다. 남는 값은 전부 목표 이하라 위험하지는
+            // 않지만, 사용자가 "왜 이 값인가" 를 알 수 없는 상태가 된다.
+            bool undo = bag_wr16(c.address + 0x1A, b);
+            undo = bag_wr16(c.address + 0x16, sum) && undo;
+            undo = bag_wr16(c.address + 0x14, cap) && undo;
+            ++r->fail;
+            log_write("가방 되돌림", c.address + 0x14,
+                      std::to_string(p.capacity), std::to_string(cap));
+            log::warnf("가방 확장 실패({}): 0x{:X} 종류 {}",
+                       undo ? "되돌림 성공" : "되돌림도 실패", c.address,
+                       c.kind);
+        }
+    }
+    if (r->changed > before) ++r->realms;
+}
+
+}  // namespace
+
+BagResult bag_expand(const mem::Reader& reader, int target, bool storage) {
+    // **백업을 비우지 않는다.** 주소당 첫 원본만 남기므로 여러 번 눌러도 처음 값이
+    // 지켜진다(리뷰 지적 3). 비우는 것은 되돌리기 성공과 forget_inventory 뿐이다.
+    BagResult r;
+    apply_to(reader, inventory_component(), target, storage, true, &r);
+    apply_to(reader, inventory_component_client(), target, storage, true, &r);
+    log::infof("가방 확장: 목표 {} -> 바꾼 것 {}개({} realm), 건너뜀 {}, 실패 {}",
+               target, r.changed, r.realms, r.skip, r.fail);
+    return r;
+}
+
+void forget_bag_backup() {
+    std::lock_guard<std::mutex> lk(g_bag_mtx);
+    g_bag_backup.clear();
+}
+
+bool bag_has_backup() {
+    std::lock_guard<std::mutex> lk(g_bag_mtx);
+    return !g_bag_backup.empty();
+}
+
+BagResult bag_restore(const mem::Reader& reader) {
+    BagResult r;
+    std::vector<BagBackup> saved;
+    {
+        std::lock_guard<std::mutex> lk(g_bag_mtx);
+        saved = g_bag_backup;
+    }
+    // **지금 살아 있는 컨테이너만 되돌린다.** 게임이 인벤토리를 새로 만들면(재접속·
+    // 캐릭터 교체·월드 재진입) 백업의 주소는 남의 객체가 된다. bag_wr16 의 SEH 는
+    // 매핑 안 된 페이지만 막지, 재할당된 유효 주소는 조용히 써 버린다
+    // (clan-roster-volatile-writes 와 같은 함정, 리뷰 지적 1).
+    std::vector<std::pair<std::uintptr_t, std::uint16_t>> alive;
+    for (const auto comp : {inventory_component(), inventory_component_client()}) {
+        if (comp == 0) continue;
+        std::vector<InventoryContainer> cs;
+        if (!read_inventory_containers(reader, comp, &cs)) continue;
+        for (const auto& c : cs) alive.emplace_back(c.address, c.kind);
+    }
+    std::vector<BagBackup> keep;   // 되돌리지 못한 것만 남긴다
+    for (const auto& s : saved) {
+        bool ok_alive = false;
+        for (const auto& a : alive) {
+            if (a.first == s.address && a.second == s.kind) {
+                ok_alive = true;
+                break;
+            }
+        }
+        if (!ok_alive) {
+            // 죽은 컨테이너는 다시 살아나지 않는다. 남겨 두면 되돌리기가 영구히
+            // 잠기므로(리뷰 재검토 B-1) 실패가 아니라 **건너뜀**으로 세고 버린다.
+            ++r.skip;
+            r.last_skip = "인벤토리가 새로 생겨 옛 컨테이너가 없습니다";
+            log::warnf("가방 복원 건너뜀: 0x{:X} 는 지금 컨테이너가 아니다",
+                       s.address);
+            continue;
+        }
+        // 되돌릴 때도 쓴 순서의 역순으로 - 캐시(+0x14)를 마지막에 맞춘다.
+        log_write("가방 복원", s.address + 0x14, "확장됨",
+                  std::to_string(s.cap));
+        bag_wr16(s.address + 0x1A, s.b);
+        bag_wr16(s.address + 0x16, s.sum);
+        bag_wr16(s.address + 0x14, s.cap);
+        std::uint16_t back = 0;
+        if (reader.read_value(s.address + 0x14, &back) && back == s.cap) {
+            ++r.changed;
+        } else {
+            ++r.fail;
+            keep.push_back(s);   // 이것만 다시 해 볼 여지가 있다
+        }
+    }
+    {
+        // 되돌린 것과 죽은 것은 지우고, 실패한 것만 남긴다. 예전에는 하나라도
+        // 실패하면 통째로 남겨 되돌리기가 영구히 잠겼다(리뷰 재검토 B-1).
+        std::lock_guard<std::mutex> lk(g_bag_mtx);
+        g_bag_backup = keep;
+    }
+    log::infof("가방 복원: 되돌린 것 {}개, 실패 {}", r.changed, r.fail);
+    return r;
+}
 
 }  // namespace cdtb::game
