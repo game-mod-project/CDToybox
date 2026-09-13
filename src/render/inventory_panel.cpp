@@ -345,6 +345,10 @@ void draw_bag_expand() {
     // 로드 뒤 자동 다시 적용. 게임이 인벤토리를 새로 만들기 때문에, 저장에 남든
     // 안 남든 이게 없으면 화면 숫자는 로드마다 원래대로 돌아간다.
     static bool s_auto = true;
+    // 마지막으로 **적용한** 칸(-1 이면 이번 실행에서 적용한 적이 없다). 칸만 바꿔
+    // 다시 적용하면 확장이 두 칸에 쪼개져, 어느 칸이 저장되는지 가리는 실험이
+    // 오염된다(리뷰 경미 3).
+    static int s_done_branch = -1;
     static std::string s_msg;
 
     ImGui::SetNextItemWidth(220.0f);
@@ -371,6 +375,11 @@ void draw_bag_expand() {
             "따로 있어, A 가 저장되는 쪽일 수 있습니다.\n"
             "A 가 정말 저장에 남는다면 되돌리기는 이번 실행 안에만 됩니다.");
     }
+    if (s_done_branch >= 0 && s_done_branch != s_branch) {
+        ImGui::TextColored(col::kWarn,
+                           "칸을 바꾸려면 먼저 되돌리기를 누르십시오 - 지금 적용하면"
+                           " 확장이 두 칸에 쪼개집니다.");
+    }
     ImGui::Checkbox("보관함도 함께", &s_storage);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
@@ -380,6 +389,9 @@ void draw_bag_expand() {
             "종류 4 는 혼자 다른 구조를 달고 있어 정체를 확인할 때까지 뺐습니다.");
     }
 
+    // 체크박스는 **의도**이고, 실제 무장은 적용을 눌러야 걸린다. 둘을 한 줄에 같이
+    // 보여 주지 않으면 켜진 체크박스가 아무것도 보장하지 않는다(리뷰 중대 4).
+    const bool armed = game::bag_auto_on();
     if (ImGui::Checkbox("로드 후 자동 다시 적용", &s_auto) && !s_auto) {
         game::bag_auto_clear();
     }
@@ -390,6 +402,16 @@ void draw_bag_expand() {
             "돌아갑니다. 켜 두면 새 인벤토리가 잡힐 때 방금 누른 것과\n"
             "똑같은 설정으로 한 번 더 겁니다(스스로 값을 정하지는 않습니다).\n"
             "되돌리기를 누르면 함께 풀립니다.");
+    }
+
+    ImGui::SameLine();
+    if (armed) {
+        // **경고색이다.** 이게 켜져 있으면 화면의 용량은 "저장에 남았다" 의 증거가
+        // 아니라 모드가 다시 걸어 놓은 값일 수 있다.
+        ImGui::TextColored(col::kWarn,
+                           "무장됨 - 지금 용량은 모드가 다시 건 값일 수 있습니다");
+    } else if (s_auto) {
+        ImGui::TextDisabled("(적용을 눌러야 무장됩니다)");
     }
 
     const mem::LocalReader reader;
@@ -406,6 +428,7 @@ void draw_bag_expand() {
         }
         if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
         if (r.changed > 0) {
+            s_done_branch = s_branch;
             if (s_auto) {
                 game::bag_auto_set(s_target, s_storage, s_branch);
             } else {
@@ -424,12 +447,20 @@ void draw_bag_expand() {
         s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 건너뜀 " +
                 std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
         if (r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+        // 되돌리기는 무장도 함께 푼다(bag_restore 안에서). 칸 경고도 지운다.
+        if (!game::bag_has_backup()) s_done_branch = -1;
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }
     if (!has_backup) ImGui::EndDisabled();
     if (!has_backup &&
         ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("이번 실행에서 확장한 적이 없습니다.");
+        // "확장한 적이 없습니다" 와 "기록이 사라졌습니다" 는 전혀 다른 말이다.
+        // 방금 확장한 사람에게 전자를 보이면 무슨 일이 있었는지 알 수 없다
+        // (리뷰 경미 4).
+        ImGui::SetTooltip(game::bag_backup_dropped()
+                              ? "되돌릴 기록이 남아 있지 않습니다 - 인벤토리가 새로"
+                                " 생겨 옛 컨테이너가 사라졌습니다."
+                              : "이번 실행에서 확장한 적이 없습니다.");
     }
     if (!s_msg.empty()) ImGui::TextDisabled("%s", s_msg.c_str());
 
@@ -439,11 +470,11 @@ void draw_bag_expand() {
     ImGui::TextWrapped(
         "저장에 남는지는 아직 확인되지 않았습니다. B 칸(+0x1A)에 넣은 값은 "
         "2026-09-13 세이브·로드에서 사라졌습니다. A 칸이 저장되는 쪽인지 보려면 "
-        "A 로 적용하고 저장한 뒤 게임을 다시 켜서, '로드 후 자동 다시 적용' 을 "
-        "끈 채로 용량이 남아 있는지 보십시오.");
-    if (game::bag_auto_on()) {
-        ImGui::TextDisabled("자동 다시 적용이 무장돼 있습니다.");
-    }
+        "A 로 적용하고 저장한 뒤, 게임을 완전히 끄고 다시 켜서 용량이 남아 있는지 "
+        "보십시오.");
+    ImGui::TextColored(col::kWarn,
+                       "게임 안에서 불러오기로는 확인할 수 없습니다 - 자동 다시 "
+                       "적용이 새 인벤토리에 값을 다시 걸어 놓기 때문입니다.");
 }
 
 void draw_socket_cap() {

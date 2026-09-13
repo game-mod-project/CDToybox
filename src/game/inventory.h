@@ -234,9 +234,51 @@ BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
 
 // 마지막 확장 전의 원래 값으로 되돌린다. 기억해 둔 것이 없으면 아무것도 안 한다.
 BagResult bag_restore(const mem::Reader& reader);
-// 백업을 버린다. 인벤토리가 새로 생기면(forget_inventory) 자동으로 불린다.
-void forget_bag_backup();
 bool bag_has_backup();
+// 되돌릴 기록이 **버려진** 적이 있는가. "확장한 적이 없습니다" 와 "기록이
+// 사라졌습니다" 는 사용자에게 전혀 다른 말이다(리뷰 경미 4).
+bool bag_backup_dropped();
+
+// ------------------------------------------------- 되돌리기 기록(순수 부분)
+
+// 확장 전 원본. 열쇠는 **(realm, 종류)** 다 - 인벤토리가 새로 생기면 주소는 바뀌지만
+// realm 과 종류는 그대로라, 주소만 갈아 끼우고 원본은 지킬 수 있다. 주소로 열쇠를
+// 잡으면 자동 재적용이 "이미 확장된 상태" 를 원본으로 삼아, 되돌리기가 240 이 아니라
+// 300 으로 간다(2026-09-13).
+struct BagBackup {
+    int realm = 0;                   // 0 = 서버, 1 = 클라
+    std::uint16_t kind = 0;
+    std::uintptr_t address = 0;      // 지금 주소(새로 잡힐 때마다 갱신)
+    std::uint16_t cap = 0, sum = 0, a = 0, b = 0;   // **최초** 원본, 덮지 않는다
+    // 우리가 마지막으로 만들어 놓은 값. 되돌리기 직전에 지금 값과 대조한다 -
+    // 다르면 그 사이 **우리가 아닌 누군가가** 바꾼 것이므로 되돌리지 않는다
+    // (캐릭터 교체, 정당한 확장 구매, 다른 세이브. 리뷰 치명 3).
+    std::uint16_t want_cap = 0, want_sum = 0;
+};
+
+// 한 컨테이너를 보고 기록에 반영할 내용.
+struct BagSeen {
+    int realm = 0;
+    std::uint16_t kind = 0;
+    std::uintptr_t address = 0;
+    std::uint16_t cap = 0, sum = 0, a = 0, b = 0;   // 손대기 **전** 지금 값
+    bool changed = false;   // 우리가 방금 썼는가 - 새 기록을 만들 자격이다
+    bool known = false;     // 지금 컨테이너 값이 "우리가 만든 값" 이라고 말할 수 있나
+    std::uint16_t want_cap = 0, want_sum = 0;      // known 일 때의 그 값
+};
+
+// 기록을 갱신한다. **바꾸지 않았어도 주소는 갱신한다** - "이미 그 값이다" 는 우리가
+// 쓴 값이 세이브에 남아 그대로인 경우의 판정이라, 그때 주소를 안 고치면 이 기능이
+// 성공했을 때만 되돌리기가 잠긴다(리뷰 치명 1). 새 기록은 changed 일 때만 만든다.
+void bag_backup_upsert(std::vector<BagBackup>& v, const BagSeen& seen);
+
+// 지금 이 컨테이너에 이 기록을 되돌려도 되는가. 되면 nullptr, 안 되면 그 이유.
+// cap/sum/used 는 지금 컨테이너의 +0x14/+0x16/+0x12 다.
+const char* bag_restore_blocked(const BagBackup& s, int cap, int sum, int used);
+
+// 지금 자동 재적용을 걸어야 하는가(순수).
+bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
+                         bool both_ready);
 
 // --------------------------------------------- 리로드에서 살아남게 하는 두 축
 
@@ -247,9 +289,10 @@ bool bag_has_backup();
 //
 // 사용자가 직접 누른 것을 그대로 되풀이할 뿐이다 - 스스로 값을 정하지 않는다.
 void bag_auto_set(int target, bool storage, int branch);
-void bag_auto_clear();      // 되돌리기 성공과 화면 체크 해제가 부른다
+void bag_auto_clear();      // 되돌리기와 화면 체크 해제가 부른다
 bool bag_auto_on();
-// 분석 루프가 매 바퀴 부른다. 무장돼 있고 인벤토리가 **새 주소로** 잡혔을 때만 쓴다.
+// 분석 루프가 매 바퀴 부른다. 무장돼 있고 인벤토리가 **새 세대로** 잡혔을 때만 쓴다
+// (주소가 아니라 세대다 - 힙이 같은 자리를 돌려주면 주소 비교는 조용히 실패한다).
 void bag_auto_tick(const mem::Reader& reader);
 
 // 캐시해 둔 컴포넌트가 아직 살아 있는지 본다. 죽었으면 버리고 다시 찾게 한다.
