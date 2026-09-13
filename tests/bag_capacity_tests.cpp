@@ -1,3 +1,5 @@
+#include <cstring>
+
 #include "game/inventory.h"
 #include "harness.h"
 
@@ -295,6 +297,9 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
     // 한 표에서 나오게 한 것이 그 때문이고, 이 시험이 그 계약이다.
     const auto rules = bag_kind_rules();
     CHECK(!rules.empty());
+    // 목표 배열의 길이와 표의 길이는 **반드시** 같아야 한다 - 어긋나면 apply_to 가
+    // span 밖을 읽는다(검토 경미 1).
+    CHECK(rules.size() == cdtb::game::kBagKindCount);
     for (const auto& r : rules) {
         // 건드리는 종류에는 반드시 쓸 만한 상한이 있어야 한다.
         CHECK(r.cap > 0);
@@ -309,6 +314,14 @@ TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
         // 표에 있는 종류는 전부 "안다". 실제로 건드릴지는 **목표값**이 정한다
         // (0 이면 안 건드린다) - 종류마다 목표가 따로 있기 때문이다.
         CHECK(bag_kind_known(r.kind));
+    }
+    // **이름은 서로 달라야 한다.** 화면이 그것을 SliderInt 라벨로 쓰고, 라벨이
+    // 곧 ImGui ID 다. 같으면 두 슬라이더가 한 값을 공유하는데 ImGui 는 경고도
+    // 안 낸다 - 이 창에서 ID 충돌이 실제로 났던 적이 있다(검토 경미 2).
+    for (std::size_t i = 0; i < rules.size(); ++i) {
+        for (std::size_t j = i + 1; j < rules.size(); ++j) {
+            CHECK(std::strcmp(rules[i].name, rules[j].name) != 0);
+        }
     }
     // 표에 없는 종류는 상한이 0 이고 어느 쪽이든 안 건드린다.
     for (const std::uint16_t k : {0, 2, 3, 4, 5, 6, 8, 10, 12, 13, 99}) {

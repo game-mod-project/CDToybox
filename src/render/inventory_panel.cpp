@@ -444,13 +444,14 @@ void draw_bag_expand() {
                 s_msg += " (아직 만들어지는 중이면 잠시 뒤 다시 눌러 보십시오)";
             }
         }
-        if (r.changed > 0) {
-            s_restored = false;
-            if (s_auto) {
-                game::bag_auto_set(s_target, s_branch);
-            } else {
-                game::bag_auto_clear();
-            }
+        if (r.changed > 0) s_restored = false;
+        // **누른 사실 자체로 무장을 갱신한다.** 예전에는 바꾼 것이 있을 때만
+        // 갱신해, 목표를 **내리고** 다시 누르면("이미 목표보다 크다" 로 건너뛴다)
+        // 화면은 새 값을 보여 주는데 자동 재적용은 옛 값을 걸었다(검토 경미 4).
+        if (s_auto) {
+            game::bag_auto_set(s_target, s_branch);
+        } else {
+            game::bag_auto_clear();
         }
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }

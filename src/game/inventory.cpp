@@ -484,6 +484,11 @@ constexpr BagKindRule kKindRules[] = {
     {9, kBagTargetMax, true, kBagBranchB, "종류 9"},
     {11, kBagTargetMax, true, kBagBranchB, "종류 11"},
 };
+// **두 손글씨 숫자가 같다** 에 종류별 배선 전체가 걸려 있다. 표를 늘리고 이 상수를
+// 안 고치면 apply_to 가 targets(span) **밖을 읽고**(UB) 그 쓰레기가 곧 목표값이
+// 되며, 화면은 새 슬라이더를 조용히 안 그린다 - 셋 다 컴파일도 시험도 통과한다.
+static_assert(std::size(kKindRules) == kBagKindCount,
+              "종류 표와 목표 배열의 길이가 어긋났다");
 
 }  // namespace
 
@@ -1017,6 +1022,12 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
 }  // namespace
 
 BagBrokenCount bag_broken_count(const mem::Reader& reader) {
+    // **쓰기 잠금을 잡고 센다.** apply_to 는 갈래 -> 합계 -> 용량을 따로 쓰므로
+    // 그 사이에는 언제나 `a+b != sum` 이다. 잠금 없이 세면 자동 재적용이 도는
+    // 프레임에 [고치기] 와 "고칠 컨테이너 N개" 가 깜빡인다(쓰기 사고로는 안
+    // 이어진다 - bag_repair 가 값을 다시 읽는다 - 그래도 헛것을 보이지 않는다).
+    // 읽기 전용이고 이 잠금은 언제나 g_bag_mtx 보다 바깥이라 교착은 없다.
+    std::lock_guard<std::mutex> op(g_bag_op_mtx);
     BagResult r;
     BagBrokenCount n;
     repair_in(reader, inventory_component(), 0, false, &r, &n);
