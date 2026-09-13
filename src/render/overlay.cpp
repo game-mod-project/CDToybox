@@ -26,6 +26,7 @@
 #include "render/layout.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
+#include "game/skillgate.h"
 #include "render/item_panel.h"
 #include "render/log_panel.h"
 #include "render/roster_panel.h"
@@ -617,6 +618,11 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
             cdtb::render::stash_queue_cancel();
         }
         cdtb::render::stash_flush();   // 해체 전에 저장 대기 중인 보관함 변경을 쓴다
+        // **게임 코드에 쓴 것을 여기서 되돌린다.** teardown() 에 두면 안 된다 -
+        // 그 함수는 해상도 변경·전체화면 전환(on_resize)에서도 돌아서, 알트탭 한
+        // 번에 관문이 조용히 풀리고 로그만 "되돌림" 이라고 남는다. 이 블록만이
+        // "사용자가 모드를 내렸다" 를 뜻한다.
+        cdtb::game::skillgate_remove_all();
         input::cursor_guard_sync(false);
         input::mouse_sync(false);
         input::cursor_guard_remove();
