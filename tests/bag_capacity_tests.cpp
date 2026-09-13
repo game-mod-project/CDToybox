@@ -180,28 +180,87 @@ TEST(bag_repair_fixes_only_the_sum_we_broke) {
     // 되돌리면서 +0x16(합계)은 우리가 쓴 408 을 그대로 뒀다. 그러면 우리 모델이
     // 영영 거부하는 모양이 남는다. 합계를 갈래 합으로 맞추면 240/190/190/0 -
     // 처음 실측값이 그대로 나온다.
-    const auto p = cdtb::game::plan_bag_repair(240, 408, 190, 0);
+    const auto p = cdtb::game::plan_bag_repair(240, 408, 190, 0, nullptr);
     CHECK(p.apply);
     CHECK(p.sum == 190);
     CHECK(p.base == 50);    // 가방의 알려진 기본 슬롯과 같다
 
     // 멀쩡한 것은 건드리지 않는다.
-    CHECK(!cdtb::game::plan_bag_repair(240, 190, 190, 0).apply);
-    CHECK(!cdtb::game::plan_bag_repair(440, 200, 0, 200).apply);
-    CHECK(!cdtb::game::plan_bag_repair(700, 650, 650, 0).apply);
+    CHECK(!cdtb::game::plan_bag_repair(240, 190, 190, 0, nullptr).apply);
+    CHECK(!cdtb::game::plan_bag_repair(440, 200, 0, 200, nullptr).apply);
+    CHECK(!cdtb::game::plan_bag_repair(700, 650, 650, 0, nullptr).apply);
 
     // 갈래 합이 용량을 넘으면 우리가 만든 모양이 아니다 - 안 건드린다.
-    CHECK(!cdtb::game::plan_bag_repair(240, 999, 300, 100).apply);
-    CHECK(!cdtb::game::plan_bag_repair(190, 999, 190, 0).apply);   // 기본 0
-    CHECK(!cdtb::game::plan_bag_repair(-1, 0, 0, 0).apply);
+    CHECK(!cdtb::game::plan_bag_repair(240, 999, 300, 100, nullptr).apply);
+    CHECK(!cdtb::game::plan_bag_repair(190, 999, 190, 0, nullptr).apply);   // 기본 0
+    CHECK(!cdtb::game::plan_bag_repair(-1, 0, 0, 0, nullptr).apply);
     // 건너뛸 때는 이유를 남긴다.
-    CHECK(cdtb::game::plan_bag_repair(240, 190, 190, 0).skip[0] != '\0');
+    CHECK(cdtb::game::plan_bag_repair(240, 190, 190, 0, nullptr).skip[0] != '\0');
 
     // 고친 결과는 **반드시** 우리 모델이 받아들이는 모양이어야 한다 - 안 그러면
     // 고치고도 그 컨테이너를 계속 거부한다.
     const auto after = plan_bag_expand(240, p.sum, 190, 0, kSlots, 700);
     CHECK(after.apply);
     CHECK(after.base == 50);
+}
+
+TEST(bag_repair_prefers_the_recorded_original) {
+    // **검토 중대 2 가 연 길이다.** 리로드에서 게임이 +0x14 만 되돌리고 확장 칸은
+    // 우리 값을 그대로 두면 `a+b == sum` 인데도 `cap < sum` 이라 모델이 영영
+    // 거부한다. 모양만 봐서는 못 고치고, 기록이 있어야 풀린다.
+    cdtb::game::BagBackup rec;
+    rec.realm = 0;
+    rec.kind = 1;
+    rec.cap = 240;
+    rec.sum = 190;
+    rec.a = 190;
+    rec.b = 0;
+    rec.want_cap = 300;
+    rec.want_sum = 250;
+
+    // 지금: 240 / 250 / 190 / 60  (합은 맞는데 용량이 작다)
+    const auto p = cdtb::game::plan_bag_repair(240, 250, 190, 60, &rec);
+    CHECK(p.apply);
+    CHECK(p.from_record);
+    CHECK(p.sum == 190);
+    CHECK(p.a == 190);
+    CHECK(p.b == 0);
+    CHECK(p.base == 50);
+    // 고친 결과는 반드시 모델이 받아들여야 한다.
+    const auto after = plan_bag_expand(240, p.sum, p.a, p.b, kSlots, 700);
+    CHECK(after.apply);
+    CHECK(after.base == 50);
+
+    // 이미 원본이면 안 건드린다.
+    CHECK(!cdtb::game::plan_bag_repair(240, 190, 190, 0, &rec).apply);
+
+    // 용량이 기록의 원본과 다르면 그 컨테이너가 우리 것이라고 볼 수 없다 -
+    // 기록 길을 안 쓰고 모양 길로 떨어진다.
+    const auto other = cdtb::game::plan_bag_repair(500, 400, 190, 0, &rec);
+    CHECK(!other.from_record);
+    CHECK(other.apply);          // 합계가 더 크니 모양 길이 연다
+    CHECK(other.sum == 190);
+}
+
+TEST(bag_repair_refuses_the_half_written_shape) {
+    // **검토 중대 1-나.** `a+b > sum` 은 컨테이너가 아직 채워지는 중이거나 우리
+    // 쓰기가 반쯤 지나간 모양이다(우리는 갈래 -> 합계 -> 용량 순으로 쓴다).
+    // 그걸 "고치면" base = cap - sum 유도가 틀어져, 가방의 정당한 190 을 60 으로
+    // 덮는 길이 열린다 - 2026-09-05 사고의 원인 절반 그 자체다.
+    CHECK(!cdtb::game::plan_bag_repair(240, 0, 190, 0, nullptr).apply);
+    CHECK(!cdtb::game::plan_bag_repair(240, 100, 190, 0, nullptr).apply);
+    CHECK(!cdtb::game::plan_bag_repair(240, 190, 190, 60, nullptr).apply);
+    // 관측된 손상의 방향(합계가 더 크다)만 연다.
+    CHECK(cdtb::game::plan_bag_repair(240, 408, 190, 0, nullptr).apply);
+
+    // 기록이 있어도 용량이 다르면 모양 길이고, 거기서도 같은 관문이 선다.
+    cdtb::game::BagBackup rec;
+    rec.realm = 0;
+    rec.kind = 1;
+    rec.cap = 999;   // 지금 컨테이너와 다르다
+    rec.sum = 190;
+    rec.a = 190;
+    CHECK(!cdtb::game::plan_bag_repair(240, 0, 190, 0, &rec).apply);
 }
 
 TEST(bag_plan_target_zero_changes_nothing) {

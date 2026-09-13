@@ -484,10 +484,17 @@ void draw_bag_expand() {
     // 우리가 쓴 값을 그대로 둔다(실측 2026-09-13). 그러면 우리 모델이 영영
     // 거부하는 모양이 남아, 그 컨테이너는 확장도 되돌리기도 안 된다.
     // 고칠 것이 있을 때만 버튼을 낸다 - 없는 버튼은 설명할 것도 없다.
-    const int broken = game::bag_broken_count(reader);
-    if (broken > 0) {
+    const auto broken = game::bag_broken_count(reader);
+    if (broken.fixable > 0) {
         ImGui::SameLine();
-        if (ImGui::Button("고치기")) {
+        // **기록에서 원본을 아는 것만 바로 쓴다.** 기록이 없으면 모양만 보고
+        // 미루어 짐작하는 것이라(우리가 어긋뜨린 합계인지, 우리가 모르는 제3의
+        // 갈래인지 코드는 가릴 수 없다), 한 번 더 묻는다. 이 창에서 혈통 검사
+        // 없이 쓰는 유일한 길이라 화면이 관문 노릇을 한다(검토 중대 1).
+        const bool all_known = broken.from_record == broken.fixable;
+        const bool go = all_known ? ImGui::Button("고치기")
+                                  : confirm_small_button("고치기", false);
+        if (go) {
             const auto r = game::bag_repair(reader);
             s_msg = "고친 것 " + std::to_string(r.changed) + "개, 실패 " +
                     std::to_string(r.fail);
@@ -497,11 +504,28 @@ void draw_bag_expand() {
             ImGui::SetTooltip(
                 "확장 합계(+0x16)가 두 갈래의 합과 어긋난 컨테이너가 있습니다.\n"
                 "리로드에서 게임이 용량과 갈래만 되돌리고 합계는 우리 값을\n"
-                "그대로 두어 생깁니다. 합계 한 칸만 갈래 합으로 맞춥니다 -\n"
-                "용량도 확장도 건드리지 않습니다.");
+                "그대로 두면 그렇게 됩니다.\n"
+                "\n"
+                "이번 실행에 적용한 기록이 있으면 그 원본 그대로 되돌립니다.\n"
+                "기록이 없으면 모양만 보고 합계를 갈래 합으로 맞춥니다 - 그건\n"
+                "짐작이라 한 번 더 묻습니다. 용량(+0x14)은 어느 쪽이든 절대\n"
+                "건드리지 않습니다.");
         }
         ImGui::SameLine();
-        ImGui::TextColored(col::kWarn, "고칠 컨테이너 %d개", broken);
+        if (all_known) {
+            ImGui::TextColored(col::kWarn, "고칠 컨테이너 %d개 (기록 있음)",
+                               broken.fixable);
+        } else {
+            ImGui::TextColored(col::kWarn, "고칠 컨테이너 %d개 (그중 기록 없음 %d)",
+                               broken.fixable, broken.fixable - broken.from_record);
+        }
+    }
+    if (broken.stuck > 0) {
+        // 안전한 조치가 없는 모양이다. 용량(+0x14)은 엔진이 재계산하는 캐시라
+        // 우리가 쓸 값이 없다 - 말해 주지 않으면 "왜 이것만 안 되지" 를 혼자 겪는다.
+        ImGui::TextColored(col::kBad,
+                           "컨테이너 %d개는 고칠 수 없습니다 - 게임을 완전히 껐다 "
+                           "켜야 풀립니다.", broken.stuck);
     }
 
     if (!s_msg.empty()) ImGui::TextWrapped("%s", s_msg.c_str());

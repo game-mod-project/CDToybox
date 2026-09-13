@@ -320,16 +320,35 @@ BagResult bag_expand(const mem::Reader& reader, std::span<const int> targets,
 // 고치는 것은 합계 한 칸뿐이다. 용량도 갈래도 안 건드린다 - 실측 18개가 전부
 // 지키는 불변식으로 되돌릴 뿐이라, 서버 가방의 경우 240/190/190/0 이라는 처음
 // 실측값이 그대로 나온다.
+// 되돌리기 기록. 아래에서 온전히 선언한다 - 복구는 포인터로만 쓴다.
+struct BagBackup;
+
 struct BagRepairPlan {
     bool apply = false;
     const char* skip = "";
-    int sum = 0;    // +0x16 에 쓸 값 = a + b
-    int base = 0;   // 그 결과의 기본 슬롯(= cap - sum). 0 보다 커야 한다
+    int sum = 0, a = 0, b = 0;   // +0x16 / +0x18 / +0x1A 에 쓸 값
+    int base = 0;                // 그 결과의 기본 슬롯. 0 보다 커야 한다
+    // 기록에서 나온 값인가. 참이면 **우리가 적어 둔 원본 그대로** 되돌리는 것이라
+    // 확인 없이 써도 된다. 거짓이면 모양만 보고 미루어 짐작한 것이라, 화면이
+    // 무엇을 쓸지 보여 주고 한 번 더 묻는다.
+    bool from_record = false;
 };
-BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b);
 
-// 고칠 것이 몇 개인가(화면이 버튼을 낼지 정한다). 읽기만 한다.
-int bag_broken_count(const mem::Reader& reader);
+// rec 가 있으면 **그 원본으로** 되돌리고, 없으면 모양만 보고 합계를 갈래 합으로
+// 맞춘다. 기록 없는 길은 `sum > a + b` 일 때만 연다 - 관측된 손상은 언제나 우리
+// 합계가 너무 큰 쪽(408 > 190)이고, 반대 방향(`a+b > sum`)은 컨테이너가 아직
+// 채워지는 중이거나 우리 쓰기가 반쯤 지나간 모양이다. 그걸 "고치면" 기본 슬롯
+// 유도가 틀어져 2026-09-05 사고를 그대로 재현한다(검토 중대 1-나).
+BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b,
+                              const BagBackup* rec);
+
+struct BagBrokenCount {
+    int fixable = 0;      // 고칠 수 있는 것
+    int from_record = 0;  // 그중 기록에서 원본을 아는 것(확인 없이 써도 된다)
+    int stuck = 0;        // 모델이 거부하는데 **안전한 조치가 없는** 것
+};
+// 읽기만 한다. 화면이 버튼과 문구를 정하는 데 쓴다.
+BagBrokenCount bag_broken_count(const mem::Reader& reader);
 // 고친다. **모드에서만** 부른다.
 BagResult bag_repair(const mem::Reader& reader);
 

@@ -523,14 +523,50 @@ int bag_kind_index(std::uint16_t kind) {
     return -1;
 }
 
-BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b) {
+BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b,
+                              const BagBackup* rec) {
     BagRepairPlan p;
     if (cap < 0 || sum < 0 || a < 0 || b < 0) {
         p.skip = "값이 음수다";
         return p;
     }
+    // ---- 길 1: 기록이 있다. **원본 그대로 되돌린다.**
+    //
+    // 조건은 "지금 용량이 기록의 원본 용량과 같다" 다. 리로드에서 게임은 +0x14 를
+    // 되돌리므로(실측), 그게 같다는 것은 우리가 적어 둔 그 컨테이너가 맞고 확장
+    // 칸만 우리 값이 남았다는 뜻이다. 모양만 보고 짐작하는 것보다 언제나 낫다 -
+    // `a+b == sum` 인데도 `cap < sum` 이라 영영 거부되는 모양(검토 중대 2)도
+    // 이 길로만 풀린다.
+    if (rec != nullptr && cap == static_cast<int>(rec->cap)) {
+        if (sum == static_cast<int>(rec->sum) &&
+            a == static_cast<int>(rec->a) && b == static_cast<int>(rec->b)) {
+            p.skip = "고칠 것이 없다";
+            return p;
+        }
+        p.sum = rec->sum;
+        p.a = rec->a;
+        p.b = rec->b;
+        p.base = cap - p.sum;
+        if (p.base <= 0) {
+            p.skip = "기록이 이상하다";
+            return p;
+        }
+        p.from_record = true;
+        p.apply = true;
+        return p;
+    }
+
+    // ---- 길 2: 기록이 없다. 모양만 보고 합계를 갈래 합으로 맞춘다.
     if (a + b == sum) {
         p.skip = "고칠 것이 없다";
+        return p;
+    }
+    // **합계가 더 클 때만 연다.** 반대 방향은 컨테이너가 아직 채워지는 중이거나
+    // 우리 쓰기가 반쯤 지나간 모양이다(우리는 갈래 -> 합계 -> 용량 순으로 쓴다).
+    // 그걸 고치면 `base = cap - sum` 유도가 틀어져, 가방의 정당한 확장 190 을
+    // 60 으로 덮는 길이 열린다 - 2026-09-05 사고의 원인 절반 그 자체다.
+    if (sum <= a + b) {
+        p.skip = "아직 만들어지는 중일 수 있다";
         return p;
     }
     // 갈래 합이 용량을 넘으면 기본 슬롯이 0 이하가 된다 - 우리가 만든 모양이
@@ -541,6 +577,8 @@ BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b) {
         return p;
     }
     p.sum = a + b;
+    p.a = a;
+    p.b = b;
     p.apply = true;
     return p;
 }
@@ -881,9 +919,21 @@ void bag_current_caps(const mem::Reader& reader, std::span<int> out) {
 
 namespace {
 
-// 한 컴포넌트에서 고칠 컨테이너를 센다(세기만 하거나, 실제로 고친다).
-void repair_in(const mem::Reader& reader, std::uintptr_t comp, bool write,
-               BagResult* r) {
+// (realm, 종류) 기록을 찾는다. 없으면 거짓.
+bool find_backup(int realm, std::uint16_t kind, BagBackup* out) {
+    std::lock_guard<std::mutex> lk(g_bag_mtx);
+    for (const auto& x : g_bag_backup) {
+        if (x.realm == realm && x.kind == kind) {
+            *out = x;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 한 컴포넌트를 훑는다. write 가 거짓이면 세기만 한다.
+void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
+               bool write, BagResult* r, BagBrokenCount* n) {
     if (comp == 0) return;
     std::vector<InventoryContainer> cs;
     if (!read_inventory_containers(reader, comp, &cs)) return;
@@ -895,28 +945,70 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, bool write,
             !reader.read_value(c.address + 0x16, &sum) ||
             !reader.read_value(c.address + 0x18, &a) ||
             !reader.read_value(c.address + 0x1A, &b)) {
-            ++r->fail;
+            if (write) ++r->fail;
             continue;
         }
-        const BagRepairPlan p = plan_bag_repair(cap, sum, a, b);
-        if (!p.apply) continue;   // 멀쩡한 것은 세지도 않는다
+        BagBackup rec;
+        const bool has_rec = find_backup(realm, c.kind, &rec);
+        const BagRepairPlan p =
+            plan_bag_repair(cap, sum, a, b, has_rec ? &rec : nullptr);
+        if (!p.apply) {
+            // 고칠 수는 없는데 모델이 거부하는 모양인가. 그런 컨테이너는 확장도
+            // 되돌리기도 안 되므로 화면이 그 사실을 말해야 한다 - 안 그러면
+            // "왜 이것만 안 되지" 를 사용자가 혼자 겪는다(검토 중대 2).
+            if (n != nullptr && !plan_bag_expand(cap, sum, a, b,
+                                                 static_cast<int>(c.slots), 700)
+                                     .understood) {
+                ++n->stuck;
+            }
+            continue;
+        }
         if (!write) {
-            ++r->changed;   // 세기만 할 때는 "고칠 것" 의 수다
+            if (n != nullptr) {
+                ++n->fixable;
+                if (p.from_record) ++n->from_record;
+            }
             continue;
         }
-        log_write("가방 합계 복구", c.address + 0x16, std::to_string(sum),
+        // 세 칸을 다 쓴다(기록에서 온 길은 갈래도 되돌린다). 용량(+0x14)은
+        // **절대** 안 건드린다 - 그건 엔진이 재계산하는 캐시다.
+        log_write("가방 복구 확장합계", c.address + 0x16, std::to_string(sum),
                   std::to_string(p.sum));
-        const bool ok =
-            bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum));
-        std::uint16_t back = 0;
-        if (ok && reader.read_value(c.address + 0x16, &back) &&
-            back == static_cast<std::uint16_t>(p.sum)) {
+        bool ok = bag_wr16(c.address + 0x18, static_cast<std::uint16_t>(p.a));
+        ok = bag_wr16(c.address + 0x1A, static_cast<std::uint16_t>(p.b)) && ok;
+        ok = bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum)) && ok;
+        std::uint16_t bs = 0, ba = 0, bb = 0;
+        const bool read_ok = reader.read_value(c.address + 0x16, &bs) &&
+                             reader.read_value(c.address + 0x18, &ba) &&
+                             reader.read_value(c.address + 0x1A, &bb);
+        if (ok && read_ok && bs == p.sum && ba == p.a && bb == p.b) {
             ++r->changed;
-            log::infof("가방 합계 복구: 0x{:X} 종류 {} 합계 {} -> {} (용량 {},"
-                       " 기본 {})", c.address, c.kind, sum, p.sum, cap, p.base);
+            // **기록의 want 를 새 값으로 맞춘다.** 안 하면 되돌리기가 그 뒤로
+            // "적용한 뒤 값이 바뀌었습니다" 로 영구히 막힌다(검토 중대 1-3).
+            // changed 를 세우지 않으므로 기록이 없던 컨테이너에 새로 만들지는
+            // 않는다 - 손상된 상태를 "원본" 으로 적는 일이 없다.
+            if (has_rec) {
+                BagSeen seen;
+                seen.realm = realm;
+                seen.kind = c.kind;
+                seen.address = c.address;
+                seen.cap = cap;
+                seen.sum = sum;
+                seen.a = a;
+                seen.b = b;
+                seen.understood = true;
+                seen.known = true;
+                seen.want_cap = cap;
+                seen.want_sum = static_cast<std::uint16_t>(p.sum);
+                remember_seen(seen);
+            }
+            log::infof("가방 복구: 0x{:X} 종류 {} 합계 {}->{} A {}->{} B {}->{}"
+                       " ({}, 용량 {}, 기본 {})", c.address, c.kind, sum, p.sum,
+                       a, p.a, b, p.b, p.from_record ? "기록" : "모양", cap,
+                       p.base);
         } else {
             ++r->fail;
-            log::warnf("가방 합계 복구 실패: 0x{:X} 종류 {}", c.address, c.kind);
+            log::warnf("가방 복구 실패: 0x{:X} 종류 {}", c.address, c.kind);
         }
     }
     if (r->changed > before) ++r->realms;
@@ -924,20 +1016,21 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, bool write,
 
 }  // namespace
 
-int bag_broken_count(const mem::Reader& reader) {
+BagBrokenCount bag_broken_count(const mem::Reader& reader) {
     BagResult r;
-    repair_in(reader, inventory_component(), false, &r);
-    repair_in(reader, inventory_component_client(), false, &r);
-    return r.changed;
+    BagBrokenCount n;
+    repair_in(reader, inventory_component(), 0, false, &r, &n);
+    repair_in(reader, inventory_component_client(), 1, false, &r, &n);
+    return n;
 }
 
 BagResult bag_repair(const mem::Reader& reader) {
     std::lock_guard<std::mutex> op(g_bag_op_mtx);
     BagResult r;
-    repair_in(reader, inventory_component(), true, &r);
-    repair_in(reader, inventory_component_client(), true, &r);
-    log::infof("가방 합계 복구: 고친 것 {}개({} realm), 실패 {}", r.changed,
-               r.realms, r.fail);
+    repair_in(reader, inventory_component(), 0, true, &r, nullptr);
+    repair_in(reader, inventory_component_client(), 1, true, &r, nullptr);
+    log::infof("가방 복구: 고친 것 {}개({} realm), 실패 {}", r.changed, r.realms,
+               r.fail);
     return r;
 }
 
