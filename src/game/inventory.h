@@ -276,6 +276,10 @@ struct BagSeen {
     std::uintptr_t address = 0;
     std::uint16_t cap = 0, sum = 0, a = 0, b = 0;   // 손대기 **전** 지금 값
     bool changed = false;   // 우리가 방금 썼는가 - 새 기록을 만들 자격이다
+    // 이 컨테이너의 모양을 우리가 이해했는가(계획이 쓰기로 갔거나 "이미 그 값" 이다).
+    // 모르는 모양의 값을 원본으로 채택하면, 전이 상태를 한 번 본 것만으로 멀쩡한
+    // 원본이 그 값으로 갈려 되돌리기가 엉뚱한 이유로 막힌다(게이트 경미 3).
+    bool understood = false;
     bool known = false;     // 지금 컨테이너 값이 "우리가 만든 값" 이라고 말할 수 있나
     std::uint16_t want_cap = 0, want_sum = 0;      // known 일 때의 그 값
 };
@@ -294,6 +298,12 @@ void bag_backup_upsert(std::vector<BagBackup>& v, const BagSeen& seen);
 // 지금 이 컨테이너에 이 기록을 되돌려도 되는가. 되면 nullptr, 안 되면 그 이유.
 // cap/sum/used 는 지금 컨테이너의 +0x14/+0x16/+0x12 다.
 const char* bag_restore_blocked(const BagBackup& s, int cap, int sum, int used);
+
+// 지금 값이 저장해 둔 원본 그대로인가. 그렇다면 되돌릴 것이 없으므로 막힘이 아니라
+// **완료**로 쳐서 기록을 지운다. 안 그러면 - 자동 재적용을 끈 사용자가 리로드할
+// 때마다 - 버튼이 켜진 채 "적용한 뒤 값이 바뀌었습니다" 만 낸다(게이트 경미 5).
+bool bag_restore_already_original(const BagBackup& s, int cap, int sum, int a,
+                                  int b);
 
 // 지금 자동 재적용을 걸어야 하는가(순수).
 bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
@@ -325,9 +335,6 @@ void inventory_check_alive(const mem::Reader& reader);
 // 요청까지 남긴다 - 한쪽만 부르는 자리를 만들지 않는다.
 void forget_inventory();
 
-// 클라 컴포넌트 찾기를 포기했는가. 포기한 판에서는 클라 쪽 되돌리기 기록이 영원히
-// "지금은 읽을 수 없습니다" 로 남아 버튼의 뜻을 흐린다(재검토 경미 6).
-bool inventory_client_given_up();
 
 // "지금 다시 찾아라". RTTI 인스턴스 탐색은 힙 전수라 값싸지 않아
 // 배경 루프가 10초에 한 번만 돌린다. 화면에서 다시 찾기를 누른

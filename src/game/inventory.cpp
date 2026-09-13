@@ -335,11 +335,6 @@ bool inventory_both_ready() {
     return g_client_tries.load(std::memory_order_acquire) >= kClientGiveUp;
 }
 
-bool inventory_client_given_up() {
-    return g_component_client.load(std::memory_order_acquire) == 0 &&
-           g_client_tries.load(std::memory_order_acquire) >= kClientGiveUp;
-}
-
 bool inventory_ready() {
     return g_component.load(std::memory_order_acquire) != 0;
 }
@@ -547,6 +542,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
             // 이 기능이 성공했을 때만 되돌리기가 잠긴다(리뷰 치명 1).
             if (remember) {
                 if (p.same) {
+                    seen.understood = true;
                     seen.known = true;
                     seen.want_cap = cap;
                     seen.want_sum = sum;
@@ -559,6 +555,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
         // 이미 있는 항목이면 주소만 갈아 끼우고 원본 값은 지킨다.
         if (remember) {
             seen.changed = true;
+            seen.understood = true;   // 계획이 쓰기로 갔다 = 모양을 이해했다
             remember_seen(seen);
         }
         // 고른 칸 -> 합계 -> 캐시 순으로. 반대 칸은 건드리지 않는다.
@@ -621,6 +618,14 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
                     seen.known = true;
                     seen.want_cap = now_cap;
                     seen.want_sum = now_sum;
+                } else if (undo) {
+                    // 되읽기는 실패했지만 되돌림은 성공했다 - 지금 값은 손대기 전
+                    // 값과 같다. 이 한 줄이 없으면 want 가 0 으로 굳어 되돌리기가
+                    // 영구히 막히고, **재기준 가드까지 영영 닫혀** 나중에 사용자가
+                    // 확장권을 사면 되돌리기가 옛 원본을 쓴다(게이트 경미 2).
+                    seen.known = true;
+                    seen.want_cap = cap;
+                    seen.want_sum = sum;
                 }
                 remember_seen(seen);
             }
@@ -652,7 +657,7 @@ void bag_backup_upsert(std::vector<BagBackup>& v, const BagSeen& seen) {
         // 이게 없으면 자동 재적용이 want 만 새로 덮어써서 혈통 검사가 리로드 한 번으로
         // 무력해지고, 되돌리기가 사용자가 돈 주고 산 칸을 지운다(재검토 치명 1).
         // 우리 값이 그대로 살아 돌아온 경우에는 값이 정확히 같아 다시 잡지 않는다.
-        if (hit->want_cap != 0 &&
+        if (seen.understood && hit->want_cap != 0 &&
             (seen.cap != hit->want_cap || seen.sum != hit->want_sum)) {
             hit->cap = seen.cap;
             hit->sum = seen.sum;
@@ -702,6 +707,12 @@ const char* bag_restore_blocked(const BagBackup& s, int cap, int sum, int used) 
         return "아이템이 원래 용량보다 많습니다 - 먼저 정리하십시오";
     }
     return nullptr;
+}
+
+bool bag_restore_already_original(const BagBackup& s, int cap, int sum, int a,
+                                 int b) {
+    return cap == static_cast<int>(s.cap) && sum == static_cast<int>(s.sum) &&
+           a == static_cast<int>(s.a) && b == static_cast<int>(s.b);
 }
 
 bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
@@ -842,22 +853,22 @@ BagResult bag_restore(const mem::Reader& reader) {
     }
 
     std::vector<BagBackup> keep;   // 되돌리지 못했고 아직 가망이 있는 것
+    bool dropped_now = false;      // 이번에 기록을 버렸나(화면 문구가 갈린다)
     for (const auto& s : saved) {
         const int realm = s.realm == 1 ? 1 : 0;
         if (!readable[realm]) {
-            // 클라를 아예 포기한 판이면 그 기록은 영원히 못 되돌린다. 남겨 두면
-            // 버튼이 늘 켜진 채 "지금은 읽을 수 없습니다" 만 반복해 뜻이 흐려진다
-            // (재검토 경미 6).
-            if (realm == 1 && inventory_client_given_up()) {
-                ++r.skip;
-                r.last_skip = "클라 인벤토리를 찾지 못해 그쪽은 되돌릴 수 없습니다";
-                g_backup_dropped.store(true, std::memory_order_release);
-                continue;
-            }
+            // **버리지 않는다.** 클라 기록은 클라 컴포넌트를 찾은 적이 있을 때만
+            // 생기므로, 지금 못 읽는 것은 "영영 없다" 가 아니라 "아직/다시 못
+            // 찾았다" 다. 여기서 버리면 곧 다시 잡히는 흔한 경우에 되돌릴 수단만
+            // 잃는다(게이트 경미 1 - 앞서 넣었던 포기 판정은 정확히 "찾았다가
+            // 잃은" 경우에만 열려, 버리면 안 되는 자리에서만 버렸다).
             ++r.skip;
-            r.last_skip = "지금은 인벤토리를 읽을 수 없습니다 - 잠시 뒤 다시"
-                          " 누르십시오";
-            keep.push_back(s);   // **버리지 않는다**
+            r.last_skip = realm == 1
+                              ? "클라 인벤토리를 아직 못 찾았습니다 - 잠시 뒤 다시"
+                                " 누르십시오"
+                              : "지금은 인벤토리를 읽을 수 없습니다 - 잠시 뒤 다시"
+                                " 누르십시오";
+            keep.push_back(s);
             continue;
         }
         // **지금 살아 있는 컨테이너를 (realm, 종류)로 다시 찾는다.** 주소로만 찾으면,
@@ -881,6 +892,7 @@ BagResult bag_restore(const mem::Reader& reader) {
             // 잠기므로 실패가 아니라 **건너뜀**으로 세고 버린다(리뷰 재검토 B-1).
             ++r.skip;
             r.last_skip = "인벤토리가 새로 생겨 옛 컨테이너가 없습니다";
+            dropped_now = true;
             g_backup_dropped.store(true, std::memory_order_release);
             log::warnf("가방 복원 건너뜀: 0x{:X} 는 지금 컨테이너가 아니다",
                        s.address);
@@ -898,6 +910,14 @@ BagResult bag_restore(const mem::Reader& reader) {
             !reader.read_value(addr + 0x1A, &cur_b)) {
             ++r.fail;
             keep.push_back(s);
+            continue;
+        }
+        if (bag_restore_already_original(s, cap, sum, cur_a, cur_b)) {
+            // 되돌릴 것이 없다. 기록을 지워 버튼이 꺼지게 한다 - 남겨 두면 자동
+            // 재적용을 끈 사용자가 리로드할 때마다 켜진 버튼과 "적용한 뒤 값이
+            // 바뀌었습니다" 를 보게 된다(게이트 경미 5).
+            ++r.skip;
+            r.last_skip = "이미 원래 값입니다";
             continue;
         }
         if (const char* why =
@@ -948,6 +968,12 @@ BagResult bag_restore(const mem::Reader& reader) {
         // apply_to 가 넣은 항목을 날리는 일(lost update)은 없다(리뷰 중대 2).
         std::lock_guard<std::mutex> lk(g_bag_mtx);
         g_bag_backup = keep;
+    }
+    // 이번에 버린 것이 없으면 "기록이 사라졌습니다" 는 더 이상 지금 상태가 아니다.
+    // 안 내리면 리로드를 한 번 겪은 세션에서 되돌리기에 성공해도 툴팁이 계속 그렇게
+    // 말한다(게이트 경미 4).
+    if (r.changed > 0 && !dropped_now) {
+        g_backup_dropped.store(false, std::memory_order_release);
     }
     log::infof("가방 복원: 되돌린 것 {}개, 건너뜀 {}, 실패 {}", r.changed, r.skip,
                r.fail);

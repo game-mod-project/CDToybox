@@ -9,6 +9,7 @@
 using cdtb::game::BagBackup;
 using cdtb::game::BagSeen;
 using cdtb::game::bag_backup_upsert;
+using cdtb::game::bag_restore_already_original;
 using cdtb::game::bag_restore_blocked;
 using cdtb::game::should_auto_reapply;
 
@@ -30,6 +31,7 @@ BagBackup applied_bag(std::uintptr_t addr) {
     std::vector<BagBackup> v;
     BagSeen s = bag_seen(addr);
     s.changed = true;
+    s.understood = true;
     s.known = true;
     s.want_cap = 300;
     s.want_sum = 250;
@@ -108,6 +110,7 @@ TEST(bag_backup_rebaselines_when_someone_else_changed_the_container) {
     std::vector<BagBackup> v;
     BagSeen first = bag_seen(0x1000);          // 240/190/190/0
     first.changed = true;
+    first.understood = true;
     first.known = true;
     first.want_cap = 300;
     first.want_sum = 250;
@@ -118,6 +121,7 @@ TEST(bag_backup_rebaselines_when_someone_else_changed_the_container) {
     survived.cap = 300;
     survived.sum = 250;
     survived.a = 250;
+    survived.understood = true;
     survived.known = true;
     survived.want_cap = 300;
     survived.want_sum = 250;
@@ -132,6 +136,7 @@ TEST(bag_backup_rebaselines_when_someone_else_changed_the_container) {
     bought.sum = 240;
     bought.a = 240;
     bought.changed = true;
+    bought.understood = true;
     bought.known = true;
     bought.want_cap = 300;
     bought.want_sum = 250;
@@ -158,6 +163,7 @@ TEST(bag_backup_does_not_rebaseline_before_it_knows_what_it_wrote) {
     BagSeen weird = bag_seen(0x1000);
     weird.cap = 999;
     weird.sum = 900;
+    weird.understood = true;
     bag_backup_upsert(v, weird);
     CHECK(v[0].cap == 240);   // 다시 잡지 않았다
 }
@@ -221,6 +227,40 @@ TEST(bag_restore_refuses_to_push_items_out_of_the_bag) {
     CHECK(bag_restore_blocked(s, 300, 250, 240) == nullptr);   // 딱 원래 용량
     CHECK(bag_restore_blocked(s, 300, 250, 241) != nullptr);   // 한 칸 넘으면 막는다
     CHECK(bag_restore_blocked(s, 300, 250, 260) != nullptr);
+}
+
+TEST(bag_backup_does_not_rebaseline_on_a_shape_it_does_not_understand) {
+    // **게이트 경미 3.** plan_bag_expand 가 거부한 모양(전이 상태 등)의 값을 원본으로
+    // 채택하면, 그것을 한 번 본 것만으로 멀쩡한 원본이 갈린다.
+    std::vector<BagBackup> v;
+    BagSeen first = bag_seen(0x1000);
+    first.changed = true;
+    first.understood = true;
+    first.known = true;
+    first.want_cap = 300;
+    first.want_sum = 250;
+    bag_backup_upsert(v, first);
+
+    BagSeen weird = bag_seen(0x1000);
+    weird.cap = 100;          // 용량이 확장 합계보다 작다 - 우리 모델이 아니다
+    weird.sum = 200;
+    weird.understood = false;
+    bag_backup_upsert(v, weird);
+    CHECK(v[0].cap == 240);   // 원본은 그대로
+
+    // 같은 값이라도 모양을 이해했다면 그것이 새 원본이다.
+    weird.understood = true;
+    bag_backup_upsert(v, weird);
+    CHECK(v[0].cap == 100);
+}
+
+TEST(bag_restore_sees_when_there_is_nothing_to_undo) {
+    // **게이트 경미 5.** 지금 값이 원본 그대로면 되돌릴 것이 없다. 막힘으로 치면
+    // 버튼이 켜진 채 "적용한 뒤 값이 바뀌었습니다" 만 반복한다.
+    const BagBackup s = applied_bag(0x1000);
+    CHECK(bag_restore_already_original(s, 240, 190, 190, 0));
+    CHECK(!bag_restore_already_original(s, 300, 250, 250, 0));
+    CHECK(!bag_restore_already_original(s, 240, 190, 0, 190));   // 갈래가 다르다
 }
 
 TEST(auto_reapply_waits_for_a_new_generation_and_both_realms) {
