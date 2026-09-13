@@ -14,6 +14,7 @@
 #include "game/equip.h"
 #include "game/actors.h"
 #include "game/clan.h"
+#include "game/skillpoint.h"
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/inventory.h"
@@ -413,6 +414,10 @@ void auto_analysis_loop() {
         // 안·30초 간격으로 막는다. 별도 대기 루프로 두면 이 루프(세션 이름표·인벤·
         // 장비·치트)를 막아 스스로를 굶긴다(리뷰 C1·C2).
         if (!clan_ready() || clan_rtti() == nullptr) discover_clan(rtti, reader);
+
+        // 스킬 포인트(어비스 결속). 지식 컴포넌트도 월드에 들어가야 생긴다.
+        // 못 찾은 동안에만 훑고, 찾으면 곧장 돌아온다.
+        if (!knowledge_ready()) discover_knowledge(rtti, reader);
 
         // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
         // 표보다 늦어서, 앞의 루프들이 먼저 끝나면 못 잡은 채로

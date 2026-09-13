@@ -6,10 +6,91 @@
 
 #include "game/nofall.h"
 #include "game/player.h"
+#include "game/skillpoint.h"
+#include "render/colors.h"
 #include "mem/reader.h"
 #include "render/layout.h"
 
 namespace cdtb::render {
+
+namespace {
+
+// 스킬 포인트(어비스 결속). 기술 창의 우상단 넷째 카운터다.
+void draw_skill_bond(const mem::Reader& reader) {
+    if (!ImGui::CollapsingHeader("스킬 포인트 (어비스 결속)")) return;
+
+    if (!game::knowledge_ready()) {
+        ImGui::TextDisabled("월드에 들어가면 지식 컴포넌트를 잡습니다 (자동).");
+        return;
+    }
+
+    // realm 둘을 다 보여 준다. 실측에서는 두 벌이 바이트까지 같았지만, 어긋나면
+    // 그것이 곧 진단이다(한쪽만 써진 상태를 모르고 지나치지 않게).
+    const game::BondState sv = game::bond_read(reader, 0);
+    const game::BondState cl = game::bond_read(reader, 1);
+    if (sv.address == 0 && cl.address == 0) {
+        ImGui::TextDisabled("지금은 결속 값을 읽을 수 없습니다.");
+        return;
+    }
+    const game::BondState& s = sv.address != 0 ? sv : cl;
+    ImGui::Text("보유 %d · 총합 %d", s.have, s.total);
+    ImGui::SameLine();
+    // 좌하단 "사용" 은 저장된 값이 아니라 화면이 계산해 그리는 값이다.
+    ImGui::TextDisabled("(화면의 '사용' = %d)", s.total - s.have);
+    if (sv.address != 0 && cl.address != 0 &&
+        (sv.have != cl.have || sv.total != cl.total)) {
+        ImGui::TextColored(col::kWarn, "두 realm 이 다릅니다: 서버 %d/%d · 클라 %d/%d",
+                           sv.have, sv.total, cl.have, cl.total);
+    }
+
+    static int s_add = 10;
+    static bool s_also_total = true;
+    static std::string s_msg;
+
+    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SliderInt("더할 양", &s_add, 1, game::kBondAddMax);
+    if (ImGui::Checkbox("총합도 함께 올리기", &s_also_total)) {}
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "기술 창 좌하단의 '사용 어비스 결속' 은 저장된 값이 아니라\n"
+            "화면이 (총합 - 보유)로 계산해 그리는 값입니다(실측 확인).\n"
+            "총합을 같이 올리지 않으면 그 숫자가 그만큼 줄어들어,\n"
+            "쓰지도 않은 것을 되돌려받은 것처럼 보입니다.\n"
+            "끄는 것은 어느 사본을 화면이 읽는지 가릴 때만 쓰십시오.");
+    }
+
+    if (ImGui::Button("결속 더하기")) {
+        const auto r = game::bond_add(reader, s_add, s_also_total);
+        s_msg = "바꾼 것 " + std::to_string(r.changed) + " realm, 건너뜀 " +
+                std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+    }
+    ImGui::SameLine();
+    const bool has_backup = game::bond_has_backup();
+    if (!has_backup) ImGui::BeginDisabled();
+    if (ImGui::Button("되돌리기")) {
+        const auto r = game::bond_restore(reader);
+        s_msg = "되돌린 것 " + std::to_string(r.changed) + " realm, 건너뜀 " +
+                std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        if (r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+    }
+    if (!has_backup) ImGui::EndDisabled();
+    if (!has_backup &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("이번 실행에서 더한 적이 없습니다.");
+    }
+    if (!s_msg.empty()) ImGui::TextWrapped("%s", s_msg.c_str());
+
+    ImGui::TextWrapped(
+        "되돌리기는 이번 실행 동안에만 됩니다. 저장에 남는지는 확인되지 "
+        "않았습니다 - 처음이라면 적게(예: 10) 더해 보고 저장 후 게임을 다시 켜서 "
+        "유지되는지 보십시오.");
+    ImGui::TextDisabled("상한 %d - 참고 모드에 스킬 포인트 기능이 없어 근거로 삼을"
+                        " 숫자가 없습니다. 보수적으로 잡은 값입니다.",
+                        game::kBondCeiling);
+}
+
+}  // namespace
 
 void draw_player_panel(bool* open) {
     if (!begin_window(Win::Player, open)) {
@@ -106,6 +187,8 @@ void draw_player_panel(bool* open) {
     ImGui::TextWrapped(
         "매 주기 현재=최대로 채웁니다. 정신력 풀로 플레이어를 식별하므로 주변"
         " NPC 에는 영향이 없습니다. 발열·탈것 화염 게이지는 건드리지 않습니다.");
+
+    draw_skill_bond(reader);
     ImGui::End();
 }
 
