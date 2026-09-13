@@ -93,6 +93,7 @@ add_library(cdtoybox SHARED
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/game/skillpoint.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -148,6 +149,7 @@ add_executable(cdtb_tests
     tests/layout_tests.cpp
     tests/log_ring_tests.cpp
     tests/log_view_tests.cpp
+    tests/skillpoint_tests.cpp
     tests/core_helpers_tests.cpp
     tests/table_sort_tests.cpp
     tests/input_filter_tests.cpp
@@ -169,6 +171,7 @@ add_executable(cdtb_tests
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/game/skillpoint.cpp
     src/render/notice_state.cpp
     src/render/stash_queue.cpp
     src/render/confirm_state.cpp
@@ -203,6 +206,7 @@ add_executable(cdtb_probe
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/game/skillpoint.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
