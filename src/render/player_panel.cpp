@@ -9,6 +9,7 @@
 #include "game/skillgate.h"
 #include "game/skillpoint.h"
 #include "render/colors.h"
+#include "render/notice.h"
 #include "mem/reader.h"
 #include "render/layout.h"
 
@@ -97,17 +98,25 @@ namespace {
 
 // 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로
 // 그 사실을 화면이 먼저 말한다.
-void draw_skill_gates(const mem::Reader& reader) {
+void draw_skill_gates() {
     if (!ImGui::CollapsingHeader("스킬 강화 조건 무시")) return;
+
+    // **누르기 전에** 그 자리를 한 번 본다. 안 그러면 원본이 다른 빌드(게임 갱신)에서
+    // 첫 클릭이 아무 반응 없이 먹히고, 빨간 줄은 다음 프레임에야 뜬다. 이미 확인한
+    // 관문은 다시 안 본다.
+    game::skillgate_probe();
 
     ImGui::TextWrapped(
         "게임 코드에 직접 바이트를 씁니다. 끄면 원래대로 되돌리고, 모드를 내릴 때도"
-        " 되돌립니다. 원본 바이트가 우리가 아는 것과 다르면(게임 갱신) 설치를"
-        " 거부합니다.");
+        " 되돌립니다. 그 자리의 원본 여덟 바이트가 우리가 아는 것과 다르면(게임"
+        " 갱신) 설치를 거부합니다.");
 
+    static Notice s_note;
     for (int g = 0; g < game::kGateCount; ++g) {
         const game::SkillGateInfo i = game::skillgate_info(g);
-        if (i.unsupported) {
+        // 못 쓰는 자리라도 **이미 걸려 있으면 체크박스를 남긴다** - 켜 둔 채 끌
+        // 방법이 사라지면 안 된다.
+        if (i.unsupported && !i.on) {
             ImGui::TextColored(col::kBad, "%s: 이 게임 빌드에서는 못 씁니다", i.name);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -119,9 +128,11 @@ void draw_skill_gates(const mem::Reader& reader) {
         }
         bool on = i.on;
         if (ImGui::Checkbox(i.name, &on)) {
-            if (!game::skillgate_set(reader, g, on)) {
-                // 실패하면 화면도 되돌린다 - 켜진 것처럼 보이면 안 된다.
-                on = game::skillgate_info(g).on;
+            const char* why = "";
+            if (!game::skillgate_set(g, on, &why)) {
+                // 체크 상태는 다음 프레임에 skillgate_info 로 다시 읽으므로 저절로
+                // 맞는다. 여기서 할 일은 **왜 안 됐는지 말하는 것**이다.
+                notice_set(&s_note, NoticeLevel::Bad, "{}: {}", i.name, why);
             }
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", i.what);
@@ -131,7 +142,13 @@ void draw_skill_gates(const mem::Reader& reader) {
                                 static_cast<unsigned long long>(i.site));
         }
     }
+    notice_draw(s_note);
 
+    ImGui::TextWrapped(
+        "\"결속 비용 무시\" 는 판정만 통과시킵니다. 이 패치가 결속 값을 건드리지는"
+        " 않지만, 실제 차감이 보유보다 큰 비용을 어떻게 쓰는지는 아직 확인되지"
+        " 않았습니다 - 보유보다 비싼 노드를 찍으면 결속 수가 음수로 돌 수 있습니다."
+        " 위쪽 \"스킬 포인트\" 로 결속을 먼저 채우는 쪽이 안전합니다.");
     ImGui::TextWrapped(
         "선행 지식(화면의 \"[깨달음] 필요\")은 여기서 안 풉니다 - 그 판정 루프가"
         " 화면에 뿌릴 목록도 만들어서, 잘못 건드리면 툴팁이 깨집니다. 따로"
@@ -237,7 +254,7 @@ void draw_player_panel(bool* open) {
         " NPC 에는 영향이 없습니다. 발열·탈것 화염 게이지는 건드리지 않습니다.");
 
     draw_skill_bond(reader);
-    draw_skill_gates(reader);
+    draw_skill_gates();
     ImGui::End();
 }
 

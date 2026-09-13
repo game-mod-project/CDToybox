@@ -436,8 +436,12 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
 // -------------------------------------------------------------------- 캐시
 namespace {
 std::mutex g_eq_mutex;
-// 장비 표를 **언제부터** 못 읽고 있나(0 이면 멀쩡하다). 분석 스레드 한 곳에서만
-// 읽고 쓴다. 지역 이동의 순간적인 실패로 재탐색을 부르지 않을 만큼 넉넉히 둔다.
+// 장비 표를 **언제부터** 못 읽고 있나(0 이면 멀쩡하다). **g_eq_mutex 가 지킨다.**
+// 예전 주석은 "분석 스레드 한 곳에서만 읽고 쓴다" 고 단언했는데 사실이 아니었다 -
+// equip_refresh_pieces 는 분석 스레드(camera.cpp)뿐 아니라 장비 창의 렌더 스레드에서도
+// 여덟 곳에서 불린다(equip_panel.cpp). 락 밖에서 읽고 쓰면 데이터 경쟁이고, 한쪽이
+// 시계를 지워 재탐색이 영영 안 돌거나 멀쩡한 표를 버리게 된다.
+// 지역 이동의 순간적인 실패로 재탐색을 부르지 않을 만큼 넉넉히 둔다.
 std::chrono::steady_clock::time_point g_eq_dead_since;
 constexpr auto kEquipDeadFor = std::chrono::seconds(10);
 std::vector<EquipTable> g_eq_tables;   // both-realms 테이블(발견 캐시)
@@ -606,6 +610,7 @@ void equip_refresh_pieces(const mem::Reader& reader) {
         //
         // 지역 이동 중에는 잠깐 못 읽을 수 있으니 **경과 시간**으로 잰다.
         const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lk(g_eq_mutex);
         if (g_eq_dead_since.time_since_epoch().count() == 0) {
             g_eq_dead_since = now;
             return;
@@ -613,12 +618,12 @@ void equip_refresh_pieces(const mem::Reader& reader) {
         if (now - g_eq_dead_since < kEquipDeadFor) return;
         g_eq_dead_since = {};
         log::warnf("장비 컴포넌트 0x{:X} 를 계속 못 읽는다 - 다시 찾는다", pt.comp);
-        std::lock_guard<std::mutex> lk(g_eq_mutex);
         g_eq_ready = false;   // camera 의 !equip_ready() 가 재탐색을 돌린다
         return;
     }
-    g_eq_dead_since = {};
+    // 어느 스레드든 **한 번 성공하면** 표는 살아 있다 - 시계를 비운다.
     std::lock_guard<std::mutex> lk(g_eq_mutex);
+    g_eq_dead_since = {};
     g_eq_pieces = std::move(pieces);
 }
 

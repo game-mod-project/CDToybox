@@ -133,6 +133,11 @@ void player_discover(const mem::Reader& reader) {
     if (cached != 0 && (!want_ok || want == cached)) {
         const std::uintptr_t arr = player_gauge_array(reader, cached);
         if (arr != 0) {
+            // **유예 시계를 여기서도 비운다.** 안 비우면 지역 이동 ①에서 켜진 시계가
+            // 그대로 남아, 한참 뒤 지역 이동 ②의 0.1초짜리 끊김에 **즉시** 10초를
+            // 넘긴 것으로 판정돼 멀쩡한 캐릭터를 버린다 - 유예를 넣은 목적 자체가
+            // 그 한 번의 깜빡임을 막는 것이었다.
+            g_dead_since = {};
             g_arr.store(arr, std::memory_order_release);
             rebuild_player_arrs(reader, arr);   // realm 목록 갱신(주소 이동 대비)
             return;

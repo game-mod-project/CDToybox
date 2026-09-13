@@ -203,9 +203,6 @@ void teardown(ID3D12CommandQueue* queue) {
     // 멈춰 있었음을 알 수 있었다.
     log::infof("해체 1: 스캔 패널 정리");
     cdtb::render::shutdown_scan_panel();   // 워커 스레드를 먼저 정리한다
-    // **게임 코드에 쓴 것을 먼저 되돌린다.** 우리 코드가 사라진 뒤에도 패치가
-    // 남아 있으면 게임이 우리가 없는 상태로 그 바이트를 계속 실행한다.
-    cdtb::game::skillgate_remove_all();
     log::infof("해체 2: GPU 대기");
     wait_for_pending(queue);   // GPU가 우리 리소스를 놓을 때까지
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }
@@ -621,6 +618,11 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
             cdtb::render::stash_queue_cancel();
         }
         cdtb::render::stash_flush();   // 해체 전에 저장 대기 중인 보관함 변경을 쓴다
+        // **게임 코드에 쓴 것을 여기서 되돌린다.** teardown() 에 두면 안 된다 -
+        // 그 함수는 해상도 변경·전체화면 전환(on_resize)에서도 돌아서, 알트탭 한
+        // 번에 관문이 조용히 풀리고 로그만 "되돌림" 이라고 남는다. 이 블록만이
+        // "사용자가 모드를 내렸다" 를 뜻한다.
+        cdtb::game::skillgate_remove_all();
         input::cursor_guard_sync(false);
         input::mouse_sync(false);
         input::cursor_guard_remove();
