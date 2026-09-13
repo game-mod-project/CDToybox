@@ -203,6 +203,13 @@ std::atomic<bool> g_rescan{false};
 // 막는다(리뷰 재검토 B-2).
 std::atomic<int> g_client_tries{0};
 constexpr int kClientGiveUp = 12;
+// 캐시한 컴포넌트를 연속 몇 바퀴 못 읽었나. 분석 루프가 ~2초에 한 바퀴라 3 이면
+// 약 6초 - 로딩 화면의 순간적인 실패로 11GB 힙 재탐색을 부르지 않을 만큼이다.
+std::atomic<int> g_dead_spins{0};
+constexpr int kDeadSpins = 3;
+// 인벤토리 세대. forget_inventory 마다 오른다. 자동 재적용이 "새 인벤토리인가" 를
+// **주소로** 판단하면, 힙이 같은 자리를 돌려줬을 때 조용히 안 걸린다.
+std::atomic<unsigned> g_inv_gen{0};
 
 // 내용이 든 컴포넌트인가. 빈 것이 여럿 살아 있어 그것으로 가른다.
 bool component_has_items(const mem::Reader& reader, std::uintptr_t addr,
@@ -263,6 +270,27 @@ bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader) {
     return g_component.load(std::memory_order_acquire) != 0;
 }
 
+void inventory_check_alive(const mem::Reader& reader) {
+    const std::uintptr_t comp = g_component.load(std::memory_order_acquire);
+    if (comp == 0) return;   // 아직 못 찾았다 - 그건 탐색이 할 일이다
+    const std::uintptr_t cli = g_component_client.load(std::memory_order_acquire);
+    std::vector<InventoryContainer> cs;
+    bool alive = component_has_items(reader, comp, &cs);
+    if (alive && cli != 0) alive = component_has_items(reader, cli, &cs);
+    if (alive) {
+        g_dead_spins.store(0, std::memory_order_release);
+        return;
+    }
+    // 로딩 화면에서는 잠깐 안 읽힐 수 있다. 연속으로 놓칠 때만 버린다.
+    if (g_dead_spins.fetch_add(1, std::memory_order_acq_rel) + 1 < kDeadSpins) {
+        return;
+    }
+    g_dead_spins.store(0, std::memory_order_release);
+    log::warnf("인벤토리 컴포넌트가 죽었다(서버 0x{:X} 클라 0x{:X}) - 다시 찾는다",
+               comp, cli);
+    forget_inventory();
+}
+
 bool inventory_both_ready() {
     if (g_component.load(std::memory_order_acquire) == 0) return false;
     if (g_component_client.load(std::memory_order_acquire) != 0) return true;
@@ -285,6 +313,7 @@ std::uintptr_t inventory_component_client() {
 void forget_inventory() {
     g_component.store(0, std::memory_order_release);
     g_component_client.store(0, std::memory_order_release);
+    g_inv_gen.fetch_add(1, std::memory_order_acq_rel);
     // 가방 백업은 **버리지 않는다.** bag_restore 가 "지금 살아 있는 컨테이너인가"
     // 를 직접 검사하므로(낡은 주소에 쓰는 길은 그쪽에서 막힌다), 여기서 선제적으로
     // 버리면 같은 주소로 곧 다시 잡히는 흔한 경우에 되돌릴 수단만 잃는다
@@ -327,8 +356,10 @@ std::vector<std::string> inventory_scan_classes() {
 
 // ------------------------------------------------------ 가방·보관함 확장
 
-BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target) {
+BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
+                        int branch) {
     BagPlan p;
+    p.branch = branch == kBagBranchB ? kBagBranchB : kBagBranchA;
     // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
     // 유도한 데서 시작했으므로, 모델이 안 맞으면 쓰지 않는 쪽이 맞다.
     if (cap < 0 || sum < 0 || a < 0 || b < 0 || slots <= 0) {
@@ -360,16 +391,24 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target) {
         p.skip = "목표가 기본 슬롯보다 작다";
         return p;
     }
-    // +0x18(a)은 그대로 두고 +0x1A 만 조정한다. 엔진이 합계를 sum 으로 재계산하든
-    // max 로 재계산하든 결과가 want 이하가 된다(max 면 오히려 작아진다).
-    p.expand_b = want - p.base - a;
-    if (p.expand_b < 0) {
+    // **줄이지 않는다.** 이미 목표보다 큰 칸을 목표까지 깎으면 용량 밖으로
+    // 밀려난 아이템이 어떻게 되는지 모른다 - 그건 확장 기능이 할 일이 아니다.
+    // 칸을 고를 수 있게 되기 전에는 이 검사가 `want - base - a < 0` 에 우연히
+    // 숨어 있었다. A 를 고르면 큰 값이 **우리가 덮어쓸 칸**에 있어 그 우연한
+    // 방어가 사라진다(2026-09-13, 시험이 잡았다).
+    if (cap > want) {
         p.skip = "이미 목표보다 크다";
         return p;
     }
-    p.sum = a + p.expand_b;
+    // **고른 칸만** 조정하고 반대 칸은 그대로 둔다. 엔진이 합계를 sum 으로
+    // 재계산하든 max 로 재계산하든 결과가 want 이하가 된다(max 면 오히려 작아진다).
+    // cap <= want 이므로 expand >= (고른 칸의 현재 값) >= 0 이다.
+    p.other = p.branch == kBagBranchA ? b : a;
+    const int cur = p.branch == kBagBranchA ? a : b;
+    p.expand = want - p.base - p.other;
+    p.sum = p.other + p.expand;
     p.capacity = p.base + p.sum;
-    p.apply = p.capacity != cap || p.expand_b != b;
+    p.apply = p.capacity != cap || p.expand != cur;
     if (!p.apply) p.skip = "이미 그 값이다";
     return p;
 }
@@ -389,13 +428,25 @@ namespace {
 
 // 확장 전 원본. 되돌리기가 **진짜 복원**이 되게 한다 - 옛 restore 는 확장을 0 으로
 // 써서 가방의 190·보관함의 200 을 날렸다(그건 복원이 아니다).
+// 열쇠는 **(realm, 종류)** 다. 주소가 아니다 - 인벤토리가 새로 생기면 주소는
+// 바뀌지만 realm 과 종류는 그대로라, 주소만 갈아 끼우고 원본은 지킬 수 있다.
+// 주소로 열쇠를 잡으면 자동 재적용이 "이미 확장된 상태" 를 원본으로 삼아, 되돌리기가
+// 240 이 아니라 300 으로 간다(2026-09-13).
 struct BagBackup {
-    std::uintptr_t address = 0;
-    std::uint16_t kind = 0;   // 재활용된 주소를 가려내는 데 쓴다
-    std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+    int realm = 0;            // 0 = 서버, 1 = 클라
+    std::uint16_t kind = 0;   // 재활용된 주소를 가려내는 데도 쓴다
+    std::uintptr_t address = 0;          // 지금 주소(새로 잡힐 때마다 갱신)
+    std::uint16_t cap = 0, sum = 0, a = 0, b = 0;   // **최초** 원본, 덮지 않는다
 };
 std::mutex g_bag_mtx;
 std::vector<BagBackup> g_bag_backup;
+
+// 로드 뒤 자동 다시 적용에 쓰는 설정. 사용자가 적용을 눌렀을 때만 무장된다.
+std::atomic<bool> g_auto_on{false};
+std::atomic<int> g_auto_target{0};
+std::atomic<bool> g_auto_storage{false};
+std::atomic<int> g_auto_branch{kBagBranchA};
+std::atomic<unsigned> g_auto_gen{0};   // 이 세대에는 이미 했다
 
 // 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
 bool bag_wr16(std::uintptr_t a, std::uint16_t v) {
@@ -409,7 +460,7 @@ bool bag_wr16(std::uintptr_t a, std::uint16_t v) {
 
 // 한 컴포넌트의 대상 컨테이너에 계획을 적용한다.
 void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
-              bool storage, bool remember, BagResult* r) {
+              bool storage, bool remember, int branch, int realm, BagResult* r) {
     if (comp == 0) return;
     std::vector<InventoryContainer> cs;
     if (!read_inventory_containers(reader, comp, &cs)) return;
@@ -425,7 +476,8 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
             continue;
         }
         const BagPlan p = plan_bag_expand(cap, sum, a, b,
-                                          static_cast<int>(c.slots), target);
+                                          static_cast<int>(c.slots), target,
+                                          branch);
         if (!p.apply) {
             ++r->skip;
             r->last_skip = p.skip;   // 화면·로그에 이유를 낸다(리뷰 지적 10)
@@ -434,47 +486,53 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
             continue;
         }
         if (remember) {
-            // **주소당 첫 원본만** 남긴다. 예전에는 bag_expand 머리에서 무조건
-            // 비웠는데, 그러면 같은 값으로 한 번 더 누르기만 해도 원본이 사라져
-            // 되돌릴 수단이 영영 없어졌다(리뷰 지적 3).
+            // **(realm, 종류)당 최초 원본만** 남긴다. 예전에는 bag_expand 머리에서
+            // 무조건 비웠는데, 그러면 같은 값으로 한 번 더 누르기만 해도 원본이
+            // 사라져 되돌릴 수단이 영영 없어졌다(리뷰 지적 3). 이미 있는 것은
+            // **주소만** 갈아 끼운다 - 리로드로 인벤토리가 새로 생긴 뒤 자동
+            // 재적용이 돌아도 되돌리기는 여전히 처음 값으로 간다.
             std::lock_guard<std::mutex> lk(g_bag_mtx);
-            bool seen = false;
-            for (const auto& x : g_bag_backup) {
-                if (x.address == c.address) {
-                    seen = true;
+            BagBackup* hit = nullptr;
+            for (auto& x : g_bag_backup) {
+                if (x.realm == realm && x.kind == c.kind) {
+                    hit = &x;
                     break;
                 }
             }
-            if (!seen) {
+            if (hit) {
+                hit->address = c.address;
+            } else {
                 g_bag_backup.push_back(
-                    BagBackup{c.address, c.kind, cap, sum, a, b});
+                    BagBackup{realm, c.kind, c.address, cap, sum, a, b});
             }
         }
-        // 저장이 담는 칸 -> 합계 -> 캐시 순으로. +0x18 은 건드리지 않는다.
+        // 고른 칸 -> 합계 -> 캐시 순으로. 반대 칸은 건드리지 않는다.
         // 쓰기 성공을 **버리지 않는다** - 이 기능은 세이브에 값을 박는 유일한
         // 기능이라, 무엇이 실제로 써졌는지 틀리게 적으면 사고 뒤 재구성이 안 된다.
-        bool ok = bag_wr16(c.address + 0x1A,
-                           static_cast<std::uint16_t>(p.expand_b));
+        const std::uintptr_t slot =
+            c.address + (p.branch == kBagBranchA ? 0x18 : 0x1A);
+        const std::uint16_t was = p.branch == kBagBranchA ? a : b;
+        bool ok = bag_wr16(slot, static_cast<std::uint16_t>(p.expand));
         ok = bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum)) && ok;
         ok = bag_wr16(c.address + 0x14,
                       static_cast<std::uint16_t>(p.capacity)) && ok;
         std::uint16_t back_cap = 0, back_b = 0;
-        // **세이브가 담는 칸(+0x1A)도 되읽는다.** 화면 캐시만 보면 "화면은 700,
-        // 저장 칸은 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6).
+        // **쓴 확장 칸도 되읽는다.** 화면 캐시(+0x14)만 보면 "화면은 300, 확장
+        // 칸은 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6).
         const bool read_ok = reader.read_value(c.address + 0x14, &back_cap) &&
-                             reader.read_value(c.address + 0x1A, &back_b);
+                             reader.read_value(slot, &back_b);
         if (ok && read_ok &&
             back_cap == static_cast<std::uint16_t>(p.capacity) &&
-            back_b == static_cast<std::uint16_t>(p.expand_b)) {
+            back_b == static_cast<std::uint16_t>(p.expand)) {
             ++r->changed;
             log_write("가방 용량", c.address + 0x14, std::to_string(cap),
                       std::to_string(p.capacity));
-            log_write("가방 확장칸", c.address + 0x1A, std::to_string(b),
-                      std::to_string(p.expand_b));
+            log_write(p.branch == kBagBranchA ? "가방 확장칸A" : "가방 확장칸B",
+                      slot, std::to_string(was), std::to_string(p.expand));
         } else {
             // 반쯤 써진 채로 두지 않는다. 남는 값은 전부 목표 이하라 위험하지는
             // 않지만, 사용자가 "왜 이 값인가" 를 알 수 없는 상태가 된다.
-            bool undo = bag_wr16(c.address + 0x1A, b);
+            bool undo = bag_wr16(slot, was);
             undo = bag_wr16(c.address + 0x16, sum) && undo;
             undo = bag_wr16(c.address + 0x14, cap) && undo;
             ++r->fail;
@@ -490,15 +548,52 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
 
 }  // namespace
 
-BagResult bag_expand(const mem::Reader& reader, int target, bool storage) {
+BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
+                     int branch) {
     // **백업을 비우지 않는다.** 주소당 첫 원본만 남기므로 여러 번 눌러도 처음 값이
     // 지켜진다(리뷰 지적 3). 비우는 것은 되돌리기 성공과 forget_inventory 뿐이다.
     BagResult r;
-    apply_to(reader, inventory_component(), target, storage, true, &r);
-    apply_to(reader, inventory_component_client(), target, storage, true, &r);
-    log::infof("가방 확장: 목표 {} -> 바꾼 것 {}개({} realm), 건너뜀 {}, 실패 {}",
-               target, r.changed, r.realms, r.skip, r.fail);
+    apply_to(reader, inventory_component(), target, storage, true, branch, 0,
+             &r);
+    apply_to(reader, inventory_component_client(), target, storage, true, branch,
+             1, &r);
+    log::infof("가방 확장: 목표 {} 칸 {} -> 바꾼 것 {}개({} realm), 건너뜀 {},"
+               " 실패 {}", target,
+               branch == kBagBranchB ? "B(+0x1A)" : "A(+0x18)", r.changed,
+               r.realms, r.skip, r.fail);
     return r;
+}
+
+void bag_auto_set(int target, bool storage, int branch) {
+    g_auto_target.store(target, std::memory_order_release);
+    g_auto_storage.store(storage, std::memory_order_release);
+    g_auto_branch.store(branch, std::memory_order_release);
+    // 지금 세대에는 방금 손으로 걸었다. 이 다음 **새로 생긴** 것부터가 대상이다.
+    g_auto_gen.store(g_inv_gen.load(std::memory_order_acquire),
+                     std::memory_order_release);
+    g_auto_on.store(true, std::memory_order_release);
+}
+
+void bag_auto_clear() {
+    g_auto_on.store(false, std::memory_order_release);
+}
+
+bool bag_auto_on() { return g_auto_on.load(std::memory_order_acquire); }
+
+void bag_auto_tick(const mem::Reader& reader) {
+    if (!g_auto_on.load(std::memory_order_acquire)) return;
+    const unsigned gen = g_inv_gen.load(std::memory_order_acquire);
+    if (gen == g_auto_gen.load(std::memory_order_acquire)) return;
+    if (inventory_component() == 0) return;
+    // 클라까지 잡힐 때까지 기다린다 - 서버만 보고 쓰면 한쪽 realm 에만 가고,
+    // 그 뒤로는 "이미 했다" 로 표시돼 클라가 영영 안 걸린다.
+    if (!inventory_both_ready()) return;
+    g_auto_gen.store(gen, std::memory_order_release);
+    log::infof("인벤토리가 새로 생겼다 - 가방 확장을 다시 적용한다 (목표 {})",
+               g_auto_target.load(std::memory_order_acquire));
+    bag_expand(reader, g_auto_target.load(std::memory_order_acquire),
+               g_auto_storage.load(std::memory_order_acquire),
+               g_auto_branch.load(std::memory_order_acquire));
 }
 
 void forget_bag_backup() {
@@ -548,8 +643,11 @@ BagResult bag_restore(const mem::Reader& reader) {
             continue;
         }
         // 되돌릴 때도 쓴 순서의 역순으로 - 캐시(+0x14)를 마지막에 맞춘다.
+        // **두 갈래를 다 되돌린다.** 확장 칸을 고를 수 있게 된 뒤로는 +0x18 도
+        // 우리가 쓸 수 있어, +0x1A 만 되돌리면 가방이 확장된 채로 남는다.
         log_write("가방 복원", s.address + 0x14, "확장됨",
                   std::to_string(s.cap));
+        bag_wr16(s.address + 0x18, s.a);
         bag_wr16(s.address + 0x1A, s.b);
         bag_wr16(s.address + 0x16, s.sum);
         bag_wr16(s.address + 0x14, s.cap);
@@ -567,7 +665,10 @@ BagResult bag_restore(const mem::Reader& reader) {
         std::lock_guard<std::mutex> lk(g_bag_mtx);
         g_bag_backup = keep;
     }
-    log::infof("가방 복원: 되돌린 것 {}개, 실패 {}", r.changed, r.fail);
+    // 되돌렸으면 자동 재적용도 푼다 - 안 그러면 다음 로드에서 도로 걸린다.
+    if (r.changed > 0) bag_auto_clear();
+    log::infof("가방 복원: 되돌린 것 {}개, 건너뜀 {}, 실패 {}", r.changed, r.skip,
+               r.fail);
     return r;
 }
 

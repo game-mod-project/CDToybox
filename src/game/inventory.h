@@ -163,9 +163,10 @@ bool inventory_both_ready();
 //   2. **목표 기본값이 999 였고 하드 상한이 없었다**(60000 까지 허용).
 //      게다가 같은 값을 +0x16·+0x18·+0x1A 세 칸에 흩뿌려 배증 위험까지 있었다.
 //
-// 그래서 지금은 `기본 = (+0x14) - (+0x16)` 으로 유도하고, **+0x18 은 건드리지
-// 않는다**. 엔진이 +0x16 을 합으로 재계산하든 최대로 재계산하든 결과가 목표
-// 이하가 되어(최대면 오히려 작아진다) 미확정인 부분을 안전한 쪽으로 비켜 간다.
+// 그래서 지금은 `기본 = (+0x14) - (+0x16)` 으로 유도하고, **두 갈래 중 고른 한
+// 칸만** 바꾼다(반대 칸은 그대로 둔다). 엔진이 +0x16 을 합으로 재계산하든 최대로
+// 재계산하든 결과가 목표 이하가 되어(최대면 오히려 작아진다) 미확정인 부분을
+// 안전한 쪽으로 비켜 간다.
 //
 // 상한: 참고 모드 둘이 독립적으로 **732 초과는 엔진이 깨진다**고 적는다(CT 소스
 // `HARD_MAX = 732`, ASI "Above 732 the game breaks ... a save made in that state
@@ -177,12 +178,29 @@ inline constexpr int kBagTargetMax = 700;    // 화면 상한(실전값)
 inline constexpr int kBagEngineMax = 732;    // 엔진이 깨지는 선 - 절대 넘기지 않는다
 
 // 컨테이너 하나를 어떻게 바꿀지 계산한 결과. **순수 계산**이라 시험할 수 있다.
+// 확장을 어느 칸에 쓸 것인가. **2026-09-13 실측: 세이브·로드를 하면 우리가 넣은
+// 확장이 사라진다.** 가방이 원래 갖고 있던 정당한 확장 190 은 +0x18 에 있었고
+// (보관함은 반대로 +0x1A 에 200), 우리는 비어 있던 +0x1A 에 60 을 넣었다. 엔진에
+// VaryExpandedInventorySlotAck 와 VaryExpandedNoSaveInventorySlotAck 가 따로 있으니
+// (2026-09-12 스파이크), 두 칸이 각각 "저장되는 확장" 과 "저장 안 되는 확장" 일 수
+// 있다. 배포를 거듭하지 않고 가리려고 **화면에서 고를 수 있게** 둔다.
+//
+// 저장에 남든 안 남든 화면에서는 유지되게 하는 것은 이것과 별개다 - 게임은 로드할
+// 때 인벤토리 컴포넌트를 **통째로 새로 만들기** 때문에, 자동 재적용(bag_auto_set)
+// 쪽이 그 절반을 맡는다.
+enum BagBranch : int {
+    kBagBranchA = 0,   // +0x18 - 가방의 기존 확장이 여기 있다(기본)
+    kBagBranchB = 1,   // +0x1A - 처음 쓴 칸, 리로드에서 사라졌다
+};
+
 struct BagPlan {
     bool apply = false;        // 거짓이면 건너뛴다(모르는 모양이거나 바꿀 게 없다)
     const char* skip = "";     // apply 가 거짓인 이유
     int base = 0;              // 유도한 기본 슬롯
-    int expand_b = 0;          // +0x1A 에 쓸 값(세이브가 담는 칸)
-    int sum = 0;               // +0x16 에 쓸 값 = (+0x18) + expand_b
+    int branch = kBagBranchA;  // 어느 칸을 쓸 것인가
+    int expand = 0;            // 그 칸에 쓸 값
+    int other = 0;             // 반대 칸의 현재 값(그대로 둔다)
+    int sum = 0;               // +0x16 에 쓸 값 = expand + other
     int capacity = 0;          // +0x14 에 쓸 값 = base + sum
 };
 
@@ -190,7 +208,8 @@ struct BagPlan {
 // target 이 0 이면 "원래대로"(복원)가 아니라 **바꿀 것 없음**이다 - 복원은 저장해
 // 둔 원본을 그대로 쓰는 별도 경로다(옛 restore 는 확장을 0 으로 써서 가방의 190 을
 // 날렸다. 그건 복원이 아니었다).
-BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target);
+BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
+                        int branch = kBagBranchA);
 
 // 이 종류를 건드릴 것인가. 가방(1)은 언제나, 보관함류(7·9·11)는 storage 가 참일 때만,
 // 작은 칸(용량 5·10·20·50)은 **절대** 건드리지 않는다 - 그것까지 부풀린 것이
@@ -210,13 +229,34 @@ struct BagResult {
 // 가방(종류 1)을, storage 가 참이면 보관함류(종류 7·9·11 - 4 는 다른 구조를 달아
 // 뺐다, bag_kind_selected 참고)도 함께 target 슬롯으로
 // 맞춘다. 클라·서버 두 realm 에 같이 쓴다. **모드(주입 DLL)에서만** 부른다.
-BagResult bag_expand(const mem::Reader& reader, int target, bool storage);
+BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
+                     int branch = kBagBranchA);
 
 // 마지막 확장 전의 원래 값으로 되돌린다. 기억해 둔 것이 없으면 아무것도 안 한다.
 BagResult bag_restore(const mem::Reader& reader);
 // 백업을 버린다. 인벤토리가 새로 생기면(forget_inventory) 자동으로 불린다.
 void forget_bag_backup();
 bool bag_has_backup();
+
+// --------------------------------------------- 리로드에서 살아남게 하는 두 축
+
+// **로드 후 자동 다시 적용.** 게임은 세이브를 불러올 때 인벤토리 컴포넌트를 통째로
+// 새로 만든다(실측 2026-09-13: 옛 주소의 컨테이너 배열이 0xFFFF/0 이 된다). 그래서
+// 메모리에 쓴 용량은 저장에 남든 안 남든 **화면에서 사라진다**. 사용자가 이번 실행에
+// 한 번 적용했다면 그 설정을 기억해 두었다가, 인벤토리가 새로 잡힐 때 한 번 더 건다.
+//
+// 사용자가 직접 누른 것을 그대로 되풀이할 뿐이다 - 스스로 값을 정하지 않는다.
+void bag_auto_set(int target, bool storage, int branch);
+void bag_auto_clear();      // 되돌리기 성공과 화면 체크 해제가 부른다
+bool bag_auto_on();
+// 분석 루프가 매 바퀴 부른다. 무장돼 있고 인벤토리가 **새 주소로** 잡혔을 때만 쓴다.
+void bag_auto_tick(const mem::Reader& reader);
+
+// 캐시해 둔 컴포넌트가 아직 살아 있는지 본다. 죽었으면 버리고 다시 찾게 한다.
+// 예전에는 이것이 없어, 로드 뒤 캐시가 죽은 포인터를 든 채로 영원히 남았다 -
+// 패널은 낡은 값을 보이고 가방 확장은 조용히 아무것도 안 했다(2026-09-13).
+// 로딩 화면에서 잠깐 안 읽히는 것과 가르려고 연속 실패를 세고 나서 버린다.
+void inventory_check_alive(const mem::Reader& reader);
 
 // 캐시를 버린다. 게임이 인벤토리를 새로 만들면(재접속 등) 옛 주소가
 // 남으므로 화면에서 다시 찾을 수 있어야 한다. 버리면 곧 다시 찾도록

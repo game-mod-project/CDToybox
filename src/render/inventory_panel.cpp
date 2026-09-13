@@ -339,6 +339,12 @@ void draw_bag_expand() {
     // 곧 안전 설계**다 - 700 을 놓고 "300 으로 해 보라" 고 적으면 아무 의미가 없다.
     static int s_target = 300;
     static bool s_storage = false;
+    // 확장을 어느 칸에 적을지. A(+0x18)가 기본이다 - 가방이 원래 갖고 있던 확장이
+    // 거기 있고, B(+0x1A)에 넣은 값은 2026-09-13 세이브·로드에서 사라졌다.
+    static int s_branch = game::kBagBranchA;
+    // 로드 뒤 자동 다시 적용. 게임이 인벤토리를 새로 만들기 때문에, 저장에 남든
+    // 안 남든 이게 없으면 화면 숫자는 로드마다 원래대로 돌아간다.
+    static bool s_auto = true;
     static std::string s_msg;
 
     ImGui::SetNextItemWidth(220.0f);
@@ -352,6 +358,19 @@ void draw_bag_expand() {
             "로드에서 죽음). 700 은 그들이 쓰는 실전값이고 여유를 둔 값입니다.\n"
             "확장 모드가 없을 때 게임 자체 천장은 240 입니다.");
     }
+    ImGui::SetNextItemWidth(220.0f);
+    static const char* kBranchNames[] = {"A: +0x18 (기존 확장이 있는 칸)",
+                                         "B: +0x1A (리로드에서 사라진 칸)"};
+    ImGui::Combo("확장 칸", &s_branch, kBranchNames, 2);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "확장을 어느 칸에 적을지입니다. 반대 칸은 건드리지 않습니다.\n"
+            "가방은 원래 갖고 있던 확장 190 을 A(+0x18)에, 보관함은 200 을\n"
+            "B(+0x1A)에 답니다. 2026-09-13 에 B 로 넣은 60 은 세이브·로드에서\n"
+            "사라졌습니다 - 엔진에 '저장되는 확장' 과 '저장 안 되는 확장' 패킷이\n"
+            "따로 있어, A 가 저장되는 쪽일 수 있습니다.\n"
+            "A 가 정말 저장에 남는다면 되돌리기는 이번 실행 안에만 됩니다.");
+    }
     ImGui::Checkbox("보관함도 함께", &s_storage);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
@@ -361,9 +380,21 @@ void draw_bag_expand() {
             "종류 4 는 혼자 다른 구조를 달고 있어 정체를 확인할 때까지 뺐습니다.");
     }
 
+    if (ImGui::Checkbox("로드 후 자동 다시 적용", &s_auto) && !s_auto) {
+        game::bag_auto_clear();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "게임은 세이브를 불러올 때 인벤토리를 통째로 새로 만듭니다.\n"
+            "그래서 저장에 남든 안 남든, 로드하면 화면 숫자가 원래대로\n"
+            "돌아갑니다. 켜 두면 새 인벤토리가 잡힐 때 방금 누른 것과\n"
+            "똑같은 설정으로 한 번 더 겁니다(스스로 값을 정하지는 않습니다).\n"
+            "되돌리기를 누르면 함께 풀립니다.");
+    }
+
     const mem::LocalReader reader;
     if (ImGui::Button("적용")) {
-        const auto r = game::bag_expand(reader, s_target, s_storage);
+        const auto r = game::bag_expand(reader, s_target, s_storage, s_branch);
         s_msg = "바꾼 것 " + std::to_string(r.changed) + "개(" +
                 std::to_string(r.realms) + " realm), 건너뜀 " +
                 std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
@@ -374,6 +405,13 @@ void draw_bag_expand() {
             s_msg += " - 한쪽 realm 에만 썼습니다(화면이 안 바뀔 수 있습니다)";
         }
         if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+        if (r.changed > 0) {
+            if (s_auto) {
+                game::bag_auto_set(s_target, s_storage, s_branch);
+            } else {
+                game::bag_auto_clear();
+            }
+        }
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }
     ImGui::SameLine();
@@ -399,9 +437,13 @@ void draw_bag_expand() {
         "되돌리기는 이번 실행 동안에만 됩니다. 게임을 끄면 원래 값으로 돌아갈 수 "
         "없습니다 - 먼저 세이브 파일을 복사해 두십시오.");
     ImGui::TextWrapped(
-        "저장에 남는지는 아직 확인되지 않았습니다. 처음이라면 목표를 낮게(예: 300) "
-        "잡아 한 번 적용하고, 저장 후 게임을 다시 켜서 유지되는지 보십시오. "
-        "유지되지 않으면 켤 때마다 다시 눌러야 합니다.");
+        "저장에 남는지는 아직 확인되지 않았습니다. B 칸(+0x1A)에 넣은 값은 "
+        "2026-09-13 세이브·로드에서 사라졌습니다. A 칸이 저장되는 쪽인지 보려면 "
+        "A 로 적용하고 저장한 뒤 게임을 다시 켜서, '로드 후 자동 다시 적용' 을 "
+        "끈 채로 용량이 남아 있는지 보십시오.");
+    if (game::bag_auto_on()) {
+        ImGui::TextDisabled("자동 다시 적용이 무장돼 있습니다.");
+    }
 }
 
 void draw_socket_cap() {
