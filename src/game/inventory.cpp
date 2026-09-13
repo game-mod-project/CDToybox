@@ -393,29 +393,26 @@ std::vector<std::string> inventory_scan_classes() {
 
 // ------------------------------------------------------ 가방·보관함 확장
 
-BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
+BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
                         int branch, int limit) {
     BagPlan p;
     p.branch = branch == kBagBranchB ? kBagBranchB : kBagBranchA;
     // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
     // 유도한 데서 시작했으므로, 모델이 안 맞으면 쓰지 않는 쪽이 맞다.
-    if (cap < 0 || sum < 0 || a < 0 || b < 0 || slots <= 0) {
+    if (cap < 0 || a < 0 || b < 0 || slots <= 0) {
         p.skip = "값이 음수다";
         return p;
     }
-    if (cap < sum) {
-        p.skip = "용량이 확장 합계보다 작다";
+    // **확장은 두 갈래의 합이다.** +0x16(합계)은 읽지 않는다 - 그 칸은 게임이
+    // 되돌리지 않아 우리 값이 세이브에 남고(실측 2026-09-13, 게임 재시작을 넘어
+    // 세 번 재현), 그 낡은 값 때문에 우리 모델이 제 컨테이너를 `cap < sum` 으로
+    // 영영 거부했다. 두 갈래에서 유도하면 낡은 합계가 있어도 맞는 값이 나온다.
+    const int exp = a + b;
+    if (cap < exp) {
+        p.skip = "용량이 확장보다 작다";
         return p;
     }
-    // 한쪽이 0 이어도 검사한다. 예전에는 `a != 0 && b != 0 &&` 가 붙어 있어,
-    // 우리가 모르는 제3의 갈래가 +0x16 에 값을 넣은 모양이 그냥 통과했다 - 그러면
-    // 엔진 재계산에서 732 를 넘길 수 있었다(리뷰 지적 2). 실측 18개 전부가
-    // sum == a + b 라 무조건으로 바꿔도 쓰던 컨테이너를 하나도 잃지 않는다.
-    if (a + b != sum) {
-        p.skip = "확장 두 갈래의 합이 합계와 다르다";
-        return p;
-    }
-    p.base = cap - sum;   // **여기가 핵심** - +0x1A 가 아니라 합계로 유도한다
+    p.base = cap - exp;   // **여기가 핵심** - 한 갈래가 아니라 두 갈래의 합으로
     if (p.base <= 0) {
         p.skip = "기본 슬롯이 0 이하다";
         return p;
@@ -450,8 +447,11 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
     p.other = p.branch == kBagBranchA ? b : a;
     const int cur = p.branch == kBagBranchA ? a : b;
     p.expand = want - p.base - p.other;
-    p.sum = p.other + p.expand;
-    p.capacity = p.base + p.sum;
+    // cap <= want 이므로 expand >= cur >= 0 이고, 아래 항등식이 성립한다:
+    //   capacity = base + other + expand = want
+    // **상한 보장은 이 항등식이 지킨다** - 기본 슬롯 유도가 틀려도 용량은 언제나
+    // 정확히 want 이고, want 는 위에서 700/732/물리 배열로 잘렸다.
+    p.capacity = p.base + p.other + p.expand;
     p.apply = p.capacity != cap || p.expand != cur;
     if (!p.apply) {
         p.skip = "이미 그 값이다";
@@ -543,12 +543,15 @@ BagRepairPlan plan_bag_repair(int cap, int sum, int a, int b,
     // `a+b == sum` 인데도 `cap < sum` 이라 영영 거부되는 모양(검토 중대 2)도
     // 이 길로만 풀린다.
     if (rec != nullptr && cap == static_cast<int>(rec->cap)) {
-        if (sum == static_cast<int>(rec->sum) &&
-            a == static_cast<int>(rec->a) && b == static_cast<int>(rec->b)) {
+        // 기록은 갈래만 들고 있다(+0x16 은 우리가 안 쓰는 칸이라 안 적는다).
+        // 합계는 갈래 합으로 만든다 - 그것이 실측 18개가 전부 지키는 모양이다.
+        const int want_sum = static_cast<int>(rec->a) + static_cast<int>(rec->b);
+        if (sum == want_sum && a == static_cast<int>(rec->a) &&
+            b == static_cast<int>(rec->b)) {
             p.skip = "고칠 것이 없다";
             return p;
         }
-        p.sum = rec->sum;
+        p.sum = want_sum;
         p.a = rec->a;
         p.b = rec->b;
         p.base = cap - p.sum;
@@ -642,15 +645,15 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
         if (ki < 0) continue;                      // 우리가 아는 종류가 아니다
         const int target = targets[static_cast<std::size_t>(ki)];
         if (target <= 0) continue;                 // 이 종류는 안 건드린다
-        std::uint16_t cap = 0, sum = 0, a = 0, b = 0;
+        // **+0x16 은 읽지 않는다.** 낡은 값이 들어 있어도 우리 산술에 안 들어온다.
+        std::uint16_t cap = 0, a = 0, b = 0;
         if (!reader.read_value(c.address + 0x14, &cap) ||
-            !reader.read_value(c.address + 0x16, &sum) ||
             !reader.read_value(c.address + 0x18, &a) ||
             !reader.read_value(c.address + 0x1A, &b)) {
             ++r->fail;
             continue;
         }
-        const BagPlan p = plan_bag_expand(cap, sum, a, b,
+        const BagPlan p = plan_bag_expand(cap, a, b,
                                           static_cast<int>(c.slots), target,
                                           bag_resolve_branch(branch, c.kind),
                                           bag_kind_cap(c.kind));
@@ -659,7 +662,6 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
         seen.kind = c.kind;
         seen.address = c.address;
         seen.cap = cap;
-        seen.sum = sum;
         seen.a = a;
         seen.b = b;
 
@@ -680,7 +682,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
                 if (p.same) {
                     seen.known = true;
                     seen.want_cap = cap;
-                    seen.want_sum = sum;
+                    seen.want_exp = static_cast<std::uint16_t>(a + b);
                 }
                 remember_seen(seen);
             }
@@ -699,27 +701,22 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
         const std::uintptr_t slot =
             c.address + (p.branch == kBagBranchA ? 0x18 : 0x1A);
         const std::uint16_t was = p.branch == kBagBranchA ? a : b;
+        // **두 칸만 쓴다: 고른 갈래와 용량.** +0x16 은 쓰지 않는다 - 게임이
+        // 되돌리지 않아 세이브에 남고, 그게 우리가 남기는 유일한 값이었다.
         bool ok = bag_wr16(slot, static_cast<std::uint16_t>(p.expand));
-        ok = bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum)) && ok;
         ok = bag_wr16(c.address + 0x14,
                       static_cast<std::uint16_t>(p.capacity)) && ok;
-        std::uint16_t back_cap = 0, back_sum = 0, back_b = 0;
+        std::uint16_t back_cap = 0, back_b = 0;
         // **쓴 칸을 전부 되읽는다.** 화면 캐시(+0x14)만 보면 "화면은 300, 확장 칸은
-        // 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6). +0x16 이 조용히 실패하면
-        // cap < sum 인 - plan_bag_expand 가 영원히 거부하는 - 상태가 남는다
-        // (재검토 경미 2).
+        // 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6).
         const bool read_ok = reader.read_value(c.address + 0x14, &back_cap) &&
-                             reader.read_value(c.address + 0x16, &back_sum) &&
                              reader.read_value(slot, &back_b);
         if (ok && read_ok &&
             back_cap == static_cast<std::uint16_t>(p.capacity) &&
-            back_sum == static_cast<std::uint16_t>(p.sum) &&
             back_b == static_cast<std::uint16_t>(p.expand)) {
             ++r->changed;
             log_write("가방 용량", c.address + 0x14, std::to_string(cap),
                       std::to_string(p.capacity));
-            log_write("가방 확장합계", c.address + 0x16, std::to_string(sum),
-                      std::to_string(p.sum));
             log_write(p.branch == kBagBranchA ? "가방 확장칸A" : "가방 확장칸B",
                       slot, std::to_string(was), std::to_string(p.expand));
             if (remember) {
@@ -727,14 +724,14 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
                 // 이것과 지금 값을 대조해, 그 사이 누가 바꿨으면 쓰지 않는다.
                 seen.known = true;
                 seen.want_cap = static_cast<std::uint16_t>(p.capacity);
-                seen.want_sum = static_cast<std::uint16_t>(p.sum);
+                seen.want_exp =
+                    static_cast<std::uint16_t>(p.other + p.expand);
                 remember_seen(seen);
             }
         } else {
             // 반쯤 써진 채로 두지 않는다. 남는 값은 전부 목표 이하라 위험하지는
             // 않지만, 사용자가 "왜 이 값인가" 를 알 수 없는 상태가 된다.
             bool undo = bag_wr16(slot, was);
-            undo = bag_wr16(c.address + 0x16, sum) && undo;
             undo = bag_wr16(c.address + 0x14, cap) && undo;
             ++r->fail;
             log_write("가방 되돌림", c.address + 0x14,
@@ -747,12 +744,13 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
                 // 경우가 바로 되돌리기가 필요한 상태인데, 예전에는 그때만
                 // want 가 0 으로 남아 "무엇을 써 놓았는지 모릅니다" 로 영구히
                 // 막혔다 - 버튼은 켜진 채로(재검토 중대 4).
-                std::uint16_t now_cap = 0, now_sum = 0;
+                std::uint16_t now_cap = 0, now_a = 0, now_b = 0;
                 if (reader.read_value(c.address + 0x14, &now_cap) &&
-                    reader.read_value(c.address + 0x16, &now_sum)) {
+                    reader.read_value(c.address + 0x18, &now_a) &&
+                    reader.read_value(c.address + 0x1A, &now_b)) {
                     seen.known = true;
                     seen.want_cap = now_cap;
-                    seen.want_sum = now_sum;
+                    seen.want_exp = static_cast<std::uint16_t>(now_a + now_b);
                 } else if (undo) {
                     // 되읽기는 실패했지만 되돌림은 성공했다 - 지금 값은 손대기 전
                     // 값과 같다. 이 한 줄이 없으면 want 가 0 으로 굳어 되돌리기가
@@ -760,7 +758,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
                     // 확장권을 사면 되돌리기가 옛 원본을 쓴다(게이트 경미 2).
                     seen.known = true;
                     seen.want_cap = cap;
-                    seen.want_sum = sum;
+                    seen.want_exp = static_cast<std::uint16_t>(a + b);
                 }
                 remember_seen(seen);
             }
@@ -793,15 +791,15 @@ void bag_backup_upsert(std::vector<BagBackup>& v, const BagSeen& seen) {
         // 무력해지고, 되돌리기가 사용자가 돈 주고 산 칸을 지운다(재검토 치명 1).
         // 우리 값이 그대로 살아 돌아온 경우에는 값이 정확히 같아 다시 잡지 않는다.
         if (seen.understood && hit->want_cap != 0 &&
-            (seen.cap != hit->want_cap || seen.sum != hit->want_sum)) {
+            (seen.cap != hit->want_cap ||
+             seen.a + seen.b != hit->want_exp)) {
             hit->cap = seen.cap;
-            hit->sum = seen.sum;
             hit->a = seen.a;
             hit->b = seen.b;
         }
         if (seen.known) {
             hit->want_cap = seen.want_cap;
-            hit->want_sum = seen.want_sum;
+            hit->want_exp = seen.want_exp;
         }
         return;
     }
@@ -812,28 +810,29 @@ void bag_backup_upsert(std::vector<BagBackup>& v, const BagSeen& seen) {
     n.kind = seen.kind;
     n.address = seen.address;
     n.cap = seen.cap;
-    n.sum = seen.sum;
     n.a = seen.a;
     n.b = seen.b;
     if (seen.known) {
         n.want_cap = seen.want_cap;
-        n.want_sum = seen.want_sum;
+        n.want_exp = seen.want_exp;
     }
     v.push_back(n);
 }
 
-const char* bag_restore_blocked(const BagBackup& s, int cap, int sum, int used) {
-    if (cap < 0 || sum < 0 || used < 0) return "값을 읽을 수 없습니다";
+const char* bag_restore_blocked(const BagBackup& s, int cap, int exp, int used) {
+    if (cap < 0 || exp < 0 || used < 0) return "값을 읽을 수 없습니다";
     if (s.want_cap == 0) return "무엇을 써 놓았는지 모릅니다";
     // **우리가 써 놓은 값 그대로인가.** 다르면 그 사이 우리가 아닌 누군가가 바꾼
     // 것이다 - 캐릭터 교체, 정당한 확장 구매, 다른 세이브. 그 위에 남의 원본을 쓰면
     // 돈 주고 산 칸을 지우는 일이 된다(리뷰 치명 3).
     if (cap != static_cast<int>(s.want_cap) ||
-        sum != static_cast<int>(s.want_sum)) {
+        exp != static_cast<int>(s.want_exp)) {
         return "적용한 뒤 값이 바뀌었습니다 - 되돌리지 않습니다";
     }
     // 기본 슬롯이 다르면 아예 다른 인벤토리다(값싼 이중 방어).
-    if (cap - sum != static_cast<int>(s.cap) - static_cast<int>(s.sum)) {
+    if (cap - exp !=
+        static_cast<int>(s.cap) - static_cast<int>(s.a) -
+            static_cast<int>(s.b)) {
         return "기본 슬롯이 달라 다른 인벤토리로 보입니다";
     }
     // 확장한 칸을 채운 뒤 되돌리면 용량 밖으로 아이템이 밀려난다. plan_bag_expand 는
@@ -844,10 +843,11 @@ const char* bag_restore_blocked(const BagBackup& s, int cap, int sum, int used) 
     return nullptr;
 }
 
-bool bag_restore_already_original(const BagBackup& s, int cap, int sum, int a,
-                                 int b) {
-    return cap == static_cast<int>(s.cap) && sum == static_cast<int>(s.sum) &&
-           a == static_cast<int>(s.a) && b == static_cast<int>(s.b);
+bool bag_restore_already_original(const BagBackup& s, int cap, int a, int b) {
+    // +0x16 은 비교하지 않는다 - 우리가 안 쓰는 칸이라 다를 수 있고, 다르다고
+    // 되돌릴 것이 남은 것도 아니다.
+    return cap == static_cast<int>(s.cap) && a == static_cast<int>(s.a) &&
+           b == static_cast<int>(s.b);
 }
 
 bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
@@ -963,9 +963,9 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
             // 고칠 수는 없는데 모델이 거부하는 모양인가. 그런 컨테이너는 확장도
             // 되돌리기도 안 되므로 화면이 그 사실을 말해야 한다 - 안 그러면
             // "왜 이것만 안 되지" 를 사용자가 혼자 겪는다(검토 중대 2).
-            if (n != nullptr && !plan_bag_expand(cap, sum, a, b,
-                                                 static_cast<int>(c.slots), 700)
-                                     .understood) {
+            if (n != nullptr &&
+                !plan_bag_expand(cap, a, b, static_cast<int>(c.slots), 700)
+                     .understood) {
                 ++n->stuck;
             }
             continue;
@@ -1001,13 +1001,12 @@ void repair_in(const mem::Reader& reader, std::uintptr_t comp, int realm,
                 seen.kind = c.kind;
                 seen.address = c.address;
                 seen.cap = cap;
-                seen.sum = sum;
                 seen.a = a;
                 seen.b = b;
                 seen.understood = true;
                 seen.known = true;
                 seen.want_cap = cap;
-                seen.want_sum = static_cast<std::uint16_t>(p.sum);
+                seen.want_exp = static_cast<std::uint16_t>(p.a + p.b);
                 remember_seen(seen);
             }
             log::infof("가방 복구: 0x{:X} 종류 {} 합계 {}->{} A {}->{} B {}->{}"
@@ -1234,16 +1233,15 @@ BagResult bag_restore(const mem::Reader& reader) {
             log::infof("가방 복원: 종류 {} 가 0x{:X} 에서 0x{:X} 로 옮겨 갔다",
                        s.kind, s.address, addr);
         }
-        std::uint16_t cap = 0, sum = 0, cur_a = 0, cur_b = 0;
+        std::uint16_t cap = 0, cur_a = 0, cur_b = 0;
         if (!reader.read_value(addr + 0x14, &cap) ||
-            !reader.read_value(addr + 0x16, &sum) ||
             !reader.read_value(addr + 0x18, &cur_a) ||
             !reader.read_value(addr + 0x1A, &cur_b)) {
             ++r.fail;
             keep.push_back(s);
             continue;
         }
-        if (bag_restore_already_original(s, cap, sum, cur_a, cur_b)) {
+        if (bag_restore_already_original(s, cap, cur_a, cur_b)) {
             // 되돌릴 것이 없다. 기록을 지워 버튼이 꺼지게 한다 - 남겨 두면 자동
             // 재적용을 끈 사용자가 리로드할 때마다 켜진 버튼과 "적용한 뒤 값이
             // 바뀌었습니다" 를 보게 된다(게이트 경미 5).
@@ -1251,8 +1249,8 @@ BagResult bag_restore(const mem::Reader& reader) {
             r.last_skip = "이미 원래 값입니다";
             continue;
         }
-        if (const char* why =
-                bag_restore_blocked(s, cap, sum, static_cast<int>(now->used))) {
+        if (const char* why = bag_restore_blocked(
+                s, cap, cur_a + cur_b, static_cast<int>(now->used))) {
             ++r.skip;
             r.last_skip = why;
             keep.push_back(s);
@@ -1266,22 +1264,19 @@ BagResult bag_restore(const mem::Reader& reader) {
                   std::to_string(s.a));
         log_write("가방 복원 확장B", addr + 0x1A, std::to_string(cur_b),
                   std::to_string(s.b));
-        log_write("가방 복원 확장합계", addr + 0x16, std::to_string(sum),
-                  std::to_string(s.sum));
         log_write("가방 복원 용량", addr + 0x14, std::to_string(cap),
                   std::to_string(s.cap));
         // 되돌릴 때도 쓴 순서의 역순으로 - 캐시(+0x14)를 마지막에 맞춘다.
+        // +0x16 은 우리가 안 쓴 칸이라 되돌릴 것도 없다.
         bool ok = bag_wr16(addr + 0x18, s.a);
         ok = bag_wr16(addr + 0x1A, s.b) && ok;
-        ok = bag_wr16(addr + 0x16, s.sum) && ok;
         ok = bag_wr16(addr + 0x14, s.cap) && ok;
-        std::uint16_t back_cap = 0, back_sum = 0, back_a = 0, back_b = 0;
+        std::uint16_t back_cap = 0, back_a = 0, back_b = 0;
         const bool read_ok = reader.read_value(addr + 0x14, &back_cap) &&
-                             reader.read_value(addr + 0x16, &back_sum) &&
                              reader.read_value(addr + 0x18, &back_a) &&
                              reader.read_value(addr + 0x1A, &back_b);
-        if (ok && read_ok && back_cap == s.cap && back_sum == s.sum &&
-            back_a == s.a && back_b == s.b) {
+        if (ok && read_ok && back_cap == s.cap && back_a == s.a &&
+            back_b == s.b) {
             ++r.changed;
         } else {
             ++r.fail;
