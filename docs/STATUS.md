@@ -719,6 +719,79 @@ dword+byte 두 번으로 나가고, 그 틈에 다른 스레드가 **반쯤 바�
 검토 1회에서 치명 1 · 중대 6 · 경미 8 이 나왔고 전부 반영했다 - 전문
 `.superpowers/sdd/2026-09-13-skill-gate/`(`review.md` · `review-response.md`).
 
+### 1.19 지식(스킬 트리 노드) 표 — 선행 조건 풀기 (2026-09-13, **저장 생존 확인됨**)
+
+화면의 `[깨달음] 필요` 와 `[원소: …] 중 하나` 는 **둘 다 선행 지식**이다. 별개 시스템이
+아니다. 문자열 키가 `UI_Skill_RequiredKnowledgeNotLearned` /
+`UI_Skill_RequiredAnyKnowledgeNotLearned` **한 쌍**이고, 둘을 고르는 코드
+(RVA 0x00E84A4D~0x00E84A7E)가 **같은 목록·같은 개수 변수**를 쓰고 메시지만 갈아 끼운다 —
+목록 원소가 2개 이상이고 `_learnRequirementType == 1` 이면 "중 하나" 쪽이다.
+
+`ElementalMaterialKey` 계열은 **무관하다.** 그쪽 필드가 `_totalFuelAmount` ·
+`_increasePerSecond` · `Freeze` · `BurnPhase1` · `Wetness` 라 **불 번짐·젖음·결빙 같은
+월드 재질 시뮬레이션**이지 스킬 조건이 아니다.
+
+**판정은 한 줄이다** (`CheckLearnOrLevelUp` 안, RVA 0x0208BC20 `cmp dword [r10+rcx*8], eax`,
+바이트 `41 39 04 CA` 확인):
+
+```
+배운지식표[선행지식번호].레벨 >= 필요레벨
+```
+
+그 루프(0x0208BB7D~0x0208BCD9)는 **쓰기가 하나도 없다.** 툴팁의 "부족한 것" 목록은
+**다른 루프**(아이템·재화, 0x0208B669~0x0208BA21, 오류 `eErrNoItemIsLack`/`eErrNoMoneyIsLack`)
+가 만든다. 2026-09-13 조사 초반에 이 둘의 라벨을 뒤바꿔 적었다가 바로잡았다.
+
+**매니저를 찾는 법** — 조회 함수 RVA 0x003C1C70 이 그대로 보여 준다:
+
+```
+rbx = *(전역 RVA 0x06C2E2D8)          ; KnowledgeInfoManager
+if (번호 >= [rbx+0x08]) 실패          ; 전체 지식 개수
+info = *(u64*)( [rbx+0x58] + 번호*8 ) ; KnowledgeInfo* 포인터 배열
+```
+
+힙 스캔이 필요 없다. **고정 RVA 라 갱신에 밀리므로**(§1.15) 매니저 개수와 컴포넌트 표
+개수가 **같은지 대조하고 다르면 멈춘다** — `Initialize`(RVA 0x0E09C4F0)가 매니저의 개수로
+표를 잡으므로 두 값은 반드시 같다.
+
+**배운 지식 표** (`KnowledgeActorComponent`):
+
+| | |
+|---|---|
+| `+0x18` / `+0x20` / `+0x24` | 데이터 · 개수 · 용량 |
+| 레코드 | **24바이트** (실측: 4796번 `…C1A0`, 4859번 `…C788`, 차이 0x5E8 = 63 × 24) |
+| `+0x00` i32 | **레벨** (0 = 미습득) |
+| `+0x08` ptr | 지연 생성 객체 — **안 건드린다** |
+| `+0x10` u8 | 습득 플래그 (게임도 1 을 쓴다) |
+
+전체 지식 수만큼 **미리 잡힌 밀집 배열**이라 끼워 넣을 것이 없다. 레벨 한 칸만 쓰면 된다 —
+게임이 지식을 지급할 때 하는 쓰기와 같다(RVA 0x02AA620C / 0x02AA6224).
+
+**실측 결과(사용자 확인 2026-09-13):**
+
+| | 결과 |
+|---|---|
+| 스킬 획득 조건의 `[깨달음] 필요` | **사라진다** |
+| 저장 → 게임 완전 재시작 후 레벨 | **남는다** — 자동 재적용이 필요 없다 |
+| 게임 안 원형 휠의 어두운 칸 | **안 켜진다** |
+
+**세 번째가 중요한 배제 근거다.** 전체 로드 경로가 세이브에서 다시 만들었는데도 안 켜졌으니,
+휠을 켜는 상태는 **지식 레벨에서 파생되는 것이 아니라 따로 저장되는 별개 상태**다.
+`KnowledgeSaveData` 가 레벨 말고도 `SkillLearnElementSaveData{KnowledgeKey,
+SkillPointOwnerType}` · `FollowLearnElementSaveData` · `KnowledgeLearnDelayElementSaveData`
+를 들고 있고, 퀵슬롯 쪽에 `UseItemReserveSlotElementSaveData{ReserveSlotKey, ItemKey,
+SkillKey, …}` 가 따로 있다. **어느 것인지는 조사 중이다.**
+
+정적 표의 사슬은 확정돼 있다(휠이 열리는 길):
+`KnowledgeInfo._learnApplySkillInfo(+0x104)` → `SkillInfo._reserveSlotInfoList(+0xE8)`.
+조건식 함수 이름표에 `CheckKnowledge` · `SkillTreeNodeLearnable` · `CheckReserveSlot` 이 있다.
+
+**지역화는 실행 파일에 없다.** 플레이어용 한국어가 **한 글자도** 없다(UTF-8/UTF-16/CP949
+전부 0회). 지식 이름과 키는 `.paz`(192개·약 175GB·매직 `PAR `)에서 런타임에 올라오므로
+**게임이 켜져 있을 때 메모리에서 읽는 수밖에 없다.**
+
+전문: `.superpowers/sdd/2026-09-13-knowledge-unlock/`.
+
 ## 2. 게임에 대해 알아낸 것
 
 ### 2.1 PE 구조 (섹션 배치가 뒤섞여 있음 — 옛 빌드 기준. 2850 은 실행 섹션이 `.idata` 0x1000 · `.sbss` 0x7480000 둘뿐, `specs/2026-09-11-game-update-2850.md`)
