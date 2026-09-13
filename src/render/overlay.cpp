@@ -26,6 +26,7 @@
 #include "render/layout.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
+#include "game/skillgate.h"
 #include "render/item_panel.h"
 #include "render/log_panel.h"
 #include "render/roster_panel.h"
@@ -202,6 +203,9 @@ void teardown(ID3D12CommandQueue* queue) {
     // 멈춰 있었음을 알 수 있었다.
     log::infof("해체 1: 스캔 패널 정리");
     cdtb::render::shutdown_scan_panel();   // 워커 스레드를 먼저 정리한다
+    // **게임 코드에 쓴 것을 먼저 되돌린다.** 우리 코드가 사라진 뒤에도 패치가
+    // 남아 있으면 게임이 우리가 없는 상태로 그 바이트를 계속 실행한다.
+    cdtb::game::skillgate_remove_all();
     log::infof("해체 2: GPU 대기");
     wait_for_pending(queue);   // GPU가 우리 리소스를 놓을 때까지
     if (g_dx12_ready) { ImGui_ImplDX12_Shutdown(); g_dx12_ready = false; }

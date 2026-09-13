@@ -6,6 +6,7 @@
 
 #include "game/nofall.h"
 #include "game/player.h"
+#include "game/skillgate.h"
 #include "game/skillpoint.h"
 #include "render/colors.h"
 #include "mem/reader.h"
@@ -88,6 +89,53 @@ void draw_skill_bond(const mem::Reader& reader) {
     ImGui::TextDisabled("상한 %d - 참고 모드에 스킬 포인트 기능이 없어 근거로 삼을"
                         " 숫자가 없습니다. 보수적으로 잡은 값입니다.",
                         game::kBondCeiling);
+}
+
+}  // namespace
+
+namespace {
+
+// 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로
+// 그 사실을 화면이 먼저 말한다.
+void draw_skill_gates(const mem::Reader& reader) {
+    if (!ImGui::CollapsingHeader("스킬 강화 조건 무시")) return;
+
+    ImGui::TextWrapped(
+        "게임 코드에 직접 바이트를 씁니다. 끄면 원래대로 되돌리고, 모드를 내릴 때도"
+        " 되돌립니다. 원본 바이트가 우리가 아는 것과 다르면(게임 갱신) 설치를"
+        " 거부합니다.");
+
+    for (int g = 0; g < game::kGateCount; ++g) {
+        const game::SkillGateInfo i = game::skillgate_info(g);
+        if (i.unsupported) {
+            ImGui::TextColored(col::kBad, "%s: 이 게임 빌드에서는 못 씁니다", i.name);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "그 자리의 원본 바이트가 우리가 아는 것과 다릅니다.\n"
+                    "게임이 갱신되면 고정 주소가 영역마다 다르게 밀립니다 -\n"
+                    "모드 쪽에서 주소를 다시 찾아야 합니다.");
+            }
+            continue;
+        }
+        bool on = i.on;
+        if (ImGui::Checkbox(i.name, &on)) {
+            if (!game::skillgate_set(reader, g, on)) {
+                // 실패하면 화면도 되돌린다 - 켜진 것처럼 보이면 안 된다.
+                on = game::skillgate_info(g).on;
+            }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", i.what);
+        if (i.on && i.site != 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("0x%llX",
+                                static_cast<unsigned long long>(i.site));
+        }
+    }
+
+    ImGui::TextWrapped(
+        "선행 지식(화면의 \"[깨달음] 필요\")은 여기서 안 풉니다 - 그 판정 루프가"
+        " 화면에 뿌릴 목록도 만들어서, 잘못 건드리면 툴팁이 깨집니다. 따로"
+        " 조사한 뒤에 넣습니다.");
 }
 
 }  // namespace
@@ -189,6 +237,7 @@ void draw_player_panel(bool* open) {
         " NPC 에는 영향이 없습니다. 발열·탈것 화염 게이지는 건드리지 않습니다.");
 
     draw_skill_bond(reader);
+    draw_skill_gates(reader);
     ImGui::End();
 }
 
