@@ -385,6 +385,25 @@ void draw_bag_expand() {
                            " 확장이 두 칸에 쪼개집니다.");
     }
     ImGui::Checkbox("보관함도 함께", &s_storage);
+    // 상한이 종류마다 다를 때만 낸다. 슬라이더는 하나인데 목표가 종류마다 다르게
+    // 잘리므로, 말하지 않으면 "왜 보관함만 다른 값이지" 가 된다. 전부 같은 값이면
+    // 굳이 줄을 차지하지 않는다.
+    {
+        const auto rules = game::bag_kind_rules();
+        bool differ = false;
+        for (const auto& r : rules) {
+            if (r.cap != rules.front().cap) differ = true;
+        }
+        if (differ) {
+            std::string caps;
+            for (const auto& r : rules) {
+                if (r.storage_only && !s_storage) continue;
+                if (!caps.empty()) caps += "  ·  ";
+                caps += std::string(r.name) + " " + std::to_string(r.cap);
+            }
+            ImGui::TextDisabled("종류별 상한: %s", caps.c_str());
+        }
+    }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
             "끄면 가방(종류 1)만 바꿉니다. 켜면 보관함류(7·9·11)도 같이\n"
@@ -431,6 +450,12 @@ void draw_bag_expand() {
             s_msg += " - 한쪽 realm 에만 썼습니다(화면이 안 바뀔 수 있습니다)";
         }
         if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+        if (r.unknown > 0) {
+            // 리로드 직후에는 컨테이너가 아직 채워지는 중이라 모양이 안 맞는다.
+            // 그 말을 안 하면 사용자는 "왜 절반만 됐지" 만 보게 된다.
+            s_msg += " - 아직 만들어지는 중일 수 있습니다. 잠시 뒤 다시 눌러"
+                     " 보십시오";
+        }
         if (r.changed > 0) {
             s_done_branch = s_branch;
             s_restored = false;

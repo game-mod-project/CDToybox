@@ -394,7 +394,7 @@ std::vector<std::string> inventory_scan_classes() {
 // ------------------------------------------------------ 가방·보관함 확장
 
 BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
-                        int branch) {
+                        int branch, int limit) {
     BagPlan p;
     p.branch = branch == kBagBranchB ? kBagBranchB : kBagBranchA;
     // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
@@ -420,9 +420,16 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
         p.skip = "기본 슬롯이 0 이하다";
         return p;
     }
+    // 여기까지 왔으면 우리가 아는 모양이다. 아래의 건너뜀은 전부 "알아보고 나서
+    // 안 건드리기로 한 결정" 이라, 다시 해 본다고 달라지지 않는다.
+    p.understood = true;
     int want = target;
-    if (want > kBagTargetMax) want = kBagTargetMax;
-    if (want > kBagEngineMax) want = kBagEngineMax;   // 이중 방어
+    // 종류별 상한이 먼저다. 표에 없거나 이상한 값이면 가장 보수적인 쪽(전체 상한)을
+    // 쓴다 - 상한 없는 길을 만들지 않는다.
+    if (limit <= 0 || limit > kBagTargetMax) limit = kBagTargetMax;
+    if (want > limit) want = limit;
+    if (want > kBagTargetMax) want = kBagTargetMax;   // 이중 방어
+    if (want > kBagEngineMax) want = kBagEngineMax;   // 삼중 방어
     if (want > slots) want = slots;                   // 물리 배열을 넘지 않는다
     if (want < p.base) {
         p.skip = "목표가 기본 슬롯보다 작다";
@@ -453,15 +460,36 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
     return p;
 }
 
+namespace {
+
+// 실측 천장(2026-09-13): 가방 240 / 보관함 440 / 9·11 은 300.
+// 상한은 아직 **전부 700** 이다 - 보관함류의 엔진 한계를 말한 근거를 못 찾았고,
+// 근거 없이 낮추면 기능을 죽이고 근거 없이 올리면 세이브를 죽인다. 조사 결과가
+// 나오면 이 표의 숫자만 고치면 된다(구조는 이미 종류별이다).
+constexpr BagKindRule kKindRules[] = {
+    {1, kBagTargetMax, false, "가방"},
+    {7, kBagTargetMax, true, "보관함"},
+    {9, kBagTargetMax, true, "종류 9"},
+    {11, kBagTargetMax, true, "종류 11"},
+};
+
+}  // namespace
+
+std::span<const BagKindRule> bag_kind_rules() { return kKindRules; }
+
+int bag_kind_cap(std::uint16_t kind) {
+    for (const auto& r : kKindRules) {
+        if (r.kind == kind) return r.cap;
+    }
+    return 0;
+}
+
 bool bag_kind_selected(std::uint16_t kind, bool storage) {
-    if (kind == 1) return true;   // 가방
-    if (!storage) return false;
-    // 보관함류만. 용량 5·10·20·50 짜리 작은 칸은 어느 쪽이든 건드리지 않는다 -
-    // 그것까지 부풀린 것이 2026-09-05 "리로드 후 지급 손상" 의 유력한 원인이다.
-    // **종류 4 는 뺀다**: 혼자 +0x20 에 8칸짜리 보조 배열을 다는데(실측 2026-09-13)
-    // 그 정체를 모른다. 용량만 올리고 그쪽을 두는 것은 모르는 모양을 건드리는
-    // 것이라, 확인 전까지는 7·9·11 만으로 간다(리뷰 지적 11).
-    return kind == 7 || kind == 9 || kind == 11;
+    for (const auto& r : kKindRules) {
+        if (r.kind != kind) continue;
+        return !r.storage_only || storage;
+    }
+    return false;
 }
 
 namespace {
@@ -522,7 +550,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
         }
         const BagPlan p = plan_bag_expand(cap, sum, a, b,
                                           static_cast<int>(c.slots), target,
-                                          branch);
+                                          branch, bag_kind_cap(c.kind));
         BagSeen seen;
         seen.realm = realm;
         seen.kind = c.kind;
@@ -534,6 +562,10 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
 
         if (!p.apply) {
             ++r->skip;
+            // "이미 그 값이다" 는 끝난 것이고, 나머지는 우리가 모양을 못 알아본
+            // 것이다. 둘을 한 칸에 섞어 세면 자동 재적용이 전이 상태를 보고도
+            // "다 했다" 로 끝낸다.
+            if (!p.understood) ++r->unknown;
             r->last_skip = p.skip;   // 화면·로그에 이유를 낸다(리뷰 지적 10)
             log::infof("가방 건너뜀: 종류 {} 0x{:X} - {}", c.kind, c.address,
                        p.skip);
@@ -541,8 +573,8 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
             // 남아 로드 뒤에도 그대로인 경우의 판정이다 - 그때 주소를 안 고치면
             // 이 기능이 성공했을 때만 되돌리기가 잠긴다(리뷰 치명 1).
             if (remember) {
+                seen.understood = p.understood;
                 if (p.same) {
-                    seen.understood = true;
                     seen.known = true;
                     seen.want_cap = cap;
                     seen.want_sum = sum;
@@ -555,7 +587,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
         // 이미 있는 항목이면 주소만 갈아 끼우고 원본 값은 지킨다.
         if (remember) {
             seen.changed = true;
-            seen.understood = true;   // 계획이 쓰기로 갔다 = 모양을 이해했다
+            seen.understood = p.understood;   // 쓰기로 갔으면 언제나 참이다
             remember_seen(seen);
         }
         // 고른 칸 -> 합계 -> 캐시 순으로. 반대 칸은 건드리지 않는다.
@@ -794,16 +826,20 @@ void bag_auto_tick(const mem::Reader& reader) {
             reader, target, g_auto_storage.load(std::memory_order_acquire),
             g_auto_branch.load(std::memory_order_acquire));
     }
-    if (r.changed + r.skip == 0) {
-        // 대상 컨테이너를 **하나도 못 봤다**. 로드 도중에는 가방 컨테이너의 레코드
-        // 배열이 아직 0 이라 목록에 아예 안 잡힌다(read_inventory_containers 의
-        // records == 0 거르개). 여기서 세대를 소모하면 그 로드에서는 영영 안 걸린다
-        // (리뷰 중대 1).
+    // 아직 끝이 아닌 두 가지. 둘 다 "다음 바퀴에 다시" 가 맞다.
+    //   * 대상 컨테이너를 **하나도 못 봤다** - 로드 도중에는 레코드 배열이 아직
+    //     0 이라 목록에 아예 안 잡힌다(read_inventory_containers 의 거르개).
+    //   * 봤지만 **모양을 못 알아봤다** - 아직 채워지는 중이다. 실측 2026-09-13:
+    //     재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 이 이유로 밀렸고,
+    //     세대는 소모돼 그 로드에서는 한쪽 realm 에만 걸린 채 끝났다.
+    if (r.changed + r.skip == 0 || r.unknown > 0) {
         const int n = g_auto_tries.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (n >= kAutoGiveUp) {
             g_auto_gen.store(gen, std::memory_order_release);
-            log::warnf("가방 자동 다시 적용: {}바퀴 동안 가방 컨테이너를 못 봤다"
-                       " - 이 세대는 포기한다", n);
+            log::warnf("가방 자동 다시 적용: {}바퀴 동안 {} - 이 세대는 포기한다",
+                       n,
+                       r.changed + r.skip == 0 ? "가방 컨테이너를 못 봤다"
+                                               : "컨테이너 모양을 못 알아봤다");
         }
         return;
     }

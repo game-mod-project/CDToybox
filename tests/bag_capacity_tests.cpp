@@ -6,6 +6,8 @@ using cdtb::game::kBagBranchA;
 using cdtb::game::kBagBranchB;
 using cdtb::game::kBagEngineMax;
 using cdtb::game::kBagTargetMax;
+using cdtb::game::bag_kind_cap;
+using cdtb::game::bag_kind_rules;
 using cdtb::game::bag_kind_selected;
 using cdtb::game::plan_bag_expand;
 
@@ -140,6 +142,36 @@ TEST(bag_plan_refuses_to_shrink) {
     CHECK(!plan_bag_expand(900, 850, 0, 850, kSlots, 700, kBagBranchB).apply);
 }
 
+TEST(bag_plan_marks_the_shapes_it_recognized) {
+    // **자동 재적용이 "끝났다" 와 "아직 덜 만들어졌다" 를 가르는 칸이다.**
+    // 여기가 뒤집히면 리로드 직후 한쪽 realm 에만 걸린 채로 끝난다(실측
+    // 2026-09-13: 재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 밀렸다).
+
+    // 모양 검사를 통과 못 한 것 - 다시 해 봐야 한다.
+    CHECK(!plan_bag_expand(-1, 0, 0, 0, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(100, 200, 0, 0, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(500, 200, 150, 100, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(190, 190, 190, 0, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(240, 190, 190, 0, 0, 700).understood);
+
+    // 알아보고 나서 안 건드리기로 한 것 - 다시 해도 같다.
+    CHECK(plan_bag_expand(240, 190, 190, 0, kSlots, 10).understood);
+    CHECK(plan_bag_expand(900, 850, 850, 0, kSlots, 700).understood);
+    // 쓸 것이 있는 것도 당연히 알아본 것이다.
+    const BagPlan p = plan_bag_expand(240, 190, 190, 0, kSlots, 700);
+    CHECK(p.apply);
+    CHECK(p.understood);
+    CHECK(!p.same);
+    // "이미 그 값이다" 는 알아본 것이고 same 이다.
+    const BagPlan again =
+        plan_bag_expand(p.capacity, p.sum, p.expand, p.other, kSlots, 700);
+    CHECK(!again.apply);
+    CHECK(again.understood);
+    CHECK(again.same);
+    // same 은 "이미 그 값" 일 때만이다 - 목표보다 큰 것은 same 이 아니다.
+    CHECK(!plan_bag_expand(900, 850, 850, 0, kSlots, 700).same);
+}
+
 TEST(bag_plan_target_zero_changes_nothing) {
     // 0 은 "복원" 이 아니라 "바꿀 것 없음" 이다.
     CHECK(!plan_bag_expand(240, 190, 190, 0, kSlots, 0).apply);
@@ -170,6 +202,60 @@ TEST(bag_kind_filter_never_touches_the_small_slots) {
     }
 }
 
+TEST(bag_kind_cap_and_filter_come_from_the_same_table) {
+    // **거르개와 상한이 어긋나면 "건드리는데 상한이 없는 종류" 가 생긴다.**
+    // 한 표에서 나오게 한 것이 그 때문이고, 이 시험이 그 계약이다.
+    const auto rules = bag_kind_rules();
+    CHECK(!rules.empty());
+    for (const auto& r : rules) {
+        // 건드리는 종류에는 반드시 쓸 만한 상한이 있어야 한다.
+        CHECK(r.cap > 0);
+        CHECK(r.cap <= cdtb::game::kBagTargetMax);
+        CHECK(cdtb::game::kBagTargetMax <= cdtb::game::kBagEngineMax);
+        CHECK(r.name != nullptr && r.name[0] != '\0');
+        CHECK(bag_kind_cap(r.kind) == r.cap);
+        // storage_only 가 거짓이면 언제나, 참이면 켰을 때만.
+        CHECK(bag_kind_selected(r.kind, true));
+        CHECK(bag_kind_selected(r.kind, false) == !r.storage_only);
+    }
+    // 표에 없는 종류는 상한이 0 이고 어느 쪽이든 안 건드린다.
+    for (const std::uint16_t k : {0, 2, 3, 4, 5, 6, 8, 10, 12, 13, 99}) {
+        CHECK(bag_kind_cap(k) == 0);
+        CHECK(!bag_kind_selected(k, false));
+        CHECK(!bag_kind_selected(k, true));
+    }
+}
+
+TEST(bag_plan_obeys_the_per_kind_limit) {
+    // 종류별 상한이 목표보다 낮으면 그쪽으로 잘린다. 가방(기본 50)에 상한 300 을
+    // 걸고 목표 700 을 넣으면 300 이 나와야 한다.
+    const BagPlan p = plan_bag_expand(240, 190, 190, 0, kSlots, 700,
+                                      kBagBranchA, 300);
+    CHECK(p.apply);
+    CHECK(p.capacity == 300);
+
+    // 목표가 상한보다 낮으면 목표가 이긴다.
+    const BagPlan q = plan_bag_expand(240, 190, 190, 0, kSlots, 260,
+                                      kBagBranchA, 700);
+    CHECK(q.apply);
+    CHECK(q.capacity == 260);
+
+    // 상한이 전체 상한보다 크면 전체 상한이 이긴다 - 표를 잘못 고쳐도
+    // 700 위로는 절대 안 간다.
+    const BagPlan big = plan_bag_expand(240, 190, 190, 0, kSlots, 9999,
+                                        kBagBranchA, 9999);
+    CHECK(big.apply);
+    CHECK(big.capacity == kBagTargetMax);
+
+    // 0·음수는 "상한 없음" 이 아니라 전체 상한이다. 상한 없는 길을 만들지 않는다.
+    for (const int bad : {0, -1, -9999}) {
+        const BagPlan z = plan_bag_expand(240, 190, 190, 0, kSlots, 9999,
+                                          kBagBranchA, bad);
+        CHECK(z.apply);
+        CHECK(z.capacity == kBagTargetMax);
+    }
+}
+
 TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
     // 속성 시험. 작은 범위를 전수로 돌며 "쓸 값이 나왔다면 반드시 성립해야 하는 것"
     // 을 확인한다. 핵심은 마지막의 a + b == sum 이다 - 모델 검사에 구멍이
@@ -184,8 +270,11 @@ TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
                     for (int base = 1; base <= 300; base += 100) {
                         const int cap = base + sum;
                         for (const int target : {50, 240, 300, 700, 9999}) {
+                          // 상한도 같이 돈다 - 0(표에 없음)·낮은 값·전체 상한.
+                          for (const int limit : {0, 300, 700, 9999}) {
                             const auto p = plan_bag_expand(cap, sum, a, b, 1460,
-                                                           target, branch);
+                                                           target, branch,
+                                                           limit);
                             if (!p.apply) continue;
                             CHECK(p.capacity <= cdtb::game::kBagEngineMax);
                             CHECK(p.capacity <= cdtb::game::kBagTargetMax);
@@ -206,6 +295,14 @@ TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
                             // plan 안에서 정의상 성립하는 항등식이라 못 잡는다
                             // (리뷰 재검토 B-8).
                             CHECK(a + b == sum);
+                            // 종류별 상한을 어떤 값으로 줘도 전체 상한을 넘지
+                            // 않는다(표를 잘못 고쳐도 세이브는 안 깨진다).
+                            const int eff =
+                                (limit <= 0 || limit > cdtb::game::kBagTargetMax)
+                                    ? cdtb::game::kBagTargetMax
+                                    : limit;
+                            CHECK(p.capacity <= eff);
+                          }
                         }
                     }
                 }
