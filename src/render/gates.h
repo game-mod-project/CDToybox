@@ -17,6 +17,10 @@ bool loading_gate(bool ready, const char* what, std::size_t done = 0,
 // 전체로 넓혀 열 폭에 잘리지 않게 한다(사용자가 열을 좁히거나 순서를 바꿔 두면
 // 한 열 안에서는 문구와 버튼이 잘렸다 - 화면 검증 2026-09-11). action 이 있으면
 // 그 옆에 SmallButton 을 붙인다. 버튼이 눌리면 true.
+//
+// 그 버튼은 **제 ID 범위 안에서** 그려진다. action 글자가 곧 ImGui ID 라, 같은
+// 창에 같은 글자의 버튼이 또 있으면 둘이 한 위젯이 된다(2026-09-13 인벤토리
+// 창의 [지우기] 둘이 실제로 그랬다).
 // BeginTable 안, TableHeadersRow 뒤에서 부른다.
 bool table_empty_row(const char* text, const char* action = nullptr);
 

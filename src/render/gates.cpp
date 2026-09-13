@@ -51,7 +51,14 @@ bool table_empty_row(const char* text, const char* action) {
     bool pressed = false;
     if (action != nullptr) {
         ImGui::SameLine();
+        // **부르는 쪽이 준 라벨이 곧 ImGui ID 다.** 같은 창에 같은 글자의 버튼이
+        // 하나라도 더 있으면 ImGui 가 둘을 한 위젯으로 보고 경고를 띄운다 -
+        // 실제로 인벤토리 창에서 검색 줄의 [지우기] 와 이 [지우기] 가 부딪혔다
+        // (화면 확인 2026-09-13). 여기서 한 겹 씌우면 세 창(인벤토리·아이템
+        // 목록·로스터) 이 한꺼번에 풀린다.
+        ImGui::PushID("빈표동작");
         pressed = ImGui::SmallButton(action);
+        ImGui::PopID();
     }
     if (table != nullptr) ImGui::PopClipRect();
     return pressed;

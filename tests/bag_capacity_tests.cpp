@@ -140,6 +140,36 @@ TEST(bag_plan_refuses_to_shrink) {
     CHECK(!plan_bag_expand(900, 850, 0, 850, kSlots, 700, kBagBranchB).apply);
 }
 
+TEST(bag_plan_marks_the_shapes_it_recognized) {
+    // **자동 재적용이 "끝났다" 와 "아직 덜 만들어졌다" 를 가르는 칸이다.**
+    // 여기가 뒤집히면 리로드 직후 한쪽 realm 에만 걸린 채로 끝난다(실측
+    // 2026-09-13: 재탐색 0.001초 뒤에 들어가 서버 realm 4개가 전부 밀렸다).
+
+    // 모양 검사를 통과 못 한 것 - 다시 해 봐야 한다.
+    CHECK(!plan_bag_expand(-1, 0, 0, 0, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(100, 200, 0, 0, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(500, 200, 150, 100, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(190, 190, 190, 0, kSlots, 700).understood);
+    CHECK(!plan_bag_expand(240, 190, 190, 0, 0, 700).understood);
+
+    // 알아보고 나서 안 건드리기로 한 것 - 다시 해도 같다.
+    CHECK(plan_bag_expand(240, 190, 190, 0, kSlots, 10).understood);
+    CHECK(plan_bag_expand(900, 850, 850, 0, kSlots, 700).understood);
+    // 쓸 것이 있는 것도 당연히 알아본 것이다.
+    const BagPlan p = plan_bag_expand(240, 190, 190, 0, kSlots, 700);
+    CHECK(p.apply);
+    CHECK(p.understood);
+    CHECK(!p.same);
+    // "이미 그 값이다" 는 알아본 것이고 same 이다.
+    const BagPlan again =
+        plan_bag_expand(p.capacity, p.sum, p.expand, p.other, kSlots, 700);
+    CHECK(!again.apply);
+    CHECK(again.understood);
+    CHECK(again.same);
+    // same 은 "이미 그 값" 일 때만이다 - 목표보다 큰 것은 same 이 아니다.
+    CHECK(!plan_bag_expand(900, 850, 850, 0, kSlots, 700).same);
+}
+
 TEST(bag_plan_target_zero_changes_nothing) {
     // 0 은 "복원" 이 아니라 "바꿀 것 없음" 이다.
     CHECK(!plan_bag_expand(240, 190, 190, 0, kSlots, 0).apply);

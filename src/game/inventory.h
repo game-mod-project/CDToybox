@@ -199,6 +199,10 @@ struct BagPlan {
     bool same = false;         // 건너뛴 이유가 "이미 그 값이다" 인가.
                                // **판정을 문구에서 뗀다** - skip 문자열을 비교해
                                // 쓰면 문구를 다듬는 순간 판정이 조용히 멈춘다.
+    // 모양 검사를 통과했는가(= 우리가 아는 컨테이너다). 통과한 뒤의 건너뜀은
+    // "안 건드리기로 한 결정" 이고, 통과 못 한 건너뜀은 "아직 못 알아봤다" 다.
+    // 리로드 직후의 전이 상태가 후자라, 자동 재적용이 다시 해 볼 근거가 된다.
+    bool understood = false;
     int base = 0;              // 유도한 기본 슬롯
     int branch = kBagBranchA;  // 어느 칸을 쓸 것인가
     int expand = 0;            // 그 칸에 쓸 값
@@ -223,7 +227,14 @@ bool bag_kind_selected(std::uint16_t kind, bool storage);
 
 struct BagResult {
     int changed = 0;   // 실제로 쓴 컨테이너 수(realm 합산)
-    int skip = 0;      // 모양이 달라 건너뛴 수
+    int skip = 0;      // 건너뛴 수(아래 unknown 을 포함한다)
+    // 그중 **모양 검사를 통과 못 해** 건너뛴 수(BagPlan::understood 가 거짓).
+     // 목표보다 이미 크거나 이미 그 값인 것은 모양을 알아본 것이라 여기 안 든다.
+    // 리로드 직후에는 컨테이너가 아직 채워지는 중이라 cap < sum 같은 모양으로
+    // 보인다(실측 2026-09-13: 재탐색 0.001초 뒤에 자동 재적용이 들어가 서버
+    // realm 4개가 전부 이 이유로 밀렸다). 그 상태는 "끝" 이 아니라 "잠시 뒤
+    // 다시 해야 할 일" 이므로 자동 재적용이 세대를 소모하지 않는 근거가 된다.
+    int unknown = 0;
     int fail = 0;      // 쓰기나 되읽기가 실패한 수
     int realms = 0;    // 실제로 쓴 realm 수(1 이면 한쪽만 - 화면이 안 바뀔 수 있다)
     const char* last_skip = "";   // 마지막으로 건너뛴 이유(화면·로그에 낸다)
