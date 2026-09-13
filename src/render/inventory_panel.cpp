@@ -339,9 +339,9 @@ void draw_bag_expand() {
     // 곧 안전 설계**다 - 700 을 놓고 "300 으로 해 보라" 고 적으면 아무 의미가 없다.
     static int s_target = 300;
     static bool s_storage = false;
-    // 확장을 어느 칸에 적을지. A(+0x18)가 기본이다 - 가방이 원래 갖고 있던 확장이
-    // 거기 있고, B(+0x1A)에 넣은 값은 2026-09-13 세이브·로드에서 사라졌다.
-    static int s_branch = game::kBagBranchA;
+    // 확장을 어느 칸에 적을지. **기본은 종류별**이다 - 가방은 +0x18, 보관함류는
+    // +0x1A 에 제 확장을 단다. 강제는 시험용으로만 둔다.
+    static int s_branch = game::kBagBranchAuto;
     // 로드 뒤 자동 다시 적용. 게임이 인벤토리를 새로 만들기 때문에, 저장에 남든
     // 안 남든 이게 없으면 화면 숫자는 로드마다 원래대로 돌아간다.
     static bool s_auto = true;
@@ -367,17 +367,23 @@ void draw_bag_expand() {
             "확장 모드가 없을 때 게임 자체 천장은 240 입니다.");
     }
     ImGui::SetNextItemWidth(220.0f);
-    static const char* kBranchNames[] = {"A: +0x18 (기존 확장이 있는 칸)",
-                                         "B: +0x1A (리로드에서 사라진 칸)"};
-    ImGui::Combo("확장 칸", &s_branch, kBranchNames, 2);
+    // 순서가 열거값과 같아야 한다(A=0, B=1, 자동=2).
+    static const char* kBranchNames[] = {"A: +0x18 강제 (시험용)",
+                                         "B: +0x1A 강제 (시험용)",
+                                         "종류별 (권장)"};
+    ImGui::Combo("확장 칸", &s_branch, kBranchNames, 3);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
             "확장을 어느 칸에 적을지입니다. 반대 칸은 건드리지 않습니다.\n"
-            "가방은 원래 갖고 있던 확장 190 을 A(+0x18)에, 보관함은 200 을\n"
-            "B(+0x1A)에 답니다. 2026-09-13 에 B 로 넣은 60 은 세이브·로드에서\n"
-            "사라졌습니다 - 엔진에 '저장되는 확장' 과 '저장 안 되는 확장' 패킷이\n"
-            "따로 있어, A 가 저장되는 쪽일 수 있습니다.\n"
-            "A 가 정말 저장에 남는다면 되돌리기는 이번 실행 안에만 됩니다.");
+            "\n"
+            "종류마다 제 확장이 들어 있는 칸이 다릅니다 - 가방은 190 을\n"
+            "+0x18 에, 보관함은 200 을 +0x1A 에 답니다(실측). 참고 모드\n"
+            "소스도 +0x1A 를 보관함 세이브의 _varyExpandSlotCount 로 적고,\n"
+            "그것이 '가방과는 다른 것' 이라고 못박습니다.\n"
+            "\n"
+            "2026-09-13 에 가방의 +0x1A(= 가방에게는 남의 칸)에 넣은 값이\n"
+            "리로드에서 사라진 것이 그 때문으로 보입니다.\n"
+            "강제 선택은 그 가설을 시험할 때만 쓰십시오.");
     }
     if (s_done_branch >= 0 && s_done_branch != s_branch) {
         ImGui::TextColored(col::kWarn,

@@ -191,6 +191,19 @@ struct BagKindRule {
     std::uint16_t kind;
     int cap;             // 이 종류의 용량 상한
     bool storage_only;   // 참이면 "보관함도 함께" 를 켰을 때만 건드린다
+    // **이 종류의 확장이 원래 들어 있는 칸.** 종류마다 다르다 - 실측에서도
+    // 상류 소스에서도 그렇다(2026-09-13 조사):
+    //   가방(1)    +0x18 에 190   · 보관함(7) +0x1A 에 200
+    // CT v5.0 2605~2618행이 그 이유를 적는다 - `_varyExpandSlotCount`(세이브의
+    // `InventoryElementSaveData` 안에 있는 값)가 곧 `container+0x1A` 이고,
+    // `+0x14` 는 `_defaultSlotCount + container[0x1A]` 로 **다시 계산되는 캐시**다.
+    // 그런데 그 주석은 머리에 "DURABLE STORAGE EXPANSION, and it is a different
+    // thing from Max Bag Space" 라고 못박는다 - 즉 그 관계는 **보관함 것**이고,
+    // 가방의 확장은 별개 경로(데이터 파일의 defaultSlot 50 / maxSlot 240)다.
+    //
+    // 그래서 2026-09-13 의 시험이 실패한 것이 설명된다: 가방의 **남의 칸**인
+    // +0x1A 에 60 을 넣었고, 가방 쪽 재계산이 그것을 덮었다.
+    int branch;
     const char* name;    // 화면에 내는 이름
 };
 
@@ -202,6 +215,12 @@ std::span<const BagKindRule> bag_kind_rules();
 
 // 이 종류의 상한. 표에 없으면 0(= 안 건드린다).
 int bag_kind_cap(std::uint16_t kind);
+
+// 이 종류의 확장이 원래 들어 있는 칸. 표에 없으면 kBagBranchA.
+int bag_kind_branch(std::uint16_t kind);
+
+// 화면이 고른 값을 실제로 쓸 칸으로 바꾼다. kBagBranchAuto 면 종류별 칸을 쓴다.
+int bag_resolve_branch(int chosen, std::uint16_t kind);
 
 // 컨테이너 하나를 어떻게 바꿀지 계산한 결과. **순수 계산**이라 시험할 수 있다.
 // 확장을 어느 칸에 쓸 것인가. **2026-09-13 실측: 세이브·로드를 하면 우리가 넣은
@@ -215,8 +234,12 @@ int bag_kind_cap(std::uint16_t kind);
 // 때 인벤토리 컴포넌트를 **통째로 새로 만들기** 때문에, 자동 재적용(bag_auto_set)
 // 쪽이 그 절반을 맡는다.
 enum BagBranch : int {
-    kBagBranchA = 0,   // +0x18 - 가방의 기존 확장이 여기 있다(기본)
-    kBagBranchB = 1,   // +0x1A - 처음 쓴 칸, 리로드에서 사라졌다
+    kBagBranchA = 0,   // +0x18 - 가방의 기존 확장이 여기 있다
+    kBagBranchB = 1,   // +0x1A - 보관함의 기존 확장이 여기 있다(= _varyExpandSlotCount)
+    // **기본값.** 종류마다 그 종류의 확장이 있는 칸을 쓴다(bag_kind_branch).
+    // 한 칸을 모든 종류에 강요하면 반드시 절반이 남의 칸을 쓴다 - 2026-09-13 에
+    // 가방의 +0x1A(= 남의 칸)에 넣은 값이 리로드에서 사라진 것이 그것이다.
+    kBagBranchAuto = 2,
 };
 
 struct BagPlan {
