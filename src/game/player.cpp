@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <chrono>
 #include <vector>
 
 #include "core/write_log.h"
@@ -25,6 +26,10 @@ constexpr std::size_t kSpiCur = 0x758, kSpiMax = 0x768;
 std::atomic<std::uintptr_t> g_arr{0};     // 표시용(주 realm)
 std::atomic<std::uintptr_t> g_char{0};    // 고정된 플레이어 char(스티키)
 std::mutex g_arrs_mtx;
+// 게이지 배열을 **언제부터** 못 읽고 있나(0 이면 멀쩡하다). 분석 스레드 한
+// 곳에서만 읽고 쓴다.
+std::chrono::steady_clock::time_point g_dead_since;
+constexpr auto kPlayerDeadFor = std::chrono::seconds(10);
 std::vector<std::uintptr_t> g_arrs;       // freeze 대상: 클라+서버 게이지 배열
 std::atomic<bool> g_god{false};
 std::atomic<bool> g_sta{false};
@@ -134,7 +139,32 @@ void player_discover(const mem::Reader& reader) {
         }
         // 게이트 실패(지역이동·캐릭전환) - 아래에서 다시 잡는다.
     }
-    if (!want_ok) return;   // 아니면 이전 고정 유지
+    if (!want_ok) {
+        // **죽은 채로 붙들지 않는다.** 예전에는 여기서 그냥 돌아가, 리로드로 장비와
+        // 게이지가 함께 죽으면 g_arr 가 죽은 주소를 든 채 player_ready() 가 참으로
+        // 남았다. 그래서 화면이 "아직 안 잡혔습니다" 대신 **-1 / -1** 을 그렸다
+        // (사용자 화면 확인 2026-09-13).
+        //
+        // 지역 이동 중에는 잠깐 못 읽을 수 있으니 경과 시간으로 잰다. 비우면
+        // player_ready() 가 거짓이 되어 화면이 정직해지고, 장비가 다시 잡히는
+        // 순간 이 함수가 다시 고정한다.
+        if (cached != 0 && player_gauge_array(reader, cached) == 0) {
+            const auto now = std::chrono::steady_clock::now();
+            if (g_dead_since.time_since_epoch().count() == 0) {
+                g_dead_since = now;
+            } else if (now - g_dead_since >= kPlayerDeadFor) {
+                g_dead_since = {};
+                log::warnf("플레이어 게이지 0x{:X} 를 계속 못 읽는다 - 놓는다",
+                           cached);
+                g_char.store(0, std::memory_order_release);
+                g_arr.store(0, std::memory_order_release);
+                std::lock_guard<std::mutex> lk(g_arrs_mtx);
+                g_arrs.clear();
+            }
+        }
+        return;   // 잡을 것이 없다
+    }
+    g_dead_since = {};
     const std::uintptr_t arr = player_gauge_array(reader, want);
     g_char.store(want, std::memory_order_release);
     g_arr.store(arr, std::memory_order_release);
