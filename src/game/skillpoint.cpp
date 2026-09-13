@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -21,14 +22,24 @@ constexpr std::size_t kBondPtr = 0xC8;
 std::atomic<std::uintptr_t> g_know{0};
 std::atomic<std::uintptr_t> g_know_client{0};
 
-// 이번 실행에서 **처음 본** 값. 되돌리기가 진짜 복원이 되게 한다.
-struct BondBackup {
-    int realm = 0;
-    std::uintptr_t address = 0;
-    std::uint16_t have = 0, total = 0, total2 = 0, total3 = 0;
-};
 std::mutex g_mtx;
 std::vector<BondBackup> g_backup;
+
+// **쓰기 전체를 직렬화한다.** 화면(렌더 스레드)이 더하기·되돌리기를 부르고, 분석
+// 스레드가 생존 검사로 컴포넌트를 버릴 수 있다. 읽고 쓰는 사이에 그 일이 나면
+// 낡은 주소에 쓰게 된다(가방에서 같은 자리가 중대였다).
+std::mutex g_op_mtx;
+
+// 탐색 스로틀. RTTI 인스턴스 탐색은 힙 전수라 값싸지 않다 - 못 찾은 동안 매 바퀴
+// 훑으면 2초마다 11GB 를 읽는다. 이웃들(인벤토리·명부)이 전부 막아 둔 비용이다.
+std::atomic<int> g_tries{0};
+constexpr int kGiveUp = 12;        // 이만큼 해 보고 그만둔다
+constexpr int kEverySpins = 5;     // 그 전에는 5바퀴(약 10초)에 한 번
+
+// 캐시한 컴포넌트를 **언제부터** 못 읽고 있나(realm 별, 0 이면 멀쩡하다).
+// 분석 스레드 한 곳에서만 읽고 쓴다.
+std::chrono::steady_clock::time_point g_dead_since[2];
+constexpr auto kDeadFor = std::chrono::seconds(10);
 
 // 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
 bool wr16(std::uintptr_t a, std::uint16_t v) {
@@ -79,10 +90,18 @@ BondPlan plan_bond_add(int have, int total, int add, bool also_total) {
     return p;
 }
 
-bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader) {
+bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
+                        int spin) {
     const bool have_server = g_know.load(std::memory_order_acquire) != 0;
     const bool have_client = g_know_client.load(std::memory_order_acquire) != 0;
     if (have_server && have_client) return true;
+
+    // **못 찾은 동안이 비싼 쪽이다.** find_objects_of 는 프리페치 밖이라 부를 때마다
+    // 힙 영역을 전부 읽는다. 분석 루프 한 바퀴가 2초이므로 그대로 두면 2초마다
+    // 11GB 다 - 새 캐릭터나 월드 밖이면 영구히.
+    const int n = g_tries.load(std::memory_order_acquire);
+    if (n >= kGiveUp) return have_server;
+    if ((spin % kEverySpins) != 0) return have_server;
 
     // **아직 못 찾은 클래스만** 넣는다. find_objects_of 의 상한은 클래스별이 아니라
     // 전체이고 낮은 주소부터 채운다(인벤토리에서 같은 함정을 겪었다).
@@ -113,11 +132,82 @@ bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader) {
         log::infof("지식 컴포넌트{} 0x{:X} -> 결속 0x{:X} (총합 {})",
                    is_client ? "(클라)" : "", f.address, ptr, total);
     }
+    const bool ok = g_know.load(std::memory_order_acquire) != 0 &&
+                    g_know_client.load(std::memory_order_acquire) != 0;
+    if (!ok) {
+        const int t = g_tries.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (t == kGiveUp) {
+            log::warnf("지식 컴포넌트를 {}번 만에 다 못 찾았다 - 그만 찾는다"
+                       " (스킬 포인트 기능이 꺼진다)", t);
+        }
+    }
     return g_know.load(std::memory_order_acquire) != 0;
 }
 
 bool knowledge_ready() {
-    return g_know.load(std::memory_order_acquire) != 0;
+    // **두 realm 을 다 봐야 한다.** 서버만 보고 참을 내면 화면이 "준비됐다" 고
+    // 하면서 클라에는 영영 안 쓴다.
+    return g_know.load(std::memory_order_acquire) != 0 &&
+           g_know_client.load(std::memory_order_acquire) != 0;
+}
+
+void knowledge_check_alive(const mem::Reader& reader) {
+    const std::uintptr_t comps[2] = {
+        g_know.load(std::memory_order_acquire),
+        g_know_client.load(std::memory_order_acquire)};
+    const auto now = std::chrono::steady_clock::now();
+    for (int realm = 0; realm < 2; ++realm) {
+        if (comps[realm] == 0) {
+            g_dead_since[realm] = {};   // 아직 못 찾았다 - 탐색이 할 일이다
+            continue;
+        }
+        // 살아 있으면 +0xC8 을 따라가 총합이 읽힌다. 죽으면 포인터가 쓰레기다.
+        std::uint64_t ptr = 0;
+        std::uint16_t total = 0;
+        const bool alive =
+            reader.read_value(comps[realm] + kBondPtr, &ptr) && ptr != 0 &&
+            reader.read_value(static_cast<std::uintptr_t>(ptr) + kBondTotal,
+                              &total);
+        if (alive) {
+            g_dead_since[realm] = {};
+            continue;
+        }
+        // 로딩 화면에서는 잠깐 안 읽힐 수 있다. 바퀴 수가 아니라 경과 시간으로 잰다.
+        if (g_dead_since[realm].time_since_epoch().count() == 0) {
+            g_dead_since[realm] = now;
+            continue;
+        }
+        if (now - g_dead_since[realm] < kDeadFor) continue;
+        g_dead_since[realm] = {};
+        log::warnf("지식 컴포넌트{} 0x{:X} 가 죽었다 - 다시 찾는다",
+                   realm == 1 ? "(클라)" : "", comps[realm]);
+        if (realm == 1) {
+            g_know_client.store(0, std::memory_order_release);
+        } else {
+            g_know.store(0, std::memory_order_release);
+        }
+        g_tries.store(0, std::memory_order_release);   // 다시 찾을 기회를 준다
+    }
+}
+
+const char* bond_restore_blocked(const BondBackup& s, int now_have,
+                                 int now_total) {
+    if (now_have < 0 || now_total < 0) return "값을 읽을 수 없습니다";
+    if (s.wrote_have == 0 && s.wrote_total == 0) {
+        return "무엇을 써 놓았는지 모릅니다";
+    }
+    // **우리가 써 놓은 값 그대로인가.** 다르면 그 사이 게임이 결속을 주었거나
+    // 사용자가 썼다는 뜻이다. 그 위에 옛 원본을 쓰면 정당하게 얻은 것을 지운다
+    // (가방에서 같은 관문이 없어 산 칸을 지우는 길이 열렸었다).
+    if (now_have != static_cast<int>(s.wrote_have) ||
+        now_total != static_cast<int>(s.wrote_total)) {
+        return "더한 뒤 값이 바뀌었습니다 - 되돌리지 않습니다";
+    }
+    // 복원이 **증가**가 되는 상황은 우리가 만든 것이 아니다.
+    if (now_total < static_cast<int>(s.total)) {
+        return "지금 총합이 원본보다 작습니다";
+    }
+    return nullptr;
 }
 
 std::uintptr_t knowledge_component() {
@@ -164,6 +254,7 @@ BondState bond_read(const mem::Reader& reader, int realm) {
 
 namespace {
 
+// **잠금을 이미 쥔 채** 부른다.
 void add_to(const mem::Reader& reader, int realm, int add, bool also_total,
             BondResult* r) {
     const BondState s = bond_read(reader, realm);
@@ -180,19 +271,20 @@ void add_to(const mem::Reader& reader, int realm, int add, bool also_total,
         // **realm 당 처음 본 값만** 남긴다. 여러 번 눌러도 처음 값이 지켜진다.
         std::lock_guard<std::mutex> lk(g_mtx);
         bool seen = false;
-        for (auto& x : g_backup) {
+        for (const auto& x : g_backup) {
             if (x.realm == realm) {
-                x.address = s.address;   // 주소는 따라간다, 값은 덮지 않는다
                 seen = true;
                 break;
             }
         }
         if (!seen) {
+            // 주소는 안 적는다 - 쓸 때마다 +0xC8 을 다시 읽으므로 적어 둘 이유가
+            // 없고, 적어 두면 낡은 주소를 쓰게 되는 길만 생긴다.
             g_backup.push_back(BondBackup{
-                realm, s.address, static_cast<std::uint16_t>(s.have),
+                realm, static_cast<std::uint16_t>(s.have),
                 static_cast<std::uint16_t>(s.total),
                 static_cast<std::uint16_t>(s.total2),
-                static_cast<std::uint16_t>(s.total3)});
+                static_cast<std::uint16_t>(s.total3), 0, 0});
         }
     }
     // **총합 사본 셋을 다 쓴다.** 화면이 어느 것을 읽는지 아직 모른다 - 하나만
@@ -221,21 +313,38 @@ void add_to(const mem::Reader& reader, int realm, int add, bool also_total,
     if (ok && back.address == s.address && back.have == p.have &&
         back.total == p.total) {
         ++r->changed;
+        {
+            // **우리가 써 놓은 값을 적어 둔다.** 되돌리기가 이것과 지금 값을
+            // 대조해, 그 사이 게임이 결속을 주었으면 쓰지 않는다.
+            std::lock_guard<std::mutex> lk(g_mtx);
+            for (auto& x : g_backup) {
+                if (x.realm != realm) continue;
+                x.wrote_have = static_cast<std::uint16_t>(p.have);
+                x.wrote_total = static_cast<std::uint16_t>(p.total);
+                break;
+            }
+        }
         log::infof("결속: realm {} 보유 {} -> {}, 총합 {} -> {} (사본 {} {})",
                    realm, s.have, back.have, s.total, back.total, back.total2,
                    back.total3);
     } else {
-        // 반쯤 써진 채로 두지 않는다.
-        wr16(s.address + kBondHave, static_cast<std::uint16_t>(s.have));
-        wr16(s.address + kBondTotal, static_cast<std::uint16_t>(s.total));
+        // 반쯤 써진 채로 두지 않는다. **지금 주소**에 쓰고(옮겨 갔다고 판정한
+        // 바로 그 경우에 옛 주소를 쓰면 남의 자리를 때린다), **사본까지** 되돌린다
+        // (안 그러면 총합과 사본이 영구히 어긋난 채 남는다).
+        const std::uintptr_t at = back.address != 0 ? back.address : s.address;
+        wr16(at + kBondHave, static_cast<std::uint16_t>(s.have));
+        wr16(at + kBondTotal, static_cast<std::uint16_t>(s.total));
+        wr16(at + kBondTotal2, static_cast<std::uint16_t>(s.total2));
+        wr16(at + kBondTotal3, static_cast<std::uint16_t>(s.total3));
         ++r->fail;
-        log::warnf("결속 쓰기 실패(되돌림): realm {} 0x{:X}", realm, s.address);
+        log::warnf("결속 쓰기 실패(되돌림): realm {} 0x{:X}", realm, at);
     }
 }
 
 }  // namespace
 
 BondResult bond_add(const mem::Reader& reader, int add, bool also_total) {
+    std::lock_guard<std::mutex> op(g_op_mtx);
     BondResult r;
     add_to(reader, 0, add, also_total, &r);
     add_to(reader, 1, add, also_total, &r);
@@ -250,6 +359,7 @@ bool bond_has_backup() {
 }
 
 BondResult bond_restore(const mem::Reader& reader) {
+    std::lock_guard<std::mutex> op(g_op_mtx);
     BondResult r;
     std::vector<BondBackup> saved;
     {
@@ -271,6 +381,17 @@ BondResult bond_restore(const mem::Reader& reader) {
             ++r.skip;
             r.last_skip = "이미 원래 값입니다";
             continue;   // 되돌릴 것이 없다 - 기록을 지운다
+        }
+        // **우리가 써 놓은 값 그대로인가.** 아니면 그 사이 게임이 결속을 주었거나
+        // 사용자가 썼다는 뜻이라, 옛 원본을 쓰면 정당하게 얻은 것을 지운다.
+        if (const char* why = bond_restore_blocked(s, now.have, now.total)) {
+            ++r.skip;
+            r.last_skip = why;
+            keep.push_back(s);
+            log::warnf("결속 복원 건너뜀: realm {} - {} (지금 {}/{}, 우리가 쓴 {}/{})",
+                       s.realm, why, now.have, now.total, s.wrote_have,
+                       s.wrote_total);
+            continue;
         }
         log_write("결속 복원", now.address + kBondHave, std::to_string(now.have),
                   std::to_string(s.have));

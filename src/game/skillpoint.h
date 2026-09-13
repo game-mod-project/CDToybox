@@ -63,7 +63,10 @@ struct BondPlan {
 BondPlan plan_bond_add(int have, int total, int add, bool also_total);
 
 // 지식 컴포넌트를 찾는다(RTTI 한 번). 힙 전수 스캔은 못 찾았을 때만 돈다.
-bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader);
+// spin 은 분석 루프의 바퀴 수다. 못 찾은 동안 매 바퀴 훑으면 2초마다 힙 전수를
+// 읽게 되므로 5바퀴(약 10초)에 한 번만 돌고, 12번 해 보고 그만둔다.
+bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
+                        int spin);
 bool knowledge_ready();
 std::uintptr_t knowledge_component();          // 서버
 std::uintptr_t knowledge_component_client();
@@ -71,6 +74,28 @@ void forget_knowledge();
 
 // 지금 값을 읽는다. realm 0 = 서버, 1 = 클라.
 BondState bond_read(const mem::Reader& reader, int realm);
+
+// 캐시한 컴포넌트가 아직 살아 있는지 본다. 죽었으면 버리고 다시 찾게 한다.
+// 게임은 세이브를 불러올 때 컴포넌트를 새로 만든다(인벤토리에서 실측했다) -
+// 그때 캐시가 죽은 포인터를 든 채 남으면 화면이 낡은 값을 보이고 쓰기가 조용히
+// 남의 자리로 간다. 로딩 화면의 순간적인 실패와 가르려고 경과 시간을 센다.
+void knowledge_check_alive(const mem::Reader& reader);
+
+// --------------------------------------------------- 되돌리기 기록(순수 부분)
+
+// 이번 실행에서 처음 본 값 + **우리가 써 놓은 값**.
+struct BondBackup {
+    int realm = 0;
+    std::uint16_t have = 0, total = 0, total2 = 0, total3 = 0;   // **최초** 원본
+    // 우리가 마지막으로 만들어 놓은 값. 되돌리기 직전에 지금 값과 대조한다 -
+    // 다르면 그 사이 게임이 결속을 주거나 사용자가 썼다는 뜻이므로 되돌리지 않는다.
+    // 가방에서 같은 관문이 없어 "정당하게 산 칸을 지우는" 길이 열렸었다.
+    std::uint16_t wrote_have = 0, wrote_total = 0;
+};
+
+// nullptr 이면 되돌려도 된다. 아니면 막는 이유(화면·로그에 그대로 낸다).
+const char* bond_restore_blocked(const BondBackup& s, int now_have,
+                                 int now_total);
 
 struct BondResult {
     int changed = 0;    // 실제로 쓴 realm 수
