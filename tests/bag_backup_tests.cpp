@@ -100,6 +100,68 @@ TEST(bag_backup_does_not_record_what_we_never_changed) {
     CHECK(v.empty());
 }
 
+TEST(bag_backup_rebaselines_when_someone_else_changed_the_container) {
+    // **재검토 치명 1 의 회귀 시험.** want 만 갱신하면 혈통 검사가 리로드 한 번으로
+    // 무력해진다 - 자동 재적용이 "마지막으로 써 놓은 값" 을 매번 새로 덮어쓰는데
+    // 원본은 영영 그대로라, 그 사이 컨테이너가 정당하게 커져도 되돌리기가 옛 원본을
+    // 쓴다(= 사용자가 돈 주고 산 칸을 지운다).
+    std::vector<BagBackup> v;
+    BagSeen first = bag_seen(0x1000);          // 240/190/190/0
+    first.changed = true;
+    first.known = true;
+    first.want_cap = 300;
+    first.want_sum = 250;
+    bag_backup_upsert(v, first);
+
+    // (1) 우리 값이 저장에서 그대로 살아 돌아왔다 - 원본을 다시 잡지 않는다.
+    BagSeen survived = bag_seen(0x2000);
+    survived.cap = 300;
+    survived.sum = 250;
+    survived.a = 250;
+    survived.known = true;
+    survived.want_cap = 300;
+    survived.want_sum = 250;
+    bag_backup_upsert(v, survived);
+    CHECK(v.size() == 1);
+    CHECK(v[0].cap == 240);
+
+    // (2) 그 사이 사용자가 확장권을 써서 290 이 됐다(기본 50 + 원래 190 + 산 50).
+    //     되돌아갈 자리는 옛 240 이 아니라 지금 이 290 이다.
+    BagSeen bought = bag_seen(0x3000);
+    bought.cap = 290;
+    bought.sum = 240;
+    bought.a = 240;
+    bought.changed = true;
+    bought.known = true;
+    bought.want_cap = 300;
+    bought.want_sum = 250;
+    bag_backup_upsert(v, bought);
+    CHECK(v.size() == 1);
+    CHECK(v[0].cap == 290);   // **구매한 50칸을 지키는 줄**
+    CHECK(v[0].sum == 240);
+    CHECK(v[0].a == 240);
+    // 같은 seen 으로 한 번 더 불려도(쓰기 전/후 두 번 부른다) 결과가 같다.
+    bag_backup_upsert(v, bought);
+    CHECK(v[0].cap == 290);
+}
+
+TEST(bag_backup_does_not_rebaseline_before_it_knows_what_it_wrote) {
+    // 아직 무엇을 썼는지 모르는 항목(want 0)은 다시 잡지 않는다 - 그러면 쓰기가
+    // 반쯤 실패한 상태가 "원본" 으로 굳는다.
+    std::vector<BagBackup> v;
+    BagSeen first = bag_seen(0x1000);
+    first.changed = true;   // known = false: 쓰기 결과를 아직 모른다
+    bag_backup_upsert(v, first);
+    CHECK(v.size() == 1);
+    CHECK(v[0].want_cap == 0);
+
+    BagSeen weird = bag_seen(0x1000);
+    weird.cap = 999;
+    weird.sum = 900;
+    bag_backup_upsert(v, weird);
+    CHECK(v[0].cap == 240);   // 다시 잡지 않았다
+}
+
 TEST(bag_backup_separates_realms_and_kinds) {
     std::vector<BagBackup> v;
     for (int realm = 0; realm < 2; ++realm) {
@@ -112,11 +174,18 @@ TEST(bag_backup_separates_realms_and_kinds) {
         }
     }
     CHECK(v.size() == 4);
-    // 같은 (realm, 종류)가 다시 오면 항목이 늘지 않는다.
+    // 같은 (realm, 종류)가 **다른 주소로** 다시 와도 항목이 늘지 않는다. 이것이
+    // 리로드를 넘기는 방식이다 - 인벤토리가 새로 생기면 주소만 바뀌고 realm·종류는
+    // 그대로다. 한 컴포넌트 안에서 종류가 유일하다는 실측(18개, 종류 0~19 가 한
+    // 번씩)에 기대며, 그 가정이 깨졌을 때 쓰기를 막는 것은 열쇠가 아니라
+    // bag_restore_blocked 의 혈통 검사다.
     BagSeen again = bag_seen(0x9999);
     again.changed = true;
     bag_backup_upsert(v, again);
     CHECK(v.size() == 4);
+    for (const auto& x : v) {
+        if (x.realm == 0 && x.kind == 1) CHECK(x.address == 0x9999);
+    }
 }
 
 TEST(bag_restore_allows_exactly_what_we_wrote) {

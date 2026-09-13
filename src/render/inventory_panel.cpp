@@ -349,6 +349,10 @@ void draw_bag_expand() {
     // 다시 적용하면 확장이 두 칸에 쪼개져, 어느 칸이 저장되는지 가리는 실험이
     // 오염된다(리뷰 경미 3).
     static int s_done_branch = -1;
+    // 되돌리기에 **성공**한 적이 있나. 기록이 비는 이유는 셋인데("한 적 없다",
+    // "되돌렸다", "기록이 사라졌다") 비활성 버튼 툴팁이 전부 첫째로 말했다
+    // (재검토 경미 5).
+    static bool s_restored = false;
     static std::string s_msg;
 
     ImGui::SetNextItemWidth(220.0f);
@@ -429,6 +433,7 @@ void draw_bag_expand() {
         if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
         if (r.changed > 0) {
             s_done_branch = s_branch;
+            s_restored = false;
             if (s_auto) {
                 game::bag_auto_set(s_target, s_storage, s_branch);
             } else {
@@ -447,8 +452,13 @@ void draw_bag_expand() {
         s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 건너뜀 " +
                 std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
         if (r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
-        // 되돌리기는 무장도 함께 푼다(bag_restore 안에서). 칸 경고도 지운다.
-        if (!game::bag_has_backup()) s_done_branch = -1;
+        // 되돌리기는 무장도 함께 푼다(bag_restore 안에서). 칸 경고는 **실제로
+        // 되돌렸을 때만** 지운다 - 기록이 버려졌다고 컨테이너의 확장이 없어진
+        // 것은 아니다(재검토 경미 4).
+        if (r.changed > 0) {
+            s_done_branch = -1;
+            s_restored = true;
+        }
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }
     if (!has_backup) ImGui::EndDisabled();
@@ -457,10 +467,12 @@ void draw_bag_expand() {
         // "확장한 적이 없습니다" 와 "기록이 사라졌습니다" 는 전혀 다른 말이다.
         // 방금 확장한 사람에게 전자를 보이면 무슨 일이 있었는지 알 수 없다
         // (리뷰 경미 4).
-        ImGui::SetTooltip(game::bag_backup_dropped()
-                              ? "되돌릴 기록이 남아 있지 않습니다 - 인벤토리가 새로"
-                                " 생겨 옛 컨테이너가 사라졌습니다."
-                              : "이번 실행에서 확장한 적이 없습니다.");
+        ImGui::SetTooltip(
+            game::bag_backup_dropped()
+                ? "되돌릴 기록이 남아 있지 않습니다 - 인벤토리가 새로 생겨 옛"
+                  " 컨테이너가 사라졌습니다."
+            : s_restored ? "이미 되돌렸습니다."
+                         : "이번 실행에서 확장한 적이 없습니다.");
     }
     if (!s_msg.empty()) ImGui::TextDisabled("%s", s_msg.c_str());
 

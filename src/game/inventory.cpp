@@ -335,6 +335,11 @@ bool inventory_both_ready() {
     return g_client_tries.load(std::memory_order_acquire) >= kClientGiveUp;
 }
 
+bool inventory_client_given_up() {
+    return g_component_client.load(std::memory_order_acquire) == 0 &&
+           g_client_tries.load(std::memory_order_acquire) >= kClientGiveUp;
+}
+
 bool inventory_ready() {
     return g_component.load(std::memory_order_acquire) != 0;
 }
@@ -446,7 +451,10 @@ BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target,
     p.sum = p.other + p.expand;
     p.capacity = p.base + p.sum;
     p.apply = p.capacity != cap || p.expand != cur;
-    if (!p.apply) p.skip = "이미 그 값이다";
+    if (!p.apply) {
+        p.skip = "이미 그 값이다";
+        p.same = true;   // 판정을 문구에서 뗀다(재검토 경미 3)
+    }
     return p;
 }
 
@@ -538,7 +546,7 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
             // 남아 로드 뒤에도 그대로인 경우의 판정이다 - 그때 주소를 안 고치면
             // 이 기능이 성공했을 때만 되돌리기가 잠긴다(리뷰 치명 1).
             if (remember) {
-                if (std::strcmp(p.skip, "이미 그 값이다") == 0) {
+                if (p.same) {
                     seen.known = true;
                     seen.want_cap = cap;
                     seen.want_sum = sum;
@@ -563,17 +571,23 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
         ok = bag_wr16(c.address + 0x16, static_cast<std::uint16_t>(p.sum)) && ok;
         ok = bag_wr16(c.address + 0x14,
                       static_cast<std::uint16_t>(p.capacity)) && ok;
-        std::uint16_t back_cap = 0, back_b = 0;
-        // **쓴 확장 칸도 되읽는다.** 화면 캐시(+0x14)만 보면 "화면은 300, 확장
-        // 칸은 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6).
+        std::uint16_t back_cap = 0, back_sum = 0, back_b = 0;
+        // **쓴 칸을 전부 되읽는다.** 화면 캐시(+0x14)만 보면 "화면은 300, 확장 칸은
+        // 그대로" 인 상태를 성공으로 적게 된다(리뷰 지적 6). +0x16 이 조용히 실패하면
+        // cap < sum 인 - plan_bag_expand 가 영원히 거부하는 - 상태가 남는다
+        // (재검토 경미 2).
         const bool read_ok = reader.read_value(c.address + 0x14, &back_cap) &&
+                             reader.read_value(c.address + 0x16, &back_sum) &&
                              reader.read_value(slot, &back_b);
         if (ok && read_ok &&
             back_cap == static_cast<std::uint16_t>(p.capacity) &&
+            back_sum == static_cast<std::uint16_t>(p.sum) &&
             back_b == static_cast<std::uint16_t>(p.expand)) {
             ++r->changed;
             log_write("가방 용량", c.address + 0x14, std::to_string(cap),
                       std::to_string(p.capacity));
+            log_write("가방 확장합계", c.address + 0x16, std::to_string(sum),
+                      std::to_string(p.sum));
             log_write(p.branch == kBagBranchA ? "가방 확장칸A" : "가방 확장칸B",
                       slot, std::to_string(was), std::to_string(p.expand));
             if (remember) {
@@ -596,12 +610,18 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
             log::warnf("가방 확장 실패({}): 0x{:X} 종류 {}",
                        undo ? "되돌림 성공" : "되돌림도 실패", c.address,
                        c.kind);
-            if (remember && undo) {
-                // 원래 값으로 돌아갔다. 그 사실을 적어 두지 않으면 되돌리기가
-                // "적용한 뒤 값이 바뀌었습니다" 로 영영 막힌다.
-                seen.known = true;
-                seen.want_cap = cap;
-                seen.want_sum = sum;
+            if (remember) {
+                // **지금 실제로 어떤 상태인지 되읽어 적는다.** 되돌림이 실패한
+                // 경우가 바로 되돌리기가 필요한 상태인데, 예전에는 그때만
+                // want 가 0 으로 남아 "무엇을 써 놓았는지 모릅니다" 로 영구히
+                // 막혔다 - 버튼은 켜진 채로(재검토 중대 4).
+                std::uint16_t now_cap = 0, now_sum = 0;
+                if (reader.read_value(c.address + 0x14, &now_cap) &&
+                    reader.read_value(c.address + 0x16, &now_sum)) {
+                    seen.known = true;
+                    seen.want_cap = now_cap;
+                    seen.want_sum = now_sum;
+                }
                 remember_seen(seen);
             }
         }
@@ -614,26 +634,31 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
 // ------------------------------------------------- 되돌리기 기록(순수 부분)
 
 void bag_backup_upsert(std::vector<BagBackup>& v, const BagSeen& seen) {
+    // **열쇠는 (realm, 종류)뿐이다.** 주소로 먼저 맞춰 보던 것을 뺐다 - 게임이 힙에서
+    // 같은 자리를 돌려주면 그 주소에 다른 종류·다른 realm 의 컨테이너가 올 수 있고,
+    // 그러면 남의 항목에 want 를 덮어써서 진짜 기록을 잃는다(재검토 중대 2).
     BagBackup* hit = nullptr;
-    // 주소가 같은 항목이 먼저다. 같은 realm 에 같은 종류가 둘인 인벤토리가 나오더라도
-    // 서로의 원본을 바꿔 달지 않는다 - 실측 18개는 종류가 전부 유일하지만 그 가정에
-    // 기대지 않는다(리뷰 치명 3).
     for (auto& x : v) {
-        if (x.address == seen.address) {
+        if (x.realm == seen.realm && x.kind == seen.kind) {
             hit = &x;
             break;
         }
     }
-    if (hit == nullptr) {
-        for (auto& x : v) {
-            if (x.realm == seen.realm && x.kind == seen.kind) {
-                hit = &x;
-                break;
-            }
-        }
-    }
     if (hit != nullptr) {
-        hit->address = seen.address;   // **원본 값(cap/sum/a/b)은 덮지 않는다**
+        hit->address = seen.address;
+        // **손대기 전 값이 우리가 써 놓은 값이 아니면 그것이 새 원본이다.**
+        // 그 사이 누가 바꿨다는 뜻이고(확장권 구매, 캐릭터 교체, 다른 세이브,
+        // 리로드로 우리 값이 사라짐), 되돌아갈 자리는 옛 원본이 아니라 지금 이 값이다.
+        // 이게 없으면 자동 재적용이 want 만 새로 덮어써서 혈통 검사가 리로드 한 번으로
+        // 무력해지고, 되돌리기가 사용자가 돈 주고 산 칸을 지운다(재검토 치명 1).
+        // 우리 값이 그대로 살아 돌아온 경우에는 값이 정확히 같아 다시 잡지 않는다.
+        if (hit->want_cap != 0 &&
+            (seen.cap != hit->want_cap || seen.sum != hit->want_sum)) {
+            hit->cap = seen.cap;
+            hit->sum = seen.sum;
+            hit->a = seen.a;
+            hit->b = seen.b;
+        }
         if (seen.known) {
             hit->want_cap = seen.want_cap;
             hit->want_sum = seen.want_sum;
@@ -690,9 +715,13 @@ bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
 
 // ------------------------------------------------------------- 확장과 복원
 
-BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
-                     int branch) {
-    std::lock_guard<std::mutex> op(g_bag_op_mtx);
+namespace {
+
+// 잠금을 **이미 쥔 채** 부른다. 자동 재적용이 "무장됐나" 를 잠금 안에서 다시 보고
+// 이어서 쓰려면, 같은 비재귀 뮤텍스를 두 번 잡지 않도록 알맹이가 따로 있어야 한다
+// (재검토 경미 1).
+BagResult bag_expand_locked(const mem::Reader& reader, int target, bool storage,
+                            int branch) {
     // **백업을 비우지 않는다.** (realm, 종류)당 첫 원본만 남기므로 여러 번 눌러도
     // 처음 값이 지켜진다(리뷰 지적 3). 비우는 것은 되돌리기 성공뿐이다.
     BagResult r;
@@ -707,6 +736,14 @@ BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
                branch == kBagBranchB ? "B(+0x1A)" : "A(+0x18)", r.changed,
                r.realms, r.skip, r.fail);
     return r;
+}
+
+}  // namespace
+
+BagResult bag_expand(const mem::Reader& reader, int target, bool storage,
+                     int branch) {
+    std::lock_guard<std::mutex> op(g_bag_op_mtx);
+    return bag_expand_locked(reader, target, storage, branch);
 }
 
 void bag_auto_set(int target, bool storage, int branch) {
@@ -734,9 +771,18 @@ void bag_auto_tick(const mem::Reader& reader) {
         g_auto_tries.store(0, std::memory_order_release);
     }
     const int target = g_auto_target.load(std::memory_order_acquire);
-    const BagResult r =
-        bag_expand(reader, target, g_auto_storage.load(std::memory_order_acquire),
-                   g_auto_branch.load(std::memory_order_acquire));
+    BagResult r;
+    {
+        // **잠금을 쥔 채 다시 확인한다.** 검사와 쓰기 사이에 렌더 스레드의
+        // 되돌리기가 먼저 끝나면, 방금 되돌린 것을 2초 안에 다시 걸게 된다 -
+        // 하필 "로드 직후 곧바로 되돌리기" 라는 가장 흔한 조작과 겹친다
+        // (재검토 경미 1).
+        std::lock_guard<std::mutex> op(g_bag_op_mtx);
+        if (!g_auto_on.load(std::memory_order_acquire)) return;
+        r = bag_expand_locked(
+            reader, target, g_auto_storage.load(std::memory_order_acquire),
+            g_auto_branch.load(std::memory_order_acquire));
+    }
     if (r.changed + r.skip == 0) {
         // 대상 컨테이너를 **하나도 못 봤다**. 로드 도중에는 가방 컨테이너의 레코드
         // 배열이 아직 0 이라 목록에 아예 안 잡힌다(read_inventory_containers 의
@@ -799,19 +845,33 @@ BagResult bag_restore(const mem::Reader& reader) {
     for (const auto& s : saved) {
         const int realm = s.realm == 1 ? 1 : 0;
         if (!readable[realm]) {
+            // 클라를 아예 포기한 판이면 그 기록은 영원히 못 되돌린다. 남겨 두면
+            // 버튼이 늘 켜진 채 "지금은 읽을 수 없습니다" 만 반복해 뜻이 흐려진다
+            // (재검토 경미 6).
+            if (realm == 1 && inventory_client_given_up()) {
+                ++r.skip;
+                r.last_skip = "클라 인벤토리를 찾지 못해 그쪽은 되돌릴 수 없습니다";
+                g_backup_dropped.store(true, std::memory_order_release);
+                continue;
+            }
             ++r.skip;
             r.last_skip = "지금은 인벤토리를 읽을 수 없습니다 - 잠시 뒤 다시"
                           " 누르십시오";
             keep.push_back(s);   // **버리지 않는다**
             continue;
         }
-        // **지금 살아 있는 컨테이너만 되돌린다.** 게임이 인벤토리를 새로 만들면
-        // 백업의 주소는 남의 객체가 된다. bag_wr16 의 SEH 는 매핑 안 된 페이지만
-        // 막지, 재할당된 유효 주소는 조용히 써 버린다
-        // (clan-roster-volatile-writes 와 같은 함정, 리뷰 지적 1).
+        // **지금 살아 있는 컨테이너를 (realm, 종류)로 다시 찾는다.** 주소로만 찾으면,
+        // 자동 재적용이 꺼져 있거나 포기한 세대에서는 주소가 낡은 채 남아 되돌리기
+        // 한 번에 기록이 통째로 버려진다 - A 칸이 저장에 남은 바로 그 경우에
+        // (재검토 중대 3). 낡은 주소에 쓰는 길은 이 조회가 막고(bag_wr16 의 SEH 는
+        // 매핑 안 된 페이지만 막지, 재할당된 유효 주소는 조용히 써 버린다 -
+        // clan-roster-volatile-writes 와 같은 함정), 엉뚱한 컨테이너에 쓰는 길은
+        // 아래 bag_restore_blocked 의 혈통 검사가 막는다.
         const InventoryContainer* now = nullptr;
         for (const auto& c : live[realm]) {
-            if (c.address == s.address && c.kind == s.kind) {
+            if (c.kind != s.kind) continue;
+            if (now == nullptr) now = &c;
+            if (c.address == s.address) {   // 주소까지 같으면 그것이 확실하다
                 now = &c;
                 break;
             }
@@ -826,11 +886,16 @@ BagResult bag_restore(const mem::Reader& reader) {
                        s.address);
             continue;
         }
+        const std::uintptr_t addr = now->address;
+        if (addr != s.address) {
+            log::infof("가방 복원: 종류 {} 가 0x{:X} 에서 0x{:X} 로 옮겨 갔다",
+                       s.kind, s.address, addr);
+        }
         std::uint16_t cap = 0, sum = 0, cur_a = 0, cur_b = 0;
-        if (!reader.read_value(s.address + 0x14, &cap) ||
-            !reader.read_value(s.address + 0x16, &sum) ||
-            !reader.read_value(s.address + 0x18, &cur_a) ||
-            !reader.read_value(s.address + 0x1A, &cur_b)) {
+        if (!reader.read_value(addr + 0x14, &cap) ||
+            !reader.read_value(addr + 0x16, &sum) ||
+            !reader.read_value(addr + 0x18, &cur_a) ||
+            !reader.read_value(addr + 0x1A, &cur_b)) {
             ++r.fail;
             keep.push_back(s);
             continue;
@@ -840,36 +905,40 @@ BagResult bag_restore(const mem::Reader& reader) {
             ++r.skip;
             r.last_skip = why;
             keep.push_back(s);
-            log::warnf("가방 복원 건너뜀: 0x{:X} - {}", s.address, why);
+            log::warnf("가방 복원 건너뜀: 0x{:X} - {}", addr, why);
             continue;
         }
         // 쓰기 **전에** 남긴다 - 쓰는 도중 죽어도 무엇을 썼는지 재구성할 수 있게.
         // 확장 칸을 고를 수 있게 된 뒤로는 +0x18 도 우리가 쓰므로 **두 갈래를 다**
         // 되돌린다(리뷰 경미 5: 쓰기 네 번에 로그 한 줄이었다).
-        log_write("가방 복원 확장A", s.address + 0x18, std::to_string(cur_a),
+        log_write("가방 복원 확장A", addr + 0x18, std::to_string(cur_a),
                   std::to_string(s.a));
-        log_write("가방 복원 확장B", s.address + 0x1A, std::to_string(cur_b),
+        log_write("가방 복원 확장B", addr + 0x1A, std::to_string(cur_b),
                   std::to_string(s.b));
-        log_write("가방 복원 용량", s.address + 0x14, std::to_string(cap),
+        log_write("가방 복원 확장합계", addr + 0x16, std::to_string(sum),
+                  std::to_string(s.sum));
+        log_write("가방 복원 용량", addr + 0x14, std::to_string(cap),
                   std::to_string(s.cap));
         // 되돌릴 때도 쓴 순서의 역순으로 - 캐시(+0x14)를 마지막에 맞춘다.
-        bool ok = bag_wr16(s.address + 0x18, s.a);
-        ok = bag_wr16(s.address + 0x1A, s.b) && ok;
-        ok = bag_wr16(s.address + 0x16, s.sum) && ok;
-        ok = bag_wr16(s.address + 0x14, s.cap) && ok;
-        std::uint16_t back_cap = 0, back_a = 0, back_b = 0;
-        const bool read_ok = reader.read_value(s.address + 0x14, &back_cap) &&
-                             reader.read_value(s.address + 0x18, &back_a) &&
-                             reader.read_value(s.address + 0x1A, &back_b);
-        if (ok && read_ok && back_cap == s.cap && back_a == s.a &&
-            back_b == s.b) {
+        bool ok = bag_wr16(addr + 0x18, s.a);
+        ok = bag_wr16(addr + 0x1A, s.b) && ok;
+        ok = bag_wr16(addr + 0x16, s.sum) && ok;
+        ok = bag_wr16(addr + 0x14, s.cap) && ok;
+        std::uint16_t back_cap = 0, back_sum = 0, back_a = 0, back_b = 0;
+        const bool read_ok = reader.read_value(addr + 0x14, &back_cap) &&
+                             reader.read_value(addr + 0x16, &back_sum) &&
+                             reader.read_value(addr + 0x18, &back_a) &&
+                             reader.read_value(addr + 0x1A, &back_b);
+        if (ok && read_ok && back_cap == s.cap && back_sum == s.sum &&
+            back_a == s.a && back_b == s.b) {
             ++r.changed;
         } else {
             ++r.fail;
-            keep.push_back(s);   // 이것만 다시 해 볼 여지가 있다
-            log::warnf("가방 복원 실패: 0x{:X} 종류 {} (쓰기 {}, 되읽기 {})",
-                       s.address, s.kind, ok ? "성공" : "실패",
-                       read_ok ? "성공" : "실패");
+            BagBackup again = s;
+            again.address = addr;   // 다음 시도는 지금 자리에서
+            keep.push_back(again);
+            log::warnf("가방 복원 실패: 0x{:X} 종류 {} (쓰기 {}, 되읽기 {})", addr,
+                       s.kind, ok ? "성공" : "실패", read_ok ? "성공" : "실패");
         }
     }
     {
