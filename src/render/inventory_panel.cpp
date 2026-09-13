@@ -335,7 +335,9 @@ std::vector<game::SocketCapRule> rules_from_ui() {
 // ② 목표 기본값이 999 인데 하드 상한이 없었기 때문이다.
 void draw_bag_expand() {
     if (!ImGui::CollapsingHeader("가방·보관함 용량")) return;
-    static int s_target = game::kBagTargetMax;
+    // 기본값은 낮게 둔다. 이 기능은 세이브에 값을 박는 유일한 기능이라 **기본값이
+    // 곧 안전 설계**다 - 700 을 놓고 "300 으로 해 보라" 고 적으면 아무 의미가 없다.
+    static int s_target = 300;
     static bool s_storage = false;
     static std::string s_msg;
 
@@ -381,8 +383,9 @@ void draw_bag_expand() {
     if (!has_backup) ImGui::BeginDisabled();
     if (ImGui::Button("되돌리기")) {
         const auto r = game::bag_restore(reader);
-        s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 실패 " +
-                std::to_string(r.fail);
+        s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 건너뜀 " +
+                std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        if (r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }
     if (!has_backup) ImGui::EndDisabled();
@@ -393,8 +396,8 @@ void draw_bag_expand() {
     if (!s_msg.empty()) ImGui::TextDisabled("%s", s_msg.c_str());
 
     ImGui::TextWrapped(
-        "되돌리기는 **이번 실행 동안에만** 됩니다. 게임을 끄면 원래 값으로 돌아갈 "
-        "수 없습니다 - 먼저 세이브 파일을 복사해 두십시오.");
+        "되돌리기는 이번 실행 동안에만 됩니다. 게임을 끄면 원래 값으로 돌아갈 수 "
+        "없습니다 - 먼저 세이브 파일을 복사해 두십시오.");
     ImGui::TextWrapped(
         "저장에 남는지는 아직 확인되지 않았습니다. 처음이라면 목표를 낮게(예: 300) "
         "잡아 한 번 적용하고, 저장 후 게임을 다시 켜서 유지되는지 보십시오. "

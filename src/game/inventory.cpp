@@ -199,6 +199,10 @@ constexpr const char* kInventoryClassClient =
 std::atomic<std::uintptr_t> g_component{0};
 std::atomic<std::uintptr_t> g_component_client{0};
 std::atomic<bool> g_rescan{false};
+// 클라를 못 찾은 채 몇 번 훑었나. 상시 루프가 10초마다 11GB 힙을 영원히 훑는 것을
+// 막는다(리뷰 재검토 B-2).
+std::atomic<int> g_client_tries{0};
+constexpr int kClientGiveUp = 12;
 
 // 내용이 든 컴포넌트인가. 빈 것이 여럿 살아 있어 그것으로 가른다.
 bool component_has_items(const mem::Reader& reader, std::uintptr_t addr,
@@ -220,13 +224,19 @@ bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader) {
 
     // 두 클래스를 **힙 한 번 훑기**로 같이 찾는다 - instances_of_class 는 vtable
     // 마다 힙 전체를 읽어, 따로 부르면 훑기가 두 배가 된다.
-    // 상한은 통과 캐시(kPassScanPerClass = 64)의 두 클래스분과 맞춘다.
+    // **아직 못 찾은 클래스만** 넣는다. find_objects_of 의 상한은 클래스별이 아니라
+    // **전체**이고 낮은 주소부터 채우므로(rtti.h), 두 이름을 늘 함께 넣으면 먼저
+    // 잡힌 쪽이 칸을 다 먹어 나머지가 잘린다 - 실측 2026-09-13 에 서버 109개·
+    // 클라 95개(합 204)라, 128 로 자르면 클라 95개 중 67개가 잘려 나갔다.
+    // 서버를 잡은 뒤에는 128칸이 전부 클라 몫이 된다(리뷰 재검토 B-2).
+    std::vector<std::string> want;
+    if (!have_server) want.emplace_back(kInventoryClass);
+    if (!have_client) want.emplace_back(kInventoryClassClient);
     constexpr std::size_t kFindMax = 128;
-    const auto found = rtti.find_objects_of(
-        {kInventoryClass, kInventoryClassClient}, kFindMax);
+    const auto found = rtti.find_objects_of(want, kFindMax);
     if (found.size() >= kFindMax) {
         // 닿으면 진짜 컴포넌트가 잘려 나갈 수 있고, 증상이 "아직 없다" 와 구분되지
-        // 않는다(리뷰 지적 12, camera.cpp 의 같은 경고와 형태를 맞춘다).
+        // 않는다(camera.cpp 의 같은 경고와 형태를 맞춘다).
         log::warnf("인벤토리 후보가 상한 {}에 닿았다 - 잘렸을 수 있다", kFindMax);
     }
     for (const auto& f : found) {
@@ -239,12 +249,25 @@ bool discover_inventory(const mem::Rtti& rtti, const mem::Reader& reader) {
         log::infof("인벤토리 컴포넌트{} 0x{:X}", is_client ? "(클라)" : "",
                    f.address);
     }
+    // 클라를 못 찾는 판이 있을 수 있다(내용이 빈 채로만 존재하는 경우 등).
+    // 영원히 같은 비용으로 다시 훑지 않도록 몇 번 해 보고 포기한다 - 포기해도
+    // 가방 확장은 서버 쪽에만 쓰고 패널이 "한쪽 realm 에만 썼습니다" 를 낸다.
+    if (g_component.load(std::memory_order_acquire) != 0 &&
+        g_component_client.load(std::memory_order_acquire) == 0) {
+        const int n = g_client_tries.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (n == kClientGiveUp) {
+            log::warnf("인벤토리 클라 컴포넌트를 {}번 만에 못 찾았다 - 그만 찾는다"
+                       " (가방 확장은 서버 realm 에만 간다)", n);
+        }
+    }
     return g_component.load(std::memory_order_acquire) != 0;
 }
 
 bool inventory_both_ready() {
-    return g_component.load(std::memory_order_acquire) != 0 &&
-           g_component_client.load(std::memory_order_acquire) != 0;
+    if (g_component.load(std::memory_order_acquire) == 0) return false;
+    if (g_component_client.load(std::memory_order_acquire) != 0) return true;
+    // 포기했으면 "다 찾았다" 로 쳐서 상시 루프가 멈추게 한다.
+    return g_client_tries.load(std::memory_order_acquire) >= kClientGiveUp;
 }
 
 bool inventory_ready() {
@@ -262,9 +285,11 @@ std::uintptr_t inventory_component_client() {
 void forget_inventory() {
     g_component.store(0, std::memory_order_release);
     g_component_client.store(0, std::memory_order_release);
-    // 가방 백업이 가리키던 세계가 사라졌다. **낡은 주소에 되돌려 쓰면 재활용된
-    // 힙을 때린다**(clan-roster-volatile-writes 와 같은 함정, 리뷰 지적 1).
-    forget_bag_backup();
+    // 가방 백업은 **버리지 않는다.** bag_restore 가 "지금 살아 있는 컨테이너인가"
+    // 를 직접 검사하므로(낡은 주소에 쓰는 길은 그쪽에서 막힌다), 여기서 선제적으로
+    // 버리면 같은 주소로 곧 다시 잡히는 흔한 경우에 되돌릴 수단만 잃는다
+    // (리뷰 재검토 B-3).
+    g_client_tries.store(0, std::memory_order_release);
     request_inventory_rescan();
 }
 
@@ -449,11 +474,14 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp, int target,
         } else {
             // 반쯤 써진 채로 두지 않는다. 남는 값은 전부 목표 이하라 위험하지는
             // 않지만, 사용자가 "왜 이 값인가" 를 알 수 없는 상태가 된다.
-            bag_wr16(c.address + 0x1A, b);
-            bag_wr16(c.address + 0x16, sum);
-            bag_wr16(c.address + 0x14, cap);
+            bool undo = bag_wr16(c.address + 0x1A, b);
+            undo = bag_wr16(c.address + 0x16, sum) && undo;
+            undo = bag_wr16(c.address + 0x14, cap) && undo;
             ++r->fail;
-            log::warnf("가방 확장 실패(되돌림): 0x{:X} 종류 {}", c.address,
+            log_write("가방 되돌림", c.address + 0x14,
+                      std::to_string(p.capacity), std::to_string(cap));
+            log::warnf("가방 확장 실패({}): 0x{:X} 종류 {}",
+                       undo ? "되돌림 성공" : "되돌림도 실패", c.address,
                        c.kind);
         }
     }
@@ -501,6 +529,7 @@ BagResult bag_restore(const mem::Reader& reader) {
         if (!read_inventory_containers(reader, comp, &cs)) continue;
         for (const auto& c : cs) alive.emplace_back(c.address, c.kind);
     }
+    std::vector<BagBackup> keep;   // 되돌리지 못한 것만 남긴다
     for (const auto& s : saved) {
         bool ok_alive = false;
         for (const auto& a : alive) {
@@ -510,12 +539,17 @@ BagResult bag_restore(const mem::Reader& reader) {
             }
         }
         if (!ok_alive) {
-            ++r.fail;
+            // 죽은 컨테이너는 다시 살아나지 않는다. 남겨 두면 되돌리기가 영구히
+            // 잠기므로(리뷰 재검토 B-1) 실패가 아니라 **건너뜀**으로 세고 버린다.
+            ++r.skip;
+            r.last_skip = "인벤토리가 새로 생겨 옛 컨테이너가 없습니다";
             log::warnf("가방 복원 건너뜀: 0x{:X} 는 지금 컨테이너가 아니다",
                        s.address);
             continue;
         }
         // 되돌릴 때도 쓴 순서의 역순으로 - 캐시(+0x14)를 마지막에 맞춘다.
+        log_write("가방 복원", s.address + 0x14, "확장됨",
+                  std::to_string(s.cap));
         bag_wr16(s.address + 0x1A, s.b);
         bag_wr16(s.address + 0x16, s.sum);
         bag_wr16(s.address + 0x14, s.cap);
@@ -524,11 +558,14 @@ BagResult bag_restore(const mem::Reader& reader) {
             ++r.changed;
         } else {
             ++r.fail;
+            keep.push_back(s);   // 이것만 다시 해 볼 여지가 있다
         }
     }
-    if (r.fail == 0) {
+    {
+        // 되돌린 것과 죽은 것은 지우고, 실패한 것만 남긴다. 예전에는 하나라도
+        // 실패하면 통째로 남겨 되돌리기가 영구히 잠겼다(리뷰 재검토 B-1).
         std::lock_guard<std::mutex> lk(g_bag_mtx);
-        g_bag_backup.clear();
+        g_bag_backup = keep;
     }
     log::infof("가방 복원: 되돌린 것 {}개, 실패 {}", r.changed, r.fail);
     return r;

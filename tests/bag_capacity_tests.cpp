@@ -115,7 +115,8 @@ TEST(bag_kind_filter_never_touches_the_small_slots) {
 
 TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
     // 속성 시험. 작은 범위를 전수로 돌며 "쓸 값이 나왔다면 반드시 성립해야 하는 것"
-    // 을 확인한다 - 모델 검사에 구멍이 생기면 여기서 걸린다.
+    // 을 확인한다. 핵심은 마지막의 a + b == sum 이다 - 모델 검사에 구멍이
+    // 생기면 그 줄에서 걸린다(나머지는 정의상 성립하는 항등식이다).
     for (int a = 0; a <= 300; a += 50) {
         for (int b = 0; b <= 300; b += 50) {
             for (int extra = -50; extra <= 50; extra += 25) {
@@ -132,6 +133,11 @@ TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
                         CHECK(p.sum == a + p.expand_b);
                         CHECK(p.expand_b >= 0);
                         CHECK(p.base > 0);
+                        // **이 한 줄이 지적 2 의 회귀를 잡는다** - 쓸 값이
+                        // 나왔다면 입력 모델이 성립했어야 한다. 나머지는
+                        // plan 안에서 정의상 성립하는 항등식이라 못 잡는다
+                        // (리뷰 재검토 B-8).
+                        CHECK(a + b == sum);
                     }
                 }
             }

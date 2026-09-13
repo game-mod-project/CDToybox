@@ -207,7 +207,8 @@ struct BagResult {
     const char* last_skip = "";   // 마지막으로 건너뛴 이유(화면·로그에 낸다)
 };
 
-// 가방(종류 1)을, storage 가 참이면 보관함류(종류 4·7·9·11)도 함께 target 슬롯으로
+// 가방(종류 1)을, storage 가 참이면 보관함류(종류 7·9·11 - 4 는 다른 구조를 달아
+// 뺐다, bag_kind_selected 참고)도 함께 target 슬롯으로
 // 맞춘다. 클라·서버 두 realm 에 같이 쓴다. **모드(주입 DLL)에서만** 부른다.
 BagResult bag_expand(const mem::Reader& reader, int target, bool storage);
 
