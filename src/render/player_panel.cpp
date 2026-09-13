@@ -6,9 +6,12 @@
 
 #include "game/nofall.h"
 #include "game/player.h"
+#include "game/clan.h"
+#include "game/knowledge.h"
 #include "game/skillgate.h"
 #include "game/skillpoint.h"
 #include "render/colors.h"
+#include "render/confirm.h"
 #include "render/notice.h"
 #include "mem/reader.h"
 #include "render/layout.h"
@@ -95,6 +98,107 @@ void draw_skill_bond(const mem::Reader& reader) {
 }  // namespace
 
 namespace {
+
+// 지식(스킬 트리 노드) 표. 화면의 `[깨달음] 필요` / `[원소: …] 중 하나` 는 **둘 다
+// 선행 지식**이고, 판정은 `배운지식표[번호].레벨 >= 필요레벨` 한 줄이다(실측).
+// 여기서는 먼저 **읽기만** 해서 "무엇이 모자란가" 를 보여 주고, 배우기는 확인을 받는다.
+void draw_knowledge(const mem::Reader& reader) {
+    if (!ImGui::CollapsingHeader("지식 (선행 조건)")) return;
+
+    static game::KnowScan s_scan;
+    static Notice s_note;
+    static bool s_scanned = false;
+
+    game::KnowTable t;
+    if (!game::know_table(reader, 0, &t)) {
+        ImGui::TextDisabled("월드에 들어가면 지식 컴포넌트를 잡습니다 (자동).");
+        return;
+    }
+    ImGui::Text("지식 %d개", t.count);
+    ImGui::SameLine();
+    ImGui::TextDisabled("표 0x%llX", static_cast<unsigned long long>(t.data));
+
+    if (ImGui::Button("선행 조건 훑기")) {
+        // **쓰기가 없다.** 정적 표를 걸어 "어딘가가 요구하는데 내 레벨이 모자란
+        // 지식" 을 모으기만 한다.
+        s_scan = game::know_scan(game::clan_rtti(), reader, 0);
+        s_scanned = true;
+        if (!s_scan.ok) {
+            notice_set(&s_note, NoticeLevel::Bad, "{}", s_scan.skip);
+        } else {
+            notice_set(&s_note, NoticeLevel::Ok,
+                       "지식 {}개 중 배운 것 {}개 · 모자란 선행 조건 {}개",
+                       s_scan.knowledge, s_scan.learned,
+                       static_cast<int>(s_scan.needs.size()));
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "게임의 지식 표를 전부 읽어, 스킬 트리 경로(태그 3)의 선행 조건\n"
+            "목록을 모읍니다. 읽기만 하며 게임 상태를 바꾸지 않습니다.");
+    }
+    notice_draw(s_note);
+
+    if (!s_scanned || !s_scan.ok) return;
+
+    ImGui::TextWrapped(
+        "아래는 다른 노드가 선행 조건으로 요구하는데 아직 레벨이 모자란 지식입니다."
+        " \"중 하나\" 표시는 같은 목록의 다른 것으로도 조건이 풀릴 수 있다는 뜻입니다.");
+    if (s_scan.needs.empty()) {
+        ImGui::TextColored(col::kOk, "모자란 선행 조건이 없습니다.");
+        return;
+    }
+
+    if (ImGui::BeginTable("know_needs", 6,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_ScrollY,
+                          ImVec2(0.0f, 220.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("이름");
+        ImGui::TableSetupColumn("지금", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+        ImGui::TableSetupColumn("필요", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+        ImGui::TableSetupColumn("요구", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableHeadersRow();
+        for (const game::KnowNeed& e : s_scan.needs) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", e.number);
+            ImGui::TableNextColumn();
+            if (e.name.empty()) {
+                ImGui::TextDisabled("(이름 못 읽음)");
+            } else {
+                ImGui::TextUnformatted(e.name.c_str());
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextColored(e.have_level > 0 ? col::kOk : col::kWarn, "%d",
+                               e.have_level);
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", e.need_level);
+            ImGui::TableNextColumn();
+            ImGui::Text("%d곳%s", e.wanted_by, e.any_of ? " · 중 하나" : "");
+            ImGui::TableNextColumn();
+            ImGui::PushID(e.number);
+            if (confirm_small_button("배우기")) {
+                const game::KnowWrite w =
+                    game::know_learn(reader, e.number, e.need_level);
+                if (w.changed > 0) {
+                    notice_set(&s_note, NoticeLevel::Ok,
+                               "{}번을 레벨 {} 로 - realm {}개",
+                               e.number, e.need_level, w.changed);
+                } else {
+                    notice_set(&s_note, NoticeLevel::Bad, "{}번: {}", e.number,
+                               w.last_skip[0] != 0 ? w.last_skip : "쓰기 실패");
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("배우기를 누르면 두 realm 의 표에 레벨을 씁니다."
+                        " 저장에 남는지는 아직 확인되지 않았습니다.");
+}
 
 // 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로
 // 그 사실을 화면이 먼저 말한다.
@@ -255,6 +359,7 @@ void draw_player_panel(bool* open) {
 
     draw_skill_bond(reader);
     draw_skill_gates();
+    draw_knowledge(reader);
     ImGui::End();
 }
 
