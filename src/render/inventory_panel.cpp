@@ -353,36 +353,52 @@ void draw_bag_expand() {
     ImGui::Checkbox("보관함도 함께", &s_storage);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "끄면 가방(종류 1)만 바꿉니다. 켜면 보관함류(4·7·9·11)도 같이\n"
-            "바꿉니다. 용량 5·20 짜리 작은 칸은 어느 쪽이든 건드리지 않습니다 -\n"
-            "그것까지 부풀린 것이 2026-09-05 의 '리로드 후 지급 손상' 이었습니다.");
+            "끄면 가방(종류 1)만 바꿉니다. 켜면 보관함류(7·9·11)도 같이\n"
+            "바꿉니다. 작은 칸은 어느 쪽이든 건드리지 않습니다 - 그것까지\n"
+            "부풀린 것이 2026-09-05 '리로드 후 지급 손상' 의 유력한 원인입니다.\n"
+            "종류 4 는 혼자 다른 구조를 달고 있어 정체를 확인할 때까지 뺐습니다.");
     }
 
     const mem::LocalReader reader;
     if (ImGui::Button("적용")) {
         const auto r = game::bag_expand(reader, s_target, s_storage);
-        s_msg = "바꾼 것 " + std::to_string(r.changed) + "개, 건너뜀 " +
+        s_msg = "바꾼 것 " + std::to_string(r.changed) + "개(" +
+                std::to_string(r.realms) + " realm), 건너뜀 " +
                 std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        if (r.changed > 0 && r.realms < 2) {
+            // 한쪽 realm 에만 갔으면 화면이 안 바뀔 수 있다. 그걸 모르면 사용자가
+            // 헛되이 다시 누른다(2026-09-05 "999 넣었는데 변경 안 보임" 이 이것으로
+            // 설명된다, 리뷰 지적 4).
+            s_msg += " - 한쪽 realm 에만 썼습니다(화면이 안 바뀔 수 있습니다)";
+        }
+        if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }
     ImGui::SameLine();
-    if (!game::bag_has_backup()) ImGui::BeginDisabled();
+    // 한 프레임에 한 번만 읽는다. 예전에는 세 번 읽어, 되돌리기가 성공해 백업이
+    // 비는 프레임에 BeginDisabled 없이 EndDisabled 만 불렸다(리뷰 지적 9).
+    const bool has_backup = game::bag_has_backup();
+    if (!has_backup) ImGui::BeginDisabled();
     if (ImGui::Button("되돌리기")) {
         const auto r = game::bag_restore(reader);
         s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 실패 " +
                 std::to_string(r.fail);
         refresh(reader);   // 용량 표시를 바로 새로 읽는다
     }
-    if (!game::bag_has_backup()) ImGui::EndDisabled();
-    if (ImGui::IsItemHovered() && !game::bag_has_backup()) {
+    if (!has_backup) ImGui::EndDisabled();
+    if (!has_backup &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("이번 실행에서 확장한 적이 없습니다.");
     }
     if (!s_msg.empty()) ImGui::TextDisabled("%s", s_msg.c_str());
 
     ImGui::TextWrapped(
-        "저장에 남는지는 아직 확인되지 않았습니다. 한 번 적용한 뒤 저장하고 "
-        "게임을 다시 켜서 용량이 유지되는지 확인해 주십시오. 유지되지 않으면 "
-        "켤 때마다 다시 눌러야 합니다.");
+        "되돌리기는 **이번 실행 동안에만** 됩니다. 게임을 끄면 원래 값으로 돌아갈 "
+        "수 없습니다 - 먼저 세이브 파일을 복사해 두십시오.");
+    ImGui::TextWrapped(
+        "저장에 남는지는 아직 확인되지 않았습니다. 처음이라면 목표를 낮게(예: 300) "
+        "잡아 한 번 적용하고, 저장 후 게임을 다시 켜서 유지되는지 보십시오. "
+        "유지되지 않으면 켤 때마다 다시 눌러야 합니다.");
 }
 
 void draw_socket_cap() {

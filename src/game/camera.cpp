@@ -425,7 +425,9 @@ void auto_analysis_loop() {
         // 찾기" 를 누른 사람에게 10초는 "눌렀는데 아무 일도 안 난다"
         // 라, 요청이 남아 있으면 주기를 기다리지 않고 지금 훑는다.
         const bool asked = take_inventory_rescan();
-        if (!inventory_ready() && (asked || (spin % 5) == 0)) {
+        // **두 realm 을 다** 잡을 때까지 본다. 서버만 보고 멈추면 클라를 영영
+        // 못 찾아 가방 확장이 한쪽에만 간다(리뷰 지적 4).
+        if (!inventory_both_ready() && (asked || (spin % 5) == 0)) {
             discover_inventory(rtti, reader);
         }
         ++spin;

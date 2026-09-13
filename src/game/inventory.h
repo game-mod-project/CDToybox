@@ -141,6 +141,9 @@ std::uintptr_t inventory_component();
 // 캐시된 **클라 realm** 인벤토리 컴포넌트. 없으면 0. 가방 확장이 both-realms
 // 로 쓰려고 둔다(화면 숫자의 출처가 어느 쪽인지 확정되지 않아 둘 다 쓴다).
 std::uintptr_t inventory_component_client();
+// 두 realm 을 **다** 잡았는가. 배경 루프의 탐색 종료 조건에 쓴다 - 서버만 보고
+// 멈추면 클라를 영영 못 찾아 가방 확장이 한쪽 realm 에만 간다(리뷰 지적 4).
+bool inventory_both_ready();
 
 // ------------------------------------------------------ 가방·보관함 확장
 //
@@ -148,7 +151,9 @@ std::uintptr_t inventory_component_client();
 // 컨테이너 전부에 써서 4개 평행 사본 중 임시 버퍼 2개를 건드렸다" 고 적었지만,
 // 되돌린 코드는 컨테이너 객체의 +0x14~+0x1A **네 칸만** 썼고 레코드 배열은
 // 건드린 적이 없다(참고 모드가 말하는 4개 사본은 **레코드 배열**이다).
-// 진짜 원인은 둘이다(2026-09-12 재조사·라이브 재검증):
+// 사고는 다음 둘로 설명된다(2026-09-12 재조사·라이브 재검증). 확정된 것은
+// "산술이 틀렸다"·"목표 999·상한 없음"·"레코드 배열은 안 건드렸다" 이고,
+// **크래시의 직접 기전 자체는 미확정**이다:
 //
 //   1. **기본 슬롯 유도가 틀렸다.** 옛 코드는 `기본 = (+0x14) - (+0x1A)` 였는데,
 //      가방은 확장을 +0x18 에 담아(+0x1A = 0) 240 이 나왔다(정답 50). 보관함은
@@ -187,10 +192,19 @@ struct BagPlan {
 // 날렸다. 그건 복원이 아니었다).
 BagPlan plan_bag_expand(int cap, int sum, int a, int b, int slots, int target);
 
+// 이 종류를 건드릴 것인가. 가방(1)은 언제나, 보관함류(7·9·11)는 storage 가 참일 때만,
+// 작은 칸(용량 5·10·20·50)은 **절대** 건드리지 않는다 - 그것까지 부풀린 것이
+// 2026-09-05 "리로드 후 지급 손상" 의 유력한 원인이다. 종류 4 는 혼자 +0x20 에
+// 8칸짜리 보조 배열을 달아(실측) 정체를 모르므로 뺀다(리뷰 지적 11).
+// 헤더로 올린 이유: 시험이 이 거르개를 덮을 수 있어야 한다(리뷰 지적 8).
+bool bag_kind_selected(std::uint16_t kind, bool storage);
+
 struct BagResult {
     int changed = 0;   // 실제로 쓴 컨테이너 수(realm 합산)
     int skip = 0;      // 모양이 달라 건너뛴 수
     int fail = 0;      // 쓰기나 되읽기가 실패한 수
+    int realms = 0;    // 실제로 쓴 realm 수(1 이면 한쪽만 - 화면이 안 바뀔 수 있다)
+    const char* last_skip = "";   // 마지막으로 건너뛴 이유(화면·로그에 낸다)
 };
 
 // 가방(종류 1)을, storage 가 참이면 보관함류(종류 4·7·9·11)도 함께 target 슬롯으로
@@ -199,6 +213,8 @@ BagResult bag_expand(const mem::Reader& reader, int target, bool storage);
 
 // 마지막 확장 전의 원래 값으로 되돌린다. 기억해 둔 것이 없으면 아무것도 안 한다.
 BagResult bag_restore(const mem::Reader& reader);
+// 백업을 버린다. 인벤토리가 새로 생기면(forget_inventory) 자동으로 불린다.
+void forget_bag_backup();
 bool bag_has_backup();
 
 // 캐시를 버린다. 게임이 인벤토리를 새로 만들면(재접속 등) 옛 주소가

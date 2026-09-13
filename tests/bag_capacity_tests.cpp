@@ -4,6 +4,7 @@
 using cdtb::game::BagPlan;
 using cdtb::game::kBagEngineMax;
 using cdtb::game::kBagTargetMax;
+using cdtb::game::bag_kind_selected;
 using cdtb::game::plan_bag_expand;
 
 namespace {
@@ -85,4 +86,65 @@ TEST(bag_plan_refuses_to_shrink) {
 TEST(bag_plan_target_zero_changes_nothing) {
     // 0 은 "복원" 이 아니라 "바꿀 것 없음" 이다.
     CHECK(!plan_bag_expand(240, 190, 190, 0, kSlots, 0).apply);
+}
+
+TEST(bag_kind_filter_never_touches_the_small_slots) {
+    // **옛 사고의 나머지 절반.** 산술만 덮으면 거르개 한 줄을 지워도 시험이 전부
+    // 통과한다 - 그런데 화면 툴팁은 바로 그 거르개를 "작은 칸을 안 건드린다" 고
+    // 약속한다. 약속을 시험이 지키게 한다(리뷰 지적 8).
+    //
+    // 2026-09-13 실측 18개 컨테이너의 종류와 용량:
+    //   1 가방 240 / 7 보관함 440 / 4 300 / 9 300 / 11 300 / 8·12 240
+    //   0·2·3 20 / 10·19 50 / 13 5 / 14~18 10
+    CHECK(bag_kind_selected(1, false));   // 가방은 언제나
+    CHECK(bag_kind_selected(1, true));
+    CHECK(!bag_kind_selected(7, false));  // 보관함은 켰을 때만
+    CHECK(bag_kind_selected(7, true));
+    CHECK(bag_kind_selected(9, true));
+    CHECK(bag_kind_selected(11, true));
+    // 종류 4 는 혼자 +0x20 에 8칸짜리 보조 배열을 단다(실측). 정체를 확인할
+    // 때까지 뺀다 - 용량만 올리고 그쪽을 두는 것은 모르는 모양을 건드리는 것이다.
+    CHECK(!bag_kind_selected(4, true));
+    // 작은 칸(용량 5·10·20·50)과 나머지는 어느 쪽이든 절대 건드리지 않는다.
+    for (const std::uint16_t k :
+         {0, 2, 3, 5, 6, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 99}) {
+        CHECK(!bag_kind_selected(k, false));
+        CHECK(!bag_kind_selected(k, true));
+    }
+}
+
+TEST(bag_plan_never_produces_a_capacity_above_the_limit) {
+    // 속성 시험. 작은 범위를 전수로 돌며 "쓸 값이 나왔다면 반드시 성립해야 하는 것"
+    // 을 확인한다 - 모델 검사에 구멍이 생기면 여기서 걸린다.
+    for (int a = 0; a <= 300; a += 50) {
+        for (int b = 0; b <= 300; b += 50) {
+            for (int extra = -50; extra <= 50; extra += 25) {
+                const int sum = a + b + extra;
+                for (int base = 1; base <= 300; base += 100) {
+                    const int cap = base + sum;
+                    for (const int target : {50, 240, 300, 700, 9999}) {
+                        const auto p =
+                            plan_bag_expand(cap, sum, a, b, 1460, target);
+                        if (!p.apply) continue;
+                        CHECK(p.capacity <= cdtb::game::kBagEngineMax);
+                        CHECK(p.capacity <= cdtb::game::kBagTargetMax);
+                        CHECK(p.capacity == p.base + p.sum);
+                        CHECK(p.sum == a + p.expand_b);
+                        CHECK(p.expand_b >= 0);
+                        CHECK(p.base > 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(bag_plan_rejects_a_hidden_third_branch) {
+    // 두 갈래 중 하나가 0 이어도 합이 맞지 않으면 건드리지 않는다. 예전 검사는
+    // 두 갈래가 **모두** 0 이 아닐 때만 걸려, 이 모양이 그냥 통과했고 엔진
+    // 재계산에서 732 를 넘길 수 있었다(리뷰 지적 2).
+    CHECK(!plan_bag_expand(500, 400, 0, 0, 1460, 700).apply);
+    CHECK(!plan_bag_expand(500, 400, 0, 300, 1460, 700).apply);
+    // 합이 맞으면 정상 동작해야 한다(검사를 조이다 쓰던 것을 잃지 않았는지).
+    CHECK(plan_bag_expand(500, 400, 400, 0, 1460, 700).apply);
 }
