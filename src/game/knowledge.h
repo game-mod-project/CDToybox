@@ -144,6 +144,44 @@ struct KnowWrite {
 // 필요할 때 만들고, 읽는 쪽에 널 가드가 있다.
 KnowWrite know_learn(const mem::Reader& reader, int number, int level);
 
+// ------------------------------------------ 스킬 등록 (게임 함수 호출)
+//
+// **레벨 표만 쓰면 "배운 것처럼 보이기만" 한다.** 실제 기능은 서버 컴포넌트의 별도
+// 해시맵이 정한다(실측 2026-09-14: 화면은 활성화로 보이는데 스킬을 못 쓰고 휠도 안 켜진다).
+//
+//   comp+0xE8 버킷 수 · +0xF4 원소 수 · +0xF8 버킷 배열 · +0x100 값 배열
+//   키 = 지식 id, 값 = { u32 SkillKey, i32 레벨 }
+//
+// 사슬: 진짜 습득이 `0x02AA55D0` 으로 이 맵에 넣고(KnowledgeInfo._learnApplySkillInfo
+// `+0x104` 에서 SkillKey 를 꺼낸다), `ServerSkillActorComponent` vtable 슬롯 19
+// (RVA 0x02B26DE0)가 그 맵을 훑어 스킬 컴포넌트에 등록한다 - 그때 휠이 켜진다.
+//
+// 해시맵이라 **손으로 못 쓴다.** 게임 함수를 부르는 수밖에 없는데, 그것은 이 저장소가
+// 처음 하는 일이다(현지화조차 게임의 조회 함수를 일부러 안 부르고 직접 걷는다 -
+// 그 함수가 읽기인 줄 알고 부르면 표에 항목을 만들기 때문이다). 그래서 관문을 여럿 둔다:
+// 서버 vtable 확인 · 표 개수 교차 검증 · 붙을 스킬 유무 확인 · 호출을 SEH 로 감싸기 ·
+// 호출 뒤 원소 수가 실제로 늘었는지 확인.
+//
+// 함수 모양은 프롤로그를 직접 읽어 확인했다(인자 4개, 스택 인자 없음):
+//   0x02AA55D0  mov [rsp+0x18], r8d / mov [rsp+0x10], dx / mov [rsp+8], rcx
+//   -> (rcx = 서버 컴포넌트, dx = u16 지식키, r8d = i32 레벨, r9b = u8 조용히)
+inline constexpr std::uintptr_t kKnowRegisterRva = 0x02AA55D0;
+inline constexpr std::uintptr_t kServerCompVtableRva = 0x05A13200;
+inline constexpr std::size_t kKnowMapCount = 0xF4;      // u32 맵 원소 수
+inline constexpr std::size_t kInfoApplySkill = 0x104;   // u16, 0xFFFF = 붙을 스킬 없음
+inline constexpr std::uint16_t kNoApplySkill = 0xFFFF;
+
+struct KnowRegister {
+    bool ok = false;
+    const char* skip = "";
+    int before = 0;        // 맵 원소 수(호출 전)
+    int after = 0;         // 호출 뒤
+    int skill_key = 0;     // 붙은 스킬 키(진단용)
+};
+
+// **서버 컴포넌트에만** 부른다. 성공 판정은 "예외 없이 돌아왔고 원소 수가 안 줄었다" 다.
+KnowRegister know_register_skill(const mem::Reader& reader, int number, int level);
+
 // ------------------------------------------------------------ 자동 재적용
 //
 // **지식 레벨 쓰기는 저장을 못 넘는다.** 실측 2026-09-14: 전날 건 번호들이 게임을 새로

@@ -108,6 +108,9 @@ void draw_knowledge(const mem::Reader& reader) {
     static game::KnowScan s_scan;
     static Notice s_note;
     static bool s_scanned = false;
+    // **게임 함수를 부르는 스위치.** 기본 꺼짐 - 이 저장소에서 게임 코드를 부르는
+    // 것은 이것이 처음이고, 데이터 쓰기와 위험이 다르다.
+    static bool s_allow_call = false;
 
     game::KnowTable t;
     if (!game::know_table(reader, 0, &t)) {
@@ -159,7 +162,7 @@ void draw_knowledge(const mem::Reader& reader) {
         ImGui::TableSetupColumn("지금", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("필요", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("요구", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableHeadersRow();
         for (const game::KnowNeed& e : s_scan.needs) {
             ImGui::TableNextRow();
@@ -195,10 +198,45 @@ void draw_knowledge(const mem::Reader& reader) {
                                w.last_skip[0] != 0 ? w.last_skip : "쓰기 실패");
                 }
             }
+            if (s_allow_call) {
+                ImGui::SameLine();
+                if (confirm_small_button("등록")) {
+                    const game::KnowRegister g =
+                        game::know_register_skill(reader, e.number, e.need_level);
+                    if (g.ok) {
+                        notice_set(&s_note, NoticeLevel::Ok,
+                                   "{}번 스킬 등록: 맵 {} -> {} (스킬키 {})",
+                                   e.number, g.before, g.after, g.skill_key);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Bad, "{}번 등록 실패: {}",
+                                   e.number, g.skip);
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "게임의 스킬 등록 함수를 부릅니다(서버 컴포넌트에만).\n"
+                        "레벨 쓰기만으로는 화면에 배운 것처럼 보이기만 하고\n"
+                        "실제로는 쓸 수 없습니다 - 이 맵이 채워져야 합니다.");
+                }
+            }
             ImGui::PopID();
         }
         ImGui::EndTable();
     }
+    ImGui::Checkbox("게임 함수 호출 허용", &s_allow_call);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "켜면 각 줄에 [등록] 이 생깁니다.\n"
+            "지금까지의 치트는 전부 데이터만 읽고 썼습니다 - 이것은 게임 코드를\n"
+            "직접 부르는 첫 기능이라 위험이 다릅니다. 되돌릴 수 있는 세이브에서,\n"
+            "전투 중이 아닐 때 시험하십시오.");
+    }
+    if (s_allow_call) {
+        ImGui::TextColored(col::kWarn,
+                           "게임 코드를 직접 부릅니다 - 되돌릴 수 있는 세이브에서"
+                           " 시험하십시오.");
+    }
+
     const int kept = static_cast<int>(game::know_auto_list().size());
     if (kept > 0) {
         ImGui::TextColored(col::kOk, "자동 재적용 %d개", kept);

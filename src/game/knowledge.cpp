@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <atomic>
 #include <mutex>
 
 #include "core/log.h"
@@ -40,6 +41,14 @@ bool wr32(std::uintptr_t a, std::int32_t v) {
         return false;
     }
 }
+bool wr64(std::uintptr_t a, std::uint64_t v) {
+    __try {
+        *reinterpret_cast<volatile std::uint64_t*>(a) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 bool wr8(std::uintptr_t a, std::uint8_t v) {
     __try {
         *reinterpret_cast<volatile std::uint8_t*>(a) = v;
@@ -47,6 +56,43 @@ bool wr8(std::uintptr_t a, std::uint8_t v) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+// 게임의 스킬 등록 함수. 인자 4개, 스택 인자 없음(프롤로그 실측).
+using RegisterFn = void*(__fastcall*)(void*, std::uint16_t, std::int32_t,
+                                      std::uint8_t);
+
+// **게임 코드를 부르는 유일한 자리.** SEH 로 감싼다 - 접근 위반은 잡을 수 있다
+// (힙 손상 같은 것은 못 잡으니, 부르기 전의 관문이 진짜 방어선이다).
+bool call_register(RegisterFn f, void* comp, std::uint16_t key,
+                   std::int32_t level, std::uint8_t silent) {
+    __try {
+        f(comp, key, level, silent);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// 정상적으로 배운 지식의 습득 시각 하나. `+0x08` 이 0 이면 "이 지식 없음" 으로 보는
+// 소비자가 있어서(RVA 0x028348EA), 우리가 올린 레코드도 같이 채운다. 임의의 큰 수
+// 대신 **실제 값을 복사**한다 - 그 칸을 "습득 후 경과" 로 쓰는 로직이 있다.
+std::atomic<std::uint64_t> g_time_donor{0};
+
+std::uint64_t time_donor(const mem::Reader& r, const KnowTable& t) {
+    const std::uint64_t cached = g_time_donor.load(std::memory_order_acquire);
+    if (cached != 0) return cached;
+    for (int i = 0; i < t.count; ++i) {
+        const std::uintptr_t rec = know_record(t.data, i);
+        if (rec == 0) continue;
+        std::int32_t lv = 0;
+        if (!r.read_value(rec + kKnowRecLevel, &lv) || lv < 1) continue;
+        std::uint64_t v = 0;
+        if (!r.read_value(rec + kKnowRecObj, &v) || v == 0) continue;
+        g_time_donor.store(v, std::memory_order_release);
+        return v;
+    }
+    return 0;
 }
 
 }  // namespace
@@ -307,8 +353,16 @@ KnowWrite know_learn(const mem::Reader& reader, int number, int level) {
             ++w.fail;
             continue;
         }
-        // 게임도 같이 세우는 플래그. +0x08 은 건드리지 않는다(널이면 게임이 만든다).
+        // 게임도 같이 세우는 플래그.
         wr8(rec + kKnowRecFlag, 1);
+        // **습득 시각도 채운다.** 0 이면 "이 지식 없음" 으로 보는 소비자가 있다
+        // (RVA 0x028348EA). 객체 포인터가 아니라 u64 시각이다 - 0x0201E3F0 은
+        // 할당자가 아니라 {일,시,분,초,ms} -> 밀리초 변환 함수였다(전문 확인).
+        std::uint64_t when = 0;
+        if (reader.read_value(rec + kKnowRecObj, &when) && when == 0) {
+            const std::uint64_t donor = time_donor(reader, t);
+            if (donor != 0) wr64(rec + kKnowRecObj, donor);
+        }
         if (rd32(reader, rec + kKnowRecLevel) != level) {
             ++w.fail;
             continue;
@@ -320,6 +374,81 @@ KnowWrite know_learn(const mem::Reader& reader, int number, int level) {
                    w.changed);
     }
     return w;
+}
+
+// ------------------------------------------ 스킬 등록 (게임 함수 호출)
+
+KnowRegister know_register_skill(const mem::Reader& reader, int number,
+                                 int level) {
+    KnowRegister r;
+    if (number < 0 || number > 0xFFFF || level < 1) {
+        r.skip = "번호나 레벨이 말이 안 됩니다";
+        return r;
+    }
+    const std::uintptr_t base = reader.module_base();
+    if (base == 0 || kKnowRegisterRva + 16 > reader.module_size() ||
+        kServerCompVtableRva + 8 > reader.module_size()) {
+        r.skip = "이미지 범위 밖입니다";
+        return r;
+    }
+
+    std::lock_guard<std::mutex> lk(g_op_mtx);
+    // **서버 컴포넌트에만.** 맵은 Server 고유 필드다 - 클라에 같은 자리가 있는지
+    // 모르므로, 잘못 부르면 엉뚱한 필드를 해시맵으로 취급해 그 자리에서 죽는다.
+    const std::uintptr_t comp = knowledge_component();
+    if (comp == 0) {
+        r.skip = "서버 지식 컴포넌트를 아직 못 잡았습니다";
+        return r;
+    }
+    const std::uintptr_t vt = static_cast<std::uintptr_t>(rd64(reader, comp));
+    if (vt != base + kServerCompVtableRva) {
+        log::warnf("지식 등록: vtable 0x{:X} 가 서버 것(0x{:X})이 아니다 - 안 부른다",
+                   vt, base + kServerCompVtableRva);
+        r.skip = "서버 컴포넌트가 아닙니다(게임이 갱신됐을 수 있습니다)";
+        return r;
+    }
+
+    // 표와 매니저가 서로 맞는지도 본다 - 어긋나면 우리가 잘못 보고 있는 것이다.
+    KnowTable t;
+    KnowMgr m;
+    if (!know_table(reader, 0, &t) || !know_manager(reader, &m) ||
+        m.count != t.count || number >= m.count) {
+        r.skip = "지식 표가 말이 안 됩니다";
+        return r;
+    }
+
+    // 붙을 스킬이 없는 지식이면 부를 이유가 없다.
+    const std::uintptr_t info = static_cast<std::uintptr_t>(
+        rd64(reader, m.array + static_cast<std::uintptr_t>(number) * 8));
+    if (info == 0) {
+        r.skip = "그 번호의 지식 정보가 없습니다";
+        return r;
+    }
+    std::uint16_t apply = kNoApplySkill;
+    reader.read_value(info + kInfoApplySkill, &apply);
+    if (apply == kNoApplySkill) {
+        r.skip = "이 지식에는 붙는 스킬이 없습니다";
+        return r;
+    }
+    r.skill_key = apply;
+
+    r.before = rd32(reader, comp + kKnowMapCount);
+    log_write("지식 스킬 등록(게임 함수)", base + kKnowRegisterRva,
+              "맵 원소 " + std::to_string(r.before), "호출");
+    const auto f = reinterpret_cast<RegisterFn>(base + kKnowRegisterRva);
+    // 조용히=1 로 부른다 - 부수 갱신 경로를 건너뛰어 더 안전하다.
+    if (!call_register(f, reinterpret_cast<void*>(comp),
+                       static_cast<std::uint16_t>(number), level, 1)) {
+        r.skip = "게임 함수 호출이 예외로 끝났습니다";
+        log::errorf("지식 등록 {}번: 호출이 예외로 끝났다", number);
+        return r;
+    }
+    r.after = rd32(reader, comp + kKnowMapCount);
+    // 이미 들어 있던 지식이면 개수가 안 늘고 갱신만 된다 - 줄지만 않으면 성공이다.
+    r.ok = r.after >= r.before;
+    log::infof("지식 {}번 스킬 등록: 맵 원소 {} -> {} (스킬키 {})", number, r.before,
+               r.after, static_cast<int>(apply));
+    return r;
 }
 
 // ------------------------------------------------------------ 자동 재적용

@@ -157,3 +157,19 @@ TEST(know_auto_upsert_keeps_separate_numbers_apart) {
     CHECK(v[0].number == 10 && v[0].level == 5);
     CHECK(v[1].number == 20 && v[1].level == 1);
 }
+
+TEST(the_skill_registration_constants_are_pinned) {
+    // 게임 함수를 부르는 기능이라 상수 하나가 틀리면 남의 코드를 부른다.
+    // 전부 실행 파일에서 직접 읽어 확인했다(2026-09-14):
+    //   0x02AA55D0 프롤로그: mov [rsp+0x18],r8d / mov [rsp+0x10],dx / mov [rsp+8],rcx
+    //     -> (rcx = 서버 컴포넌트, dx = u16 지식키, r8d = i32 레벨, r9b = u8 조용히)
+    //   ServerKnowledgeActorComponent vtable RVA 0x05A13200 (RTTI COL 0x5E7AC08)
+    CHECK(cdtb::game::kKnowRegisterRva == 0x02AA55D0);
+    CHECK(cdtb::game::kServerCompVtableRva == 0x05A13200);
+    CHECK(cdtb::game::kKnowMapCount == 0xF4);
+    CHECK(cdtb::game::kInfoApplySkill == 0x104);
+    CHECK(cdtb::game::kNoApplySkill == 0xFFFF);
+    // 습득 시각 칸은 레코드 안이어야 한다(24바이트를 넘으면 남의 레코드를 쓴다).
+    CHECK(cdtb::game::kKnowRecObj + 8 <= cdtb::game::kKnowRecStride);
+    CHECK(cdtb::game::kKnowRecFlag + 1 <= cdtb::game::kKnowRecStride);
+}
