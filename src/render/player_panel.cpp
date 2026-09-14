@@ -47,7 +47,8 @@ void draw_skill_bond(const mem::Reader& reader) {
         const game::BondState& s = sv.address != 0 ? sv : cl;
         ImGui::RadioButton("", &s_slot, i);
         ImGui::SameLine();
-        ImGui::Text("캐릭터 %d: 보유 %d · 총합 %d", i, s.have, s.total);
+        ImGui::Text("%s: 보유 %d · 총합 %d", game::bond_name(i), s.have,
+                    s.total);
         ImGui::SameLine();
         // 좌하단 "사용" 은 저장된 값이 아니라 화면이 계산해 그리는 값이다.
         ImGui::TextDisabled("(사용 %d)", s.total - s.have);
@@ -62,13 +63,13 @@ void draw_skill_bond(const mem::Reader& reader) {
         ImGui::TextDisabled("지금은 결속 값을 읽을 수 없습니다.");
         return;
     }
-    ImGui::TextDisabled("칸 번호는 SkillPointOwnerType 입니다 - 어느 번호가 어느"
-                        " 캐릭터인지는 아직 대조하지 않았습니다.");
+    ImGui::TextDisabled("SkillPointOwnerType 0·1·2 = 클리프·웅카·데미안"
+                        " (화면과 대조해 확인).");
 
     ImGui::SetNextItemWidth(160.0f);
     ImGui::SliderInt("더할 양", &s_add, 1, game::kBondAddMax);
     ImGui::SameLine();
-    ImGui::TextDisabled("-> 캐릭터 %d", s_slot);
+    ImGui::TextDisabled("-> %s", game::bond_name(s_slot));
     if (ImGui::Checkbox("총합도 함께 올리기", &s_also_total)) {}
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(

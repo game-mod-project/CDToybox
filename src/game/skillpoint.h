@@ -46,6 +46,14 @@ inline constexpr std::size_t kBondTotal = 0x02;
 inline constexpr std::size_t kBondType = 0x04;
 inline constexpr int kBondSlots = 3;
 
+// 칸 번호 -> 캐릭터. **사용자가 화면과 대조해 확인했다**(2026-09-14):
+// 보유 1 / 70 / 150 이 각각 클리프 / 웅카 / 데미안이었다.
+inline constexpr const char* kBondNames[kBondSlots] = {"클리프", "웅카",
+                                                       "데미안"};
+inline constexpr const char* bond_name(int slot) {
+    return (slot >= 0 && slot < kBondSlots) ? kBondNames[slot] : "?";
+}
+
 // 한 번에 더할 수 있는 최대와, 결과값의 천장.
 // **상류 근거가 없다.** 참고 모드(CT·ASI) 둘 다 스킬 포인트 기능이 없어 빌려 올
 // 숫자가 없다. u16 칸이라 65535 가 구조적 한계이고, 그 한참 아래의 보수적인 선을
