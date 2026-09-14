@@ -93,6 +93,11 @@ struct KnowNeed {
     int have_level = 0;    // 지금 레벨
     int wanted_by = 0;     // 이것을 요구하는 (지식, 레벨) 자리의 수
     bool any_of = false;   // "중 하나" 목록에 든 적이 있나
+    // 이 지식에 **붙는 스킬**(KnowledgeInfo._learnApplySkillInfo, +0x104).
+    // 0xFFFF 면 없다 - 그러면 등록 함수를 불러도 게임 자신이 건너뛴다
+    // (RVA 0x02AA643A `cmp word [rax+0x104], 0xFFFF; je`). 선행 조건 노드는
+    // "문을 여는 열쇠" 일 뿐 스킬을 안 다는 경우가 많다.
+    int skill_key = 0;
     std::string name;      // 현지화 이름(못 풀면 빈 문자열)
 };
 

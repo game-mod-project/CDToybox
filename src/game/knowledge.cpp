@@ -301,7 +301,15 @@ KnowScan know_scan(const mem::Rtti* rtti, const mem::Reader& reader, int realm) 
     know_need_drop_satisfied(&s.needs);
     know_need_sort(&s.needs);
 
-    // 5) 이름. 못 풀려도 번호는 쓸 수 있으므로 실패를 실패로 치지 않는다.
+    // 5) 붙는 스킬과 이름. 못 풀려도 번호는 쓸 수 있으므로 실패로 치지 않는다.
+    for (auto& e : s.needs) {
+        const std::uintptr_t info = static_cast<std::uintptr_t>(
+            infos[static_cast<std::size_t>(e.number)]);
+        if (info == 0) continue;
+        std::uint16_t apply = kNoApplySkill;
+        reader.read_value(info + kInfoApplySkill, &apply);
+        e.skill_key = apply;
+    }
     if (has_loc) {
         for (auto& e : s.needs) {
             const std::uintptr_t info = static_cast<std::uintptr_t>(

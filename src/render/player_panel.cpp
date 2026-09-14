@@ -196,12 +196,15 @@ void draw_knowledge(const mem::Reader& reader) {
     ImGui::TextWrapped(
         "아래는 다른 노드가 선행 조건으로 요구하는데 아직 레벨이 모자란 지식입니다."
         " \"중 하나\" 표시는 같은 목록의 다른 것으로도 조건이 풀릴 수 있다는 뜻입니다.");
+    ImGui::TextWrapped(
+        "\"스킬\" 칸이 \"없음\" 이면 그 지식에는 붙는 스킬이 없어 등록이 헛일입니다"
+        " - 게임 자신도 그런 지식은 건너뜁니다. 그래서 [등록] 을 안 그립니다.");
     if (s_scan.needs.empty()) {
         ImGui::TextColored(col::kOk, "모자란 선행 조건이 없습니다.");
         return;
     }
 
-    if (ImGui::BeginTable("know_needs", 6,
+    if (ImGui::BeginTable("know_needs", 7,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY,
                           ImVec2(0.0f, 220.0f))) {
@@ -211,6 +214,7 @@ void draw_knowledge(const mem::Reader& reader) {
         ImGui::TableSetupColumn("지금", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("필요", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("요구", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("스킬", ImGuiTableColumnFlags_WidthFixed, 55.0f);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableHeadersRow();
         for (const game::KnowNeed& e : s_scan.needs) {
@@ -231,6 +235,15 @@ void draw_knowledge(const mem::Reader& reader) {
             ImGui::TableNextColumn();
             ImGui::Text("%d곳%s", e.wanted_by, e.any_of ? " · 중 하나" : "");
             ImGui::TableNextColumn();
+            // **붙는 스킬이 없으면 등록은 헛일이다** - 게임 자신도 건너뛴다.
+            const bool has_skill =
+                e.skill_key != 0 && e.skill_key != game::kNoApplySkill;
+            if (has_skill) {
+                ImGui::TextColored(col::kOk, "%d", e.skill_key);
+            } else {
+                ImGui::TextDisabled("없음");
+            }
+            ImGui::TableNextColumn();
             ImGui::PushID(e.number);
             if (confirm_small_button("배우기")) {
                 const game::KnowWrite w =
@@ -247,7 +260,7 @@ void draw_knowledge(const mem::Reader& reader) {
                                w.last_skip[0] != 0 ? w.last_skip : "쓰기 실패");
                 }
             }
-            if (s_allow_call && !game::know_register_locked()) {
+            if (s_allow_call && has_skill && !game::know_register_locked()) {
                 ImGui::SameLine();
                 if (confirm_small_button("등록")) {
                     // **여기서 직접 부르지 않는다.** 렌더 스레드에는 게임 함수가
