@@ -329,6 +329,227 @@ std::vector<game::SocketCapRule> rules_from_ui() {
 //
 // 부위는 (분류 +0xA3, 장비타입 +0x42) 쌍이다 - 분류만으로는 갑옷과 망토가
 // 안 갈린다. 근거: specs/2026-09-07-socket-grant-unlock-research.md 9·10절.
+// 가방·보관함 용량. **2026-09-05 에 되돌렸던 기능을 원인 규명 후 다시 붙인 것**
+// 이다(inventory.h 의 긴 주석 참고). 그때 사고는 "임시 버퍼를 건드려서" 가 아니라
+// ① 기본 슬롯을 한 칸(+0x1A)만 보고 유도해 가방에서 240(정답 50)이 나왔고
+// ② 목표 기본값이 999 인데 하드 상한이 없었기 때문이다.
+void draw_bag_expand() {
+    if (!ImGui::CollapsingHeader("가방·보관함 용량")) return;
+
+    // **종류마다 목표를 따로 둔다.** 예전에는 슬라이더 하나에 "보관함도 함께"
+    // 체크였는데, 상한을 종류별로 빼 놓고 목표는 하나라 실제로는 종류별 조절이
+    // 전혀 안 됐다(상한이 넷 다 700 이라 더 그랬다). 0 이면 그 종류는 안 건드린다.
+    //
+    // 기본값: 가방만 300, 나머지는 0. 이 기능은 게임 메모리에 값을 박는 기능이라
+    // **기본값이 곧 안전 설계**다 - 전부 700 을 놓고 "낮게 해 보라" 고 적으면
+    // 아무 의미가 없다.
+    static int s_target[game::kBagKindCount] = {300, 0, 0, 0};
+    // 확장을 어느 칸에 적을지. **기본은 종류별**이다 - 가방은 +0x18, 보관함류는
+    // +0x1A 에 제 확장을 단다. 강제는 시험용으로만 둔다.
+    static int s_branch = game::kBagBranchAuto;
+    // 로드 뒤 자동 다시 적용. 게임이 인벤토리를 새로 만들기 때문에, 저장에 남든
+    // 안 남든 이게 없으면 화면 숫자는 로드마다 원래대로 돌아간다.
+    static bool s_auto = true;
+    // 되돌리기에 **성공**한 적이 있나. 기록이 비는 이유가 셋이라 툴팁을 가른다.
+    static bool s_restored = false;
+    static std::string s_msg;
+
+    const mem::LocalReader reader;
+    const auto rules = game::bag_kind_rules();
+
+    // 지금 용량을 옆에 낸다. 이게 없으면 슬라이더가 무엇을 기준으로 움직이는지
+    // 알 수 없다(종류마다 기본 슬롯도 천장도 다르다).
+    int cur[game::kBagKindCount] = {0, 0, 0, 0};
+    game::bag_current_caps(reader, cur);
+
+    for (std::size_t i = 0; i < rules.size() && i < game::kBagKindCount; ++i) {
+        const auto& rule = rules[i];
+        ImGui::SetNextItemWidth(200.0f);
+        // 라벨이 곧 ImGui ID 다. 표의 이름이 서로 달라야 하고, 시험이 그걸 본다.
+        ImGui::SliderInt(rule.name, &s_target[i], 0, rule.cap);
+        ImGui::SameLine();
+        if (s_target[i] <= 0) {
+            ImGui::TextDisabled("안 건드림  (지금 %d · 상한 %d)", cur[i],
+                                rule.cap);
+        } else {
+            ImGui::TextDisabled("지금 %d · 상한 %d", cur[i], rule.cap);
+        }
+    }
+    ImGui::TextDisabled("0 으로 두면 그 종류는 건드리지 않습니다.");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "상한 700 은 참고 모드 둘이 쓰는 실전값이고, 732 초과는 엔진이\n"
+            "깨진다고 둘 다 적습니다(그 상태로 저장하면 로드에서 죽습니다).\n"
+            "보관함만의 상한은 상류 문서에도 실행 파일에도 없어, 같은 선을\n"
+            "씁니다. 작은 칸(용량 5·10·20·50)은 어느 쪽이든 안 건드립니다.");
+    }
+
+    // 순서가 열거값과 같아야 한다(A=0, B=1, 자동=2).
+    ImGui::SetNextItemWidth(220.0f);
+    static const char* kBranchNames[] = {"A: +0x18 강제 (시험용)",
+                                         "B: +0x1A 강제 (시험용)",
+                                         "종류별 (권장)"};
+    ImGui::Combo("확장 칸", &s_branch, kBranchNames, 3);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "확장을 어느 칸에 적을지입니다. 반대 칸은 건드리지 않습니다.\n"
+            "\n"
+            "종류마다 제 확장이 들어 있는 칸이 다릅니다 - 가방은 190 을\n"
+            "+0x18 에, 보관함은 200 을 +0x1A 에 답니다(실측). 참고 모드\n"
+            "소스도 +0x1A 를 보관함 세이브의 _varyExpandSlotCount 로 적고,\n"
+            "그것이 '가방과는 다른 것' 이라고 못박습니다.\n"
+            "강제 선택은 그 가설을 시험할 때만 쓰십시오.");
+    }
+
+    // 체크박스는 **의도**이고, 실제 무장은 적용을 눌러야 걸린다. 둘을 한 줄에 같이
+    // 보여 주지 않으면 켜진 체크박스가 아무것도 보장하지 않는다.
+    const bool armed = game::bag_auto_on();
+    if (ImGui::Checkbox("로드 후 자동 다시 적용", &s_auto) && !s_auto) {
+        game::bag_auto_clear();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "게임은 세이브를 불러올 때 인벤토리를 통째로 새로 만듭니다.\n"
+            "그래서 저장에 남든 안 남든, 로드하면 화면 숫자가 원래대로\n"
+            "돌아갑니다. 켜 두면 새 인벤토리가 잡힐 때 방금 누른 것과\n"
+            "똑같은 설정으로 한 번 더 겁니다(스스로 값을 정하지는 않습니다).\n"
+            "되돌리기를 누르면 함께 풀립니다.");
+    }
+    ImGui::SameLine();
+    if (armed) {
+        ImGui::TextColored(col::kWarn,
+                           "무장됨 - 지금 용량은 모드가 다시 건 값일 수 있습니다");
+    } else if (s_auto) {
+        ImGui::TextDisabled("(적용을 눌러야 무장됩니다)");
+    }
+
+    if (ImGui::Button("적용")) {
+        const auto r = game::bag_expand(reader, s_target, s_branch);
+        s_msg = "바꾼 것 " + std::to_string(r.changed) + "개(" +
+                std::to_string(r.realms) + " realm), 건너뜀 " +
+                std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        if (r.changed > 0 && r.realms < 2) {
+            // 한쪽 realm 에만 갔으면 화면이 안 바뀔 수 있다. 그걸 모르면 사용자가
+            // 헛되이 다시 누른다(2026-09-05 "999 넣었는데 변경 안 보임" 이 이것으로
+            // 설명된다, 리뷰 지적 4).
+            s_msg += " - 한쪽 realm 에만 썼습니다(화면이 안 바뀔 수 있습니다)";
+        }
+        if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+        if (r.unknown > 0) {
+            // 사실만 말한다. unknown 이 하나라도 있으면 **다 된 경우에도** "잠시 뒤
+            // 다시" 가 붙던 것을 좁혔다(리뷰 B-3).
+            s_msg += " - 컨테이너 " + std::to_string(r.unknown) +
+                     "개는 모양을 못 알아봤습니다";
+            if (r.changed == 0) {
+                s_msg += " (아직 만들어지는 중이면 잠시 뒤 다시 눌러 보십시오)";
+            }
+        }
+        if (r.changed > 0) s_restored = false;
+        // **누른 사실 자체로 무장을 갱신한다.** 예전에는 바꾼 것이 있을 때만
+        // 갱신해, 목표를 **내리고** 다시 누르면("이미 목표보다 크다" 로 건너뛴다)
+        // 화면은 새 값을 보여 주는데 자동 재적용은 옛 값을 걸었다(검토 경미 4).
+        if (s_auto) {
+            game::bag_auto_set(s_target, s_branch);
+        } else {
+            game::bag_auto_clear();
+        }
+        refresh(reader);   // 용량 표시를 바로 새로 읽는다
+    }
+    ImGui::SameLine();
+    // 한 프레임에 한 번만 읽는다. 예전에는 세 번 읽어, 되돌리기가 성공해 백업이
+    // 비는 프레임에 BeginDisabled 없이 EndDisabled 만 불렸다(리뷰 지적 9).
+    const bool has_backup = game::bag_has_backup();
+    if (!has_backup) ImGui::BeginDisabled();
+    if (ImGui::Button("되돌리기")) {
+        const auto r = game::bag_restore(reader);
+        s_msg = "되돌린 것 " + std::to_string(r.changed) + "개, 건너뜀 " +
+                std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
+        if (r.skip > 0) s_msg += std::string(" - ") + r.last_skip;
+        if (r.changed > 0) s_restored = true;
+        refresh(reader);
+    }
+    if (!has_backup) ImGui::EndDisabled();
+    if (!has_backup &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        // "확장한 적이 없습니다" 와 "기록이 사라졌습니다" 와 "되돌렸습니다" 는
+        // 사용자에게 전혀 다른 말이다.
+        ImGui::SetTooltip(
+            game::bag_backup_dropped()
+                ? "되돌릴 기록이 남아 있지 않습니다 - 인벤토리가 새로 생겨 옛"
+                  " 컨테이너가 사라졌습니다."
+            : s_restored ? "이미 되돌렸습니다."
+                         : "이번 실행에서 확장한 적이 없습니다.");
+    }
+
+    // **합계 칸 정리 - 이제는 미용이다.** 새 산술은 +0x16 을 읽지도 쓰지도 않으므로
+    // 낡은 합계가 기능을 막지 않는다. 다만 옛 코드가 세이브에 남긴 값이라(실측:
+    // 게임 재시작을 넘어 464·650 이 살아 왔다) 치울 수단은 있어야 한다.
+    // **경고색으로 내지 않는다** - 급한 일이 아니고, 급한 것처럼 보이면 사용자가
+    // 필요도 없는 쓰기를 누른다(검토 중대 2).
+    const auto broken = game::bag_broken_count(reader);
+    if (broken.fixable > 0) {
+        ImGui::SameLine();
+        // **기록에서 원본을 아는 것만 바로 쓴다.** 기록이 없으면 모양만 보고
+        // 미루어 짐작하는 것이라(우리가 어긋뜨린 합계인지, 우리가 모르는 제3의
+        // 갈래인지 코드는 가릴 수 없다), 한 번 더 묻는다. 이 창에서 혈통 검사
+        // 없이 쓰는 유일한 길이라 화면이 관문 노릇을 한다(검토 중대 1).
+        const bool all_known = broken.from_record == broken.fixable;
+        const bool go = all_known ? ImGui::Button("합계 정리")
+                                  : confirm_small_button("합계 정리", false);
+        if (go) {
+            const auto r = game::bag_repair(reader);
+            s_msg = "고친 것 " + std::to_string(r.changed) + "개, 실패 " +
+                    std::to_string(r.fail);
+            refresh(reader);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "확장 합계(+0x16)가 두 갈래의 합과 어긋난 컨테이너가 있습니다.\n"
+                "예전 판이 그 칸에 쓴 값이 세이브에 남아 생깁니다.\n"
+                "\n"
+                "지금은 눌러도 되고 안 눌러도 됩니다 - 지금 판은 그 칸을\n"
+                "읽지도 쓰지도 않아 기능에 아무 영향이 없습니다. 세이브를\n"
+                "깔끔하게 두고 싶을 때만 쓰십시오.\n"
+                "\n"
+                "이번 실행에 적용한 기록이 있으면 그 원본 그대로 되돌립니다.\n"
+                "기록이 없으면 모양만 보고 합계를 갈래 합으로 맞춥니다 - 그건\n"
+                "짐작이라 한 번 더 묻습니다. 용량(+0x14)은 어느 쪽이든 절대\n"
+                "건드리지 않습니다.");
+        }
+        ImGui::SameLine();
+        if (all_known) {
+            ImGui::TextDisabled("정리할 컨테이너 %d개 (기록 있음, 급하지 않습니다)",
+                                broken.fixable);
+        } else {
+            ImGui::TextDisabled("정리할 컨테이너 %d개 (그중 기록 없음 %d,"
+                                " 급하지 않습니다)",
+                                broken.fixable,
+                                broken.fixable - broken.from_record);
+        }
+    }
+    if (broken.stuck > 0) {
+        // 우리가 모양을 못 알아본 컨테이너다. 대개는 **아직 채워지는 중**이라
+        // 잠시 뒤면 저절로 풀린다(예전 문구는 "게임을 껐다 켜야 한다" 였는데,
+        // 그건 낡은 합계가 막던 시절의 조치라 지금은 틀린 지시다).
+        ImGui::TextDisabled("컨테이너 %d개는 아직 모양을 못 알아봤습니다 - 대개"
+                            " 만들어지는 중이니 잠시 뒤 다시 보십시오.",
+                            broken.stuck);
+    }
+
+    if (!s_msg.empty()) ImGui::TextWrapped("%s", s_msg.c_str());
+
+    ImGui::TextWrapped(
+        "되돌리기는 이번 실행 동안에만 됩니다. 게임을 끄면 원래 값으로 돌아갈 수 "
+        "없습니다 - 먼저 세이브 파일을 복사해 두십시오.");
+    ImGui::TextWrapped(
+        "가방은 어느 칸에 써도 저장에 남지 않는 것이 실측으로 확인됐습니다(게임이 "
+        "로드에서 되돌립니다). 보관함은 아직 미확정입니다 - 확인하려면 적용·저장 "
+        "뒤 게임을 완전히 껐다 켜고, '로드 후 자동 다시 적용' 을 끈 채로 보십시오.");
+    ImGui::TextColored(col::kWarn,
+                       "게임 안에서 불러오기로는 확인할 수 없습니다 - 자동 다시 "
+                       "적용이 새 인벤토리에 값을 다시 걸어 놓기 때문입니다.");
+}
+
 void draw_socket_cap() {
     if (!ImGui::CollapsingHeader("소켓 상한")) return;
     ImGui::Indent();
@@ -578,10 +799,7 @@ void draw_inventory_panel(bool* open) {
 
     draw_socket_cap();
 
-    // 가방 확장은 되돌렸다. 등록 컨테이너 18개 전부에 무차별로 쓰면
-    // 그중 임시 버퍼(게임이 유지하는 4개 평행 사본 중 2개)를 건드려
-    // 게임이 크래시하고 지급 경로까지 손상됐다(2026-09-05 실측). CT 처럼
-    // 어느 사본이 안전한지 구조로 식별한 뒤에 다시 붙인다.
+    draw_bag_expand();
 
     draw_filter_bar(&g_bar, g_opts);   // 매 프레임 거르므로 반환값은 안 쓴다
     const game::ItemFilter filter = to_filter(g_bar, g_opts);

@@ -41,6 +41,7 @@ TEST(config_returns_defaults_when_file_missing) {
     CHECK_EQ(c.toggle_key, 0x2D);
     CHECK_EQ(c.unload_key, 0x79);   // F10. 이동 키에서 멀리 뒀다
     CHECK_EQ(c.show_diagnostics, true);
+    CHECK_EQ(c.equip_character_row, -1);   // 장비 창 캐릭터: 자동
 }
 
 TEST(config_round_trips) {
@@ -51,12 +52,35 @@ TEST(config_round_trips) {
     w.toggle_key = 0x77;        // F8
     w.unload_key = 0x78;        // F9
     w.show_diagnostics = false;
+    w.equip_character_row = 5;   // 웅카
     CHECK(cdtb::config::save(p, w));
 
     const cdtb::Config r = cdtb::config::load(p);
     CHECK_EQ(r.toggle_key, 0x77);
     CHECK_EQ(r.unload_key, 0x78);
     CHECK_EQ(r.show_diagnostics, false);
+    CHECK_EQ(r.equip_character_row, 5);
+    fs::remove(p);
+}
+
+TEST(config_equip_character_row_out_of_range_is_auto) {
+    const std::wstring p = temp_path(L"cdtb_cfg_equip_row.ini");
+    {
+        std::ofstream out(p);
+        out << "[CDToybox]\n";
+        out << "equip_character_row = 70000\n";   // u16 밖 - 자동으로
+    }
+    CHECK_EQ(cdtb::config::load(p).equip_character_row, -1);
+    {
+        std::ofstream out(p);
+        out << "equip_character_row = -3\n";
+    }
+    CHECK_EQ(cdtb::config::load(p).equip_character_row, -1);
+    {
+        std::ofstream out(p);
+        out << "equip_character_row = 0\n";   // 클리프
+    }
+    CHECK_EQ(cdtb::config::load(p).equip_character_row, 0);
     fs::remove(p);
 }
 

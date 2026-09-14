@@ -97,6 +97,10 @@ Config load(const std::wstring& path) {
             c.socket_cap = (v < 0 || v > 5) ? 0 : v;
         } else if (key == "socket_cap_parts") {
             c.socket_cap_parts = parse_socket_cap_parts(val);
+        } else if (key == "equip_character_row") {
+            // 캐릭터 행은 u16 이고 0xFFFF 는 "자동" 이다. 그 밖은 자동으로 본다.
+            const int v = to_int(val, -1);
+            c.equip_character_row = (v < 0 || v > 0xFFFE) ? -1 : v;
         }
     }
     return c;
@@ -124,6 +128,8 @@ bool save(const std::wstring& path, const Config& c) {
         out << p.category << ":" << p.equip_type << "=" << p.want;
     }
     out << "\n";
+    out << "; 장비 창의 캐릭터 선택(캐릭터 행). -1 = 자동(착용 조각 최다). 클리프 0, 데미안 3, 웅카 5.\n";
+    out << "equip_character_row = " << c.equip_character_row << "\n";
     return out.good();
 }
 

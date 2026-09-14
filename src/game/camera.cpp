@@ -14,6 +14,8 @@
 #include "game/equip.h"
 #include "game/actors.h"
 #include "game/clan.h"
+#include "game/knowledge.h"
+#include "game/skillpoint.h"
 #include "game/companion.h"
 #include "game/grant.h"
 #include "game/inventory.h"
@@ -83,23 +85,80 @@ bool camera_name(const mem::Reader& reader, std::uintptr_t camera,
 // 이미지를 이미 읽어 둔 Rtti 로 탐색한다. 재시도 루프가 350MB를
 // 매번 다시 읽지 않도록 분리했고, Reader 를 받으므로 probe 도
 // 같은 로직을 돌려 배포 전에 검증할 수 있다.
+std::vector<std::string> camera_scan_classes() {
+    return {".?AVFreeCamCamera@pa@@", ".?AVPhotoCamera@pa@@", ".?AVCameraManager@pa@@",
+            ".?AVPlayerCameraComponent@pa@@"};
+}
+
+// 한 통과의 단계들(아이템표·인벤토리·로스터·액터 매니저·카메라·명부)이 힙에서 찾는 클래스
+// 전부. 통과 시작에 한 번 훑어 두면(prefetch_instances) 단계들은 캐시에서 낸다.
+std::vector<std::string> pass_scan_classes() {
+    std::vector<std::string> all;
+    for (auto part : {&items_scan_classes, &inventory_scan_classes,
+                             &roster_scan_classes, &actors_scan_classes,
+                             &camera_scan_classes, &clan_scan_classes}) {
+        const auto names = part();
+        all.insert(all.end(), names.begin(), names.end());
+    }
+    return all;
+}
+
+// 통과 한 바퀴의 미리 훑기 창. 만들 때 훑고(로그 한 줄), 블록을 어떻게 나가든(break·return·
+// 예외) 소멸자가 비운다 - 손으로 짝지으면 조기 반환이 생길 때 스냅숏이 본 루프로 샌다
+// (리뷰 O-1).
+namespace {
+struct PrefetchScope {
+    const mem::Rtti& rtti;
+    PrefetchScope(const mem::Rtti& r, const char* what) : rtti(r) {
+        rtti.prefetch_instances(pass_scan_classes(), kPassScanPerClass);
+        const auto ps = rtti.prefetch_stats();
+        if (ps.capped == 0) {
+            log::infof("힙 훑기({}): 클래스 {}개에서 객체 {}개", what, ps.names, ps.objects);
+        } else {
+            log::infof("힙 훑기({}): 클래스 {}개에서 객체 {}개 - 그중 {}개 클래스는 상한 {}에 "
+                       "닿아 그 단계는 다시 걷는다",
+                       what, ps.names, ps.objects, ps.capped, kPassScanPerClass);
+        }
+    }
+    ~PrefetchScope() { rtti.clear_prefetch(); }
+    PrefetchScope(const PrefetchScope&) = delete;
+    PrefetchScope& operator=(const PrefetchScope&) = delete;
+};
+}  // namespace
+
 bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
                    CameraSet* out) {
     CameraSet found;
 
-    // 이름으로 진짜를 고른다. 후보에는 vtable 값을 우연히 담은
-    // 메모리가 섞여 있다.
-    found.free_cam = pick_named(
-        reader, rtti.instances_of_class(".?AVFreeCamCamera@pa@@", 16),
-        "FreeCamera");
-    found.photo_cam = pick_named(
-        reader, rtti.instances_of_class(".?AVPhotoCamera@pa@@", 16),
-        "PhotoCamera");
+    // 네 클래스의 인스턴스를 힙 한 번 훑기로 모은다. instances_of_class 는 vtable 마다 힙
+    // 전체를 읽으므로(이 넷은 vtable 7개 = 힙 전수 7회) 월드 안에서 122초가 걸렸다(실측
+    // 2026-09-12) - 카메라를 못 잡은 통과가 한 바퀴 더 돌면 그 사이 이름 채우기가 뒤로
+    // 밀려 창마다 "불러오는 중" 이 길어졌다. 후보에는 vtable 값을 우연히 담은 메모리가
+    // 섞여 있어 이름으로 진짜를 고른다. 상한은 네 클래스가 나눠 쓰고 낮은 주소부터 채우므로
+    // (실측 후보 합계 14개) 닿으면 경고를 남긴다 - 미확보가 이어질 때 "객체가 아직 없다" 와
+    // 가르기 위해서다(리뷰 C-2).
+    constexpr std::size_t kScanMax = 1024;
+    const std::vector<std::string> kClasses = camera_scan_classes();
+    std::vector<std::uintptr_t> free_cams, photo_cams, managers, comps;
+    const auto scanned = rtti.find_objects_of(kClasses, kScanMax);
+    for (const auto& f : scanned) {
+        if (f.cls == kClasses[0]) free_cams.push_back(f.address);
+        else if (f.cls == kClasses[1]) photo_cams.push_back(f.address);
+        else if (f.cls == kClasses[2]) managers.push_back(f.address);
+        else if (f.cls == kClasses[3]) comps.push_back(f.address);
+    }
+    log::infof("카메라 후보(힙 한 번 훑기): 프리캠 {} 포토캠 {} 매니저 {} 플레이어 컴포넌트 {}",
+               free_cams.size(), photo_cams.size(), managers.size(), comps.size());
+    if (scanned.size() >= kScanMax) {
+        log::warnf("카메라 후보가 상한 {}개에 닿았다 - 가짜 후보가 많아 진짜를 놓쳤을 수 있다",
+                   kScanMax);
+    }
+    found.free_cam = pick_named(reader, free_cams, "FreeCamera");
+    found.photo_cam = pick_named(reader, photo_cams, "PhotoCamera");
 
     // CameraManager 는 이름이 없다. +0x18 이 방금 찾은 프리카메라를
     // 가리키는지로 검증한다.
-    for (const auto a :
-         rtti.instances_of_class(".?AVCameraManager@pa@@", 16)) {
+    for (const auto a : managers) {
         std::uint64_t slot = 0;
         if (!reader.read(a + 0x18, &slot, sizeof(slot))) continue;
         if (found.free_cam != 0 && slot == found.free_cam) {
@@ -110,9 +169,6 @@ bool discover_with(const mem::Rtti& rtti, const mem::Reader& reader,
 
     // PlayerCameraComponent 도 이름이 없다. +0x88 이 가리키는 곳에서
     // 0x28 을 빼면 활성 카메라이고, 그 이름이 "PlayerCamera" 여야 한다.
-    const auto comps =
-        rtti.instances_of_class(".?AVPlayerCameraComponent@pa@@", 16);
-    log::infof("PlayerCameraComponent 후보 {}개", comps.size());
     for (const auto a : comps) {
         std::uint64_t icam = 0;
         if (!reader.read(a + 0x88, &icam, sizeof(icam))) {
@@ -211,6 +267,12 @@ void auto_analysis_loop() {
     // 받아 적기만 한다 - 아무것도 쓰지 않는다.
     actor_hook_install(rtti, reader);
     tick_hook_install(rtti, reader);
+    // 낙사 방지 훅도 여기서 건다. RTTI 이미지와 모듈 베이스만 있으면 되고
+    // 월드·카메라·아이템 표를 기다릴 이유가 없다 - 예전에는 아래 세 번째
+    // 루프에 있어 **월드 진입 뒤 1~2분**이 지나야 설치됐다(실측 2026-09-12:
+    // 08:24 실행 -> 08:25:59 설치). 플레이어를 보호하는 훅이 아이템 이름
+    // 채우기 뒤에 줄 설 이유가 없다.
+    nofall_install(rtti, reader);
     // 프레임 경계 조사용 계측 훅(펌프·작업 래퍼)은 조사가 끝나 끈다.
     // 이 훅들은 전용 워커 스레드의 장기 실행 루프에 걸려 메시지
     // 파이프라인 타이밍을 흔들 위험이 있다(2026-09-04). 코드는 남겨
@@ -246,6 +308,14 @@ void auto_analysis_loop() {
         };
         auto t = pass_t0;
 
+        // 이 통과의 단계들이 찾는 클래스를 힙 한 번 훑기로 미리 모은다(mem/rtti.h
+        // prefetch_instances). 단계마다 vtable 수만큼 힙을 읽던 것(한 통과에 10회 넘게,
+        // 월드 안에서 단계마다 10~30초)이 한 번이 된다. 준비된 단계는 어차피 안 찾고, 아직
+        // 없는 객체는 빈 결과로 끝난다(다음 통과가 다시 훑는다). 통과 끝에 비운다 - 힙은
+        // 바뀐다.
+        const PrefetchScope prefetch_scope(rtti, "통과");
+        t = step("힙 훑기", t);
+
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
@@ -279,6 +349,7 @@ void auto_analysis_loop() {
         // 이 스캔을 돌면 종 바꾸기에서 게임이 멈춘다(game/clan.cpp).
         discover_clan(rtti, reader);
         step("동반자 명부", t);
+        rtti.clear_prefetch();   // 통과 사이(10초)엔 캐시를 비워 둔다 - 소멸자는 안전망
         log::infof("탐색 {}번째 통과: {}ms", attempt,
                    ::GetTickCount64() - pass_t0);
         if (got_cam && g_set.active != 0) {
@@ -301,6 +372,7 @@ void auto_analysis_loop() {
     // 정상이다. 예전에는 카메라를 찾는 순간 이 루프를 빠져나가 이름이
     // 영영 비었다 - 로그에 "이름 풀린 것 0개" 로 남았다.
     for (int i = 0; i < 120 && !g_stop.load(); ++i) {
+        const PrefetchScope prefetch_scope(rtti, "이름 채우기");   // 위 루프와 같은 이유
         discover_item_ids(rtti, reader);
         discover_inventory(rtti, reader);
         discover_roster(rtti, reader);
@@ -316,6 +388,7 @@ void auto_analysis_loop() {
         if (items_done) discover_item_ids(rtti, reader);
         // 명부: 값싼 세션 사슬 먼저, RTTI 스캔은 월드 안에서만(clan.cpp 가 가른다).
         discover_clan(rtti, reader);
+        rtti.clear_prefetch();   // 반복 사이(5초)엔 캐시를 비워 둔다 - 소멸자는 안전망
         if (items_done && inventory_ready() && item_ids_ready()) break;
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
@@ -343,6 +416,23 @@ void auto_analysis_loop() {
         // 장비·치트)를 막아 스스로를 굶긴다(리뷰 C1·C2).
         if (!clan_ready() || clan_rtti() == nullptr) discover_clan(rtti, reader);
 
+        // 스킬 포인트(어비스 결속). 지식 컴포넌트도 월드에 들어가야 생긴다.
+        // **월드 게이트 + 스로틀이 둘 다 필요하다** - find_objects_of 는 프리페치
+        // 밖이라 부를 때마다 힙 전수를 읽는데, 이 루프는 2초에 한 바퀴다. 인벤토리
+        // 탐색이 같은 이유로 5바퀴 주기와 포기 카운터를 두고 있다.
+        // 장비가 잡혔다는 것이 곧 월드 안이라는 뜻이라 그것을 게이트로 쓴다.
+        if (equip_ready()) {
+            knowledge_check_alive(reader);
+            if (!knowledge_ready()) {
+                discover_knowledge(rtti, reader, spin, player_char());
+            }
+        }
+        // 지식 레벨 쓰기는 저장을 못 넘고, 리로드는 컴포넌트를 새로 만든다. 이번
+        // 실행에서 사용자가 건 것이 모자라면 다시 건다(건 것이 없으면 즉시 반환).
+        // **장비 게이트 밖에 둔다** - 재적용은 탐색과 달리 힙을 안 훑어 값싸고,
+        // 장비를 못 읽는 동안에도 지식 컴포넌트만 살아 있으면 걸 수 있다.
+        know_auto_tick(reader);
+
         // 인벤토리는 월드에 들어간 뒤에야 생긴다. 카메라와 아이템
         // 표보다 늦어서, 앞의 루프들이 먼저 끝나면 못 잡은 채로
         // 남았다 - 실측에서 창이 "컴포넌트를 아직 못 찾았습니다"
@@ -353,10 +443,20 @@ void auto_analysis_loop() {
         // 값싸지 않아 10초에 한 번으로 줄인다. 다만 화면에서 "다시
         // 찾기" 를 누른 사람에게 10초는 "눌렀는데 아무 일도 안 난다"
         // 라, 요청이 남아 있으면 주기를 기다리지 않고 지금 훑는다.
+        // **세이브를 불러오면 게임이 인벤토리를 통째로 새로 만든다.** 예전에는
+        // 캐시가 죽은 포인터를 든 채 남아, 패널이 낡은 값을 보이고 가방 확장이
+        // 조용히 아무것도 안 했다(2026-09-13 "세이브-로드 후 300 유지 안 됨").
+        inventory_check_alive(reader);
+
         const bool asked = take_inventory_rescan();
-        if (!inventory_ready() && (asked || (spin % 5) == 0)) {
+        // **두 realm 을 다** 잡을 때까지 본다. 서버만 보고 멈추면 클라를 영영
+        // 못 찾아 가방 확장이 한쪽에만 간다(리뷰 지적 4).
+        if (!inventory_both_ready() && (asked || (spin % 5) == 0)) {
             discover_inventory(rtti, reader);
         }
+        // 새 인벤토리가 잡혔으면, 이번 실행에서 사용자가 걸어 둔 가방 확장을
+        // 다시 건다(무장돼 있을 때만 - 적용을 누른 적이 없으면 아무 일도 없다).
+        bag_auto_tick(reader);
         ++spin;
 
         // 장비 에디터(힙 스캔은 못 잡았을 때만). 플레이어 = 정신력 풀 + 착용
@@ -371,10 +471,13 @@ void auto_analysis_loop() {
         // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
         player_discover(reader);
 
-        // 낙사 방지(No Fall Damage). 훅은 한 번 설치(자기검증), 매 주기 플레이어
-        // faller 학습을 시도한다(플레이어가 한 번 떨어져야 학습됨).
+        // 낙사 방지 훅은 위(분석 스레드 머리)에서 이미 걸었다. 여기 남긴 것은
+        // **재시도**다 - alloc_near 가 한 번 실패하면 그때는 미지원으로 갈리지
+        // 않으므로 다시 볼 기회가 있어야 한다. 설치됐거나 미지원으로 갈렸으면
+        // 원자 적재 한 번으로 곧장 돌아온다(이중 설치는 CAS 가 막는다).
+        // 내 root 갱신은 **렌더 틱**(overlay.cpp)이 맡는다 - 통과 한 바퀴는 수십
+        // 초라, 캐릭터를 바꾸면 낡은 root 로 남는 창이 너무 길다.
         nofall_install(rtti, reader);
-        nofall_identify(reader);
         specguard_install(reader);   // 백업(렌더 루프가 먼저 설치)
         heal_special_items(reader);   // 특수아이템 표시 보정
 

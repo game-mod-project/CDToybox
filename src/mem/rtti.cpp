@@ -218,11 +218,7 @@ std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
 
 std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
                                             std::size_t max) const {
-    std::vector<Found> out;
-    if (image_.empty()) return out;
-
-    const std::uintptr_t mb = r_.module_base();
-    const std::uintptr_t me = mb + r_.module_size();
+    if (image_.empty()) return {};
 
     // vtable 해석은 색인에서 가져온다. 예전에는 여기서 이미지 전체를
     // 8바이트씩 훑으며 `class_of_vtable` 을 불렀는데, 이 함수를 부르는
@@ -235,7 +231,82 @@ std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
         if (cls.find(substring) == std::string::npos) continue;
         matching.emplace_back(vt, &cls);
     }
-    if (matching.empty()) return out;
+    return scan_heap(matching, max);
+}
+
+std::vector<Rtti::Found> Rtti::find_objects_of(const std::vector<std::string>& names,
+                                               std::size_t max) const {
+    if (image_.empty() || names.empty()) return {};
+    // 이름이 전부 미리 모아져 있으면(prefetch) 힙을 다시 읽지 않는다 - 그 스냅숏을 주소 순으로.
+    {
+        std::lock_guard<std::mutex> lk(prefetch_mutex_);
+        if (!prefetch_.empty()) {
+            std::vector<Found> out;
+            bool all = true;
+            for (const auto& n : names) {
+                const auto it = prefetch_.find(n);
+                // 없거나 상한에 닿은 이름이 있으면 스냅숏이 모자랄 수 있다 - 걷는다(리뷰 P-1).
+                if (it == prefetch_.end() ||
+                    (prefetch_cap_ != 0 && it->second.size() >= prefetch_cap_)) {
+                    all = false;
+                    break;
+                }
+                for (const auto a : it->second) out.push_back(Found{a, n});
+            }
+            if (all) {
+                std::sort(out.begin(), out.end(), [](const Found& x, const Found& y) {
+                    return x.address < y.address;
+                });
+                if (out.size() > max) out.resize(max);
+                return out;
+            }
+        }
+    }
+    ensure_index();
+    std::vector<std::pair<std::uintptr_t, const std::string*>> matching;
+    for (const auto& [vt, ti] : vtable_cls_) {
+        const std::string& cls = types_[ti].name;
+        for (const auto& n : names) {
+            if (cls == n) {
+                matching.emplace_back(vt, &cls);
+                break;
+            }
+        }
+    }
+    return scan_heap(matching, max);
+}
+
+// 힙 영역을 한 번 훑어 matching 의 vtable 값을 담은 8바이트 자리를 전부 모은다. 영역 하나를
+// 통째로 읽다 실패하면 그 영역은 건너뛴다 - 스캔이 매번 완전하지 않은 이유(game/equip.cpp
+// 가 캐시로 메운다). max 는 전체 상한이라 여러 클래스를 모을 때는 넉넉히 준다. matching 은
+// vtable 주소 오름차순으로 이분 탐색한다(색인 순서가 그렇다 - 아니면 여기서 정렬).
+std::vector<Rtti::Found> Rtti::scan_heap(
+    const std::vector<std::pair<std::uintptr_t, const std::string*>>& matching_in,
+    std::size_t max, std::size_t per_class_max, std::size_t* capped_out) const {
+    std::vector<Found> out;
+    if (capped_out != nullptr) *capped_out = 0;
+    if (matching_in.empty() || max == 0) return out;
+    using Entry = std::pair<std::uintptr_t, const std::string*>;
+    const auto by_vt = [](const Entry& a, const Entry& b) { return a.first < b.first; };
+    std::vector<Entry> sorted;
+    const std::vector<Entry>* matching = &matching_in;
+    if (!std::is_sorted(matching_in.begin(), matching_in.end(), by_vt)) {
+        sorted = matching_in;
+        std::sort(sorted.begin(), sorted.end(), by_vt);
+        matching = &sorted;
+    }
+
+    const std::uintptr_t mb = r_.module_base();
+    const std::uintptr_t me = mb + r_.module_size();
+
+    // 클래스별 상한: 같은 이름 포인터로 센다. 닿은 클래스는 건너뛰고, 전부 닿으면 끝낸다 -
+    // 한 클래스의 가짜 후보가 다른 클래스를 굶기지 않게.
+    std::unordered_map<const std::string*, std::size_t> per_class;
+    std::size_t classes = 0, capped = 0;
+    if (per_class_max != 0) {
+        for (const auto& m : *matching) per_class.emplace(m.second, 0);
+        classes = per_class.size();
+    }
 
     std::vector<std::uint8_t> buf;
     for (const auto& reg : r_.heap_regions()) {
@@ -249,15 +320,64 @@ std::vector<Rtti::Found> Rtti::find_objects(const std::string& substring,
             std::uint64_t v;
             std::memcpy(&v, buf.data() + i, 8);
             if (v < mb || v >= me) continue;
-            for (const auto& m : matching) {
-                if (v != m.first) continue;
-                out.push_back(Found{base + i, *m.second});
-                break;
+            const auto it = std::lower_bound(
+                matching->begin(), matching->end(), v,
+                [](const Entry& m, std::uintptr_t x) { return m.first < x; });
+            if (it == matching->end() || it->first != v) continue;
+            if (per_class_max != 0) {
+                std::size_t& n = per_class[it->second];
+                if (n >= per_class_max) continue;
+                ++n;
+                if (n == per_class_max) {
+                    ++capped;
+                    if (capped_out != nullptr) *capped_out = capped;
+                }
             }
+            out.push_back(Found{base + i, *it->second});
             if (out.size() >= max) return out;
+            if (per_class_max != 0 && capped == classes) return out;
         }
     }
     return out;
+}
+
+void Rtti::prefetch_instances(const std::vector<std::string>& names,
+                              std::size_t max_per_class) const {
+    std::unordered_map<std::string, std::vector<std::uintptr_t>> fresh;
+    for (const auto& n : names) fresh.emplace(n, std::vector<std::uintptr_t>{});
+    std::size_t objects = 0, capped = 0;
+    if (!image_.empty() && !names.empty()) {
+        ensure_index();
+        std::vector<std::pair<std::uintptr_t, const std::string*>> matching;
+        for (const auto& [vt, ti] : vtable_cls_) {
+            const std::string& cls = types_[ti].name;
+            if (fresh.find(cls) != fresh.end()) matching.emplace_back(vt, &cls);
+        }
+        const std::size_t total =
+            max_per_class == 0 ? 4096 : max_per_class * names.size();
+        for (const auto& f : scan_heap(matching, total, max_per_class, &capped)) {
+            fresh[f.cls].push_back(f.address);
+            ++objects;
+        }
+    }
+    std::lock_guard<std::mutex> lk(prefetch_mutex_);
+    prefetch_ = std::move(fresh);
+    prefetch_objects_ = objects;
+    prefetch_cap_ = max_per_class;
+    prefetch_capped_ = capped;
+}
+
+void Rtti::clear_prefetch() const {
+    std::lock_guard<std::mutex> lk(prefetch_mutex_);
+    prefetch_.clear();
+    prefetch_objects_ = 0;
+    prefetch_cap_ = 0;
+    prefetch_capped_ = 0;
+}
+
+Rtti::PrefetchStats Rtti::prefetch_stats() const {
+    std::lock_guard<std::mutex> lk(prefetch_mutex_);
+    return PrefetchStats{prefetch_.size(), prefetch_objects_, prefetch_capped_};
 }
 
 std::vector<std::uintptr_t> Rtti::find_qword(std::uint64_t value,
@@ -359,6 +479,18 @@ std::vector<Rtti::Ref> Rtti::find_refs(std::uintptr_t target,
 std::vector<std::uintptr_t> Rtti::instances_of_class(const std::string& name,
                                                      std::size_t max) const {
     std::vector<std::uintptr_t> out;
+    // 미리 모아 둔 이름이면 힙을 다시 읽지 않는다(prefetch_instances 의 스냅숏). 단 스냅숏이
+    // 상한에 닿았고 호출부가 그보다 많이 원하면 모자랄 수 있으니 걷는다(리뷰 P-1).
+    {
+        std::lock_guard<std::mutex> lk(prefetch_mutex_);
+        const auto it = prefetch_.find(name);
+        if (it != prefetch_.end() &&
+            !(prefetch_cap_ != 0 && it->second.size() >= prefetch_cap_ && max > prefetch_cap_)) {
+            out = it->second;
+            if (out.size() > max) out.resize(max);
+            return out;
+        }
+    }
     for (const auto& t : find_types(name, 32)) {
         if (t.name != name) continue;   // 완전 일치만
         for (const auto vt : vtables_for(t.descriptor)) {

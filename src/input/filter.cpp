@@ -62,4 +62,45 @@ bool mask_key_state(int vk, bool overlay_visible, bool want_keyboard) {
     return want_keyboard;
 }
 
+bool legacy_gate_step(LegacyGateState& s, unsigned long long now_ms, bool os_moved,
+                      unsigned long long last_legacy_ms, unsigned long long grace_ms) {
+    if (os_moved) {
+        // grace 넘게 멈췄다 다시 움직이면 새 움직임이다 - 처음부터 다시 센다
+        if (s.last_move_ms == 0 || now_ms - s.last_move_ms > grace_ms) {
+            s.run_start_ms = now_ms;
+        }
+        s.last_move_ms = now_ms;
+    }
+    const bool legacy_recent =
+        last_legacy_ms != 0 &&
+        (last_legacy_ms >= now_ms || now_ms - last_legacy_ms <= grace_ms);
+    if (legacy_recent) {
+        s.dead = false;
+    } else if (s.last_move_ms != 0 && now_ms - s.last_move_ms <= grace_ms &&
+               now_ms - s.run_start_ms >= grace_ms) {
+        s.dead = true;
+    }
+    return s.dead;
+}
+
+bool raw_answered(unsigned long long raw_at_ms, unsigned long long last_legacy_ms,
+                  unsigned long long slack_ms) {
+    return last_legacy_ms != 0 && last_legacy_ms + slack_ms >= raw_at_ms;
+}
+
+RawMouseDecoded decode_raw_mouse(unsigned button_flags, unsigned short button_data) {
+    RawMouseDecoded d;
+    // RI_MOUSE_*: 버튼 b(0 왼 1 오른 2 가운데 3 X1 4 X2)의 눌림 비트는 1<<(2b),
+    // 뗌 비트는 1<<(2b+1). 휠은 0x0400(세로)·0x0800(가로), 값은 usButtonData 의
+    // 부호 있는 16비트.
+    for (unsigned b = 0; b < 5; ++b) {
+        if (button_flags & (1u << (2 * b))) d.down |= 1u << b;
+        if (button_flags & (1u << (2 * b + 1))) d.up |= 1u << b;
+    }
+    const int delta = static_cast<short>(button_data);
+    if (button_flags & 0x0400u) d.wheel = delta;
+    if (button_flags & 0x0800u) d.hwheel = delta;
+    return d;
+}
+
 }  // namespace cdtb::input

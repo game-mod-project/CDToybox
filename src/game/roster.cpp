@@ -533,9 +533,14 @@ std::uint16_t main_character_row(const mem::Reader& reader) {
 
 bool is_playable_character_row(const mem::Reader& reader, std::uint32_t row) {
     if (row == 0xFFFF) return false;
-    if (row == main_character_row(reader)) return true;
+    if (row == kProtagonistRow || row == main_character_row(reader)) return true;
     const RosterEntry* e = character_by_row(row);
     return e != nullptr && is_playable_merc_row(e->merc_row);
+}
+
+
+std::vector<std::string> roster_scan_classes() {
+    return {kVehicleClass, kMercenaryClass, kCharacterClass};
 }
 
 }  // namespace cdtb::game

@@ -2,13 +2,18 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <chrono>
 #include <string>
 
+#include "core/log.h"
 #include "core/write_log.h"
+#include "game/actors.h"
 #include "game/items.h"
 #include "game/player.h"
+#include "game/roster.h"
 
 namespace cdtb::game {
 namespace {
@@ -162,10 +167,16 @@ int socket_unlock_entry(const mem::Reader& r, std::uintptr_t entry, int want) {
     return opened;
 }
 
-bool refine_set_entry(const mem::Reader& r, std::uintptr_t entry,
+bool temper_set_entry(const mem::Reader& r, std::uintptr_t entry,
                       std::uint16_t lvl) {
     if (!wr16(entry + 0x0A, lvl)) return false;
     return rd16(r, entry + 0x0A) == lvl;
+}
+
+bool sharpness_set_entry(const mem::Reader& r, std::uintptr_t entry,
+                         std::uint16_t lvl) {
+    if (!wr16(entry + 0x58, lvl)) return false;
+    return rd16(r, entry + 0x58) == lvl;
 }
 
 bool dye_set_entry(const mem::Reader& r, std::uintptr_t entry, int rec,
@@ -280,7 +291,8 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
         w.entry = e;
         w.instance = rd64(reader, e + 0x00);
         w.key = key;
-        w.refine = rd16(reader, e + 0x0A);
+        w.temper = rd16(reader, e + 0x0A);
+        w.sharpness = rd16(reader, e + 0x58);
         w.slot_tag = static_cast<std::uint16_t>(rd32(reader, e + (t.stride - 8)) &
                                                 0xFFFF);
         const std::uintptr_t sp = rd64(reader, e + 0x60);
@@ -345,10 +357,36 @@ int collect_equip_tables(const mem::Rtti& rtti, const mem::Reader& reader,
 // 배열에 밀려 불안정했다. 대신 **서로 다른 슬롯 태그 수**로 고른다(진짜
 // 착용은 슬롯마다 하나). prefer_arr 가 여전히 좋은 후보면 그대로 유지해
 // 매 주기 목록이 튀지 않게 한다.
+// 테이블의 캐릭터 행. comp+0x08 이 액터 매니저가 세는 캐릭터 객체라 actor_character_row 로
+// 푼다(실측 2026-09-12: 서버 조각 21/16/11 → 행 0/5/3). 못 풀면 kEquipAutoCharacter.
+static std::uint16_t table_character_row(const mem::Reader& reader,
+                                         const EquipTable& t) {
+    if (t.comp == 0) return kEquipAutoCharacter;
+    const std::uintptr_t ch =
+        static_cast<std::uintptr_t>(rd64(reader, t.comp + 0x08));
+    std::uint16_t row = kEquipAutoCharacter;
+    if (!vp(ch) || !actor_character_row(reader, ch, &row)) return kEquipAutoCharacter;
+    return row;
+}
+
 bool pick_player_table(const mem::Reader& reader,
                        const std::vector<EquipTable>& tabs,
                        std::uintptr_t prefer_arr, EquipTable* table_out,
-                       std::vector<WornPiece>* pieces_out) {
+                       std::vector<WornPiece>* pieces_out,
+                       std::uint16_t want_row) {
+    // 고른 캐릭터가 있으면 그 캐릭터의 테이블(서버·클라)만 후보로 삼는다. 월드에 없으면
+    // 아래 자동(정신력 풀 + 조각 최다)으로 돌아간다.
+    if (want_row != kEquipAutoCharacter) {
+        std::vector<EquipTable> mine;
+        for (const auto& t : tabs) {
+            if (table_character_row(reader, t) == want_row) mine.push_back(t);
+        }
+        if (!mine.empty() &&
+            pick_player_table(reader, mine, prefer_arr, table_out, pieces_out,
+                              kEquipAutoCharacter)) {
+            return true;
+        }
+    }
     EquipTable best;
     int bestScore = 0;
     std::vector<WornPiece> bestPieces, tmp;
@@ -370,7 +408,10 @@ bool pick_player_table(const mem::Reader& reader,
             const std::uintptr_t ch = rd64(reader, t.comp + 0x08);
             if (char_is_player(reader, ch)) score += 10000;
         }
-        if (t.arr == prefer_arr && dt >= 3) score += 1;   // 동률 안정화만
+        // 동률 안정화만. 되살린 표(missed > 0)는 못 받는다 - 지역 이동으로 새 표가 잡혔는데
+        // 옛 표가 되살아나 prefer 로 이기면 표시가 옛 표에 고착된다(리뷰 K-1). 생 스캔 결과가
+        // tabs 앞쪽이라 동률이면 생 스캔이 이긴다.
+        if (t.arr == prefer_arr && dt >= 3 && t.missed == 0) score += 1;
         if (t.stride == 0xD0) score += 1;                 // 확정 stride 우대
         if (score > bestScore) {
             bestScore = score;
@@ -388,36 +429,166 @@ bool read_player_worn(const mem::Rtti& rtti, const mem::Reader& reader,
                       EquipTable* table_out, std::vector<WornPiece>* pieces_out) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);
-    return pick_player_table(reader, tabs, 0, table_out, pieces_out);
+    return pick_player_table(reader, tabs, 0, table_out, pieces_out,
+                             kEquipAutoCharacter);
 }
 
 // -------------------------------------------------------------------- 캐시
 namespace {
 std::mutex g_eq_mutex;
+// 장비 표를 **언제부터** 못 읽고 있나(0 이면 멀쩡하다). **g_eq_mutex 가 지킨다.**
+// 예전 주석은 "분석 스레드 한 곳에서만 읽고 쓴다" 고 단언했는데 사실이 아니었다 -
+// equip_refresh_pieces 는 분석 스레드(camera.cpp)뿐 아니라 장비 창의 렌더 스레드에서도
+// 여덟 곳에서 불린다(equip_panel.cpp). 락 밖에서 읽고 쓰면 데이터 경쟁이고, 한쪽이
+// 시계를 지워 재탐색이 영영 안 돌거나 멀쩡한 표를 버리게 된다.
+// 지역 이동의 순간적인 실패로 재탐색을 부르지 않을 만큼 넉넉히 둔다.
+std::chrono::steady_clock::time_point g_eq_dead_since;
+constexpr auto kEquipDeadFor = std::chrono::seconds(10);
 std::vector<EquipTable> g_eq_tables;   // both-realms 테이블(발견 캐시)
 std::vector<WornPiece> g_eq_pieces;    // 플레이어 착용장비
 EquipTable g_eq_player_table;           // 플레이어 테이블(빠른 재읽기용)
+std::vector<EquipCharacter> g_eq_chars; // 월드의 플레이어형 캐릭터(행 오름차순)
+std::uint16_t g_eq_current_row = kEquipAutoCharacter;   // 캐시된 테이블의 캐릭터
+std::uint16_t g_eq_resolved_want = kEquipAutoCharacter; // 마지막 발견이 소화한 선택
+std::uint16_t g_eq_log_row = kEquipAutoCharacter;       // 로그 판정용: 마지막 발견의 표시 행
+bool g_eq_log_ok = false;                                // 로그 판정용: 마지막 발견 성공 여부
 bool g_eq_ready = false;
 std::atomic<bool> g_eq_refresh{false};
+std::atomic<std::uint16_t> g_eq_want_row{kEquipAutoCharacter};   // 렌더 스레드가 고른다
 }  // namespace
 
 void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<EquipTable> tabs;
     collect_equip_tables(rtti, reader, &tabs);   // both-realms 쓰기 대상 전체
     std::uintptr_t prefer = 0;
+    std::vector<EquipTable> known;
+    std::vector<EquipCharacter> prev_chars;
+    std::uint16_t prev_row = kEquipAutoCharacter;
+    bool prev_ok = false;
     {
         std::lock_guard<std::mutex> lk(g_eq_mutex);
         prefer = g_eq_player_table.arr;   // 이전 선택 유지(동률 안정화)
+        known = g_eq_tables;
+        prev_chars = g_eq_chars;
+        prev_row = g_eq_log_row;   // 실패도 반영된 로그용 상태(리뷰 K-3)
+        prev_ok = g_eq_log_ok;
     }
-    // 플레이어 = 정신력 풀 보유 + 착용 조각 최다(pick_player_table 이 점수화).
+    // 힙 스캔은 매번 완전하지 않다(영역 하나를 통째로 읽다 실패하면 그 영역 전부를 건너뛴다 -
+    // 실측 2026-09-12: 잇단 스캔이 26/29/28/16개였고 웅카 서버 테이블이 한 번은 빠져, 첫 일괄
+    // 쓰기가 한쪽 realm 에만 갔다). 전에 찾아 둔 테이블은 지금도 같은 자리에서 검증되면
+    // 남긴다 - 후보 목록에서 캐릭터가 사라졌다 나타났다 하지 않고, both-realms 쓰기가
+    // 양쪽을 다 찾는다. 검증: vtable 이 아직 EquipSlotActorComponent 이고(class_of_object),
+    // 스캔과 같은 조건(find_equip_table 로 같은 arr·stride + 실제아이템 >= 3)을 지난다.
+    // 읽기는 SEH 로 감싸여 풀린 페이지는 false 로 떨어지고, 커밋된 채 재사용된 자리는
+    // vtable·구조 점수·조각 수가 거른다(리뷰 K-2·O-2). 되살린 표는 연속 kReviveMaxMisses 회를
+    // 넘기면 버리고 한 번에 kReviveMax 개까지만 - 캐시가 자라지 않게(리뷰 K-4).
+    constexpr int kReviveMaxMisses = 15;   // 20초 주기면 5분
+    constexpr std::size_t kReviveMax = 64;
+    std::size_t revived = 0;
+    {
+        std::vector<WornPiece> chk;
+        for (const auto& k : known) {
+            if (revived >= kReviveMax) break;
+            bool present = false;
+            for (const auto& t : tabs) {
+                if (t.arr == k.arr) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present) continue;
+            if (k.missed + 1 > kReviveMaxMisses) continue;
+            if (rtti.class_of_object(k.comp).find("EquipSlotActorComponent") ==
+                std::string::npos) {
+                continue;
+            }
+            EquipTable again;
+            if (!find_equip_table(reader, k.comp, &again) || again.arr != k.arr ||
+                again.stride != k.stride) {
+                continue;
+            }
+            again.comp = k.comp;
+            again.missed = k.missed + 1;
+            if (!read_worn_gear(reader, again, &chk) || chk.size() < 3) continue;
+            tabs.push_back(again);
+            ++revived;
+        }
+    }
+    // 캐릭터 후보: 정신력 풀이 있고 착용 테이블로 보이는 것 중 행을 푼 것. realm 마다 하나씩
+    // 오므로 행으로 합치고 조각 수는 큰 쪽을 둔다.
+    std::vector<EquipCharacter> chars;
+    std::vector<WornPiece> tmp;
+    for (const auto& t : tabs) {
+        if (t.comp == 0) continue;
+        const std::uintptr_t ch =
+            static_cast<std::uintptr_t>(rd64(reader, t.comp + 0x08));
+        if (!char_is_player(reader, ch)) continue;
+        if (!read_worn_gear(reader, t, &tmp)) continue;
+        const int dt = distinct_tags(tmp);
+        const int n = static_cast<int>(tmp.size());
+        if (n == 0 || dt * 2 < n) continue;
+        const std::uint16_t row = table_character_row(reader, t);
+        if (row == kEquipAutoCharacter) continue;
+        // 정신력 풀은 동행(companion)에도 있다 - 플레이어블(주인공·Mercenary_Main)만 후보다
+        // (리뷰 E-1: 7조각짜리 동반자(행 5654)가 콤보에 들고, 고르면 치트·낙사 앵커까지
+        // 그쪽으로 옮겨갔다).
+        if (!is_playable_character_row(reader, row)) continue;
+        EquipCharacter* found = nullptr;
+        for (auto& c : chars) {
+            if (c.row == row) {
+                found = &c;
+                break;
+            }
+        }
+        if (found == nullptr) {
+            chars.push_back(EquipCharacter{row, dt});
+        } else if (dt > found->pieces) {
+            found->pieces = dt;
+        }
+    }
+    std::sort(chars.begin(), chars.end(),
+              [](const EquipCharacter& a, const EquipCharacter& b) {
+                  return a.row < b.row;
+              });
+    // 고른 캐릭터(없으면 자동 = 정신력 풀 보유 + 착용 조각 최다, pick_player_table 이 점수화).
+    const std::uint16_t want = g_eq_want_row.load(std::memory_order_relaxed);
     EquipTable pt;
     std::vector<WornPiece> pieces;
-    const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces);
+    const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces, want);
+    const std::uint16_t cur = ok ? table_character_row(reader, pt) : kEquipAutoCharacter;
+    // 후보나 표시 캐릭터, 성공 여부가 바뀌면 한 줄 남긴다(20초 주기 재탐색은 조용히 - 실패가
+    // 이어져도 한 번만) - "콤보에 웅카가 없다" 를 로그로 가릴 수 있게.
+    bool changed = chars.size() != prev_chars.size() || cur != prev_row || ok != prev_ok;
+    for (std::size_t i = 0; !changed && i < chars.size(); ++i) {
+        changed = chars[i].row != prev_chars[i].row || chars[i].pieces != prev_chars[i].pieces;
+    }
+    if (changed) {
+        const auto label = [](std::uint16_t row) -> std::string {
+            if (row == kEquipAutoCharacter) return "자동";
+            const RosterEntry* e = character_by_row(row);
+            return e != nullptr && !e->display().empty() ? e->display()
+                                                          : "행 " + std::to_string(row);
+        };
+        std::string list;
+        for (const auto& c : chars) {
+            if (!list.empty()) list += " ";
+            list += label(c.row) + "(" + std::to_string(c.pieces) + ")";
+        }
+        log::infof("장비 캐릭터 후보 {}개: {} - 선택 {} → 표시 {} (테이블 {}개, 캐시에서 되살림 "
+                   "{}개{})",
+                   chars.size(), list, label(want), ok ? label(cur) : "없음", tabs.size(),
+                   revived, ok ? "" : ", 착용 테이블 못 찾음");
+    }
     std::lock_guard<std::mutex> lk(g_eq_mutex);
+    g_eq_log_row = cur;
+    g_eq_log_ok = ok;
     g_eq_tables = std::move(tabs);
+    g_eq_chars = std::move(chars);
+    g_eq_resolved_want = want;   // 실패해도 "이 선택을 봤다" 는 남긴다(창의 갱신 중 표시)
     if (ok) {
         g_eq_player_table = pt;
         g_eq_pieces = std::move(pieces);
+        g_eq_current_row = cur;
         g_eq_ready = true;
     }
 }
@@ -430,14 +601,58 @@ void equip_refresh_pieces(const mem::Reader& reader) {
         pt = g_eq_player_table;
     }
     std::vector<WornPiece> pieces;
-    if (!read_worn_gear(reader, pt, &pieces)) return;
+    if (!read_worn_gear(reader, pt, &pieces)) {
+        // **실패를 센다.** 게임은 세이브를 불러올 때 컴포넌트를 새로 만든다(인벤토리
+        // 에서 실측했다). 예전에는 여기서 조용히 돌아가기만 해서 g_eq_ready 가 참인
+        // 채 죽은 표를 들고 있었고, 그러면 camera 의 `!equip_ready()` 재탐색이 영영
+        // 안 돌았다. 플레이어 치트가 그것을 따라가므로 화면이 -1/-1 을 그렸다
+        // (사용자 화면 확인 2026-09-13).
+        //
+        // 지역 이동 중에는 잠깐 못 읽을 수 있으니 **경과 시간**으로 잰다.
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lk(g_eq_mutex);
+        if (g_eq_dead_since.time_since_epoch().count() == 0) {
+            g_eq_dead_since = now;
+            return;
+        }
+        if (now - g_eq_dead_since < kEquipDeadFor) return;
+        g_eq_dead_since = {};
+        log::warnf("장비 컴포넌트 0x{:X} 를 계속 못 읽는다 - 다시 찾는다", pt.comp);
+        g_eq_ready = false;   // camera 의 !equip_ready() 가 재탐색을 돌린다
+        return;
+    }
+    // 어느 스레드든 **한 번 성공하면** 표는 살아 있다 - 시계를 비운다.
     std::lock_guard<std::mutex> lk(g_eq_mutex);
+    g_eq_dead_since = {};
     g_eq_pieces = std::move(pieces);
 }
 
 std::uintptr_t equip_player_comp() {
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     return g_eq_ready ? g_eq_player_table.comp : 0;
+}
+
+std::vector<EquipCharacter> equip_characters() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_chars;
+}
+
+void equip_select_character(std::uint16_t row) {
+    g_eq_want_row.store(row, std::memory_order_relaxed);
+}
+
+std::uint16_t equip_selected_character() {
+    return g_eq_want_row.load(std::memory_order_relaxed);
+}
+
+std::uint16_t equip_current_character() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_ready ? g_eq_current_row : kEquipAutoCharacter;
+}
+
+std::uint16_t equip_resolved_character() {
+    std::lock_guard<std::mutex> lk(g_eq_mutex);
+    return g_eq_resolved_want;
 }
 
 void equip_tables_copy(std::vector<EquipTable>* out) {
@@ -466,7 +681,7 @@ bool equip_take_refresh() {
     return g_eq_refresh.exchange(false, std::memory_order_acq_rel);
 }
 
-// op: 0=socket 1=refine 2=dye
+// op: 0=socket 1=temper 2=dye 3=unlock 4=sharpness
 static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
                         int op, int a, std::uint16_t b, std::uint8_t g,
                         std::uint8_t bl) {
@@ -481,18 +696,20 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         if (e == 0) continue;
         bool ok = false;
         if (op == 0) ok = socket_fill_entry(reader, e, a, b);
-        else if (op == 1) ok = refine_set_entry(reader, e, b);
+        else if (op == 1) ok = temper_set_entry(reader, e, b);
         else if (op == 2) ok = dye_set_entry(reader, e, a,
                                               static_cast<std::uint8_t>(b), g, bl);
         else if (op == 3) ok = socket_unlock_entry(reader, e, a) > 0;
+        else if (op == 4) ok = sharpness_set_entry(reader, e, b);
         if (ok) ++wrote;
     }
     // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
-    static const char* const kWhat[4] = {"장비 소켓", "장비 연마", "장비 염색",
-                                         "장비 소켓 열기"};
+    static const char* const kWhat[5] = {"장비 소켓", "장비 담금질", "장비 염색",
+                                         "장비 소켓 열기", "장비 연마"};
     std::string after;
     if (op == 0) after = "칸 " + std::to_string(a) + " 보석 순번 " + std::to_string(b);
-    else if (op == 1) after = "연마 " + std::to_string(b);
+    else if (op == 1) after = "담금질 " + std::to_string(b);
+    else if (op == 4) after = "연마 " + std::to_string(b);
     else if (op == 2) after = "zone 레코드 " + std::to_string(a) + " -> " +
                               std::to_string(static_cast<int>(b)) + "," +
                               std::to_string(static_cast<int>(g)) + "," +
@@ -508,9 +725,14 @@ int eq_write_socket(const mem::Reader& reader, std::uint64_t instance, int k,
     return eq_write_all(reader, instance, 0, k, gem, 0, 0);
 }
 
-int eq_write_refine(const mem::Reader& reader, std::uint64_t instance,
+int eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
                     std::uint16_t level) {
     return eq_write_all(reader, instance, 1, 0, level, 0, 0);
+}
+
+int eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
+                       std::uint16_t level) {
+    return eq_write_all(reader, instance, 4, 0, level, 0, 0);
 }
 
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,

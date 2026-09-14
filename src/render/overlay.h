@@ -21,6 +21,11 @@ std::vector<Config::SocketCapPart> socket_cap_setting();
 // **거는 것은 부르는 쪽 일이다** - 여기서는 설정만 만진다.
 bool set_socket_cap_setting(const std::vector<Config::SocketCapPart>& parts);
 
+// 장비 창의 캐릭터 선택(캐릭터 행, -1 = 자동). 바꾸면 ini 에 저장한다 - **고르는 것은
+// 부르는 쪽 일이다**(game::equip_select_character). 시작 때는 set_config 가 되살린다.
+int equip_character_setting();
+bool set_equip_character_setting(int row);
+
 // 창을 켠다. 아이템 목록이 줄 클릭 때 지급 창을 띄우는 데 쓴다.
 void show_window(cdtb::render::Win w);
 

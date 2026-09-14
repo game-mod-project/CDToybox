@@ -346,4 +346,7 @@ std::vector<LiveActor> live_actors_copy() {
     return g_live;
 }
 
+
+std::vector<std::string> actors_scan_classes() { return {kActorManagerClass}; }
+
 }  // namespace cdtb::game

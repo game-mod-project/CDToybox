@@ -81,6 +81,9 @@ add_library(cdtoybox SHARED
     src/render/gates.cpp
     src/render/layout_table.cpp
     src/render/layout.cpp
+    src/render/log_filter.cpp
+    src/render/log_view.cpp
+    src/render/log_panel.cpp
     src/game/camera.cpp
     src/game/analysis.cpp
     src/game/freecam.cpp
@@ -90,6 +93,9 @@ add_library(cdtoybox SHARED
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/game/skillpoint.cpp
+    src/game/skillgate.cpp
+    src/game/knowledge.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -98,12 +104,14 @@ add_library(cdtoybox SHARED
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/nofall_cave.cpp
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/spec_heal.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
+    src/input/mouse.cpp
     src/proxy/exports.def
 )
 set_target_properties(cdtoybox PROPERTIES
@@ -141,9 +149,19 @@ add_executable(cdtb_tests
     tests/image_dump_tests.cpp
     tests/ui_state_tests.cpp
     tests/layout_tests.cpp
+    tests/log_ring_tests.cpp
+    tests/log_view_tests.cpp
+    tests/skillpoint_tests.cpp
+    tests/skillgate_tests.cpp
+    tests/knowledge_tests.cpp
     tests/core_helpers_tests.cpp
     tests/table_sort_tests.cpp
     tests/input_filter_tests.cpp
+    tests/rtti_tests.cpp
+    tests/nofall_tests.cpp
+    tests/bag_capacity_tests.cpp
+    tests/bag_backup_tests.cpp
+    src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
     src/game/grant.cpp
@@ -157,10 +175,15 @@ add_executable(cdtb_tests
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/game/skillpoint.cpp
+    src/game/skillgate.cpp
+    src/game/knowledge.cpp
     src/render/notice_state.cpp
     src/render/stash_queue.cpp
     src/render/confirm_state.cpp
     src/render/layout_table.cpp
+    src/render/log_filter.cpp
+    src/render/log_view.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
 target_link_libraries(cdtb_tests PRIVATE cdtb_core)
@@ -189,6 +212,8 @@ add_executable(cdtb_probe
     src/game/companion.cpp
     src/game/actors.cpp
     src/game/clan.cpp
+    src/game/skillpoint.cpp
+    src/game/knowledge.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -197,6 +222,7 @@ add_executable(cdtb_probe
     src/game/equip.cpp
     src/game/player.cpp
     src/game/nofall.cpp
+    src/game/nofall_cave.cpp
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/spec_heal.cpp

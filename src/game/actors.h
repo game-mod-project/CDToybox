@@ -141,4 +141,8 @@ void live_actors_tick(const mem::Reader& reader);
 // 다른 스레드용 복사본(뮤텍스 아래에서 복사).
 std::vector<LiveActor> live_actors_copy();
 
+
+// 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
+std::vector<std::string> actors_scan_classes();
+
 }  // namespace cdtb::game

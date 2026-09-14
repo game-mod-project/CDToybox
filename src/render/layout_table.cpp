@@ -25,6 +25,10 @@ constexpr WindowSpec kSpecs[] = {
      220},
     {Win::Camera, "카메라 분석", "카메라 분석 (진단)", false, 60, 870, 560, 200, 400,
      160},
+    // 장비(640,340~760)의 **아래**, 플레이어 치트(x 1240~)의 **왼쪽** 빈 자리다.
+    // 로스터·카메라는 x 620 에서 끝나므로 640 부터는 비어 있다. 본창과도 안 겹친다
+    // (layout_tests 가 이 넷을 전부 검사한다).
+    {Win::Log, "로그", "로그 (실시간)", false, 640, 780, 560, 280, 400, 160},
 };
 static_assert(sizeof(kSpecs) / sizeof(kSpecs[0]) == kWinCount);
 

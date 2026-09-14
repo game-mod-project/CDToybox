@@ -24,3 +24,6 @@ cheat_report.txt
 *.zip
 CHANGELOG_Table.txt
 CrimsonInvEditor.itemmap.txt
+
+# 참고용 제3자 모드 배포물 - 추적하지 않는다(남의 저작물이다)
+*.zip

@@ -32,6 +32,11 @@ struct Config {
     // 그대로 읽어 주기 위한 것이고, 화면에서 한 번 저장하면 부위 목록으로
     // 바뀐다. 0 이면 안 건다.
     int socket_cap = 0;
+
+    // 장비 창에서 고른 캐릭터(캐릭터 행). -1 이면 자동(정신력 풀 + 착용 조각 최다).
+    // 클리프·웅카·데미안을 번갈아 조종하므로 마지막 선택을 세션 너머로 남긴다.
+    // ini 표기: `equip_character_row = 5` (클리프 0, 데미안 3, 웅카 5)
+    int equip_character_row = -1;
 };
 
 namespace config {

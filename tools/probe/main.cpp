@@ -29,6 +29,8 @@
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
+#include "game/nofall.h"
+#include "game/nofall_cave.h"
 #include "game/localization.h"
 #include "game/player.h"
 #include "game/roster.h"
@@ -2176,6 +2178,169 @@ void cmd_cheat(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     for (const char* n : kKnown) cmd_cheat_one(rt, reader, n);
 }
 
+// 장비 창의 캐릭터 후보를 DLL 과 같은 코드(equip_discover)로 계산해 보인다 - "웅카가 콤보에
+// 없다/골라도 안 바뀐다" 를 가른다. 인자로 캐릭터 행을 주면 그 선택으로 고른 결과까지 본다.
+// 발견을 두 번 돌려 두 번째가 캐시 되살리기 경로를 밟게 한다(스캔이 빠뜨린 것을 캐시가
+// 건지는지 테이블 수로 보인다). 전 경로 읽기 전용.
+void cmd_equipchars(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                    char** argv) {
+    if (!game::discover_roster(rt, reader)) {
+        std::printf("로스터 실패\n");
+        return;
+    }
+    std::uint16_t want = game::kEquipAutoCharacter;
+    if (argc > 2) {
+        char* end = nullptr;
+        const unsigned long v = std::strtoul(argv[2], &end, 0);
+        if (end == argv[2] || *end != 0 || v > 0xFFFE) {
+            std::printf("사용법: equipchars [캐릭터 행 0..65534]\n");
+            return;
+        }
+        want = static_cast<std::uint16_t>(v);
+    }
+    game::equip_select_character(want);
+    game::equip_discover(rt, reader);
+    std::vector<game::EquipTable> first;
+    game::equip_tables_copy(&first);
+    game::equip_discover(rt, reader);   // 두 번째: 캐시 되살리기 경로
+    std::vector<game::EquipTable> tabs;
+    game::equip_tables_copy(&tabs);
+    std::size_t revived = 0;
+    for (const auto& t : tabs) revived += t.missed > 0 ? 1 : 0;
+    std::printf("테이블 1차 %zu개 → 2차 %zu개(캐시에서 되살림 %zu개), 선택 %u, 현재 %u, 소화 %u, "
+                "ready=%d (아래는 플레이어형만)\n",
+                first.size(), tabs.size(), revived, want, game::equip_current_character(),
+                game::equip_resolved_character(), game::equip_ready() ? 1 : 0);
+    for (const auto& t : tabs) {
+        std::uint64_t ch = 0;
+        reader.read_value(t.comp + 0x08, &ch);
+        if (!game::char_is_player(reader, static_cast<std::uintptr_t>(ch))) continue;
+        std::uint16_t row = 0xFFFF;
+        game::actor_character_row(reader, static_cast<std::uintptr_t>(ch), &row);
+        std::vector<game::WornPiece> ps;
+        game::read_worn_gear(reader, t, &ps);
+        const game::RosterEntry* e = game::character_by_row(row);
+        std::printf("  comp=0x%llX arr=0x%llX 조각 %zu 행 %u %s playable=%d%s\n",
+                    (unsigned long long)t.comp, (unsigned long long)t.arr, ps.size(), row,
+                    e != nullptr ? e->display().c_str() : "?",
+                    game::is_playable_character_row(reader, row) ? 1 : 0,
+                    t.missed > 0 ? " (되살림)" : "");
+    }
+    const auto chars = game::equip_characters();
+    std::printf("후보 %zu개\n", chars.size());
+    for (const auto& c : chars) {
+        const game::RosterEntry* e = game::character_by_row(c.row);
+        std::printf("  행 %u 슬롯 %d %s\n", c.row, c.pieces,
+                    e != nullptr ? e->display().c_str() : "?");
+    }
+    std::vector<game::WornPiece> pieces;
+    game::equip_snapshot(&pieces);
+    std::printf("스냅샷 조각 %zu개 (테이블 comp=0x%llX)\n", pieces.size(),
+                (unsigned long long)game::equip_player_comp());
+}
+
+// 분석 스레드의 통과 한 바퀴를 흉내 낸다 - 힙 한 번 훑기(prefetch) 뒤 단계들이 캐시에서
+// 내는지, 단계마다 얼마나 걸리는지 잰다. 인자 "old" 를 주면 미리 훑기 없이(예전처럼 단계마다
+// 힙을 읽으며) 돌려 견준다. 전 경로 읽기 전용(게임 메모리를 읽기만 한다).
+// 낙사 훅을 **설치하지 않고** 점검만 한다. 디스패처 AOB 가 이 빌드에서 유일한지,
+// 케이브가 조립되는지, 그 바이트가 무엇인지 찍는다. 게임 갱신으로 AOB 가 깨졌을 때
+// 가장 먼저 돌려 볼 명령이다. 전 경로 읽기 전용(게임 메모리를 쓰지 않는다).
+void cmd_nofall(const mem::Rtti& rt, const mem::Reader& reader) {
+    // nofall.cpp 의 kSite 와 같은 문자열이어야 한다(둘이 갈리면 여기가 거짓말을 한다).
+    const char* kSite =
+        "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70 "
+        "49 8B C1 49 8B E8 0F B7 DA 48 8B F1 4D 85 C9";
+    const auto parsed = mem::parse_pattern(kSite);
+    if (!parsed) {
+        std::printf("AOB 를 해석하지 못했습니다\n");
+        return;
+    }
+    std::printf("AOB 바이트 수 %zu\n", parsed->size());
+    if (!rt.loaded()) {
+        std::printf("이미지를 못 읽었습니다\n");
+        return;
+    }
+    const auto& img = rt.image();
+    const mem::Range range{img.data(), img.size()};
+    const auto hits = mem::find_all(range, *parsed, 8);
+    std::printf("사이트 후보 %zu곳\n", hits.size());
+    for (const auto* h : hits) {
+        const std::uint64_t rva = static_cast<std::uint64_t>(h - img.data());
+        std::printf("  RVA 0x%08llX  VA 0x%llX\n", (unsigned long long)rva,
+                    (unsigned long long)(reader.module_base() + rva));
+    }
+    if (hits.size() != 1) {
+        std::printf("유일하지 않으므로 모드는 설치를 거부합니다\n");
+        return;
+    }
+    const std::uint64_t rva = static_cast<std::uint64_t>(hits[0] - img.data());
+    const std::uintptr_t site = reader.module_base() + rva;
+
+    std::uint8_t orig[game::kNofallOrigSize]{};
+    if (!reader.read(site, orig, sizeof(orig))) {
+        std::printf("사이트 원본 바이트를 못 읽었습니다\n");
+        return;
+    }
+    std::printf("원본 %zu바이트:", game::kNofallOrigSize);
+    for (auto b : orig) std::printf(" %02X", b);
+    std::printf("\n");
+
+    // vars 주소는 점검용 가짜다(할당하지 않는다).
+    const auto built = game::nofall_build_cave(orig, 0x20000001000ULL, site);
+    if (!built.ok) {
+        std::printf("케이브 조립 실패: %s\n", built.why);
+        return;
+    }
+    std::printf("케이브 %zu바이트 (상한 %zu):\n", built.code.size(),
+                game::kNofallCaveSize);
+    for (std::size_t i = 0; i < built.code.size(); ++i) {
+        if (i % 16 == 0) std::printf("  %04zX ", i);
+        std::printf(" %02X", built.code[i]);
+        if (i % 16 == 15) std::printf("\n");
+    }
+    if (built.code.size() % 16 != 0) std::printf("\n");
+}
+
+void cmd_passscan(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    const bool old = argc > 2 && std::strcmp(argv[2], "old") == 0;
+    const auto t0 = ::GetTickCount64();
+    auto t = t0;
+    auto step = [&](const char* what) {
+        const auto now = ::GetTickCount64();
+        std::printf("  [%s] %llums\n", what, (unsigned long long)(now - t));
+        t = now;
+    };
+    if (!old) {
+        // DLL 과 같은 목록·상한(camera.h) - 실측이 어긋나지 않게(리뷰 P-4).
+        rt.prefetch_instances(game::pass_scan_classes(), game::kPassScanPerClass);
+        const auto ps = rt.prefetch_stats();
+        std::printf("힙 훑기: 클래스 %zu개 객체 %zu개 (상한 %zu 에 닿은 클래스 %zu개)\n",
+                    ps.names, ps.objects, game::kPassScanPerClass, ps.capped);
+        step("힙 훑기");
+    } else {
+        std::printf("(미리 훑기 없이 - 단계마다 힙을 읽는다)\n");
+    }
+    game::discover_items(rt, reader);
+    step("아이템표");
+    game::discover_inventory(rt, reader);
+    step("인벤토리");
+    game::discover_roster(rt, reader);
+    step("로스터");
+    game::discover_actor_manager(rt, reader);
+    step("액터 매니저");
+    game::CameraSet cs;
+    const bool cam = game::discover_with(rt, reader, &cs);
+    step("카메라");
+    game::discover_clan(rt, reader);
+    step("동반자 명부");
+    rt.clear_prefetch();
+    std::printf("통과 합계 %llums, 카메라 %s, 인벤토리 %s, 로스터 %s, 액터 매니저 %s, 명부 %s\n",
+                (unsigned long long)(::GetTickCount64() - t0), cam ? "확보" : "미확보",
+                game::inventory_ready() ? "OK" : "-", game::roster_ready() ? "OK" : "-",
+                game::actor_manager_ready() ? "OK" : "-", game::clan_ready() ? "OK" : "-");
+}
+
 void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                char** argv) {
     if (argc > 2 && std::strcmp(argv[2], "diag") == 0) {
@@ -2195,10 +2360,13 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
             std::int32_t hpmax = 0;
             if (arr) reader.read_value(arr + 0x18, &hpmax);
             const bool isp = game::char_is_player(reader, ch);
+            // 캐릭터 행(comp+0x08 의 캐릭터 객체에서 actor_character_row). 못 풀면 65535.
+            std::uint16_t row = 0xFFFF;
+            game::actor_character_row(reader, static_cast<std::uintptr_t>(ch), &row);
             std::printf("  [%s] comp=0x%llX pieces=%zu char=0x%llX gauge=%s "
-                        "hpmax=%d player=%d\n",
+                        "hpmax=%d player=%d row=%u\n",
                         o.cls.c_str(), (unsigned long long)o.address, ps.size(),
-                        (unsigned long long)ch, arr ? "Y" : "N", hpmax, isp);
+                        (unsigned long long)ch, arr ? "Y" : "N", hpmax, isp, row);
         }
         return;
     }
@@ -2217,8 +2385,8 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         game::read_worn_gear(reader, t, &ps);
         std::printf("worn pieces: %zu\n", ps.size());
         for (const auto& w : ps) {
-            std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
-                        (unsigned long long)w.instance, w.key, w.refine,
+            std::printf("  inst=0x%llX key=%u temper=%u sharp=%u slot=%u unlocked=%d  sock:",
+                        (unsigned long long)w.instance, w.key, w.temper, w.sharpness,
                         w.slot_tag, w.unlocked);
             for (int k = 0; k < 5; ++k)
                 std::printf(" [%u m%X i%02X]", w.sockets[k].gem,
@@ -2239,8 +2407,8 @@ void cmd_equip(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::printf("player table arr=0x%llX cnt=%u stride=0x%X  pieces=%zu\n",
                 (unsigned long long)t.arr, t.cnt, t.stride, ps.size());
     for (const auto& w : ps) {
-        std::printf("  inst=0x%llX key=%u refine=%u slot=%u unlocked=%d  sock:",
-                    (unsigned long long)w.instance, w.key, w.refine,
+        std::printf("  inst=0x%llX key=%u temper=%u sharp=%u slot=%u unlocked=%d  sock:",
+                    (unsigned long long)w.instance, w.key, w.temper, w.sharpness,
                     w.slot_tag, w.unlocked);
         for (int k = 0; k < 5; ++k)
             std::printf(" [%u m%X i%02X]", w.sockets[k].gem,
@@ -3710,6 +3878,9 @@ int main(int argc, char** argv) {
     if (cmd == "aob") { cmd_aob(rt, reader, argc, argv); return 0; }
     if (cmd == "invsock") { cmd_invsock(rt, reader); return 0; }
     if (cmd == "equip") { cmd_equip(rt, reader, argc, argv); return 0; }
+    if (cmd == "passscan") { cmd_passscan(rt, reader, argc, argv); return 0; }
+    if (cmd == "nofall") { cmd_nofall(rt, reader); return 0; }
+    if (cmd == "equipchars") { cmd_equipchars(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
