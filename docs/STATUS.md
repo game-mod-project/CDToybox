@@ -792,9 +792,40 @@ SkillPointOwnerType}` · `FollowLearnElementSaveData` · `KnowledgeLearnDelayEle
 를 들고 있고, 퀵슬롯 쪽에 `UseItemReserveSlotElementSaveData{ReserveSlotKey, ItemKey,
 SkillKey, …}` 가 따로 있다. **어느 것인지는 조사 중이다.**
 
-정적 표의 사슬은 확정돼 있다(휠이 열리는 길):
-`KnowledgeInfo._learnApplySkillInfo(+0x104)` → `SkillInfo._reserveSlotInfoList(+0xE8)`.
+**기능 관문을 찾았다(2026-09-14).** `ServerKnowledgeActorComponent` 에만 있는 해시맵이다:
+
+| | |
+|---|---|
+| `+0xE8` / `+0xEC` / `+0xF4` | 버킷 수 · 보조 · **원소 수** |
+| `+0xF8` / `+0x100` | 버킷 배열 · 값 배열 |
+| 키 / 값 | 지식 id / **{ u32 SkillKey, i32 레벨 }** |
+
+사슬: 진짜 습득이 **`0x02AA55D0`** 으로 이 맵에 넣고(`KnowledgeInfo._learnApplySkillInfo`
+`+0x104` 에서 SkillKey 를 꺼낸다) → `ServerSkillActorComponent` vtable 슬롯 19
+(RVA 0x02B26DE0)가 그 맵을 훑어 스킬 컴포넌트에 등록한다. **그때 휠이 켜진다.**
+레벨 표는 이 맵을 안 건드리므로, 화면은 "배운 것처럼" 보이고 기능은 안 된다.
+클라 컴포넌트의 같은 자리는 전부 0 이다(실측) - **서버 전용 필드**다.
+
+해시맵이라 손으로 못 쓴다. 게임 함수를 부르는 수밖에 없고, 인자는 게임 자신의
+호출부(RVA 0x02AA6450 / 0x02AA64F8)와 대조해 확인했다 -
+`(rcx = 서버 comp, dx = u16 지식키, r8d = i32 레벨, r9b = 1)`.
+**다만 렌더 스레드에서 부르면 죽는다**(TLS, TROUBLESHOOTING 1.8/1.13) - 소환 치트가
+쓰는 게임 스레드 자리에 걸어 두고 집어 가게 한다. 2026-09-14 기준 **아직 성공을
+확인하지 못했다.**
+
+레코드 `+0x08` 은 객체가 아니라 **습득 시각**이다(`0x0201E3F0` 은 할당자가 아니라
+`{일,시,분,초,ms}` -> 밀리초 변환 함수다). 0 이면 "이 지식 없음" 으로 보는 소비자가
+있어(0x028348EA) 정상 습득한 지식의 값을 복사해 채운다.
+
+정적 표의 사슬도 확정돼 있다:
+`KnowledgeInfo._learnApplySkillInfo(+0x104)` -> `SkillInfo._reserveSlotInfoList(+0xE8)`.
 조건식 함수 이름표에 `CheckKnowledge` · `SkillTreeNodeLearnable` · `CheckReserveSlot` 이 있다.
+
+**컴포넌트는 플레이어 액터 사슬로 잡는다** - `*(u64*)( *(u64*)(액터+0x68) + 0x150 )`.
+RTTI 탐색은 vtable 값이 들어 있는 **표까지 객체로 잡아**(2026-09-14: 후보 둘이 16바이트
+간격) 화면에 쓰레기 숫자를 그렸다. 사슬이 주는 것은 **클라** 쪽이므로
+(`player_char()` 가 클라 액터다) realm 은 `rtti.class_of_object` 로 판정한다.
+서버 쪽은 여전히 RTTI 가 잡되 레벨 표 구조 검사를 통과해야 받는다.
 
 **지역화는 실행 파일에 없다.** 플레이어용 한국어가 **한 글자도** 없다(UTF-8/UTF-16/CP949
 전부 0회). 지식 이름과 키는 `.paz`(192개·약 175GB·매직 `PAR `)에서 런타임에 올라오므로
