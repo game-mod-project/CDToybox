@@ -717,6 +717,26 @@ void know_diagnose(const mem::Reader& reader) {
         } else {
             log::warnf("    레벨표를 못 읽었다");
         }
+        // **결속 풀은 캐릭터별 배열일 수 있다.** 조사 보고서가 `+0xC8` 을
+        // "SkillPointOwnerType 색인, 6바이트 레코드 {i16 현재, i16 누적, u16 타입}"
+        // 로 적었는데, 지금 우리는 첫 칸만 읽고 쓴다. 화면의 우상단 카운터가
+        // 넷이라는 것과도 안 맞는다 - 앞 여덟 칸을 날로 찍어 확인한다.
+        const std::uint64_t pool = rd64(reader, comp + 0xC8);
+        if (pool >= 0x10000) {
+            for (int i = 0; i < 8; ++i) {
+                const std::uintptr_t rec =
+                    static_cast<std::uintptr_t>(pool) +
+                    static_cast<std::uintptr_t>(i) * 6;
+                std::uint16_t a = 0, b = 0, c = 0;
+                if (!reader.read_value(rec + 0, &a)) break;
+                reader.read_value(rec + 2, &b);
+                reader.read_value(rec + 4, &c);
+                log::infof("    결속 풀[{}] 0x{:X}: {} · {} · 타입 {}", i, rec, a,
+                           b, c);
+            }
+        } else {
+            log::warnf("    결속 풀 포인터가 이상하다: 0x{:X}", pool);
+        }
     }
     log::infof("지식 진단 ----- 끝");
 }
