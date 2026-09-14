@@ -96,6 +96,7 @@ add_library(cdtoybox SHARED
     src/game/skillpoint.cpp
     src/game/skillgate.cpp
     src/game/knowledge.cpp
+    src/game/reserveslot.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -178,6 +179,7 @@ add_executable(cdtb_tests
     src/game/skillpoint.cpp
     src/game/skillgate.cpp
     src/game/knowledge.cpp
+    src/game/reserveslot.cpp
     src/render/notice_state.cpp
     src/render/stash_queue.cpp
     src/render/confirm_state.cpp
@@ -214,6 +216,7 @@ add_executable(cdtb_probe
     src/game/clan.cpp
     src/game/skillpoint.cpp
     src/game/knowledge.cpp
+    src/game/reserveslot.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
