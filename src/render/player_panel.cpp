@@ -12,6 +12,7 @@
 #include "game/skillpoint.h"
 #include "render/colors.h"
 #include "render/confirm.h"
+#include "render/table_sort_imgui.h"
 #include "render/notice.h"
 #include "mem/reader.h"
 #include "render/layout.h"
@@ -219,21 +220,44 @@ void draw_knowledge(const mem::Reader& reader) {
         ImGui::TextColored(col::kOk, "모자란 선행 조건이 없습니다.");
     }
 
+    // 폭 조절(Resizable)과 머리글 정렬(Sortable). 다른 표들과 같은 배관을 쓴다.
+    constexpr ImGuiTableFlags kKnowF =
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (!s_scan.needs.empty() &&
-        ImGui::BeginTable("know_needs", 7,
-                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 220.0f))) {
+        ImGui::BeginTable("know_needs", 7, kKnowF, ImVec2(0.0f, 220.0f))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-        ImGui::TableSetupColumn("이름");
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("지금", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("필요", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("요구", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("스킬", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
+                                        ImGuiTableColumnFlags_NoSort,
+                                140.0f);
         ImGui::TableHeadersRow();
-        for (const game::KnowNeed& e : s_scan.needs) {
+
+        static SortSpec s_need_sort;
+        table_sort_pull(&s_need_sort);
+        std::vector<const game::KnowNeed*> view;
+        view.reserve(s_scan.needs.size());
+        for (const auto& e : s_scan.needs) view.push_back(&e);
+        sort_view(view, s_need_sort,
+                  [](const game::KnowNeed* a, const game::KnowNeed* b, int col) {
+                      switch (col) {
+                          case 0: return cmp3(a->number, b->number);
+                          case 1: return cmp3(a->name, b->name);
+                          case 2: return cmp3(a->have_level, b->have_level);
+                          case 3: return cmp3(a->need_level, b->need_level);
+                          case 4: return cmp3(a->wanted_by, b->wanted_by);
+                          case 5: return cmp3(a->skill_key, b->skill_key);
+                          default: return 0;
+                      }
+                  });
+        for (const game::KnowNeed* ep : view) {
+            const game::KnowNeed& e = *ep;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::Text("%d", e.number);
@@ -316,17 +340,32 @@ void draw_knowledge(const mem::Reader& reader) {
                             static_cast<int>(s_scan.fresh.size()));
     }
     if (!s_scan.fresh.empty() &&
-        ImGui::BeginTable("know_fresh", 4,
-                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 220.0f))) {
+        ImGui::BeginTable("know_fresh", 4, kKnowF, ImVec2(0.0f, 220.0f))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-        ImGui::TableSetupColumn("이름");
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("스킬", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
+                                        ImGuiTableColumnFlags_NoSort,
+                                140.0f);
         ImGui::TableHeadersRow();
-        for (const game::KnowNeed& e : s_scan.fresh) {
+
+        static SortSpec s_fresh_sort;
+        table_sort_pull(&s_fresh_sort);
+        std::vector<const game::KnowNeed*> fview;
+        fview.reserve(s_scan.fresh.size());
+        for (const auto& e : s_scan.fresh) fview.push_back(&e);
+        sort_view(fview, s_fresh_sort,
+                  [](const game::KnowNeed* a, const game::KnowNeed* b, int col) {
+                      switch (col) {
+                          case 0: return cmp3(a->number, b->number);
+                          case 1: return cmp3(a->name, b->name);
+                          case 2: return cmp3(a->skill_key, b->skill_key);
+                          default: return 0;
+                      }
+                  });
+        for (const game::KnowNeed* ep : fview) {
+            const game::KnowNeed& e = *ep;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::Text("%d", e.number);
