@@ -536,6 +536,7 @@ const char* const kMessageClasses[] = {
     "TrocTrHireMercenaryFromInventoryReq", // 2454 인벤 고용
     "TrocTrCatchBySummonReq",              // 2386 붙잡기
     "TrocTrSelectMercenarySpawnReq",       // 2894 스폰 선택
+    "TrocTrCallSpecialVehicleByQuickSlotReq", // buruki: drive call-special-vehicle handler directly (body: u32 no + float3 + u32 + u8)
     // 등록 뒤 상태를 바로잡거나 되돌리는 것들. 획득이 "소환된 상태"로
     // 들어가 다른 개체 소환까지 막는 문제를 풀려고 넣었다
     // (실측 2026-09-06: 목록에는 뜨는데 주위에 없고 해제도 안 됨).
