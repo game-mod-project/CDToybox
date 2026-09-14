@@ -144,6 +144,21 @@ void draw_knowledge(const mem::Reader& reader) {
 
     if (!s_scanned || !s_scan.ok) return;
 
+    ImGui::Checkbox("게임 함수 호출 허용", &s_allow_call);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "켜면 각 줄에 [등록] 이 생깁니다.\n"
+            "지금까지의 치트는 전부 데이터만 읽고 썼습니다 - 이것은 게임 코드를\n"
+            "직접 부르는 첫 기능이라 위험이 다릅니다. 되돌릴 수 있는 세이브에서,\n"
+            "전투 중이 아닐 때 시험하십시오.");
+    }
+    if (s_allow_call) {
+        ImGui::TextColored(col::kWarn,
+                           "게임 코드를 직접 부릅니다 - 되돌릴 수 있는 세이브에서"
+                           " 시험하십시오.");
+    }
+
+
     ImGui::TextWrapped(
         "아래는 다른 노드가 선행 조건으로 요구하는데 아직 레벨이 모자란 지식입니다."
         " \"중 하나\" 표시는 같은 목록의 다른 것으로도 조건이 풀릴 수 있다는 뜻입니다.");
@@ -223,20 +238,6 @@ void draw_knowledge(const mem::Reader& reader) {
         }
         ImGui::EndTable();
     }
-    ImGui::Checkbox("게임 함수 호출 허용", &s_allow_call);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "켜면 각 줄에 [등록] 이 생깁니다.\n"
-            "지금까지의 치트는 전부 데이터만 읽고 썼습니다 - 이것은 게임 코드를\n"
-            "직접 부르는 첫 기능이라 위험이 다릅니다. 되돌릴 수 있는 세이브에서,\n"
-            "전투 중이 아닐 때 시험하십시오.");
-    }
-    if (s_allow_call) {
-        ImGui::TextColored(col::kWarn,
-                           "게임 코드를 직접 부릅니다 - 되돌릴 수 있는 세이브에서"
-                           " 시험하십시오.");
-    }
-
     const int kept = static_cast<int>(game::know_auto_list().size());
     if (kept > 0) {
         ImGui::TextColored(col::kOk, "자동 재적용 %d개", kept);
