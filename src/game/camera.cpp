@@ -423,7 +423,9 @@ void auto_analysis_loop() {
         // 장비가 잡혔다는 것이 곧 월드 안이라는 뜻이라 그것을 게이트로 쓴다.
         if (equip_ready()) {
             knowledge_check_alive(reader);
-            if (!knowledge_ready()) discover_knowledge(rtti, reader, spin);
+            if (!knowledge_ready()) {
+                discover_knowledge(rtti, reader, spin, player_char());
+            }
         }
         // 지식 레벨 쓰기는 저장을 못 넘고, 리로드는 컴포넌트를 새로 만든다. 이번
         // 실행에서 사용자가 건 것이 모자라면 다시 건다(건 것이 없으면 즉시 반환).

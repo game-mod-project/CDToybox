@@ -65,8 +65,12 @@ BondPlan plan_bond_add(int have, int total, int add, bool also_total);
 // 지식 컴포넌트를 찾는다(RTTI 한 번). 힙 전수 스캔은 못 찾았을 때만 돈다.
 // spin 은 분석 루프의 바퀴 수다. 못 찾은 동안 매 바퀴 훑으면 2초마다 힙 전수를
 // 읽게 되므로 5바퀴(약 10초)에 한 번만 돌고, 12번 해 보고 그만둔다.
+// player_actor 를 주면 **힙 스캔 없이** 그 액터에서 내려가 서버 컴포넌트를 잡는다
+// (comp = *(u64*)( *(u64*)(actor+0x68) + 0x150 ) - 게임 코드 세 곳이 쓰는 사슬이고
+// 신원이 확실하다). 0 이면 RTTI 탐색만 쓴다 - 그쪽은 vtable 값이 들어 있는 표까지
+// 잡으므로(실측 2026-09-14) 구조 검사로 거른다.
 bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
-                        int spin);
+                        int spin, std::uintptr_t player_actor = 0);
 bool knowledge_ready();
 std::uintptr_t knowledge_component();          // 서버
 std::uintptr_t knowledge_component_client();

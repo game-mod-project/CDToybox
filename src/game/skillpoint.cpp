@@ -54,6 +54,56 @@ bool wr16(std::uintptr_t a, std::uint16_t v) {
     }
 }
 
+// **컴포넌트가 진짜 그것인지 구조로 본다.** RTTI 탐색은 "그 vtable 값이 들어 있는
+// 메모리" 도 잡는다 - 실측 2026-09-14: 후보 둘이 **16바이트 간격**으로 나왔고
+// (0x110D4CEE90 / 0x110D4CEEA0), 결속 포인터가 0x100000001 같은 값이었다. 실제
+// 컴포넌트는 0x1A8 바이트가 넘는 객체라 16바이트 간격일 수 없다. 그 쓰레기를 들고
+// 화면이 "보유 4724 · 총합 44302" 를 그렸다.
+//
+// 지식 레벨 표(+0x18 데이터 / +0x20 개수 / +0x24 용량)는 Initialize 가 전체 지식
+// 수만큼 한 번에 잡으므로, 그 셋이 앞뒤가 맞는지 보면 가짜가 걸린다.
+bool comp_looks_real(const mem::Reader& reader, std::uintptr_t comp) {
+    if (comp == 0) return false;
+    std::uint64_t data = 0;
+    std::uint32_t count = 0, cap = 0;
+    if (!reader.read_value(comp + 0x18, &data) || data < 0x10000) return false;
+    if (!reader.read_value(comp + 0x20, &count) || count == 0 ||
+        count > 100000) {
+        return false;
+    }
+    if (!reader.read_value(comp + 0x24, &cap) || cap < count) return false;
+    // 표의 첫 레코드와 마지막 레코드가 읽혀야 한다 - 개수가 진짜라는 뜻이다.
+    std::uint64_t probe = 0;
+    const std::uintptr_t last =
+        static_cast<std::uintptr_t>(data) +
+        (static_cast<std::uintptr_t>(count) - 1) * 24;
+    return reader.read_value(static_cast<std::uintptr_t>(data), &probe) &&
+           reader.read_value(last, &probe);
+}
+
+// **플레이어 액터에서 내려오는 사슬.** 이것이 정공법이다 - 신원이 확실하다.
+//   comp = *(u64*)( *(u64*)(액터 + 0x68) + 0x150 )
+// 게임 코드 세 곳이 같은 사슬을 쓴다(RVA 0x0208BBF5 / 0x0208738B / 0x026BA3A0).
+std::uintptr_t comp_from_player(const mem::Reader& reader,
+                                std::uintptr_t actor) {
+    if (actor == 0) return 0;
+    std::uint64_t sub = 0;
+    if (!reader.read_value(actor + 0x68, &sub) || sub == 0) return 0;
+    std::uint64_t comp = 0;
+    if (!reader.read_value(static_cast<std::uintptr_t>(sub) + 0x150, &comp) ||
+        comp == 0) {
+        return 0;
+    }
+    const std::uintptr_t c = static_cast<std::uintptr_t>(comp);
+    // 되짚어 확인한다 - 그 컴포넌트의 +0x08 이 우리가 온 액터여야 한다.
+    std::uint64_t back = 0;
+    if (!reader.read_value(c + 0x08, &back) ||
+        static_cast<std::uintptr_t>(back) != actor) {
+        return 0;
+    }
+    return comp_looks_real(reader, c) ? c : 0;
+}
+
 std::uintptr_t comp_of(int realm) {
     return realm == 1 ? knowledge_component_client() : knowledge_component();
 }
@@ -94,7 +144,7 @@ BondPlan plan_bond_add(int have, int total, int add, bool also_total) {
 }
 
 bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
-                        int spin) {
+                        int spin, std::uintptr_t player_actor) {
     const bool have_server = g_know.load(std::memory_order_acquire) != 0;
     const bool have_client = g_know_client.load(std::memory_order_acquire) != 0;
     if (have_server && have_client) return true;
@@ -105,6 +155,20 @@ bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
     const int n = g_tries.load(std::memory_order_acquire);
     if (n >= kGiveUp) return have_server;
     if ((spin % kEverySpins) != 0) return have_server;
+
+    // **플레이어 액터에서 먼저 내려가 본다.** 힙 스캔이 필요 없고 신원이 확실하다.
+    // 이 사슬이 주는 것은 **서버** 컴포넌트다(게임 코드가 같은 자리에서 쓴다).
+    if (!have_server) {
+        const std::uintptr_t c = comp_from_player(reader, player_actor);
+        if (c != 0) {
+            std::uint64_t vt = 0;
+            reader.read_value(c, &vt);
+            g_know_vt[0].store(vt, std::memory_order_release);
+            g_know.store(c, std::memory_order_release);
+            log::infof("지식 컴포넌트 0x{:X} (플레이어 사슬) vtable 0x{:X}", c, vt);
+            if (g_know_client.load(std::memory_order_acquire) != 0) return true;
+        }
+    }
 
     // **아직 못 찾은 클래스만** 넣는다. find_objects_of 의 상한은 클래스별이 아니라
     // 전체이고 낮은 주소부터 채운다(인벤토리에서 같은 함정을 겪었다).
@@ -123,8 +187,13 @@ bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
         // **구조체까지 따라가 본다.** 모듈 이미지 안의 타입 등록 칸도 인스턴스로
         // 잡히므로(실측: 클래스마다 2개 중 하나가 그것이다), 포인터가 가리키는
         // 값까지 읽히는 것만 받는다.
+        // **구조까지 본다.** 예전에는 `+0xC8` 을 따라가 총합이 0 이 아니면 받았는데,
+        // 그것만으로는 vtable 값이 든 표를 걸러내지 못했다(머리 주석 참조).
+        if (!comp_looks_real(reader, f.address)) continue;
         std::uint64_t ptr = 0;
-        if (!reader.read_value(f.address + kBondPtr, &ptr) || ptr == 0) continue;
+        if (!reader.read_value(f.address + kBondPtr, &ptr) || ptr < 0x10000) {
+            continue;
+        }
         std::uint16_t total = 0;
         if (!reader.read_value(static_cast<std::uintptr_t>(ptr) + kBondTotal,
                                &total) ||
@@ -179,8 +248,8 @@ void knowledge_check_alive(const mem::Reader& reader) {
         std::uint64_t ptr = 0;
         std::uint16_t total = 0;
         const bool alive =
-            vt_ok && reader.read_value(comps[realm] + kBondPtr, &ptr) &&
-            ptr != 0 &&
+            vt_ok && comp_looks_real(reader, comps[realm]) &&
+            reader.read_value(comps[realm] + kBondPtr, &ptr) && ptr >= 0x10000 &&
             reader.read_value(static_cast<std::uintptr_t>(ptr) + kBondTotal,
                               &total);
         if (alive) {
