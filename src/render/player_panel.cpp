@@ -151,6 +151,22 @@ void draw_knowledge(const mem::Reader& reader) {
         ImGui::SetTooltip("컴포넌트의 vtable·소유 액터·맵 자리를 로그에 적습니다.\n"
                           "읽기만 합니다.");
     }
+    ImGui::SameLine();
+    if (ImGui::Button("이름 진단")) {
+        // 이름이 하나도 안 풀릴 때 - 지역화 상태와 레벨 데이터 날바이트를 찍는다.
+        int n = 0;
+        if (s_scan.ok && !s_scan.fresh.empty()) {
+            n = s_scan.fresh[0].number;
+        } else if (s_scan.ok && !s_scan.needs.empty()) {
+            n = s_scan.needs[0].number;
+        }
+        game::know_diagnose_names(game::clan_rtti(), reader, n);
+        notice_set(&s_note, NoticeLevel::Ok, "{}번 이름 진단을 로그에 남겼습니다",
+                   n);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("이름이 안 뜰 때 누르십시오. 먼저 훑기를 한 번 하십시오.");
+    }
     notice_draw(s_note);
 
     if (!s_scanned || !s_scan.ok) return;
@@ -201,10 +217,10 @@ void draw_knowledge(const mem::Reader& reader) {
         " - 게임 자신도 그런 지식은 건너뜁니다. 그래서 [등록] 을 안 그립니다.");
     if (s_scan.needs.empty()) {
         ImGui::TextColored(col::kOk, "모자란 선행 조건이 없습니다.");
-        return;
     }
 
-    if (ImGui::BeginTable("know_needs", 7,
+    if (!s_scan.needs.empty() &&
+        ImGui::BeginTable("know_needs", 7,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY,
                           ImVec2(0.0f, 220.0f))) {
@@ -286,6 +302,74 @@ void draw_knowledge(const mem::Reader& reader) {
         }
         ImGui::EndTable();
     }
+
+    // ---------------- 스킬이 붙었는데 아직 안 배운 지식 (전수)
+    //
+    // 선행 조건 목록으로는 목적지에 못 간다는 것이 실측으로 드러났다 - 레벨 0 인
+    // 줄에는 붙는 스킬이 없고, 스킬이 붙은 줄은 이미 배운 것뿐이라 등록해도 맵이
+    // 안 늘었다. 그래서 "요구받는가" 를 안 따지고 전수로 모은다.
+    ImGui::Separator();
+    ImGui::Text("스킬이 붙었는데 아직 안 배운 지식: %d개", s_scan.fresh_total);
+    if (s_scan.fresh_total > static_cast<int>(s_scan.fresh.size())) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(앞 %d개만 보여 줍니다)",
+                            static_cast<int>(s_scan.fresh.size()));
+    }
+    if (!s_scan.fresh.empty() &&
+        ImGui::BeginTable("know_fresh", 4,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_ScrollY,
+                          ImVec2(0.0f, 220.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("이름");
+        ImGui::TableSetupColumn("스킬", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableHeadersRow();
+        for (const game::KnowNeed& e : s_scan.fresh) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", e.number);
+            ImGui::TableNextColumn();
+            if (e.name.empty()) {
+                ImGui::TextDisabled("(이름 못 읽음)");
+            } else {
+                ImGui::TextUnformatted(e.name.c_str());
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextColored(col::kOk, "%d", e.skill_key);
+            ImGui::TableNextColumn();
+            ImGui::PushID(100000 + e.number);
+            if (confirm_small_button("배우기")) {
+                const game::KnowWrite w = game::know_learn(reader, e.number, 1);
+                if (w.changed > 0) {
+                    game::know_auto_remember(e.number, 1);
+                    notice_set(&s_note, NoticeLevel::Ok,
+                               "{}번을 레벨 1 로 - realm {}개", e.number,
+                               w.changed);
+                } else {
+                    notice_set(&s_note, NoticeLevel::Bad, "{}번: {}", e.number,
+                               w.last_skip[0] != 0 ? w.last_skip : "쓰기 실패");
+                }
+            }
+            if (s_allow_call && !game::know_register_locked()) {
+                ImGui::SameLine();
+                if (confirm_small_button("등록")) {
+                    if (game::knowledge_queue_register(e.number, 1)) {
+                        notice_set(&s_note, NoticeLevel::Info,
+                                   "{}번 등록 요청 - 게임 스레드를 기다립니다",
+                                   e.number);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Warn,
+                                   "이미 걸린 요청이 있습니다");
+                    }
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
     const int kept = static_cast<int>(game::know_auto_list().size());
     if (kept > 0) {
         ImGui::TextColored(col::kOk, "자동 재적용 %d개", kept);
