@@ -721,6 +721,64 @@ void know_diagnose(const mem::Reader& reader) {
     log::infof("지식 진단 ----- 끝");
 }
 
+void know_diagnose_names(const mem::Rtti* rtti, const mem::Reader& reader,
+                         int number) {
+    log::infof("이름 진단 ----- 지식 {}번", number);
+    LocSystem loc;
+    const bool has_loc = rtti != nullptr && find_loc_system(*rtti, reader, &loc);
+    log::infof("  지역화: 잡힘={} 객체 0x{:X} 풀 0x{:X} 크기 {}", has_loc ? 1 : 0,
+               loc.object, loc.pool, loc.pool_size);
+
+    KnowMgr m;
+    if (!know_manager(reader, &m) || number < 0 || number >= m.count) {
+        log::warnf("  매니저/번호가 안 맞는다");
+        return;
+    }
+    const std::uintptr_t info = static_cast<std::uintptr_t>(
+        rd64(reader, m.array + static_cast<std::uintptr_t>(number) * 8));
+    if (info == 0) {
+        log::warnf("  그 번호의 지식 정보가 없다");
+        return;
+    }
+    const std::uintptr_t lv = static_cast<std::uintptr_t>(
+        rd64(reader, info + kInfoLevels));
+    const int lvn = rd32(reader, info + kInfoLevelCount);
+    log::infof("  info 0x{:X} 레벨배열 0x{:X} 개수 {} 스킬 {}", info, lv, lvn,
+               rd32(reader, info + kInfoApplySkill) & 0xFFFF);
+    if (lv == 0) return;
+
+    // 레벨 0 데이터의 앞 0xE8 을 16바이트씩 날로 찍는다. 이름이 어느 자리에
+    // 어떤 모양으로 있는지는 이것을 보고 정한다.
+    for (std::size_t off = 0; off < kLevelStride; off += 16) {
+        std::uint8_t b[16] = {};
+        if (!reader.read(lv + off, b, 16)) break;
+        log::infof("  +0x{:02X}: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}"
+                   " {:02X} | {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}"
+                   " {:02X}",
+                   static_cast<unsigned>(off), b[0], b[1], b[2], b[3], b[4], b[5],
+                   b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14],
+                   b[15]);
+    }
+
+    // 이름 후보 자리들을 u64 현지화 키로 보고 풀어 본다.
+    if (!has_loc) return;
+    static const std::size_t kTry[] = {0x08, 0x60, 0xA8, 0xB0, 0xC8, 0xD0};
+    for (std::size_t off : kTry) {
+        const std::uint64_t key = rd64(reader, lv + off);
+        if (key == 0) continue;
+        std::string text;
+        int cat = -1;
+        if (resolve(reader, loc, key, &text, &cat) && !text.empty()) {
+            log::infof("  +0x{:02X} 키 0x{:X} -> \"{}\" (분류 {})",
+                       static_cast<unsigned>(off), key, text, cat);
+        } else {
+            log::infof("  +0x{:02X} 키 0x{:X} -> 못 품", static_cast<unsigned>(off),
+                       key);
+        }
+    }
+    log::infof("이름 진단 ----- 끝");
+}
+
 bool know_register_locked() {
     return g_register_locked.load(std::memory_order_acquire);
 }

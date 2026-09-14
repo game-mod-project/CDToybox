@@ -151,6 +151,22 @@ void draw_knowledge(const mem::Reader& reader) {
         ImGui::SetTooltip("컴포넌트의 vtable·소유 액터·맵 자리를 로그에 적습니다.\n"
                           "읽기만 합니다.");
     }
+    ImGui::SameLine();
+    if (ImGui::Button("이름 진단")) {
+        // 이름이 하나도 안 풀릴 때 - 지역화 상태와 레벨 데이터 날바이트를 찍는다.
+        int n = 0;
+        if (s_scan.ok && !s_scan.fresh.empty()) {
+            n = s_scan.fresh[0].number;
+        } else if (s_scan.ok && !s_scan.needs.empty()) {
+            n = s_scan.needs[0].number;
+        }
+        game::know_diagnose_names(game::clan_rtti(), reader, n);
+        notice_set(&s_note, NoticeLevel::Ok, "{}번 이름 진단을 로그에 남겼습니다",
+                   n);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("이름이 안 뜰 때 누르십시오. 먼저 훑기를 한 번 하십시오.");
+    }
     notice_draw(s_note);
 
     if (!s_scanned || !s_scan.ok) return;

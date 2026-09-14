@@ -241,6 +241,12 @@ inline constexpr std::size_t kKnowCompOwner = 0x08;
 // **읽기만 하는 진단.** 무엇이 어긋났는지 로그로 남긴다 - 추측으로 또 부르지 않기 위해서다.
 void know_diagnose(const mem::Reader& reader);
 
+// 이름이 안 풀릴 때 쓰는 진단. 지역화 시스템 상태와, 레벨 데이터의 이름 후보
+// 자리들을 **날바이트로** 찍는다. `_knowledgeName +0xA8` 이 u64 현지화 키라는 것은
+// 아직 **가정**이고, 2026-09-14 에 이름이 하나도 안 나왔다.
+void know_diagnose_names(const mem::Rtti* rtti, const mem::Reader& reader,
+                         int number);
+
 // ------------------------------------------------------------ 자동 재적용
 //
 // **지식 레벨 쓰기는 저장을 못 넘는다.** 실측 2026-09-14: 전날 건 번호들이 게임을 새로
