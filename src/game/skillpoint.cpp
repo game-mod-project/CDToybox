@@ -157,17 +157,38 @@ bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
     if ((spin % kEverySpins) != 0) return have_server;
 
     // **플레이어 액터에서 먼저 내려가 본다.** 힙 스캔이 필요 없고 신원이 확실하다.
-    // 이 사슬이 주는 것은 **서버** 컴포넌트다(게임 코드가 같은 자리에서 쓴다).
-    if (!have_server) {
+    //
+    // **이 사슬이 어느 realm 을 주는지 넘겨짚지 않는다.** 처음에 "서버를 준다" 고
+    // 적고 서버 칸에 넣었는데, 실측은 클라였다(2026-09-14: vtable 0x1454AF200 =
+    // Client…, 서버는 0x145A13200). player_char() 가 클라 쪽 액터이기 때문이다.
+    // 그래서 **객체에게 직접 클래스를 묻고** 맞는 칸에 넣는다 - vtable RVA 를
+    // 코드에 박지 않아도 되고, 사슬이 주는 쪽이 바뀌어도 따라간다.
+    if (!have_server || !have_client) {
         const std::uintptr_t c = comp_from_player(reader, player_actor);
         if (c != 0) {
-            std::uint64_t vt = 0;
-            reader.read_value(c, &vt);
-            g_know_vt[0].store(vt, std::memory_order_release);
-            g_know.store(c, std::memory_order_release);
-            log::infof("지식 컴포넌트 0x{:X} (플레이어 사슬) vtable 0x{:X}", c, vt);
-            if (g_know_client.load(std::memory_order_acquire) != 0) return true;
+            const std::string cls = rtti.class_of_object(c);
+            const bool is_client = cls == kKnowClassClient;
+            const bool is_server = cls == kKnowClass;
+            if (!is_client && !is_server) {
+                log::warnf("플레이어 사슬이 준 0x{:X} 는 '{}' 다 - 안 쓴다", c,
+                           cls.empty() ? "알 수 없음" : cls);
+            } else {
+                const int realm = is_client ? 1 : 0;
+                auto& slot = is_client ? g_know_client : g_know;
+                if (slot.load(std::memory_order_acquire) == 0) {
+                    std::uint64_t vt = 0;
+                    reader.read_value(c, &vt);
+                    g_know_vt[realm].store(vt, std::memory_order_release);
+                    slot.store(c, std::memory_order_release);
+                    log::infof("지식 컴포넌트{} 0x{:X} (플레이어 사슬) vtable 0x{:X}",
+                               is_client ? "(클라)" : "", c, vt);
+                }
+            }
         }
+    }
+    if (g_know.load(std::memory_order_acquire) != 0 &&
+        g_know_client.load(std::memory_order_acquire) != 0) {
+        return true;
     }
 
     // **아직 못 찾은 클래스만** 넣는다. find_objects_of 의 상한은 클래스별이 아니라
