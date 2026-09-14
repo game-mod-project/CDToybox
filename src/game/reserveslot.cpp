@@ -62,47 +62,36 @@ std::uintptr_t info_at(const mem::Reader& r, const Mgr& m, int key) {
         rd64(r, m.array + static_cast<std::uintptr_t>(key) * 8));
 }
 
-// 짧은 문자열 후보를 찍는다. **모양을 가정하지 않는다** - 이름 키를 +0xA8 로
-// 넘겨짚었다가 한 사이클을 태운 적이 있다. 날바이트와 "포인터로 봤을 때" 를 같이 낸다.
-void dump_maybe_string(const mem::Reader& r, std::uintptr_t at, const char* what) {
-    std::uint8_t raw[16] = {};
-    if (!r.read(at, raw, 16)) {
-        log::infof("    {} 0x{:X}: 못 읽음", what, at);
-        return;
+// 조건 객체를 **넓게** 날로 찍는다. 16바이트만 떴다가 문자열이 잘렸다
+// (2026-09-14: "07 63 5F 43 6C 6F 61 6B" 까지만 보여 "c_Cloak" 인지 확신 못 했다).
+//
+// 모양을 가정하지 않는다. `_originalString` 이 SSO 인지 포인터인지 모르므로,
+// 구간을 통째로 16바이트씩 찍고 **인쇄 가능한 조각은 옆에 같이** 낸다.
+void dump_raw(const mem::Reader& r, std::uintptr_t at, int bytes,
+              const char* what) {
+    log::infof("    {} 0x{:X} ({}바이트)", what, at, bytes);
+    for (int off = 0; off < bytes; off += 16) {
+        std::uint8_t b[16] = {};
+        if (!r.read(at + static_cast<std::uintptr_t>(off), b, 16)) break;
+        std::string hex, txt;
+        for (int i = 0; i < 16; ++i) {
+            char t[4];
+            std::snprintf(t, sizeof(t), "%02X ", b[i]);
+            hex += t;
+            txt += (b[i] >= 0x20 && b[i] < 0x7F) ? static_cast<char>(b[i]) : '.';
+        }
+        log::infof("      +{:02X}: {}| {}", off, hex, txt);
     }
-    std::string hex;
-    for (int i = 0; i < 16; ++i) {
-        char b[4];
-        std::snprintf(b, sizeof(b), "%02X ", raw[i]);
-        hex += b;
-    }
+    // 포인터로 보이면 그쪽도 한 번 따라가 본다.
     std::uint64_t p = 0;
-    std::memcpy(&p, raw, 8);
-    std::string text;
-    if (p >= 0x10000) {
-        char buf[97] = {};
-        if (r.read(static_cast<std::uintptr_t>(p), buf, 96)) {
-            buf[96] = 0;
-            bool printable = true;
-            for (int i = 0; i < 8 && buf[i] != 0; ++i) {
-                const unsigned char c = static_cast<unsigned char>(buf[i]);
-                if (c < 0x20 && c != '\t') printable = false;
-            }
-            if (printable && buf[0] != 0) text = buf;
+    if (r.read_value(at, &p) && p >= 0x10000) {
+        char buf[129] = {};
+        if (r.read(static_cast<std::uintptr_t>(p), buf, 128)) {
+            buf[128] = 0;
+            bool ok = buf[0] >= 0x20 && buf[0] < 0x7F;
+            if (ok) log::infof("      [{}+0 을 포인터로] \"{}\"", what, buf);
         }
     }
-    // 인라인 문자열(SSO)일 수도 있으니 그 경우도 본다.
-    if (text.empty()) {
-        bool printable = raw[0] >= 0x20 && raw[0] < 0x7F;
-        if (printable) {
-            char buf[17] = {};
-            std::memcpy(buf, raw, 16);
-            buf[16] = 0;
-            text = std::string("(인라인?) ") + buf;
-        }
-    }
-    log::infof("    {} 0x{:X}: {}| {}", what, at, hex,
-               text.empty() ? "(문자열 아님)" : text);
 }
 
 void dump_slot_info(const mem::Reader& r, const Mgr& cond, std::uintptr_t info,
@@ -143,7 +132,7 @@ void dump_slot_info(const mem::Reader& r, const Mgr& cond, std::uintptr_t info,
                    " parser 0x{:X}",
                    ci, rd8(r, ci + kCiBlocked), rd64(r, ci + kCiCondition),
                    rd32(r, ci + kCiParser));
-        dump_maybe_string(r, ci + kCiOriginal, "originalString");
+        dump_raw(r, ci, 0x60, "ConditionInfo 전체");
     }
 }
 
