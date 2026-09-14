@@ -8,6 +8,7 @@
 #include "game/player.h"
 #include "game/clan.h"
 #include "game/knowledge.h"
+#include "game/reserveslot.h"
 #include "game/skillgate.h"
 #include "game/skillpoint.h"
 #include "render/colors.h"
@@ -166,6 +167,15 @@ void draw_knowledge(const mem::Reader& reader) {
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("컴포넌트의 vtable·소유 액터·맵 자리를 로그에 적습니다.\n"
                           "읽기만 합니다.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("휠 진단")) {
+        // 예약 슬롯(원형 휠) 쪽을 **한 번에** 다 찍는다. 읽기만 한다.
+        game::reserveslot_diagnose(reader, game::player_char());
+        notice_set(&s_note, NoticeLevel::Ok, "휠 진단을 로그에 남겼습니다");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("예약 슬롯 매니저·원소 칸의 조건식·런타임 슬롯을 한 번에 로그로 찍습니다. 읽기만 합니다.");
     }
     ImGui::SameLine();
     if (ImGui::Button("이름 진단")) {
