@@ -208,6 +208,10 @@ struct KnowQueue {
     KnowRegister result;
 };
 
+// **원자 하나만 읽는다.** 게임 디투어가 매 호출마다 부르는 자리라, 걸린 것이
+// 없을 때 뮤텍스도 TLS 검사도 건드리지 않게 하려는 것이다.
+bool knowledge_has_pending();
+
 // 화면이 부른다. 이미 걸린 것이 있으면 거짓.
 bool knowledge_queue_register(int number, int level);
 // **게임 스레드에서만** 부른다(TLS 가 선 자리). 걸린 것이 없으면 즉시 반환.

@@ -382,8 +382,21 @@ KnowWrite know_learn(const mem::Reader& reader, int number, int level) {
 
 // ------------------------------------------ 스킬 등록 (게임 함수 호출)
 
+// 본체. **g_op_mtx 를 이미 쥔 채로** 부른다 - 게임 스레드가 그 락을 기다리며
+// 멈추지 않게 하려고 잠그기와 일하기를 갈라 두었다.
+namespace {
+KnowRegister register_held(const mem::Reader& reader, int number, int level);
+}  // namespace
+
 KnowRegister know_register_skill(const mem::Reader& reader, int number,
                                  int level) {
+    std::lock_guard<std::mutex> lk(g_op_mtx);
+    return register_held(reader, number, level);
+}
+
+namespace {
+KnowRegister register_held(const mem::Reader& reader, int number,
+                           int level) {
     KnowRegister r;
     if (number < 0 || number > 0xFFFF || level < 1) {
         r.skip = "번호나 레벨이 말이 안 됩니다";
@@ -401,7 +414,6 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number,
         return r;
     }
 
-    std::lock_guard<std::mutex> lk(g_op_mtx);
     // **서버 컴포넌트에만.** 맵은 Server 고유 필드다 - 클라에 같은 자리가 있는지
     // 모르므로, 잘못 부르면 엉뚱한 필드를 해시맵으로 취급해 그 자리에서 죽는다.
     const std::uintptr_t comp = knowledge_component();
@@ -502,6 +514,7 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number,
                r.after, static_cast<int>(apply));
     return r;
 }
+}  // namespace
 
 // ------------------------------------------------------------ 자동 재적용
 
@@ -652,7 +665,13 @@ bool know_register_locked() {
 namespace {
 std::mutex g_q_mtx;
 KnowQueue g_q;
+// 디투어가 매 호출마다 보는 값. 뮤텍스 없이 읽는다.
+std::atomic<bool> g_q_pending{false};
 }  // namespace
+
+bool knowledge_has_pending() {
+    return g_q_pending.load(std::memory_order_acquire);
+}
 
 bool knowledge_queue_register(int number, int level) {
     std::lock_guard<std::mutex> lk(g_q_mtx);
@@ -661,12 +680,21 @@ bool knowledge_queue_register(int number, int level) {
     g_q.number = number;
     g_q.level = level;
     g_q.has_result = false;
+    g_q_pending.store(true, std::memory_order_release);
     log::infof("지식 등록 요청: {}번 레벨 {} - 게임 스레드를 기다린다", number,
                level);
     return true;
 }
 
 void knowledge_run_pending() {
+    if (!g_q_pending.load(std::memory_order_acquire)) return;
+
+    // **게임 스레드를 세우지 않는다.** 화면이 레벨 쓰기나 진단으로 이 락을 쥐고
+    // 있을 수 있는데, 그때 기다리면 게임 로직 스레드가 그만큼 멈춘다. 못 잡으면
+    // 요청을 그대로 두고 물러난다 - 다음 기회에 집어 가면 된다.
+    std::unique_lock<std::mutex> op(g_op_mtx, std::try_to_lock);
+    if (!op.owns_lock()) return;
+
     int number = 0;
     int level = 0;
     {
@@ -674,14 +702,13 @@ void knowledge_run_pending() {
         if (!g_q.pending) return;
         number = g_q.number;
         level = g_q.level;
-    }
-    // **요청을 먼저 지운다.** 호출이 죽어도 같은 요청이 다시 실행되면 안 된다.
-    {
-        std::lock_guard<std::mutex> lk(g_q_mtx);
+        // **집어 가는 즉시 지운다.** 호출이 죽어도 같은 요청이 다시 실행되면
+        // 안 된다(디투어는 곧바로 또 돈다).
         g_q.pending = false;
+        g_q_pending.store(false, std::memory_order_release);
     }
     const mem::LocalReader reader;
-    const KnowRegister r = know_register_skill(reader, number, level);
+    const KnowRegister r = register_held(reader, number, level);
     std::lock_guard<std::mutex> lk(g_q_mtx);
     g_q.has_result = true;
     g_q.result = r;

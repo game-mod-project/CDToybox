@@ -760,11 +760,18 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
             log_normal_stack();
         }
     }
-    if (g_detour_depth == 1) run_pending_if_any();
+    bool grant_ran = false;
+    if (g_detour_depth == 1) grant_ran = run_pending_if_any();
 
     // 지식 스킬 등록. **렌더 스레드에서 부르면 TLS 가 없어 죽는다**(1.8/1.13).
-    // 걸린 요청이 없으면 즉시 반환하므로 평소에는 비용이 없다.
-    if (g_detour_depth == 1 && thread_ready_for_spawn()) {
+    //
+    // 이 자리는 게임의 핫 패스다. 그래서 순서가 중요하다:
+    //  1) `knowledge_has_pending()` 은 **원자 하나**만 읽는다 - 평소엔 여기서 끝난다.
+    //  2) 지급이 이번 바퀴에 돌았으면 건너뛴다 - 한 디투어에 무거운 일을 겹쳐
+    //     쌓지 않는다(지급 쪽이 교착으로 고생한 자리다).
+    //  3) TLS 검사는 그 둘을 지난 뒤에만 한다.
+    if (g_detour_depth == 1 && !grant_ran &&
+        cdtb::game::knowledge_has_pending() && thread_ready_for_spawn()) {
         cdtb::game::knowledge_run_pending();
     }
 
