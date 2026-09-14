@@ -21,6 +21,9 @@ constexpr std::size_t kBondPtr = 0xC8;
 
 std::atomic<std::uintptr_t> g_know{0};
 std::atomic<std::uintptr_t> g_know_client{0};
+// **발견할 때 본 vtable.** 생존 검사의 기준이다 - RVA 를 코드에 박지 않아도 되고,
+// 게임이 갱신돼도 저절로 따라간다.
+std::atomic<std::uint64_t> g_know_vt[2] = {};
 
 std::mutex g_mtx;
 std::vector<BondBackup> g_backup;
@@ -128,9 +131,12 @@ bool discover_knowledge(const mem::Rtti& rtti, const mem::Reader& reader,
             total == 0) {
             continue;
         }
+        std::uint64_t vt = 0;
+        reader.read_value(f.address, &vt);
+        g_know_vt[is_client ? 1 : 0].store(vt, std::memory_order_release);
         slot.store(f.address, std::memory_order_release);
-        log::infof("지식 컴포넌트{} 0x{:X} -> 결속 0x{:X} (총합 {})",
-                   is_client ? "(클라)" : "", f.address, ptr, total);
+        log::infof("지식 컴포넌트{} 0x{:X} -> 결속 0x{:X} (총합 {}) vtable 0x{:X}",
+                   is_client ? "(클라)" : "", f.address, ptr, total, vt);
     }
     const bool ok = g_know.load(std::memory_order_acquire) != 0 &&
                     g_know_client.load(std::memory_order_acquire) != 0;
@@ -161,11 +167,20 @@ void knowledge_check_alive(const mem::Reader& reader) {
             g_dead_since[realm] = {};   // 아직 못 찾았다 - 탐색이 할 일이다
             continue;
         }
-        // 살아 있으면 +0xC8 을 따라가 총합이 읽힌다. 죽으면 포인터가 쓰레기다.
+        // **vtable 이 그대로인지 본다.** 예전에는 `+0xC8` 을 따라가 총합이 읽히는지만
+        // 봤는데, 그것으로는 **해제된 뒤 다른 용도로 재사용된 메모리를 못 걸렀다** -
+        // 실측 2026-09-14: 클라 컴포넌트의 소유 액터 칸에 0x726F6C6F432E7475
+        // (= 바이트로 "ut.Color", 문자열 조각)이 들어 있는데도 살아 있다고 봤다.
+        // 우연히 널 아닌 값을 읽는 것과 "그 클래스의 객체다" 는 다르다.
+        std::uint64_t vt = 0;
+        const std::uint64_t want_vt = g_know_vt[realm].load(std::memory_order_acquire);
+        const bool vt_ok = reader.read_value(comps[realm], &vt) && vt != 0 &&
+                           (want_vt == 0 || vt == want_vt);
         std::uint64_t ptr = 0;
         std::uint16_t total = 0;
         const bool alive =
-            reader.read_value(comps[realm] + kBondPtr, &ptr) && ptr != 0 &&
+            vt_ok && reader.read_value(comps[realm] + kBondPtr, &ptr) &&
+            ptr != 0 &&
             reader.read_value(static_cast<std::uintptr_t>(ptr) + kBondTotal,
                               &total);
         if (alive) {
@@ -186,6 +201,7 @@ void knowledge_check_alive(const mem::Reader& reader) {
         } else {
             g_know.store(0, std::memory_order_release);
         }
+        g_know_vt[realm].store(0, std::memory_order_release);
         g_tries.store(0, std::memory_order_release);   // 다시 찾을 기회를 준다
     }
 }
