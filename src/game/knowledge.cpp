@@ -139,6 +139,15 @@ void know_need_add(std::vector<KnowNeed>* v, int number, int need, bool any_of) 
 void know_need_sort(std::vector<KnowNeed>* v) {
     if (v == nullptr) return;
     std::sort(v->begin(), v->end(), [](const KnowNeed& a, const KnowNeed& b) {
+        // **손댈 수 있는 줄을 위로.** 붙는 스킬이 없으면 등록이 헛일이고
+        // (게임 자신도 건너뛴다), 이미 배운 것은 맵에 이미 있을 수 있어
+        // 개수가 안 는다. 그래서 "스킬 있음 + 아직 레벨 0" 이 가장 위다.
+        const bool as = a.skill_key != 0 && a.skill_key != 0xFFFF;
+        const bool bs = b.skill_key != 0 && b.skill_key != 0xFFFF;
+        if (as != bs) return as;
+        const bool af = as && a.have_level == 0;
+        const bool bf = bs && b.have_level == 0;
+        if (af != bf) return af;
         if (a.wanted_by != b.wanted_by) return a.wanted_by > b.wanted_by;
         return a.number < b.number;   // 완전 순서 - 화면이 흔들리지 않게
     });
@@ -299,9 +308,8 @@ KnowScan know_scan(const mem::Rtti* rtti, const mem::Reader& reader, int realm) 
         e.have_level = level[static_cast<std::size_t>(e.number)];
     }
     know_need_drop_satisfied(&s.needs);
-    know_need_sort(&s.needs);
 
-    // 5) 붙는 스킬과 이름. 못 풀려도 번호는 쓸 수 있으므로 실패로 치지 않는다.
+    // 5) 붙는 스킬. **정렬보다 먼저** 읽는다 - 정렬이 이 값을 본다.
     for (auto& e : s.needs) {
         const std::uintptr_t info = static_cast<std::uintptr_t>(
             infos[static_cast<std::size_t>(e.number)]);
@@ -309,6 +317,55 @@ KnowScan know_scan(const mem::Rtti* rtti, const mem::Reader& reader, int realm) 
         std::uint16_t apply = kNoApplySkill;
         reader.read_value(info + kInfoApplySkill, &apply);
         e.skill_key = apply;
+    }
+    know_need_sort(&s.needs);
+
+    // 6) **스킬이 붙었는데 아직 안 배운 지식**을 전수로 모은다. 선행 조건
+    //    목록과 달리 "요구받는가" 를 따지지 않는다 - 휠을 채우는 지식이
+    //    누구의 선행 조건도 아닐 수 있기 때문이다.
+    for (int n = 0; n < m.count; ++n) {
+        if (level[static_cast<std::size_t>(n)] != 0) continue;
+        const std::uintptr_t info =
+            static_cast<std::uintptr_t>(infos[static_cast<std::size_t>(n)]);
+        if (info == 0) continue;
+        std::uint16_t apply = kNoApplySkill;
+        if (!reader.read_value(info + kInfoApplySkill, &apply)) continue;
+        if (apply == kNoApplySkill || apply == 0) continue;
+        ++s.fresh_total;
+        if (static_cast<int>(s.fresh.size()) >= kKnowFreshMax) continue;
+        KnowNeed e;
+        e.number = n;
+        e.need_level = 1;
+        e.have_level = 0;
+        e.skill_key = apply;
+        s.fresh.push_back(std::move(e));
+    }
+    if (has_loc) {
+        for (auto& e : s.fresh) {
+            const std::uintptr_t info = static_cast<std::uintptr_t>(
+                infos[static_cast<std::size_t>(e.number)]);
+            if (info == 0) continue;
+            const std::uintptr_t lv_base =
+                static_cast<std::uintptr_t>(rd64(reader, info + kInfoLevels));
+            if (lv_base == 0) continue;
+            const std::uint64_t key = rd64(reader, lv_base + kLevelName);
+            if (key == 0) continue;
+            resolve(reader, loc, key, &e.name, nullptr);
+        }
+    }
+
+    {
+        int with_skill = 0, fresh = 0;
+        for (const auto& e : s.needs) {
+            if (e.skill_key == 0 || e.skill_key == kNoApplySkill) continue;
+            ++with_skill;
+            if (e.have_level == 0) ++fresh;
+        }
+        log::infof("지식 훑기: 모자란 선행 조건 {}개 · 스킬 붙은 것 {}개 ·"
+                   " 그중 아직 레벨 0 인 것 {}개 | 전수: 스킬 붙었는데 안 배운 지식"
+                   " {}개(보여 주는 것 {}개)",
+                   static_cast<int>(s.needs.size()), with_skill, fresh,
+                   s.fresh_total, static_cast<int>(s.fresh.size()));
     }
     if (has_loc) {
         for (auto& e : s.needs) {

@@ -70,6 +70,8 @@ inline constexpr int kKnowMaxCount = 20000;
 inline constexpr int kKnowMaxLevels = 64;
 inline constexpr int kKnowMaxLearnFrom = 32;
 inline constexpr int kKnowMaxNeeds = 64;
+// `fresh` 목록의 화면 상한. 넘으면 자르고 개수만 알린다.
+inline constexpr int kKnowFreshMax = 300;
 
 // ------------------------------------------------------------------ 자료형
 
@@ -109,6 +111,12 @@ struct KnowScan {
     int learned = 0;     // 레벨 >= 1 인 것
     int walked = 0;      // 실제로 훑은 지식 수
     std::vector<KnowNeed> needs;   // **모자란 것만**, 요구 많은 순
+    // **스킬이 붙었는데 아직 안 배운 지식**(선행 조건인지와 무관하게 전수).
+    // 선행 조건 목록으로는 목적지에 못 간다는 것이 실측으로 드러나 넣었다
+    // (2026-09-14: 레벨 0 인 줄에는 붙는 스킬이 없고, 스킬이 붙은 줄은 이미
+    // 배운 것뿐이라 등록해도 맵이 18 -> 18 이었다).
+    std::vector<KnowNeed> fresh;
+    int fresh_total = 0;   // 잘리기 전 실제 개수
 };
 
 // ------------------------------------------------------------ 순수 부분(시험용)
