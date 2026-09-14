@@ -152,3 +152,23 @@ TEST(bond_restore_refuses_when_it_would_be_an_increase) {
     b.wrote_total = 140;   // 지금 총합이 원본보다 작다
     CHECK(bond_restore_blocked(b, 11, 140) != nullptr);
 }
+
+TEST(the_bond_pool_is_a_per_character_array) {
+    // 실측 2026-09-14([진단] 이 찍은 값):
+    //   풀[0]   1 · 151 · 타입 0
+    //   풀[1]  70 · 151 · 타입 1
+    //   풀[2] 150 · 151 · 타입 2
+    // 레코드 6바이트 {u16 보유, u16 총합, u16 소유타입}. 예전에는 이것을 단일
+    // 구조체로 보고 첫 칸만 읽어, 다른 두 캐릭터의 70·150 이 화면에 안 나왔다.
+    // 그때 "총합 사본" 이라 부른 +0x08·+0x0E 는 사실 **다른 캐릭터의 총합**이고,
+    // "정체 미상" +0x0C 는 **캐릭터 2 의 보유**였다.
+    CHECK(cdtb::game::kBondStride == 6);
+    CHECK(cdtb::game::kBondHave == 0x00);
+    CHECK(cdtb::game::kBondTotal == 0x02);
+    CHECK(cdtb::game::kBondType == 0x04);
+    CHECK(cdtb::game::kBondSlots == 3);
+    // 옛 오프셋들이 무엇이었는지 산술로 남긴다 - 다시 헷갈리지 않게.
+    CHECK(1 * cdtb::game::kBondStride + cdtb::game::kBondTotal == 0x08);
+    CHECK(2 * cdtb::game::kBondStride + cdtb::game::kBondHave == 0x0C);
+    CHECK(2 * cdtb::game::kBondStride + cdtb::game::kBondTotal == 0x0E);
+}

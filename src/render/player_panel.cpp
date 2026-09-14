@@ -30,31 +30,45 @@ void draw_skill_bond(const mem::Reader& reader) {
         return;
     }
 
-    // realm 둘을 다 보여 준다. 실측에서는 두 벌이 바이트까지 같았지만, 어긋나면
-    // 그것이 곧 진단이다(한쪽만 써진 상태를 모르고 지나치지 않게).
-    const game::BondState sv = game::bond_read(reader, 0);
-    const game::BondState cl = game::bond_read(reader, 1);
-    if (sv.address == 0 && cl.address == 0) {
-        ImGui::TextDisabled("지금은 결속 값을 읽을 수 없습니다.");
-        return;
-    }
-    const game::BondState& s = sv.address != 0 ? sv : cl;
-    ImGui::Text("보유 %d · 총합 %d", s.have, s.total);
-    ImGui::SameLine();
-    // 좌하단 "사용" 은 저장된 값이 아니라 화면이 계산해 그리는 값이다.
-    ImGui::TextDisabled("(화면의 '사용' = %d)", s.total - s.have);
-    if (sv.address != 0 && cl.address != 0 &&
-        (sv.have != cl.have || sv.total != cl.total)) {
-        ImGui::TextColored(col::kWarn, "두 realm 이 다릅니다: 서버 %d/%d · 클라 %d/%d",
-                           sv.have, sv.total, cl.have, cl.total);
-    }
-
+    // **결속은 캐릭터별이다**(실측 2026-09-14). 셋을 다 보여 주고, 쓸 칸을 고르게
+    // 한다. 예전에는 첫 칸만 읽어 보유 1 만 보였고, 다른 두 캐릭터의 70·150 은
+    // 화면에 아예 안 나왔다.
+    static int s_slot = 0;
     static int s_add = 10;
     static bool s_also_total = true;
     static std::string s_msg;
 
+    int readable = 0;
+    for (int i = 0; i < game::kBondSlots; ++i) {
+        const game::BondState sv = game::bond_read(reader, 0, i);
+        const game::BondState cl = game::bond_read(reader, 1, i);
+        if (sv.address == 0 && cl.address == 0) continue;
+        ++readable;
+        const game::BondState& s = sv.address != 0 ? sv : cl;
+        ImGui::RadioButton("", &s_slot, i);
+        ImGui::SameLine();
+        ImGui::Text("캐릭터 %d: 보유 %d · 총합 %d", i, s.have, s.total);
+        ImGui::SameLine();
+        // 좌하단 "사용" 은 저장된 값이 아니라 화면이 계산해 그리는 값이다.
+        ImGui::TextDisabled("(사용 %d)", s.total - s.have);
+        if (sv.address != 0 && cl.address != 0 &&
+            (sv.have != cl.have || sv.total != cl.total)) {
+            ImGui::TextColored(col::kWarn,
+                               "   두 realm 이 다릅니다: 서버 %d/%d · 클라 %d/%d",
+                               sv.have, sv.total, cl.have, cl.total);
+        }
+    }
+    if (readable == 0) {
+        ImGui::TextDisabled("지금은 결속 값을 읽을 수 없습니다.");
+        return;
+    }
+    ImGui::TextDisabled("칸 번호는 SkillPointOwnerType 입니다 - 어느 번호가 어느"
+                        " 캐릭터인지는 아직 대조하지 않았습니다.");
+
     ImGui::SetNextItemWidth(160.0f);
     ImGui::SliderInt("더할 양", &s_add, 1, game::kBondAddMax);
+    ImGui::SameLine();
+    ImGui::TextDisabled("-> 캐릭터 %d", s_slot);
     if (ImGui::Checkbox("총합도 함께 올리기", &s_also_total)) {}
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
@@ -62,11 +76,11 @@ void draw_skill_bond(const mem::Reader& reader) {
             "화면이 (총합 - 보유)로 계산해 그리는 값입니다(실측 확인).\n"
             "총합을 같이 올리지 않으면 그 숫자가 그만큼 줄어들어,\n"
             "쓰지도 않은 것을 되돌려받은 것처럼 보입니다.\n"
-            "끄는 것은 어느 사본을 화면이 읽는지 가릴 때만 쓰십시오.");
+            "고른 칸의 총합만 올립니다 - 다른 캐릭터는 안 건드립니다.");
     }
 
     if (ImGui::Button("결속 더하기")) {
-        const auto r = game::bond_add(reader, s_add, s_also_total);
+        const auto r = game::bond_add(reader, s_add, s_also_total, s_slot);
         s_msg = "바꾼 것 " + std::to_string(r.changed) + " realm, 건너뜀 " +
                 std::to_string(r.skip) + ", 실패 " + std::to_string(r.fail);
         if (r.changed == 0 && r.skip > 0) s_msg += std::string(" - ") + r.last_skip;

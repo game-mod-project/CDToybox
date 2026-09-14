@@ -331,54 +331,56 @@ void forget_knowledge() {
     // 선제적으로 버리면 곧 다시 잡히는 흔한 경우에 되돌릴 수단만 잃는다.
 }
 
-BondState bond_read(const mem::Reader& reader, int realm) {
+BondState bond_read(const mem::Reader& reader, int realm, int slot) {
     BondState s;
+    if (slot < 0 || slot >= kBondSlots) return s;
     const std::uintptr_t comp = comp_of(realm);
     if (comp == 0) return s;
     // **포인터를 매번 다시 읽는다.** 컴포넌트가 살아 있어도 구조체가 옮겨 갈 수
     // 있고, 낡은 주소에 쓰는 것은 이 저장소가 반복해서 데인 함정이다
     // (clan-roster-volatile-writes).
     std::uint64_t ptr = 0;
-    if (!reader.read_value(comp + kBondPtr, &ptr) || ptr == 0) return s;
-    const std::uintptr_t a = static_cast<std::uintptr_t>(ptr);
-    std::uint16_t have = 0, total = 0, total2 = 0, other = 0, total3 = 0;
+    if (!reader.read_value(comp + kBondPtr, &ptr) || ptr < 0x10000) return s;
+    const std::uintptr_t a = static_cast<std::uintptr_t>(ptr) +
+                             static_cast<std::uintptr_t>(slot) * kBondStride;
+    std::uint16_t have = 0, total = 0, type = 0;
     if (!reader.read_value(a + kBondHave, &have) ||
         !reader.read_value(a + kBondTotal, &total) ||
-        !reader.read_value(a + kBondTotal2, &total2) ||
-        !reader.read_value(a + kBondOther, &other) ||
-        !reader.read_value(a + kBondTotal3, &total3)) {
+        !reader.read_value(a + kBondType, &type)) {
         return s;
     }
+    // **소유 타입이 칸 번호와 같아야 한다.** 클라 쪽에서 셋째 칸의 타입이
+    // 60162 로 나온 적이 있다(실측 2026-09-14) - 배열이 거기까지 안 가거나 다른
+    // 것이 겹쳐 있다는 뜻이므로, 그런 칸에는 쓰지 않는다.
+    if (type != static_cast<std::uint16_t>(slot)) return s;
     s.address = a;
+    s.slot = slot;
     s.have = have;
     s.total = total;
-    s.total2 = total2;
-    s.other = other;
-    s.total3 = total3;
+    s.type = type;
     return s;
 }
 
 namespace {
 
-// **잠금을 이미 쥔 채** 부른다.
-void add_to(const mem::Reader& reader, int realm, int add, bool also_total,
-            BondResult* r) {
-    const BondState s = bond_read(reader, realm);
-    if (s.address == 0) return;   // 그 realm 은 아직 못 잡았다
+void add_to(const mem::Reader& reader, int realm, int slot, int add,
+            bool also_total, BondResult* r) {
+    const BondState s = bond_read(reader, realm, slot);
+    if (s.address == 0) return;   // 그 realm/칸 은 아직 못 잡았다
     const BondPlan p = plan_bond_add(s.have, s.total, add, also_total);
     if (!p.apply) {
         ++r->skip;
         r->last_skip = p.skip;
-        log::infof("결속 건너뜀: realm {} 0x{:X} - {} (보유 {} 총합 {})", realm,
-                   s.address, p.skip, s.have, s.total);
+        log::infof("결속 건너뜀: realm {} 칸 {} 0x{:X} - {} (보유 {} 총합 {})",
+                   realm, slot, s.address, p.skip, s.have, s.total);
         return;
     }
     {
-        // **realm 당 처음 본 값만** 남긴다. 여러 번 눌러도 처음 값이 지켜진다.
+        // **realm·칸 마다 처음 본 값만** 남긴다. 여러 번 눌러도 처음 값이 지켜진다.
         std::lock_guard<std::mutex> lk(g_mtx);
         bool seen = false;
         for (const auto& x : g_backup) {
-            if (x.realm == realm) {
+            if (x.realm == realm && x.slot == slot) {
                 seen = true;
                 break;
             }
@@ -386,16 +388,15 @@ void add_to(const mem::Reader& reader, int realm, int add, bool also_total,
         if (!seen) {
             // 주소는 안 적는다 - 쓸 때마다 +0xC8 을 다시 읽으므로 적어 둘 이유가
             // 없고, 적어 두면 낡은 주소를 쓰게 되는 길만 생긴다.
-            g_backup.push_back(BondBackup{
-                realm, static_cast<std::uint16_t>(s.have),
-                static_cast<std::uint16_t>(s.total),
-                static_cast<std::uint16_t>(s.total2),
-                static_cast<std::uint16_t>(s.total3), 0, 0});
+            g_backup.push_back(BondBackup{realm, slot,
+                                          static_cast<std::uint16_t>(s.have),
+                                          static_cast<std::uint16_t>(s.total),
+                                          0, 0});
         }
     }
-    // **총합 사본 셋을 다 쓴다.** 화면이 어느 것을 읽는지 아직 모른다 - 하나만
-    // 올리면 화면과 저장이 어긋난 채 남을 수 있다. 셋이 지금 다 같은 값이라
-    // (실측 151/151/151) 같이 올리는 것이 그 모양을 지키는 길이다.
+    // **그 칸만 쓴다.** 예전에는 +0x08 과 +0x0E 를 "총합 사본" 으로 보고 같이
+    // 썼는데, 그 자리는 **다른 캐릭터의 칸**이었다(실측 2026-09-14: 레코드 6바이트
+    // {보유, 총합, 타입}, 타입 0·1·2). 남의 캐릭터 값을 건드리고 있었다.
     log_write("결속 보유", s.address + kBondHave, std::to_string(s.have),
               std::to_string(p.have));
     bool ok = wr16(s.address + kBondHave, static_cast<std::uint16_t>(p.have));
@@ -404,58 +405,40 @@ void add_to(const mem::Reader& reader, int realm, int add, bool also_total,
                   std::to_string(p.total));
         ok = wr16(s.address + kBondTotal,
                   static_cast<std::uint16_t>(p.total)) && ok;
-        // 사본 둘은 지금 값이 총합과 같을 때만 따라 올린다 - 다른 값이면 우리가
-        // 뜻을 모르는 칸이므로 건드리지 않는다.
-        if (s.total2 == s.total) {
-            ok = wr16(s.address + kBondTotal2,
-                      static_cast<std::uint16_t>(p.total)) && ok;
-        }
-        if (s.total3 == s.total) {
-            ok = wr16(s.address + kBondTotal3,
-                      static_cast<std::uint16_t>(p.total)) && ok;
-        }
     }
-    const BondState back = bond_read(reader, realm);
-    if (ok && back.address == s.address && back.have == p.have &&
-        back.total == p.total) {
-        ++r->changed;
-        {
-            // **우리가 써 놓은 값을 적어 둔다.** 되돌리기가 이것과 지금 값을
-            // 대조해, 그 사이 게임이 결속을 주었으면 쓰지 않는다.
-            std::lock_guard<std::mutex> lk(g_mtx);
-            for (auto& x : g_backup) {
-                if (x.realm != realm) continue;
-                x.wrote_have = static_cast<std::uint16_t>(p.have);
-                x.wrote_total = static_cast<std::uint16_t>(p.total);
-                break;
-            }
-        }
-        log::infof("결속: realm {} 보유 {} -> {}, 총합 {} -> {} (사본 {} {})",
-                   realm, s.have, back.have, s.total, back.total, back.total2,
-                   back.total3);
-    } else {
-        // 반쯤 써진 채로 두지 않는다. **지금 주소**에 쓰고(옮겨 갔다고 판정한
-        // 바로 그 경우에 옛 주소를 쓰면 남의 자리를 때린다), **사본까지** 되돌린다
-        // (안 그러면 총합과 사본이 영구히 어긋난 채 남는다).
-        const std::uintptr_t at = back.address != 0 ? back.address : s.address;
-        wr16(at + kBondHave, static_cast<std::uint16_t>(s.have));
-        wr16(at + kBondTotal, static_cast<std::uint16_t>(s.total));
-        wr16(at + kBondTotal2, static_cast<std::uint16_t>(s.total2));
-        wr16(at + kBondTotal3, static_cast<std::uint16_t>(s.total3));
+    const BondState back = bond_read(reader, realm, slot);
+    if (!ok || back.address == 0 || back.have != p.have) {
         ++r->fail;
-        log::warnf("결속 쓰기 실패(되돌림): realm {} 0x{:X}", realm, at);
+        log::warnf("결속 쓰기 실패: realm {} 칸 {} 0x{:X}", realm, slot,
+                   s.address);
+        return;
     }
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        for (auto& x : g_backup) {
+            if (x.realm != realm || x.slot != slot) continue;
+            x.wrote_have = static_cast<std::uint16_t>(back.have);
+            x.wrote_total = static_cast<std::uint16_t>(back.total);
+            break;
+        }
+    }
+    ++r->changed;
+    log::infof("결속 realm {} 칸 {}: 보유 {} -> {} (총합 {} -> {})", realm, slot,
+               s.have, back.have, s.total, back.total);
 }
 
 }  // namespace
 
-BondResult bond_add(const mem::Reader& reader, int add, bool also_total) {
+BondResult bond_add(const mem::Reader& reader, int add, bool also_total,
+                    int slot) {
     std::lock_guard<std::mutex> op(g_op_mtx);
     BondResult r;
-    add_to(reader, 0, add, also_total, &r);
-    add_to(reader, 1, add, also_total, &r);
-    log::infof("결속 더하기: +{} (총합도 {}) -> 바꾼 것 {}개, 건너뜀 {}, 실패 {}",
-               add, also_total ? "함께" : "안 함", r.changed, r.skip, r.fail);
+    add_to(reader, 0, slot, add, also_total, &r);
+    add_to(reader, 1, slot, add, also_total, &r);
+    log::infof("결속 더하기: 칸 {} +{} (총합도 {}) -> 바꾼 것 {}개, 건너뜀 {},"
+               " 실패 {}",
+               slot, add, also_total ? "함께" : "안 함", r.changed, r.skip,
+               r.fail);
     return r;
 }
 
@@ -476,10 +459,10 @@ BondResult bond_restore(const mem::Reader& reader) {
     for (const auto& s : saved) {
         // **주소를 다시 읽는다.** 기록해 둔 주소가 아니라 지금 컴포넌트가 가리키는
         // 자리에 쓴다 - 낡은 주소는 남의 객체가 된다.
-        const BondState now = bond_read(reader, s.realm);
+        const BondState now = bond_read(reader, s.realm, s.slot);
         if (now.address == 0) {
             ++r.skip;
-            r.last_skip = "지금은 지식 컴포넌트를 읽을 수 없습니다";
+            r.last_skip = "지금은 그 칸을 읽을 수 없습니다";
             keep.push_back(s);   // 버리지 않는다
             continue;
         }
@@ -494,8 +477,9 @@ BondResult bond_restore(const mem::Reader& reader) {
             ++r.skip;
             r.last_skip = why;
             keep.push_back(s);
-            log::warnf("결속 복원 건너뜀: realm {} - {} (지금 {}/{}, 우리가 쓴 {}/{})",
-                       s.realm, why, now.have, now.total, s.wrote_have,
+            log::warnf("결속 복원 건너뜀: realm {} 칸 {} - {} (지금 {}/{},"
+                       " 우리가 쓴 {}/{})",
+                       s.realm, s.slot, why, now.have, now.total, s.wrote_have,
                        s.wrote_total);
             continue;
         }
@@ -503,28 +487,26 @@ BondResult bond_restore(const mem::Reader& reader) {
                   std::to_string(s.have));
         bool ok = wr16(now.address + kBondHave, s.have);
         ok = wr16(now.address + kBondTotal, s.total) && ok;
-        if (now.total2 == now.total) {
-            ok = wr16(now.address + kBondTotal2, s.total2) && ok;
-        }
-        if (now.total3 == now.total) {
-            ok = wr16(now.address + kBondTotal3, s.total3) && ok;
-        }
-        const BondState back = bond_read(reader, s.realm);
-        if (ok && back.have == s.have && back.total == s.total) {
-            ++r.changed;
-        } else {
+        const BondState back = bond_read(reader, s.realm, s.slot);
+        if (!ok || back.address == 0 || back.have != s.have) {
             ++r.fail;
             keep.push_back(s);
-            log::warnf("결속 복원 실패: realm {} 0x{:X}", s.realm, now.address);
+            log::warnf("결속 복원 실패: realm {} 칸 {} 0x{:X}", s.realm, s.slot,
+                       now.address);
+            continue;
         }
+        ++r.changed;
+        log::infof("결속 복원: realm {} 칸 {} 보유 {} 총합 {}", s.realm, s.slot,
+                   s.have, s.total);
     }
     {
         std::lock_guard<std::mutex> lk(g_mtx);
-        g_backup = keep;
+        g_backup = std::move(keep);
     }
-    log::infof("결속 복원: 되돌린 것 {}개, 건너뜀 {}, 실패 {}", r.changed, r.skip,
-               r.fail);
+    log::infof("결속 되돌리기: 바꾼 것 {}개, 건너뜀 {}, 실패 {}", r.changed,
+               r.skip, r.fail);
     return r;
 }
+
 
 }  // namespace cdtb::game

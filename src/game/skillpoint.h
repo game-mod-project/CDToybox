@@ -27,11 +27,24 @@ namespace cdtb::game {
 // 계산해 그린다(실측: 보유 1->0 인데 저장된 151 셋은 그대로였고, 화면은 150->151).
 // 그래서 보유만 올리면 "사용" 이 줄어 쓰지도 않은 것을 되돌려받은 것처럼 보인다 -
 // 총합도 같이 올려야 앞뒤가 맞는다.
+// **결속 풀은 캐릭터별 배열이다**(실측 2026-09-14, [진단] 이 찍은 값):
+//
+//     풀[0]:   1 · 151 · 타입 0
+//     풀[1]:  70 · 151 · 타입 1
+//     풀[2]: 150 · 151 · 타입 2
+//
+// 레코드 **6바이트** `{u16 보유, u16 총합, u16 소유타입}` 이고 타입이 칸 번호와
+// 같다. 화면의 탭 셋(클리프·데미안·웅카)과 `SkillPointOwnerType` 셋에 대응한다.
+//
+// 예전에는 이것을 **단일 구조체**로 보고 첫 칸만 읽었다. 그래서 화면이 보유 1 만
+// 보였고(다른 두 캐릭터의 70·150 은 안 보였다), "총합 사본" 이라고 부른 +0x08 ·
+// +0x0E 와 "정체 미상 별개 카운터" +0x0C 는 사실 **다른 캐릭터의 칸**이었다.
+// 총합을 같이 올릴 때 남의 캐릭터 값을 건드리고 있었다.
+inline constexpr std::size_t kBondStride = 6;
 inline constexpr std::size_t kBondHave = 0x00;
 inline constexpr std::size_t kBondTotal = 0x02;
-inline constexpr std::size_t kBondTotal2 = 0x08;
-inline constexpr std::size_t kBondOther = 0x0C;   // 안 건드린다
-inline constexpr std::size_t kBondTotal3 = 0x0E;
+inline constexpr std::size_t kBondType = 0x04;
+inline constexpr int kBondSlots = 3;
 
 // 한 번에 더할 수 있는 최대와, 결과값의 천장.
 // **상류 근거가 없다.** 참고 모드(CT·ASI) 둘 다 스킬 포인트 기능이 없어 빌려 올
@@ -40,14 +53,13 @@ inline constexpr std::size_t kBondTotal3 = 0x0E;
 inline constexpr int kBondAddMax = 100;
 inline constexpr int kBondCeiling = 9999;
 
-// 지금 읽은 값. address 가 0 이면 못 읽었다.
+// 한 캐릭터 칸의 지금 값. address 가 0 이면 못 읽었다(칸이 없거나 타입이 안 맞는다).
 struct BondState {
     std::uintptr_t address = 0;
+    int slot = -1;
     int have = 0;
     int total = 0;
-    int total2 = 0;
-    int other = 0;
-    int total3 = 0;
+    int type = -1;
 };
 
 // 무엇을 쓸지. **순수 계산**이라 시험할 수 있다.
@@ -76,8 +88,10 @@ std::uintptr_t knowledge_component();          // 서버
 std::uintptr_t knowledge_component_client();
 void forget_knowledge();
 
-// 지금 값을 읽는다. realm 0 = 서버, 1 = 클라.
-BondState bond_read(const mem::Reader& reader, int realm);
+// 지금 값을 읽는다. realm 0 = 서버, 1 = 클라. slot 은 캐릭터 칸(0..2).
+// **소유타입이 칸 번호와 다르면 못 읽은 것으로 친다** - 클라 쪽에서 셋째 칸의
+// 타입이 60162 로 나온 적이 있다(배열이 거기까지 안 가거나 다른 것이 겹쳤다).
+BondState bond_read(const mem::Reader& reader, int realm, int slot);
 
 // 캐시한 컴포넌트가 아직 살아 있는지 본다. 죽었으면 버리고 다시 찾게 한다.
 // 게임은 세이브를 불러올 때 컴포넌트를 새로 만든다(인벤토리에서 실측했다) -
@@ -90,7 +104,8 @@ void knowledge_check_alive(const mem::Reader& reader);
 // 이번 실행에서 처음 본 값 + **우리가 써 놓은 값**.
 struct BondBackup {
     int realm = 0;
-    std::uint16_t have = 0, total = 0, total2 = 0, total3 = 0;   // **최초** 원본
+    int slot = 0;
+    std::uint16_t have = 0, total = 0;   // **최초** 원본
     // 우리가 마지막으로 만들어 놓은 값. 되돌리기 직전에 지금 값과 대조한다 -
     // 다르면 그 사이 게임이 결속을 주거나 사용자가 썼다는 뜻이므로 되돌리지 않는다.
     // 가방에서 같은 관문이 없어 "정당하게 산 칸을 지우는" 길이 열렸었다.
@@ -108,8 +123,9 @@ struct BondResult {
     const char* last_skip = "";
 };
 
-// 두 realm 에 같이 쓴다. **모드(주입 DLL)에서만** 부른다.
-BondResult bond_add(const mem::Reader& reader, int add, bool also_total);
+// 두 realm 의 **같은 칸**에 쓴다. **모드(주입 DLL)에서만** 부른다.
+BondResult bond_add(const mem::Reader& reader, int add, bool also_total,
+                    int slot);
 // 이번 실행에서 처음 본 값으로 되돌린다.
 BondResult bond_restore(const mem::Reader& reader);
 bool bond_has_backup();
