@@ -12,6 +12,7 @@
 
 #include "core/log.h"
 #include "game/companion.h"
+#include "game/knowledge.h"
 #include "game/items.h"
 #include "mem/hook.h"
 #include "mem/scanner.h"
@@ -760,6 +761,12 @@ std::uintptr_t __fastcall det_actor_getter(void* session) {
         }
     }
     if (g_detour_depth == 1) run_pending_if_any();
+
+    // 지식 스킬 등록. **렌더 스레드에서 부르면 TLS 가 없어 죽는다**(1.8/1.13).
+    // 걸린 요청이 없으면 즉시 반환하므로 평소에는 비용이 없다.
+    if (g_detour_depth == 1 && thread_ready_for_spawn()) {
+        cdtb::game::knowledge_run_pending();
+    }
 
     if (g_detour_depth == 1 && g_reader != nullptr &&
         !g_traced.load(std::memory_order_acquire) && thread_ready_for_spawn()) {

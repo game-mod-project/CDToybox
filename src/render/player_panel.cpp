@@ -155,6 +155,25 @@ void draw_knowledge(const mem::Reader& reader) {
 
     if (!s_scanned || !s_scan.ok) return;
 
+    // 게임 스레드가 집어 간 결과를 받아 알림으로 바꾼다.
+    {
+        const game::KnowQueue q = game::knowledge_queue_state();
+        if (q.has_result) {
+            if (q.result.ok) {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "{}번 스킬 등록: 맵 {} -> {} (스킬키 {})", q.number,
+                           q.result.before, q.result.after, q.result.skill_key);
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad, "{}번 등록 실패: {}",
+                           q.number, q.result.skip);
+            }
+            game::knowledge_queue_clear_result();
+        } else if (q.pending) {
+            ImGui::TextColored(col::kWarn, "%d번 등록 요청 대기 중 (게임 스레드)",
+                               q.number);
+        }
+    }
+
     ImGui::Checkbox("게임 함수 호출 허용", &s_allow_call);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
@@ -231,15 +250,16 @@ void draw_knowledge(const mem::Reader& reader) {
             if (s_allow_call && !game::know_register_locked()) {
                 ImGui::SameLine();
                 if (confirm_small_button("등록")) {
-                    const game::KnowRegister g =
-                        game::know_register_skill(reader, e.number, e.need_level);
-                    if (g.ok) {
-                        notice_set(&s_note, NoticeLevel::Ok,
-                                   "{}번 스킬 등록: 맵 {} -> {} (스킬키 {})",
-                                   e.number, g.before, g.after, g.skill_key);
+                    // **여기서 직접 부르지 않는다.** 렌더 스레드에는 게임 함수가
+                    // 따라가는 TLS 가 없다 - 그래서 죽었다(1.8/1.13). 요청만 걸고
+                    // 게임 스레드가 집어 간다.
+                    if (game::knowledge_queue_register(e.number, e.need_level)) {
+                        notice_set(&s_note, NoticeLevel::Info,
+                                   "{}번 등록 요청 - 게임 스레드를 기다립니다",
+                                   e.number);
                     } else {
-                        notice_set(&s_note, NoticeLevel::Bad, "{}번 등록 실패: {}",
-                                   e.number, g.skip);
+                        notice_set(&s_note, NoticeLevel::Warn,
+                                   "이미 걸린 요청이 있습니다");
                     }
                 }
                 if (ImGui::IsItemHovered()) {

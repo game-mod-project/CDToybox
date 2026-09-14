@@ -647,4 +647,54 @@ bool know_register_locked() {
     return g_register_locked.load(std::memory_order_acquire);
 }
 
+// ------------------------------------------ 게임 스레드에 걸어 두기
+
+namespace {
+std::mutex g_q_mtx;
+KnowQueue g_q;
+}  // namespace
+
+bool knowledge_queue_register(int number, int level) {
+    std::lock_guard<std::mutex> lk(g_q_mtx);
+    if (g_q.pending) return false;
+    g_q.pending = true;
+    g_q.number = number;
+    g_q.level = level;
+    g_q.has_result = false;
+    log::infof("지식 등록 요청: {}번 레벨 {} - 게임 스레드를 기다린다", number,
+               level);
+    return true;
+}
+
+void knowledge_run_pending() {
+    int number = 0;
+    int level = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_q_mtx);
+        if (!g_q.pending) return;
+        number = g_q.number;
+        level = g_q.level;
+    }
+    // **요청을 먼저 지운다.** 호출이 죽어도 같은 요청이 다시 실행되면 안 된다.
+    {
+        std::lock_guard<std::mutex> lk(g_q_mtx);
+        g_q.pending = false;
+    }
+    const mem::LocalReader reader;
+    const KnowRegister r = know_register_skill(reader, number, level);
+    std::lock_guard<std::mutex> lk(g_q_mtx);
+    g_q.has_result = true;
+    g_q.result = r;
+}
+
+KnowQueue knowledge_queue_state() {
+    std::lock_guard<std::mutex> lk(g_q_mtx);
+    return g_q;
+}
+
+void knowledge_queue_clear_result() {
+    std::lock_guard<std::mutex> lk(g_q_mtx);
+    g_q.has_result = false;
+}
+
 }  // namespace cdtb::game
