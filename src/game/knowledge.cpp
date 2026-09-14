@@ -79,6 +79,10 @@ bool call_register(RegisterFn f, void* comp, std::uint16_t key,
 // 대신 **실제 값을 복사**한다 - 그 칸을 "습득 후 경과" 로 쓰는 로직이 있다.
 std::atomic<std::uint64_t> g_time_donor{0};
 
+// 등록 호출이 한 번이라도 예외로 끝나면 잠근다(실행 단위). 되돌릴 길이 없으므로
+// 다시 시도하게 두지 않는다.
+std::atomic<bool> g_register_locked{false};
+
 std::uint64_t time_donor(const mem::Reader& r, const KnowTable& t) {
     const std::uint64_t cached = g_time_donor.load(std::memory_order_acquire);
     if (cached != 0) return cached;
@@ -392,6 +396,11 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number,
         return r;
     }
 
+    if (g_register_locked.load(std::memory_order_acquire)) {
+        r.skip = "이번 실행에서 호출이 한 번 실패해 잠갔습니다 - 게임을 다시 켜십시오";
+        return r;
+    }
+
     std::lock_guard<std::mutex> lk(g_op_mtx);
     // **서버 컴포넌트에만.** 맵은 Server 고유 필드다 - 클라에 같은 자리가 있는지
     // 모르므로, 잘못 부르면 엉뚱한 필드를 해시맵으로 취급해 그 자리에서 죽는다.
@@ -405,6 +414,22 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number,
         log::warnf("지식 등록: vtable 0x{:X} 가 서버 것(0x{:X})이 아니다 - 안 부른다",
                    vt, base + kServerCompVtableRva);
         r.skip = "서버 컴포넌트가 아닙니다(게임이 갱신됐을 수 있습니다)";
+        return r;
+    }
+
+    // **소유 액터를 확인한다.** 등록 함수가 초입에서 `[comp+8]` 을 역참조하므로
+    // (0x02AA5421 -> 0x02AA5433), 0 이거나 못 읽으면 그 자리에서 죽는다.
+    std::uint64_t owner = 0;
+    if (!reader.read_value(comp + kKnowCompOwner, &owner) || owner == 0) {
+        log::warnf("지식 등록: 소유 액터가 0 이다(comp 0x{:X}) - 안 부른다", comp);
+        r.skip = "그 컴포넌트에 소유 액터가 없습니다";
+        return r;
+    }
+    // 그 액터의 `+0x08` 도 읽힌다는 것까지 본다 - 함수가 바로 다음에 그것을 읽는다.
+    std::uint64_t owner_field = 0;
+    if (!reader.read_value(static_cast<std::uintptr_t>(owner) + 8, &owner_field)) {
+        log::warnf("지식 등록: 소유 액터 0x{:X} 의 +8 을 못 읽는다 - 안 부른다", owner);
+        r.skip = "소유 액터를 읽을 수 없습니다";
         return r;
     }
 
@@ -439,8 +464,10 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number,
     // 조용히=1 로 부른다 - 부수 갱신 경로를 건너뛰어 더 안전하다.
     if (!call_register(f, reinterpret_cast<void*>(comp),
                        static_cast<std::uint16_t>(number), level, 1)) {
-        r.skip = "게임 함수 호출이 예외로 끝났습니다";
-        log::errorf("지식 등록 {}번: 호출이 예외로 끝났다", number);
+        r.skip = "게임 함수 호출이 예외로 끝났습니다 - 이번 실행에서는 잠급니다";
+        g_register_locked.store(true, std::memory_order_release);
+        log::errorf("지식 등록 {}번: 호출이 예외로 끝났다 - 이번 실행에서 잠근다."
+                    " 저장하지 말고 이전 세이브를 부르십시오", number);
         return r;
     }
     r.after = rd32(reader, comp + kKnowMapCount);
@@ -513,6 +540,55 @@ void know_auto_tick(const mem::Reader& reader) {
     if (again > 0) {
         log::infof("지식 자동 재적용: {}개를 다시 걸었다", again);
     }
+}
+
+void know_diagnose(const mem::Reader& reader) {
+    const std::uintptr_t base = reader.module_base();
+    log::infof("지식 진단 ----- 모듈 0x{:X} 크기 0x{:X}", base,
+               static_cast<std::uint64_t>(reader.module_size()));
+    KnowMgr m;
+    if (know_manager(reader, &m)) {
+        log::infof("  매니저 0x{:X} 개수 {} 배열 0x{:X}", m.object, m.count,
+                   m.array);
+    } else {
+        log::warnf("  매니저를 못 찾았다");
+    }
+    for (int realm = 0; realm < 2; ++realm) {
+        const char* who = realm == 0 ? "서버" : "클라";
+        const std::uintptr_t comp =
+            realm == 1 ? knowledge_component_client() : knowledge_component();
+        if (comp == 0) {
+            log::warnf("  {} 컴포넌트: 아직 못 잡았다", who);
+            continue;
+        }
+        const std::uintptr_t vt = static_cast<std::uintptr_t>(rd64(reader, comp));
+        log::infof("  {} comp 0x{:X} vtable 0x{:X} (서버 기대 0x{:X}) 일치={}", who,
+                   comp, vt, base + kServerCompVtableRva,
+                   vt == base + kServerCompVtableRva ? 1 : 0);
+        const std::uint64_t owner = rd64(reader, comp + kKnowCompOwner);
+        std::uint64_t owner8 = 0;
+        const bool owner8_ok =
+            owner != 0 && reader.read_value(static_cast<std::uintptr_t>(owner) + 8,
+                                            &owner8);
+        log::infof("    +0x08 소유액터 0x{:X} (그 +8 읽힘={} 값 0x{:X})", owner,
+                   owner8_ok ? 1 : 0, owner8);
+        log::infof("    맵: +0xE8 버킷수 {} · +0xEC {} · +0xF4 원소수 {}",
+                   rd32(reader, comp + 0xE8), rd32(reader, comp + 0xEC),
+                   rd32(reader, comp + kKnowMapCount));
+        log::infof("    맵: +0xF8 버킷배열 0x{:X} · +0x100 값배열 0x{:X}",
+                   rd64(reader, comp + 0xF8), rd64(reader, comp + 0x100));
+        KnowTable t;
+        if (know_table(reader, realm, &t)) {
+            log::infof("    레벨표 0x{:X} 개수 {} 용량 {}", t.data, t.count, t.cap);
+        } else {
+            log::warnf("    레벨표를 못 읽었다");
+        }
+    }
+    log::infof("지식 진단 ----- 끝");
+}
+
+bool know_register_locked() {
+    return g_register_locked.load(std::memory_order_acquire);
 }
 
 }  // namespace cdtb::game

@@ -180,7 +180,24 @@ struct KnowRegister {
 };
 
 // **서버 컴포넌트에만** 부른다. 성공 판정은 "예외 없이 돌아왔고 원소 수가 안 줄었다" 다.
+//
+// **한 번 예외가 나면 그 실행 내내 다시 안 부른다.** 해시맵 삽입 도중에 튕기면 맵이
+// 반쯤 바뀐 채 남을 수 있고, 그 위에 또 넣는 것이 가장 나쁜 수다. 실측 2026-09-14 에
+// 실제로 예외가 났다(4859번, 맵 원소 18에서 호출 직후) - 관문 다섯을 다 지나 호출까지
+// 갔으므로 **부르는 방식 쪽에 아직 모르는 전제가 있다.**
 KnowRegister know_register_skill(const mem::Reader& reader, int number, int level);
+
+// 예외로 잠겼나. 잠기면 화면이 버튼을 안 그린다.
+bool know_register_locked();
+
+// 컴포넌트 `+0x08` = 소유 액터. **등록 함수가 초입에서 이것을 역참조한다**:
+//   0x02AA5421 mov rax,[rcx+8] / 0x02AA5425 lea rdx,[rax+8]
+//   0x02AA542C cmove rdx,0     / 0x02AA5433 mov rdx,[rdx]   <- 0 이면 여기서 죽는다
+// 첫 시도에서 예외가 난 자리로 가장 유력하다(실측 2026-09-14).
+inline constexpr std::size_t kKnowCompOwner = 0x08;
+
+// **읽기만 하는 진단.** 무엇이 어긋났는지 로그로 남긴다 - 추측으로 또 부르지 않기 위해서다.
+void know_diagnose(const mem::Reader& reader);
 
 // ------------------------------------------------------------ 자동 재적용
 //
