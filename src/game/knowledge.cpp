@@ -433,6 +433,31 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number,
         return r;
     }
 
+    // **참조 카운트 객체까지 확인한다.** 등록 함수가 초입에 부르는 0x0038D7F0 이
+    // `[[comp+8]+8]` 의 카운트를 올리고 `call [*(obj)+0x30]` 으로 가상 호출을 한다.
+    // 그 vtable 이 이미지 밖이면 그 자리에서 죽는다.
+    {
+        const std::uintptr_t obj = static_cast<std::uintptr_t>(owner_field);
+        std::uint64_t objvt = 0;
+        const std::uint64_t limit =
+            base + static_cast<std::uint64_t>(reader.module_size());
+        if (obj == 0 || !reader.read_value(obj, &objvt) || objvt < base ||
+            objvt >= limit) {
+            log::warnf("지식 등록: [소유액터+8]=0x{:X} 의 vtable 0x{:X} 이 이미지 밖이다"
+                       " - 안 부른다", obj, objvt);
+            r.skip = "소유 객체가 온전하지 않습니다";
+            return r;
+        }
+        std::uint64_t fn = 0;
+        if (!reader.read_value(static_cast<std::uintptr_t>(objvt) + 0x30, &fn) ||
+            fn < base || fn >= limit) {
+            log::warnf("지식 등록: vtable+0x30 = 0x{:X} 이 이미지 밖이다 - 안 부른다",
+                       fn);
+            r.skip = "소유 객체의 가상 함수가 온전하지 않습니다";
+            return r;
+        }
+    }
+
     // 표와 매니저가 서로 맞는지도 본다 - 어긋나면 우리가 잘못 보고 있는 것이다.
     KnowTable t;
     KnowMgr m;
@@ -572,6 +597,37 @@ void know_diagnose(const mem::Reader& reader) {
                                             &owner8);
         log::infof("    +0x08 소유액터 0x{:X} (그 +8 읽힘={} 값 0x{:X})", owner,
                    owner8_ok ? 1 : 0, owner8);
+        // **등록 함수가 여기서 가상 호출을 한다.** 0x0038D7F0 이
+        // `[[comp+8]+8]` 을 참조 카운트 객체로 보고 `lock xadd [obj+8]` 로 카운트를
+        // 올린 뒤 `call [*(obj)+0x30]` 을 부른다. 그 vtable 이 모듈 이미지 안이
+        // 아니면 그 자리에서 죽는다 - 4번 다 예외가 난 자리로 가장 유력하다.
+        if (owner8_ok && owner8 != 0) {
+            const std::uintptr_t obj = static_cast<std::uintptr_t>(owner8);
+            std::uint64_t objvt = 0;
+            std::uint32_t rc = 0, flags = 0;
+            const bool vt_ok = reader.read_value(obj, &objvt);
+            const bool rc_ok = reader.read_value(obj + 8, &rc);
+            reader.read_value(obj + 0xC, &flags);
+            const bool in_image =
+                vt_ok && objvt >= base &&
+                objvt < base + static_cast<std::uint64_t>(reader.module_size());
+            log::infof("    참조객체 0x{:X}: vtable 0x{:X} 읽힘={} 이미지안={}"
+                       " 카운트={}({}) flags=0x{:X}",
+                       obj, objvt, vt_ok ? 1 : 0, in_image ? 1 : 0, rc,
+                       rc_ok ? "읽힘" : "못읽음", flags);
+            if (in_image) {
+                // 가상 호출 대상 [vtable+0x30] 도 이미지 안인지 본다.
+                std::uint64_t fn = 0;
+                const bool fn_ok =
+                    reader.read_value(static_cast<std::uintptr_t>(objvt) + 0x30,
+                                      &fn);
+                const bool fn_in =
+                    fn_ok && fn >= base &&
+                    fn < base + static_cast<std::uint64_t>(reader.module_size());
+                log::infof("      vtable+0x30 = 0x{:X} (RVA 0x{:X}) 이미지안={}", fn,
+                           fn_in ? fn - base : 0, fn_in ? 1 : 0);
+            }
+        }
         log::infof("    맵: +0xE8 버킷수 {} · +0xEC {} · +0xF4 원소수 {}",
                    rd32(reader, comp + 0xE8), rd32(reader, comp + 0xEC),
                    rd32(reader, comp + kKnowMapCount));
