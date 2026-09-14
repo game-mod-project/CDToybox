@@ -53,7 +53,12 @@ inline constexpr std::size_t kKnowRecFlag = 0x10;    // u8, 게임도 1 을 쓴�
 inline constexpr std::size_t kInfoLevels = 0x88;        // KnowledgeLevelData 배열
 inline constexpr std::size_t kInfoLevelCount = 0x90;    // i32
 inline constexpr std::size_t kLevelStride = 0xE8;
-inline constexpr std::size_t kLevelName = 0xA8;         // u64 현지화 키로 추정
+// `_knowledgeName` 은 단일 키가 아니라 **{포인터, u64 키, u32 분류}** 구조체다.
+// 필드는 +0xA8 에서 시작하지만 **키는 그 안쪽 +8**, 즉 절대 +0xB0 이다.
+// 처음에 +0xA8(포인터)을 키로 읽어 이름이 하나도 안 풀렸다 - 실측으로 잡았다
+// (2026-09-14, 지식 0번: +0xB0 키 0xB1F27E3200000490 -> "생명", 분류 9).
+inline constexpr std::size_t kLevelName = 0xB0;   // u64 현지화 키
+inline constexpr std::size_t kLevelDesc = 0xD0;   // 설명(같은 모양)
 inline constexpr std::size_t kLevelLearnFrom = 0x78;
 inline constexpr std::size_t kLevelLearnFromCount = 0x80;
 inline constexpr std::size_t kLearnFromStride = 0x58;
