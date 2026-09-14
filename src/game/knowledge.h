@@ -190,6 +190,35 @@ KnowRegister know_register_skill(const mem::Reader& reader, int number, int leve
 // 예외로 잠겼나. 잠기면 화면이 버튼을 안 그린다.
 bool know_register_locked();
 
+// ------------------------------------------ 게임 스레드에 걸어 두기
+//
+// **등록 함수를 렌더 스레드에서 부르면 안 된다.** 게임 함수 안쪽이 TLS
+// (`gs:[0x58] -> [0] -> [+0x250]`)를 따라가는데 렌더 스레드에는 그 블록이 없다.
+// 2026-09-14 에 ImGui 버튼에서 바로 불러 **네 번 다 접근 위반**이 났다 - 인자도
+// 관문도 다 맞았는데도. 이 저장소가 이미 겪고 적어 둔 함정이다
+// (TROUBLESHOOTING 1.8, 그리고 그 재발인 1.13).
+//
+// 그래서 화면은 **요청만 걸고**, 소환 치트가 쓰는 그 자리 - 액터 조회 디투어의
+// `깊이 == 1` + `thread_ready_for_spawn()` - 에서 게임 스레드가 집어 간다.
+struct KnowQueue {
+    bool pending = false;    // 걸린 요청이 있나
+    int number = 0;
+    int level = 0;
+    bool has_result = false; // 집어 가서 끝났나
+    KnowRegister result;
+};
+
+// **원자 하나만 읽는다.** 게임 디투어가 매 호출마다 부르는 자리라, 걸린 것이
+// 없을 때 뮤텍스도 TLS 검사도 건드리지 않게 하려는 것이다.
+bool knowledge_has_pending();
+
+// 화면이 부른다. 이미 걸린 것이 있으면 거짓.
+bool knowledge_queue_register(int number, int level);
+// **게임 스레드에서만** 부른다(TLS 가 선 자리). 걸린 것이 없으면 즉시 반환.
+void knowledge_run_pending();
+KnowQueue knowledge_queue_state();
+void knowledge_queue_clear_result();
+
 // 컴포넌트 `+0x08` = 소유 액터. **등록 함수가 초입에서 이것을 역참조한다**:
 //   0x02AA5421 mov rax,[rcx+8] / 0x02AA5425 lea rdx,[rax+8]
 //   0x02AA542C cmove rdx,0     / 0x02AA5433 mov rdx,[rdx]   <- 0 이면 여기서 죽는다
