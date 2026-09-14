@@ -100,13 +100,10 @@ void dump_slot_info(const mem::Reader& r, const Mgr& cond, std::uintptr_t info,
         log::warnf("  {}: ReserveSlotInfo 가 없다", label);
         return;
     }
-    log::infof("  {} info 0x{:X}: key {} · blocked {} · type {} · usingType {}",
-               label, info, rd32(r, info + kRsKey), rd8(r, info + kRsBlocked),
-               rd8(r, info + kRsType), rd8(r, info + kRsUsingType));
-    log::infof("    flags +0xAC..AF: {} {} {} {}", rd8(r, info + kRsFlags),
-               rd8(r, info + kRsFlags + 1), rd8(r, info + kRsFlags + 2),
-               rd8(r, info + kRsFlags + 3));
-    log::infof("    fill 0x{:X} x{} · target 0x{:X} x{}",
+    log::infof("  {} flags +0xAC..AF: {} {} {} {} · fill 0x{:X} x{} ·"
+               " target 0x{:X} x{}",
+               label, rd8(r, info + kRsFlags), rd8(r, info + kRsFlags + 1),
+               rd8(r, info + kRsFlags + 2), rd8(r, info + kRsFlags + 3),
                rd64(r, info + kRsFillData), rd32(r, info + kRsFillCount),
                rd64(r, info + kRsTargetList), rd32(r, info + kRsTargetCount));
 
@@ -159,10 +156,22 @@ void reserveslot_diagnose(const mem::Reader& reader,
 
     const int elem = well[kElemSlotIndex];
     const int veh = well[4];
-    if (slot.object != 0) {
-        dump_slot_info(reader, cond, info_at(reader, slot, elem), "원소");
-        // 대조군 - 채워져 있을 법한 슬롯 하나를 나란히 본다.
-        dump_slot_info(reader, cond, info_at(reader, slot, veh), "탈것(대조군)");
+    // **전부 훑는다.** 원소와 탈것만 보다가 "깨달음 칸은?" 을 못 답했다 - 어느
+    // 슬롯이 무엇인지 이름표가 없으므로, 28개를 다 찍고 눈으로 고르는 편이
+    // 왕복 한 번보다 싸다. 후보 목록이 있는 슬롯만 자세히 판다.
+    for (int k = 0; slot.object != 0 && k < slot.count; ++k) {
+        const std::uintptr_t info = info_at(reader, slot, k);
+        if (info == 0) continue;
+        const int n = static_cast<int>(rd32(reader, info + kRsNameHashCount));
+        const char* tag = k == elem   ? " <<< 원소"
+                          : k == veh  ? " (탈것)"
+                                      : "";
+        log::infof("  슬롯정보[{}]{} key {} · blocked {} · type {} · usingType {}"
+                   " · 후보 {}개",
+                   k, tag, rd32(reader, info + kRsKey),
+                   rd8(reader, info + kRsBlocked), rd8(reader, info + kRsType),
+                   rd8(reader, info + kRsUsingType), n);
+        if (n > 0) dump_slot_info(reader, cond, info, "  ^");
     }
 
     // ---- 런타임 컨테이너
