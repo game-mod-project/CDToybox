@@ -366,6 +366,20 @@ KnowScan know_scan(const mem::Rtti* rtti, const mem::Reader& reader, int realm) 
                    " {}개(보여 주는 것 {}개)",
                    static_cast<int>(s.needs.size()), with_skill, fresh,
                    s.fresh_total, static_cast<int>(s.fresh.size()));
+        // **표의 내용을 로그에도 적는다.** 예전에는 사용자가 화면을 읽어 알려
+        // 주셔야 했다 - 목록·이름·스킬키를 그대로 찍으면 그럴 일이 없다.
+        for (const auto& e : s.needs) {
+            log::infof("  [선행] {}번 \"{}\" 지금 {} / 필요 {} · {}곳{} · 스킬 {}",
+                       e.number, e.name.empty() ? "?" : e.name, e.have_level,
+                       e.need_level, e.wanted_by, e.any_of ? " · 중 하나" : "",
+                       (e.skill_key == 0 || e.skill_key == kNoApplySkill)
+                           ? std::string("없음")
+                           : std::to_string(e.skill_key));
+        }
+        for (const auto& e : s.fresh) {
+            log::infof("  [미습득] {}번 \"{}\" 스킬 {}", e.number,
+                       e.name.empty() ? "?" : e.name, e.skill_key);
+        }
     }
     if (has_loc) {
         for (auto& e : s.needs) {
