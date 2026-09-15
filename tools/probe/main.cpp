@@ -1391,6 +1391,81 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // 내가 가진 동반자 명부. 전부 읽기다.
 //
 // 용병단 컴포넌트의 레코드 배열을 걷는다(game/clan.h).
+
+// characterinfo 레코드 원시 덤프·비교 - 소환 가능 필드 탐색용(2026-09-15).
+static bool char_record_addr(const mem::Rtti& rt, const mem::Reader& reader,
+                             std::uint32_t row, std::uintptr_t* out) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_static_manager(reader, rt,
+                                   ".?AVCharacterInfoManager@pa@@", &mgr))
+        return false;
+    std::uint32_t count = 0;
+    std::uintptr_t records = 0;
+    if (!game::roster_header(reader, mgr, &count, &records)) return false;
+    if (row >= count) return false;
+    std::uint64_t rec = 0;
+    if (!reader.read_value(records + static_cast<std::uintptr_t>(row) * 8, &rec) ||
+        rec == 0)
+        return false;
+    *out = static_cast<std::uintptr_t>(rec);
+    return true;
+}
+
+void cmd_recdump(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc < 3) { std::printf("recdump <행> [바이트=0x200]\n"); return; }
+    const std::uint32_t row =
+        static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 0));
+    const std::size_t n =
+        (argc > 3) ? static_cast<std::size_t>(std::strtoull(argv[3], nullptr, 0))
+                   : 0x200;
+    std::uintptr_t rec = 0;
+    if (!char_record_addr(rt, reader, row, &rec)) {
+        std::printf("행 %u 레코드 못 찾음\n", row); return;
+    }
+    std::printf("행 %u 레코드 0x%llX (%zu바이트):\n", row,
+                static_cast<unsigned long long>(rec), n);
+    std::vector<std::uint8_t> b(n, 0);
+    if (!reader.read(rec, b.data(), n)) { std::printf("읽기 실패\n"); return; }
+    for (std::size_t o = 0; o < n; o += 16) {
+        std::printf("  +0x%03zX:", o);
+        for (int j = 0; j < 16 && o + j < n; ++j)
+            std::printf(" %02X", b[o + static_cast<std::size_t>(j)]);
+        std::printf("\n");
+    }
+}
+
+void cmd_recdiff(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc < 4) { std::printf("recdiff <행1> <행2> [바이트=0x200]\n"); return; }
+    const std::uint32_t r1 =
+        static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 0));
+    const std::uint32_t r2 =
+        static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+    const std::size_t n =
+        (argc > 4) ? static_cast<std::size_t>(std::strtoull(argv[4], nullptr, 0))
+                   : 0x200;
+    std::uintptr_t a1 = 0, a2 = 0;
+    if (!char_record_addr(rt, reader, r1, &a1) ||
+        !char_record_addr(rt, reader, r2, &a2)) {
+        std::printf("레코드 못 찾음\n"); return;
+    }
+    std::vector<std::uint8_t> b1(n, 0), b2(n, 0);
+    reader.read(a1, b1.data(), n);
+    reader.read(a2, b2.data(), n);
+    std::printf("행 %u(0x%llX) vs 행 %u(0x%llX) - 다른 오프셋:\n", r1,
+                static_cast<unsigned long long>(a1), r2,
+                static_cast<unsigned long long>(a2));
+    int diffs = 0;
+    for (std::size_t o = 0; o < n; ++o) {
+        if (b1[o] != b2[o]) {
+            std::printf("  +0x%03zX: %02X vs %02X\n", o, b1[o], b2[o]);
+            ++diffs;
+        }
+    }
+    std::printf("총 %d 바이트 다름\n", diffs);
+}
+
 void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
     if (!game::discover_roster(rt, reader)) {
         std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
@@ -3831,6 +3906,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "clan") { cmd_clan(rt, reader, argc, argv); return 0; }
+    if (cmd == "recdump") { cmd_recdump(rt, reader, argc, argv); return 0; }
+    if (cmd == "recdiff") { cmd_recdiff(rt, reader, argc, argv); return 0; }
     if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
     if (cmd == "gate") { cmd_gate(rt, reader); return 0; }
     if (cmd == "playable") { cmd_playable(rt, reader); return 0; }

@@ -545,6 +545,17 @@ const char* const kMessageClasses[] = {
     "TrocTrCompleteCalculateSummonAfterRegistReq", // 2962 u64 번호 + float3
     "TrocTrFireMercenaryReq",                      // 2465 u64 번호
     "TrocTrDisbandMercenaryReq",                   // 2248 u32
+    // 탑승 트리거(스폰된 드래곤을 실제로 태우기 - 2026-09-15)
+    "TrocTrReserveSummonAndRideAck",               // 소환+탑승 원자흐름(서버->클라 핸들러)
+    "TrocTrRideOnVehicleReq",                      // 탈것 직접 탑승
+    "TrocTrNotifySummonCharacterAck",              // 소환 캐릭터 통지
+    "TrocTrAttachLinkVehicleReq",                  // 와이어/링크 탈것
+    "TrocTrChangeVehiclePhysicsStateReq",          // 탈것 물리상태(정지 해제)
+    "TrocTrUpdateSeatDataReq",                     // 좌석 데이터
+    "TrocTrCallVehicleMercenaryAck",               // 탈것 용병 호출
+    // 조종 캐릭터 전환(휠 선택 = 드래곤 조종 시도 - 2026-09-15)
+    "TrocTrChangePlayerbleCharacterReq",           // 조종 캐릭터 전환
+    "TrocTrChangeFocusActorReq",                   // 포커스 액터 전환
 };
 constexpr int kMessageMax = 24;
 MessageDesc g_msgs[kMessageMax];
@@ -590,6 +601,8 @@ bool companion_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader
         MessageDesc m;
         if (!resolve_message(rtti, reader, cls, &m)) continue;
         g_msgs[g_msg_count++] = m;
+        log::infof("  메시지 {} ID {} 역직렬화 RVA 0x{:X}", cls, m.id,
+                   m.deser - reader.module_base());
     }
     log::infof("실험용 메시지 {}개 해석됨 - 명령 파일 `msg <16진 와이어>` 로 구동",
                g_msg_count);
