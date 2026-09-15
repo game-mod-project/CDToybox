@@ -139,7 +139,7 @@ void* __fastcall det_gate(void* a1, void* out, void* a3, std::uint64_t a4) {
     std::uint32_t result = 0xFFFFFFFFu;
     if (out != nullptr) std::memcpy(&result, out, sizeof(result));
     if (g_gate_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("소환게이트: 키=0x{:X} 호출자=+0x{:X} 결과={}", key,
+        log::infof("소환게이트: 키=0x{:X} 호출자=+0x{:X} 오류코드={}", key,
                    caller_rva(ret), result);
     }
     return r;
@@ -153,8 +153,12 @@ void* __fastcall det_spawn(void* rcx, void* out, std::uint32_t r8, void* r9,
     if (out != nullptr) std::memcpy(&result, out, sizeof(result));
     const long seq = g_spawn_seq.fetch_add(1, std::memory_order_relaxed);
     if (g_spawn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("스폰0x2A22DE0[{}]: 호출자=+0x{:X} r8={} 결과={}", seq,
-                   caller_rva(ret), r8, result);
+        // **게이트의 "결과" 와 뜻이 다르다.** 게이트는 오류 코드(0 = 오류 없음)
+        // 이고, 여기 out 자리는 만들어진 객체다 - 큰 값이면 만든 것, 0 이면 못
+        // 만든 것이다. 같은 이름으로 찍다가 거꾸로 읽었다(2026-09-15).
+        log::infof("스폰0x2A22DE0[{}]: 호출자=+0x{:X} r8={} 결과물=0x{:X} ({})",
+                   seq, caller_rva(ret), r8, result,
+                   result != 0 ? "만듦" : "없음");
     }
     return r;
 }
