@@ -119,6 +119,8 @@ Config load(const std::wstring& path) {
             c.socket_cap = (v < 0 || v > 5) ? 0 : v;
         } else if (key == "socket_cap_parts") {
             c.socket_cap_parts = parse_socket_cap_parts(val);
+        } else if (key == "vehicle_wheel_extend") {
+            c.vehicle_wheel_extend = (to_int(val, 0) != 0);
         } else if (key == "knowledge_keep") {
             c.knowledge_keep = parse_knowledge_keep(val);
         } else if (key == "equip_character_row") {
@@ -141,6 +143,10 @@ bool save(const std::wstring& path, const Config& c) {
     out << "show_diagnostics = " << (c.show_diagnostics ? 1 : 0) << "\n";
     out << "; (구) 전 부위 일괄. 부위 목록이 비어 있을 때만 쓴다\n";
     out << "socket_cap = " << c.socket_cap << "\n";
+    out << "; 메인 탈것 휠에 드래곤·ATAG 카테고리를 얹는다(1 = 켬).\n";
+    out << "; 게임이 휠을 만들기 전에 걸어야 하므로 **시작할 때** 걸린다 -\n";
+    out << "; 다 만들어진 뒤에 늘리면 특수 탑승물 호출이 먹통이 된다.\n";
+    out << "vehicle_wheel_extend = " << (c.vehicle_wheel_extend ? 1 : 0) << "\n";
     out << "; 부위별 소켓 칸 수. `분류:장비타입=칸수` 를 쉼표로 잇는다.\n";
     out << "; 부위는 아이템표의 (+0xA3, +0x42) 쌍이다 - 갑옷 3:5, 망토 3:75,\n";
     out << "; 투구 24:4, 장갑 22:6, 신발 9:7, 귀걸이 15:8, 목걸이 34:9, 반지 49:10.\n";

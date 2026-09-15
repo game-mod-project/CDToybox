@@ -7,6 +7,7 @@
 //
 // (한때 여기 있던 `wheel_merge` 시험들은 그 기능과 함께 걷어냈다 - 메인 휠에
 // 카테고리를 얹는 것은 게임 검증에서 폐기됐다. reserveslot.h 의 주석 참조.)
+#include "game/clan.h"
 #include "game/reserveslot.h"
 #include "harness.h"
 
@@ -87,6 +88,18 @@ TEST(vehicle_place_gated_picks_ground_checked) {
     CHECK(!vehicle_place_gated(-1.0f));   // 음수는 안 건드린다
     // 우리가 쓴 뒤에는 다시 손댈 것이 없어야 한다(백업이 우리 값을 덮지 않게).
     CHECK(!vehicle_place_gated(0.0f));
+}
+
+// 휠 색인 옮기기의 여유 판정. 실측(2026-09-15): 타입 5 벡터 13/18(여유 5),
+// 타입 9 벡터 7/8(여유 1), 타입 2 벡터 2/2(여유 0).
+TEST(reindex_has_room_needs_spare_capacity) {
+    using cdtb::game::reindex_has_room;
+    CHECK(reindex_has_room(13, 18));   // 특수 탑승물 - 들어간다
+    CHECK(reindex_has_room(7, 8));
+    CHECK(!reindex_has_room(2, 2));    // 꽉 참 - 재할당이 필요하므로 안 건드린다
+    CHECK(!reindex_has_room(0, 0));
+    // 개수가 용량보다 큰 말도 안 되는 값이면 손대지 않는다.
+    CHECK(!reindex_has_room(9, 8));
 }
 
 }  // namespace

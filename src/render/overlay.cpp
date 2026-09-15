@@ -567,6 +567,14 @@ void show_window(cdtb::render::Win w) {
     shown(w) = true;
 }
 
+bool vehicle_wheel_setting() { return g_cfg.vehicle_wheel_extend; }
+
+bool set_vehicle_wheel_setting(bool on) {
+    g_cfg.vehicle_wheel_extend = on;
+    if (g_ini_path.empty()) return false;
+    return cdtb::config::save(g_ini_path, g_cfg);
+}
+
 std::vector<Config::SocketCapPart> socket_cap_setting() {
     return g_cfg.socket_cap_parts;
 }
@@ -731,6 +739,20 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 표가 올라온 그 순간 한 번만 본다. 설정이 꺼져 있어도 그때
         // 끝낸다 - 안 그러면 나중에 화면에서 체크박스를 켜는 순간
         // 여기서도 걸려, "다음 실행부터" 라는 문구와 어긋난다.
+        // 탈것 휠 목록도 매 실행 다시 걸어야 한다(예약 슬롯 표는 데이터에서
+        // 새로 읽힌다). **반드시 게임이 휠을 만들기 전이어야 한다** - 다 만들어진
+        // 뒤에 늘리면 같은 휠의 특수 탑승물 호출이 먹통이 된다(실측 2026-09-15,
+        // TROUBLESHOOTING 3.12). 그래서 화면에서 즉시 걸지 않고 설정에 적어
+        // **여기서**, 표가 읽히는 가장 이른 프레임에 한 번만 건다. 이 블록은
+        // 타이틀 화면부터 돌므로 월드 진입(= 휠이 만들어지는 시점)보다 앞선다.
+        static bool s_wheel_done = false;
+        if (!s_wheel_done && g_cfg.vehicle_wheel_extend) {
+            if (cdtb::game::wheel_state(reader).ready) {
+                s_wheel_done = true;
+                cdtb::game::wheel_unlock(reader, true);
+            }
+        }
+
         static bool s_cap_done = false;
         if (!s_cap_done && cdtb::game::items_ready()) {
             s_cap_done = true;

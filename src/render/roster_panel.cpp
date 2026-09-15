@@ -666,12 +666,29 @@ void draw_species_popup() {
             game::apply_species(g_near_reader, g_species_no,
                                 static_cast<std::uint16_t>(g_species_pick),
                                 &msg);
+        // 그리는 루프 밖에서 읽는다
+        if (r == game::SpeciesApply::Ok) {
+            g_clan_needs_refresh = true;
+            // **휠은 종류별 색인으로 목록을 만든다.** 종만 바꾸면 그 색인이
+            // 안 따라와 **휠에서만** 못 부른다 - 목록은 번호로 가니 멀쩡하다
+            // (사용자 실측 2026-09-15). 세이브-로드가 재구축해 주지만 그때까지
+            // 기다릴 이유가 없다. 여기서 제자리로 옮긴다(clan.h 휠 색인 고치기).
+            const mem::Rtti* rt = game::clan_rtti();
+            if (rt != nullptr) {
+                const game::ReindexResult ix =
+                    game::clan_reindex(g_near_reader, *rt, false);
+                if (ix.moved > 0) {
+                    msg += " · 휠 색인 " + std::to_string(ix.moved) + "건 정리";
+                } else if (ix.no_room > 0) {
+                    msg += " · 휠 색인은 자리가 없어 못 옮겼습니다(세이브·로드"
+                           " 하면 정리됩니다)";
+                }
+            }
+        }
         notice_set(&g_species_notice,
                    r == game::SpeciesApply::Ok ? NoticeLevel::Ok
                                                : NoticeLevel::Bad,
                    "{}", msg);
-        // 그리는 루프 밖에서 읽는다
-        if (r == game::SpeciesApply::Ok) g_clan_needs_refresh = true;
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -709,7 +726,38 @@ void draw_my_companions_tab() {
     g_clan_needs_refresh = false;
     if (ImGui::SmallButton("새로고침")) refresh = true;
     ImGui::SameLine();
+    // 예전에 바꿔 둔 개체용. 지금은 바꾸기가 끝나면 저절로 고쳐지지만, 이 판
+    // 이전에 바꾼 것들은 옛 타입 벡터에 그대로 남아 있다.
+    if (ImGui::SmallButton("휠 색인 고치기")) {
+        const mem::Rtti* rt = game::clan_rtti();
+        if (rt == nullptr) {
+            notice_set(&g_species_notice, NoticeLevel::Bad,
+                       "RTTI 준비 전입니다");
+        } else {
+            const game::ReindexResult ix =
+                game::clan_reindex(g_near_reader, *rt, false);
+            if (ix.realms == 0) {
+                notice_set(&g_species_notice, NoticeLevel::Bad, "{}", ix.note);
+            } else if (ix.wrong == 0) {
+                notice_set(&g_species_notice, NoticeLevel::Ok,
+                           "어긋난 것이 없습니다");
+            } else {
+                notice_set(&g_species_notice, NoticeLevel::Ok,
+                           "어긋남 {}건 중 {}건 옮겼습니다 (자리없음 {})",
+                           ix.wrong, ix.moved, ix.no_room);
+            }
+            refresh = true;
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "휠은 종류별 색인으로 목록을 만듭니다. 종만 바꾸면 그 색인이\n"
+            "안 따라와 휠에서만 못 부릅니다(목록은 번호로 가니 멀쩡).\n"
+            "여기서 제자리로 옮깁니다 - 세이브·로드가 필요 없습니다.");
+    }
+    ImGui::SameLine();
     ImGui::TextDisabled("자동 2초");
+    notice_draw(g_species_notice);
     if (now - g_clan_last_refresh > 2.0) refresh = true;
     if (refresh) {
         log::Slow slow_r("명부 갱신", 4.0);

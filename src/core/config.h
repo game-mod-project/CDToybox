@@ -48,6 +48,16 @@ struct Config {
     // 클리프·웅카·데미안을 번갈아 조종하므로 마지막 선택을 세션 너머로 남긴다.
     // ini 표기: `equip_character_row = 5` (클리프 0, 데미안 3, 웅카 5)
     int equip_character_row = -1;
+
+    // 메인 탈것 휠에 드래곤·ATAG 카테고리를 얹는다.
+    //
+    // **반드시 게임이 휠을 만들기 전에 걸어야 한다.** 다 만들어진 뒤에 목록을
+    // 늘리면 게임 쪽 휠이 어긋나 같은 휠의 특수 탑승물 호출이 먹통이 된다
+    // (실측 2026-09-15, TROUBLESHOOTING 3.12). 그래서 화면에서 즉시 걸지 않고
+    // 이 설정에 적어 **다음 실행의 시작 지점**에서 건다 - 소켓 상한과 같은 방식이다.
+    // 예약 슬롯 표도 매 실행 데이터에서 새로 읽히므로 세션마다 다시 걸려야 한다.
+    // ini 표기: `vehicle_wheel_extend = 1`
+    bool vehicle_wheel_extend = false;
 };
 
 namespace config {

@@ -17,6 +17,7 @@
 #include "render/notice.h"
 #include "mem/reader.h"
 #include "render/layout.h"
+#include "render/overlay.h"
 
 namespace cdtb::render {
 
@@ -600,21 +601,22 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
     line("드래곤", w.dragon);
     line("ATAG/기계", w.mech);
 
-    // **한 방향이다.** 끄는 길을 두지 않는다 - 목록을 줄이면 게임 쪽 휠이 옛
-    // 목록으로 만든 상태와 어긋나 특수 탑승물이 먹통이 된다(실측 2026-09-15).
-    // 정적 표라 세이브에 안 남으므로 **재시작이 곧 되돌리기**다.
-    if (w.on) {
-        ImGui::TextColored(col::kOk, "메인 휠에 얹었습니다 (허용 %d개)",
-                           w.main_slot.count);
-        ImGui::TextDisabled(
-            "되돌리려면 게임을 다시 시작하십시오 - 체크를 푸는 것으로는 안"
-            " 돌아옵니다(실측).");
-    } else if (confirm_small_button("메인 휠에 드래곤·ATAG 얹기")) {
-        if (game::wheel_unlock(reader, true)) {
-            notice_set(&s_note, NoticeLevel::Ok, "허용 {}개로 늘렸습니다",
-                       w.want_count);
+    // **즉시 걸지 않는다.** 게임이 휠을 다 만든 뒤에 목록을 늘리면 같은 휠의
+    // 특수 탑승물 호출이 먹통이 된다(실측 2026-09-15). 그래서 설정에 적어
+    // **다음 실행의 시작 지점**에서 건다 - 그때는 게임이 아직 휠을 안 만들었다.
+    // 소켓 상한이 매 실행 다시 걸리는 것과 같은 방식이다.
+    bool want = overlay::vehicle_wheel_setting();
+    if (ImGui::Checkbox("메인 휠에 드래곤·ATAG 얹기 (다음 실행부터)", &want)) {
+        if (overlay::set_vehicle_wheel_setting(want)) {
+            if (want) {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "저장했습니다 - 게임을 다시 켜면 걸립니다");
+            } else {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "껐습니다 - 게임을 다시 켜면 원래대로입니다");
+            }
         } else {
-            notice_set(&s_note, NoticeLevel::Bad, "실패 - 목록을 안 건드렸습니다");
+            notice_set(&s_note, NoticeLevel::Bad, "설정 파일을 못 썼습니다");
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -622,14 +624,19 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
             "메인 탈것 휠이 허용하는 카테고리 목록에\n"
             "드래곤 슬롯·메카닉 슬롯이 쓰는 값을 그대로 더합니다.\n"
             "번호를 박지 않고 그 슬롯들에서 베껴 옵니다.\n\n"
-            "7시 전용 드래곤 슬롯은 무반응입니다 - 이것을 눌러야\n"
+            "7시 전용 드래곤 슬롯은 무반응입니다 - 이것을 켜야\n"
             "드래곤이 6시 메인 휠에서 소환 경로까지 갑니다.\n\n"
-            "대가: 이 판에서 같은 휠의 특수 탑승물 호출이 먹통이 됩니다.\n"
-            "체크를 풀어도 안 돌아옵니다 - 게임을 다시 켜야 합니다(실측).");
+            "게임이 휠을 만들기 전에 걸어야 하므로 지금 바로가 아니라\n"
+            "다음 실행의 시작 지점에서 겁니다. 그래야 같은 휠의\n"
+            "특수 탑승물이 멀쩡합니다.");
     }
-    ImGui::TextColored(col::kWarn,
-                       "누르면 이 판에서 특수 탑승물 호출이 먹통이 됩니다."
-                       " 되돌리기는 게임 재시작뿐입니다.");
+    if (w.on) {
+        ImGui::TextColored(col::kOk, "이번 실행에 걸려 있습니다 (허용 %d개)",
+                           w.main_slot.count);
+    } else if (want) {
+        ImGui::TextColored(col::kWarn,
+                           "다음 실행부터 걸립니다 - 지금은 안 걸려 있습니다.");
+    }
     notice_draw(s_note);
 
     // 쿨다운. 휠에 얹고 나니 드래곤이 "쿨타임 중" 으로 막혔다(2026-09-15).

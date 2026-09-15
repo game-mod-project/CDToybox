@@ -1551,6 +1551,107 @@ void cmd_vehdiff(mem::Rtti& rt, const mem::Reader& reader, int argc,
     }
 }
 
+// 종류별 색인에서 자리가 어긋난 개체를 제자리로 옮긴다.
+//
+//     clanfix [dry]
+//
+// 종 교체분이 옛 타입 벡터에 남아 휠에서만 안 불리는 것을 고친다.
+void cmd_clanfix(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
+    game::discover_roster(rt, reader);
+    const bool dry = (argc > 2 && std::strcmp(argv[2], "dry") == 0);
+    const game::ReindexResult r = game::clan_reindex(reader, rt, dry);
+    std::printf("%s realm %d · 어긋남 %d · 옮김 %d · 자리없음 %d %s\n",
+                dry ? "[읽기만]" : "[적용]", r.realms, r.wrong, r.moved,
+                r.no_room, r.note);
+}
+
+// 용병단의 **종류별 색인**(휠이 목록을 만들 때 쓰는 해시)을 통째로 찍는다.
+//
+//     clanindex
+//
+// 종 교체는 명부 레코드의 종(`+0x20`)만 바꾸고 이 색인은 안 건드린다 - 버킷 키가
+// **넣을 때의 종**에서 파생되기 때문이다. 그래서 바꾼 개체가 옛 종류 버킷에 남고,
+// 번호로 가는 목록은 멀쩡한데 **휠만 못 찾는다**(사용자 실측 2026-09-15).
+// 제자리로 옮기려면 먼저 이 구조를 눈으로 봐야 한다.
+//
+// 배치(실측 2026-09-12, `2026-09-12-summon-wheel-research.md` 실측 3):
+//   M = clan + 0x18
+//   M+0x30 버킷 수 · M+0x40 버킷표(버킷 0x100 간격) · M+0x48 슬롯 배열
+//   버킷: [0] u32 개수, +8 부터 {u32 키, u32 슬롯색인} 쌍
+//   슬롯 원소: {해시@+0, 키(u32)@+4, 벡터헤더@+8}
+void cmd_clanindex(mem::Rtti& rt, const mem::Reader& reader) {
+    game::discover_roster(rt, reader);
+    std::uintptr_t clan = 0;
+    if (!game::find_clan_component(reader, rt, &clan)) {
+        std::printf("서버 용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    auto r64 = [&](std::uintptr_t a) {
+        std::uint64_t v = 0;
+        return reader.read_value(a, &v) ? v : 0ull;
+    };
+    auto r32 = [&](std::uintptr_t a) {
+        std::uint32_t v = 0;
+        return reader.read_value(a, &v) ? v : 0u;
+    };
+    // 번호·종을 곁들이려고 명부도 읽는다.
+    std::vector<game::ClanEntry> list;
+    game::read_clan_roster(reader, clan, &list);
+    auto describe = [&](std::uintptr_t rec) {
+        for (const auto& e : list) {
+            if (e.record == rec) {
+                static char buf[160];
+                std::snprintf(buf, sizeof buf, "번호 %llu 종행 %u 타입행 %u %s",
+                              (unsigned long long)e.merc_no, e.row, e.merc_row,
+                              e.display().c_str());
+                return (const char*)buf;
+            }
+        }
+        return "(명부에 없음)";
+    };
+
+    const std::uintptr_t m = clan + 0x18;
+    const std::uint32_t nb = r32(m + 0x30);
+    const std::uintptr_t table = static_cast<std::uintptr_t>(r64(m + 0x40));
+    const std::uintptr_t slots = static_cast<std::uintptr_t>(r64(m + 0x48));
+    std::printf("clan 0x%llX · M 0x%llX · 버킷수 %u · 표 0x%llX · 슬롯 0x%llX\n",
+                (unsigned long long)clan, (unsigned long long)m, nb,
+                (unsigned long long)table, (unsigned long long)slots);
+    if (nb == 0 || nb > 4096 || table < 0x10000 || slots < 0x10000) {
+        std::printf("배치가 말이 안 됩니다 - 안 따라갑니다.\n");
+        return;
+    }
+    for (std::uint32_t b = 0; b < nb; ++b) {
+        const std::uintptr_t bucket = table + static_cast<std::uintptr_t>(b) * 0x100;
+        const std::uint32_t cnt = r32(bucket);
+        if (cnt == 0 || cnt > 31) continue;
+        for (std::uint32_t i = 0; i < cnt; ++i) {
+            const std::uint32_t key = r32(bucket + 8 + i * 8);
+            const std::uint32_t idx = r32(bucket + 0xC + i * 8);
+            const std::uintptr_t elem = static_cast<std::uintptr_t>(
+                r64(slots + static_cast<std::uintptr_t>(idx) * 8));
+            if (elem < 0x10000) continue;
+            const std::uintptr_t vec = elem + 8;
+            const std::uintptr_t begin = static_cast<std::uintptr_t>(r64(vec));
+            // 벡터 머리는 {begin, u32 개수, u32 용량} 이다 - qword 로 읽으면 둘이
+            // 한 덩어리로 붙어 말이 안 되는 수가 나온다(처음에 그렇게 읽었다).
+            const std::uint32_t vcnt = r32(vec + 8);
+            const std::uint32_t vcap = r32(vec + 0xC);
+            std::printf("  타입키 %u (버킷 %u·슬롯 %u) 벡터 0x%llX 개수 %u 용량 %u"
+                        " 여유 %d\n",
+                        key, b, idx, (unsigned long long)begin, vcnt, vcap,
+                        static_cast<int>(vcap) - static_cast<int>(vcnt));
+            if (begin < 0x10000 || vcnt > 256) continue;
+            for (std::uint32_t k = 0; k < vcnt; ++k) {
+                const std::uintptr_t rec = static_cast<std::uintptr_t>(
+                    r64(begin + static_cast<std::uintptr_t>(k) * 8));
+                std::printf("      [%u] 0x%llX  %s\n", k,
+                            (unsigned long long)rec, describe(rec));
+            }
+        }
+    }
+}
+
 // 명부의 소환 판정(`[월드]` 표식)이 **진짜인지** 본다.
 //
 //     clanalive
@@ -4251,6 +4352,8 @@ int main(int argc, char** argv) {
     if (cmd == "wheel") { cmd_wheel(rt, reader); return 0; }
     if (cmd == "clandiff") { cmd_clandiff(rt, reader, argc, argv); return 0; }
     if (cmd == "clanalive") { cmd_clanalive(rt, reader); return 0; }
+    if (cmd == "clanindex") { cmd_clanindex(rt, reader); return 0; }
+    if (cmd == "clanfix") { cmd_clanfix(rt, reader, argc, argv); return 0; }
     if (cmd == "vehdiff") { cmd_vehdiff(rt, reader, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
