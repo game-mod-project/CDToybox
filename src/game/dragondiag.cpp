@@ -222,24 +222,28 @@ bool dragondiag_install(const mem::Reader& reader) {
         g_spawn_target = nullptr;
     }
 
-    g_notify_target = reinterpret_cast<void*>(g_base + kNotifyRva);
-    const bool notify_ok = mem::hook_install(
-        g_notify_target, &det_notify, reinterpret_cast<void**>(&g_orig_notify));
-    if (!notify_ok) {
-        log::errorf("알림 후킹 실패 (RVA 0x{:X})", kNotifyRva);
-        g_notify_target = nullptr;
-    }
+    // **알림(0xFB7F060) 훅은 뗐다 (2026-09-15).** 게임이 팅겼고 죽은 자리가
+    // 그 함수 안이었다(`RIP 모듈+0x0FB7F0DE`, RCX·RDI 가 32비트로 잘린 값).
+    //
+    // 원인은 주석에 이미 적혀 있었다 - 이 함수는 진입부가 `rdi = r8` · `esi =
+    // r9w` · **`r12d = dx`** 로 받는다. `r12` 는 인자 레지스터가 아니다. 평범한
+    // C++ 디투어는 원본을 부르기 **전에** 자기 용도로 r12 를 쓸 수 있으므로
+    // "레지스터 넷만 흘려보내면 된다" 는 판단이 틀렸다.
+    //
+    // 게다가 이 훅은 넣은 뒤로 **쓸 만한 줄을 하나도 안 남겼다** - 거부될 때
+    // msg 0x3F5 가 단 한 건도 안 왔다. 얻는 것 없이 위험만 있었다.
+    // 다시 걸려면 인자를 흘려보내지 않는 naked 썽크가 필요하다.
+    const bool notify_ok = false;
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v5 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 게이트 0x{:X} {} ·"
-        " 스폰 0x{:X} {} · 알림 0x{:X} {} (드래곤을 눌렀을 때 '휠함수 진입' ·"
-        " '휠소환 진입' 중 어디까지 나오는지가 갈림길이다)",
+        "소환 진단 v6 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 게이트 0x{:X} {} ·"
+        " 스폰 0x{:X} {} (알림 훅은 뗐다 - 게임을 팅기게 했다)",
         kWheelFnRva, wheelfn_ok ? "후킹" : "실패", kCallFnRva,
         callfn_ok ? "후킹" : "실패", kGateRva, gate_ok ? "후킹" : "실패",
-        kSpawnRva, spawn_ok ? "후킹" : "실패", kNotifyRva,
-        notify_ok ? "후킹" : "실패");
-    return gate_ok || spawn_ok || notify_ok || callfn_ok || wheelfn_ok;
+        kSpawnRva, spawn_ok ? "후킹" : "실패");
+    (void)notify_ok;
+    return gate_ok || spawn_ok || callfn_ok || wheelfn_ok;
 }
 
 }  // namespace cdtb::game
