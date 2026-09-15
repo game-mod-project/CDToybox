@@ -31,17 +31,25 @@ constexpr std::uint64_t kSpawnRva = 0x2A22DE0;  // 실제 스폰 프리미티브
 // 안 들어왔다.** 그 함수는 목록에서 부를 때 같은 다른 경로였다. 실제 휠 경로는
 // 스폰 로그가 찍어 준 호출자 `+0x2B78493` 쪽이고, 거기서 뒤로 훑어 함수 시작을
 // 찾았다 - `0x2B78330`(프롤로그 `48 89 5c 24 08 48 89 74 24 18 55 57 41 54 41 56`).
-// 한 겹 위는 앞선 세션이 기록해 둔 `0x2941350` 이다.
+// 한 겹 위는 앞선 세션이 기록해 둔 `0x29411E0` 이다.
 //
 // 실측된 갈림: **A.T.A.G. 클릭은 스폰 프리미티브까지 가고(r8=1000019),
 // 드래곤 클릭은 아무 줄도 안 남긴다.** 이 둘 중 어디까지 오는지가 다음을 정한다.
+// 훅 자리는 **PE 예외 디렉터리(.pdata)로 확정한다.** `tools/rtti/funcstart.py`.
+//
+// 처음엔 "뒤로 훑어 `CC CC CC CC` 패딩 다음" 을 함수 시작으로 보는 어림짐작을
+// 썼다가 셋 중 둘을 틀렸다(2026-09-15):
+//   +0x2AC9E58 -> 짐작 0x2AC87C0 · 실제 **0x2AC9C10** (0x1450 빗나감)
+//   0x2941350  -> 함수 시작이 아니라 **0x29411E0 안쪽(+0x170)**
+// 함수 중간에 훅을 걸면 명령을 덮어써 게임을 팅기게 할 수 있다. 짐작으로 걸린
+// 훅은 진입이 0건이었고, 그 0 건을 "드래곤이 안 온다" 로 읽을 뻔했다.
 constexpr std::uint64_t kCallFnRva = 0x2B78330;    // 휠 소환 루틴
-constexpr std::uint64_t kWheelFnRva = 0x2941350;   // 그 한 겹 위
+constexpr std::uint64_t kWheelFnRva = 0x29411E0;   // 그 한 겹 위
 // 소환 경로가 **둘**이다. 스폰 로그의 호출자가 두 가지로 찍힌다 -
-// `+0x2B78493`(함수 0x2B78330) 과 `+0x2AC9E58`(함수 0x2AC87C0). 하나만 걸어
+// `+0x2B78493`(함수 0x2B78330) 과 `+0x2AC9E58`(함수 0x2AC9C10). 하나만 걸어
 // 두면 드래곤이 다른 쪽으로 갔을 때 또 "아무것도 없음" 이 나와 무의미해진다.
 // 프롤로그 `48 8b c4 48 89 58 18 48 89 50 10 55 56 57 41 54` - 표준이다.
-constexpr std::uint64_t kAltFnRva = 0x2AC87C0;     // 또 하나의 소환 경로
+constexpr std::uint64_t kAltFnRva = 0x2AC9C10;     // 또 하나의 소환 경로
 // **거부 코드를 직접 찍는다(2026-09-15).** 드래곤이 "호출할 수 없는 장소입니다" 로
 // 막히는데 후보가 여럿이다(`eErrNoCallVehicleInvalidPosition` · `...InvalidAir` ·
 // `...MercenaryIndoor` · `...MercenaryRegion` · `...BlockedSpawnPositionByObstacle` ·
@@ -147,7 +155,7 @@ void* __fastcall det_callfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
 void* __fastcall det_wheelfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
     const void* ret = _ReturnAddress();
     if (g_wheelfn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("휠함수 진입(0x2941350): 호출자=+0x{:X} rcx=0x{:X} rdx=0x{:X}"
+        log::infof("휠함수 진입(0x29411E0): 호출자=+0x{:X} rcx=0x{:X} rdx=0x{:X}"
                    " r8=0x{:X} r9=0x{:X}",
                    caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
                    reinterpret_cast<std::uintptr_t>(a2),
@@ -156,11 +164,11 @@ void* __fastcall det_wheelfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
     return g_orig_wheelfn(a1, a2, a3, a4);
 }
 
-// 또 하나의 소환 경로(0x2AC87C0). 스폰 호출자가 `+0x2AC9E58` 로 찍히는 쪽이다.
+// 또 하나의 소환 경로(0x2AC9C10). 스폰 호출자가 `+0x2AC9E58` 로 찍히는 쪽이다.
 void* __fastcall det_altfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
     const void* ret = _ReturnAddress();
     if (g_altfn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("다른경로 진입(0x2AC87C0): 호출자=+0x{:X} rcx=0x{:X}"
+        log::infof("다른경로 진입(0x2AC9C10): 호출자=+0x{:X} rcx=0x{:X}"
                    " rdx=0x{:X} r8=0x{:X} r9=0x{:X}",
                    caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
                    reinterpret_cast<std::uintptr_t>(a2),
@@ -266,7 +274,7 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v7 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {}"
+        "소환 진단 v8 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {}"
         " · 게이트 0x{:X} {} · 스폰 0x{:X} {} (알림 훅은 뗐다 - 팅기게 했다)",
         kWheelFnRva, wheelfn_ok ? "후킹" : "실패", kCallFnRva,
         callfn_ok ? "후킹" : "실패", kAltFnRva, altfn_ok ? "후킹" : "실패",
