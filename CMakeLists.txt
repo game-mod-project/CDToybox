@@ -109,6 +109,7 @@ add_library(cdtoybox SHARED
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/spec_heal.cpp
+    src/game/dragondiag.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
