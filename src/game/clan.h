@@ -202,6 +202,12 @@ bool find_clan_component_client(const mem::Reader& reader, const mem::Rtti& rtti
                                 std::uintptr_t* out);
 
 
+// 캐시된 용병단 컴포넌트. **값싼 길이다** - `find_clan_component` 는 RTTI 힙
+// 스캔(10초대)이라 렌더 스레드에서 부르면 화면이 그만큼 멈춘다. 캐시가 비어
+// 있으면 배경 재탐색을 걸고 false 를 준다(이번 프레임은 포기).
+bool clan_component_fast(const mem::Reader& reader, const mem::Rtti& rtti,
+                         bool client, std::uintptr_t* out);
+
 // ------------------------------------------- 휠 색인 고치기 (2026-09-15)
 //
 // **종 교체분이 휠에서만 안 불린다**(사용자 실측 2026-09-15). 목록은 번호로 가니

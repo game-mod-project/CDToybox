@@ -695,6 +695,41 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
         }
     }
 
+    // 드래곤을 "되는 탈것" 규칙에 태운다. 검사를 하나씩 찾아 푸는 대신, 같은
+    // 휠에서 정상 동작하는 특수 탑승물과 **같은 두 칸**을 주는 쪽이 빠르다.
+    ImGui::Separator();
+    const game::DisguiseState dg = game::disguise_state(reader);
+    if (!dg.ready) {
+        ImGui::TextDisabled("%s", dg.note);
+    } else {
+        ImGui::TextDisabled("메인 휠이 안 받는 종 %d개 · 베껴 올 값: 타입행 %d ·"
+                            " 탈것규칙 %d",
+                            dg.targets, dg.donor_merc, dg.donor_veh);
+        bool dis = dg.on;
+        if (ImGui::Checkbox("드래곤·ATAG 를 특수 탑승물과 같은 규칙으로", &dis)) {
+            if (game::disguise_apply(reader, dis)) {
+                if (dis) {
+                    notice_set(&s_note, NoticeLevel::Ok, "{}개 종을 바꿨습니다",
+                               dg.targets);
+                } else {
+                    notice_set(&s_note, NoticeLevel::Ok, "원래대로 되돌렸습니다");
+                }
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad,
+                           "실패 - 표를 안 건드렸습니다");
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "CharacterInfo 의 두 칸만 바꿉니다:\n"
+                "  +0x6E _vehicleInfo    탈것 규칙 행\n"
+                "  +0xBE _mercenaryInfo  동반자 타입 행\n\n"
+                "값은 번호를 박지 않고 **내가 가진 정상 탈것**에서 베껴 옵니다.\n"
+                "바꾼 뒤 명부의 종류별 색인도 같이 맞춥니다.\n"
+                "정적 표라 세이브에 안 남고, 끄면 원래 값으로 되돌립니다.");
+        }
+    }
+
     ImGui::TextColored(col::kWarn,
                        "실험입니다. 휠 목록에 뜨는 것과 실제로 소환·탑승이"
                        " 되는 것은 다를 수 있습니다.");

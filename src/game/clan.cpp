@@ -565,6 +565,11 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
 
 // ------------------------------------------- 휠 색인 고치기 (2026-09-15)
 
+bool clan_component_fast(const mem::Reader& reader, const mem::Rtti& rtti,
+                         bool client, std::uintptr_t* out) {
+    return clan_component_cached(reader, rtti, client, out);
+}
+
 bool reindex_has_room(std::uint32_t count, std::uint32_t cap) {
     return cap > count;
 }

@@ -234,6 +234,7 @@ void wheel_teardown();
 //
 // 정적 표라 세이브에 안 남는다. 게임을 끄면 원복된다.
 inline constexpr std::size_t kCiVehicleInfo = 0x6E;
+inline constexpr std::size_t kCiMercInfo = 0xBE;   // _mercenaryInfo (동반자 타입 행)
 inline constexpr std::size_t kCiCoolTime = 0x70;
 inline constexpr std::size_t kCiSpawnDuration = 0x78;
 inline constexpr std::uint64_t kCoolTimeFree = 1;
@@ -293,5 +294,39 @@ struct CallPlaceState {
 CallPlaceState call_place_state(const mem::Reader& reader);
 bool call_place_free(const mem::Reader& reader, bool on);
 void call_place_teardown();
+
+// ------------------ 드래곤·ATAG 를 "되는 탈것" 과 같은 규칙으로 (2026-09-15)
+//
+// 여기까지 온 사실들:
+//   - 드래곤은 휠에서 눌리고 스폰 프리미티브까지 간다(결과 0 = 오류 없음).
+//   - 그런데 안 나오고 **"호출할 수 없는 장소입니다"** 가 뜬다. 그 문구는 우리가
+//     건 알림 경로(msg 0x3F5)로 안 나온다 - 클라 쪽 UI 층이 따로 내는 것이다.
+//   - 같은 휠에서 **특수 탑승물(타입행 5)은 정상**이다.
+//
+// 그래서 검사를 하나씩 찾아 푸는 대신 **드래곤을 그 정상 경로에 태운다.** 종의
+// 두 칸만 바꾸면 게임의 모든 판정이 특수 탑승물과 같아진다:
+//
+//   CharacterInfo +0x6E `_vehicleInfo`    탈것 규칙 행 (드래곤 3 · 와이번 4)
+//   CharacterInfo +0xBE `_mercenaryInfo`  동반자 타입 행 (드래곤 2 · 특수 5)
+//
+// **기증자는 내가 실제로 가진 개체에서 고른다.** 번호를 박지 않는다 - 메인 휠이
+// 허용하는 타입행이면서 내가 가진 탈것 하나를 골라 그 두 값을 베껴 온다.
+//
+// 바꾼 뒤에는 **명부의 종류별 색인도 따라와야 한다**(clan.h 휠 색인 고치기).
+// 정적 표라 세이브에 안 남고, 끄면 원래 값으로 되돌린다.
+inline constexpr int kDisguiseMax = 16;
+
+struct DisguiseState {
+    bool ready = false;
+    bool on = false;
+    int targets = 0;       // 바꿀 종 수(내가 가진, 메인 휠이 안 받는 타입)
+    int donor_merc = -1;   // 베껴 올 타입행
+    int donor_veh = -1;    // 베껴 올 탈것 규칙 행
+    char note[96] = {};
+};
+
+DisguiseState disguise_state(const mem::Reader& reader);
+bool disguise_apply(const mem::Reader& reader, bool on);
+void disguise_teardown();
 
 }  // namespace cdtb::game

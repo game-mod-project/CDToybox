@@ -7,6 +7,7 @@
 
 #include "core/log.h"
 #include "game/knowledge.h"
+#include "game/clan.h"
 #include "game/roster.h"
 #include "mem/safe_read.h"
 
@@ -880,6 +881,186 @@ bool call_place_free(const mem::Reader& reader, bool on) {
     }
     log::infof("호출 장소 제한: {}개 풀었다 (지면 거리 검사 -> 0)", done);
     return true;
+}
+
+// ---------------------------------- 드래곤·ATAG 를 "되는 탈것" 규칙으로
+
+namespace {
+
+struct DisguiseBak {
+    std::uintptr_t rec = 0;
+    std::uint16_t merc = 0;
+    std::uint16_t veh = 0;
+};
+DisguiseBak g_dis_bak[kDisguiseMax];
+int g_dis_bak_n = 0;
+
+bool wr16(std::uintptr_t a, std::uint16_t v) {
+    return mem::safe_write_bytes(a, &v, sizeof v);
+}
+
+// 메인 휠이 받는 타입인가.
+bool main_wheel_takes(const WheelState& w, int merc_row) {
+    for (int i = 0; i < w.main_slot.count; ++i) {
+        if (w.main_slot.cats[i] == merc_row) return true;
+    }
+    return false;
+}
+
+// 대상·기증자를 한 번에 고른다. 대상은 **내 명부에 있는** 종 중 메인 휠이 안 받는
+// 것, 기증자는 메인 휠이 받으면서 내가 가진 탈것이다.
+struct DisguisePlan {
+    std::uintptr_t rec[kDisguiseMax] = {};
+    std::uint16_t row[kDisguiseMax] = {};
+    int n = 0;
+    int donor_merc = -1;
+    int donor_veh = -1;
+};
+
+bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
+                std::size_t note_cap) {
+    const mem::Rtti* rtti = clan_rtti();
+    if (rtti == nullptr) {
+        std::snprintf(note, note_cap, "%s", "RTTI 준비 전입니다");
+        return false;
+    }
+    const WheelState w = wheel_state(r);
+    if (!w.ready) {
+        std::snprintf(note, note_cap, "%s", w.note);
+        return false;
+    }
+    std::uintptr_t clan = 0;
+    if (!clan_component_fast(r, *rtti, false, &clan)) {
+        std::snprintf(note, note_cap, "%s", "명부를 아직 못 잡았습니다");
+        return false;
+    }
+    std::vector<ClanEntry> list;
+    if (!read_clan_roster(r, clan, &list)) {
+        std::snprintf(note, note_cap, "%s", "명부를 읽지 못했습니다");
+        return false;
+    }
+    std::uintptr_t recs = 0;
+    int cn = 0;
+    {
+        const std::uintptr_t mgr = roster_char_manager();
+        std::uint32_t n = 0;
+        if (mgr == 0 || !roster_header(r, mgr, &n, &recs)) {
+            std::snprintf(note, note_cap, "%s", "캐릭터 표를 아직 못 잡았습니다");
+            return false;
+        }
+        cn = static_cast<int>(n);
+    }
+    auto char_rec = [&](std::uint32_t row) -> std::uintptr_t {
+        if (static_cast<int>(row) >= cn) return 0;
+        return static_cast<std::uintptr_t>(
+            rd64(r, recs + static_cast<std::uintptr_t>(row) * 8));
+    };
+
+    // 기증자: 메인 휠이 받는 타입 + 탈것 규칙이 있는 것. 여럿이면 처음 것.
+    for (const auto& e : list) {
+        if (e.merc_row == 0xFFFF || !main_wheel_takes(w, e.merc_row)) continue;
+        const std::uintptr_t rec = char_rec(e.row);
+        if (rec == 0) continue;
+        const std::uint16_t veh = rd16(r, rec + kCiVehicleInfo);
+        if (veh == 0) continue;   // 탈것이 아니면 규칙을 베낄 수 없다
+        p->donor_merc = e.merc_row;
+        p->donor_veh = veh;
+        break;
+    }
+    if (p->donor_merc < 0) {
+        std::snprintf(note, note_cap, "%s",
+                      "베껴 올 탈것이 없습니다 (메인 휠이 받는 탈것을 하나 가지십시오)");
+        return false;
+    }
+    // 대상: 메인 휠이 안 받는 타입의 종. 같은 종이 여럿이어도 한 번만.
+    for (const auto& e : list) {
+        if (e.merc_row == 0xFFFF || main_wheel_takes(w, e.merc_row)) continue;
+        const std::uintptr_t rec = char_rec(e.row);
+        if (rec == 0) continue;
+        bool dup = false;
+        for (int i = 0; i < p->n; ++i) {
+            if (p->rec[i] == rec) { dup = true; break; }
+        }
+        if (dup || p->n >= kDisguiseMax) continue;
+        p->rec[p->n] = rec;
+        p->row[p->n] = static_cast<std::uint16_t>(e.row);
+        ++p->n;
+    }
+    return true;
+}
+
+}  // namespace
+
+DisguiseState disguise_state(const mem::Reader& reader) {
+    DisguiseState s;
+    DisguisePlan p;
+    if (!build_plan(reader, &p, s.note, sizeof s.note)) return s;
+    s.ready = true;
+    s.targets = p.n;
+    s.donor_merc = p.donor_merc;
+    s.donor_veh = p.donor_veh;
+    s.on = g_dis_bak_n > 0;
+    return s;
+}
+
+bool disguise_apply(const mem::Reader& reader, bool on) {
+    if (!on) {
+        disguise_teardown();
+        return true;
+    }
+    if (g_dis_bak_n > 0) return true;
+
+    DisguisePlan p;
+    char note[96] = {};
+    if (!build_plan(reader, &p, note, sizeof note) || p.n == 0) {
+        log::warnf("탈것 규칙 바꾸기: 할 일이 없다 ({})", note);
+        return false;
+    }
+    int done = 0;
+    for (int i = 0; i < p.n && g_dis_bak_n < kDisguiseMax; ++i) {
+        const std::uintptr_t rec = p.rec[i];
+        const std::uint16_t om = rd16(reader, rec + kCiMercInfo);
+        const std::uint16_t ov = rd16(reader, rec + kCiVehicleInfo);
+        g_dis_bak[g_dis_bak_n] = DisguiseBak{rec, om, ov};
+        ++g_dis_bak_n;
+        // **탈것 규칙을 먼저, 타입을 나중에.** 타입이 바뀌는 순간 다른 코드가
+        // 이 종을 특수 탑승물로 보기 시작하므로, 그때 규칙은 이미 맞아야 한다.
+        bool ok = wr16(rec + kCiVehicleInfo,
+                       static_cast<std::uint16_t>(p.donor_veh));
+        ok = wr16(rec + kCiMercInfo,
+                  static_cast<std::uint16_t>(p.donor_merc)) && ok;
+        if (ok) {
+            ++done;
+            log::infof("탈것 규칙 바꾸기: 종행 {} - 타입 {} -> {} · 탈것규칙 {} -> {}",
+                       p.row[i], om, p.donor_merc, ov, p.donor_veh);
+        }
+    }
+    if (done == 0) {
+        disguise_teardown();
+        return false;
+    }
+    // 명부의 종류별 색인도 새 타입으로 따라와야 휠이 찾는다.
+    const mem::Rtti* rtti = clan_rtti();
+    if (rtti != nullptr) {
+        const ReindexResult ix = clan_reindex(reader, *rtti, false);
+        log::infof("탈것 규칙 바꾸기: 휠 색인 어긋남 {} · 옮김 {} · 자리없음 {}",
+                   ix.wrong, ix.moved, ix.no_room);
+    }
+    return true;
+}
+
+void disguise_teardown() {
+    if (g_dis_bak_n == 0) return;
+    int back = 0;
+    for (int i = 0; i < g_dis_bak_n; ++i) {
+        const DisguiseBak& b = g_dis_bak[i];
+        if (b.rec == 0) continue;
+        // 되돌릴 때는 순서를 뒤집는다 - 타입을 먼저 원래대로.
+        if (wr16(b.rec + kCiMercInfo, b.merc)) ++back;
+        wr16(b.rec + kCiVehicleInfo, b.veh);
+    }
+    log::infof("탈것 규칙 바꾸기: {}개 되돌렸다", back);
+    g_dis_bak_n = 0;
 }
 
 void call_place_teardown() {
