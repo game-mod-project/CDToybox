@@ -173,4 +173,15 @@ TEST(spawn_voxel_gated_frees_only_restricted_species) {
     CHECK(!spawn_voxel_gated(0));   // A.T.A.G. - 이미 자유, 손대지 않는다
 }
 
+// 휠용 타입은 **부를 때만** 필요하다. 나와 있는 동안 바꿔 둔 채로 두면 다른
+// 계통이 그 종을 특수 탑승물로 본다 - A.T.A.G. 개조 UI 자리에 말 UI 가 떴다
+// (사용자 실측 2026-09-15).
+TEST(disguise_wants_swap_only_while_out_of_world) {
+    using cdtb::game::disguise_wants_swap;
+    CHECK(disguise_wants_swap(0));     // 아무도 안 나와 있다 - 휠용으로
+    CHECK(!disguise_wants_swap(1));    // 나와 있다 - 제 타입으로
+    CHECK(!disguise_wants_swap(2));    // 블랙스타처럼 명부에 둘이어도 마찬가지
+    CHECK(disguise_wants_swap(-1));    // 말도 안 되는 값은 0 과 같이 본다
+}
+
 }  // namespace

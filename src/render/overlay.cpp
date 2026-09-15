@@ -7,6 +7,8 @@
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
 
+#include <chrono>
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -751,6 +753,20 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
             if (cdtb::game::wheel_state(reader).ready) {
                 s_wheel_done = true;
                 cdtb::game::wheel_unlock(reader, true);
+            }
+        }
+
+        // 휠 칸을 바꿔 둔 종은 **월드에 나와 있는 동안 제 타입으로 돌려 놓는다.**
+        // 바꿔 둔 채로 두면 다른 계통이 특수 탑승물로 보고 엉뚱하게 군다 -
+        // A.T.A.G. 개조 UI 자리에 말 UI 가 떴다(사용자 실측 2026-09-15).
+        // 명부를 읽으므로 매 프레임이 아니라 몇 초에 한 번만 본다. 시계는
+        // **단조 시계**다 - ImGui 시계는 오버레이를 숨기면 멈춘다.
+        {
+            static std::chrono::steady_clock::time_point s_dis_at{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - s_dis_at >= std::chrono::seconds(2)) {
+                s_dis_at = now;
+                cdtb::game::disguise_tick(reader);
             }
         }
 

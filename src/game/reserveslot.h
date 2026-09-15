@@ -404,6 +404,16 @@ struct DisguiseState {
 
 DisguiseState disguise_state(const mem::Reader& reader);
 bool disguise_apply(const mem::Reader& reader, bool on);
+
+// **순수 함수.** 지금 휠용 타입으로 바꿔 둘 때인가. 월드에 한 마리도 안 나와
+// 있을 때만이다 - 나와 있는 동안 바꿔 두면 다른 계통이 이 종을 특수 탑승물로
+// 보고 엉뚱하게 군다(A.T.A.G. 개조 UI 자리에 말 UI, 실측 2026-09-15).
+bool disguise_wants_swap(int in_world_count);
+
+// 월드 등장/퇴장에 맞춰 타입을 오간다. 값이 바뀔 때만 쓴다.
+// 호출자가 몇 초에 한 번씩 부른다(매 프레임 부르지 말 것 - 명부를 읽는다).
+void disguise_tick(const mem::Reader& reader);
+
 void disguise_teardown();
 
 }  // namespace cdtb::game

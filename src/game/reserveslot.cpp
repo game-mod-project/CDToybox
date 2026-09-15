@@ -827,6 +827,11 @@ bool vehicle_place_gated(float ground_dist) {
     return ground_dist > 0.0f;
 }
 
+bool disguise_wants_swap(int in_world_count) {
+    // 한 마리라도 나와 있으면 제 타입으로 둔다.
+    return in_world_count <= 0;
+}
+
 bool spawn_voxel_gated(std::uint32_t count) {
     // 목록이 비면 아무 데서나 부를 수 있다 - A.T.A.G. 가 그 상태다.
     return count > 0;
@@ -900,8 +905,11 @@ namespace {
 
 struct DisguiseBak {
     std::uintptr_t rec = 0;
-    std::uint16_t merc = 0;
-    std::uint16_t veh = 0;
+    std::uint16_t merc = 0;        // 원래 타입행
+    std::uint16_t veh = 0;         // 원래 탈것규칙(안 쓰지만 기록해 둔다)
+    std::uint16_t row = 0xFFFF;    // 종행
+    std::uint16_t donor = 0;       // 휠에서 부를 때 쓸 타입행
+    bool applied = false;          // 지금 휠용으로 바꿔 둔 상태인가
 };
 DisguiseBak g_dis_bak[kDisguiseMax];
 int g_dis_bak_n = 0;
@@ -1107,7 +1115,6 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
     log::infof("휠 칸 바꾸기: 기증자 종행 {} - 타입행 {} (탈것규칙 {} 은 안 베낀다)"
                " · 대상 {}개",
                p.donor_row, p.donor_merc, p.donor_veh, p.n);
-    int done = 0;
     for (int i = 0; i < p.n && g_dis_bak_n < kDisguiseMax; ++i) {
         const std::uintptr_t rec = p.rec[i];
         const std::uint16_t om = rd16(reader, rec + kCiMercInfo);
@@ -1119,17 +1126,21 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
                        p.row[i]);
             continue;
         }
-        g_dis_bak[g_dis_bak_n] = DisguiseBak{rec, om, ov};
+        // **타입은 여기서 안 쓴다.** 월드에 나와 있는지에 따라 `disguise_tick`
+        // 이 정한다 - 나와 있는 동안 타입을 바꿔 두면 개조 UI 같은 다른 계통이
+        // 이 종을 특수 탑승물로 보고 엉뚱한 화면을 연다(사용자 실측 2026-09-15:
+        // A.T.A.G. 개조 UI 자리에 말 UI 가 떴다).
+        g_dis_bak[g_dis_bak_n] =
+            DisguiseBak{rec, om, ov, p.row[i],
+                        static_cast<std::uint16_t>(p.donor_merc), false};
         ++g_dis_bak_n;
         // **`_vehicleInfo` 는 건드리지 않는다.** 그 칸은 규칙이 아니라 *무엇이
         // 나오는가* 를 정한다 - 말의 18 을 씌웠더니 드래곤 자리에서 말이
         // 나왔다(사용자 실측 2026-09-15 17:23). 바꿀 것은 휠 칸뿐이다.
-        if (!wr16(rec + kCiMercInfo, static_cast<std::uint16_t>(p.donor_merc))) {
-            continue;
-        }
-        ++done;
-        log::infof("휠 칸 바꾸기: 종행 {} - 타입 {} -> {} · 탈것규칙 {} 그대로",
-                   p.row[i], om, p.donor_merc, ov);
+        //
+        // 아래 둘은 **장소 검사를 느슨하게만** 하므로 월드 등장 여부와 무관하게
+        // 한 번 걸어 두고 끌 때 되돌린다.
+        //
         // **호출 지형 요구를 푼다.** 여기가 "호출할 수 없는 위치입니다" 의 진짜
         // 출처다 - A.T.A.G. 는 요구가 0개라 그대로 됐고(사용자 실측 2026-09-15
         // 17:46), 드래곤은 1개(복셀 3)만 허용해 거부됐다. 개수만 0 으로 둔다.
@@ -1144,8 +1155,7 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
                            p.row[i], vx);
             }
         }
-        // 자기 탈것 규칙은 그대로 두되, 그 규칙의 지면 거리 검사만 푼다.
-        // 드래곤 30 · 와이번 0 - 여기가 "호출할 수 없는 장소" 가 나오던 자리다.
+        // 자기 탈것 규칙의 지면 거리 검사만 푼다. 드래곤 30 · 와이번 0.
         if (veh_recs == 0 || static_cast<int>(ov) >= veh_n) continue;
         const std::uintptr_t vrec = static_cast<std::uintptr_t>(
             rd64(reader, veh_recs + static_cast<std::uintptr_t>(ov) * 8));
@@ -1160,23 +1170,46 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
             log::infof("휠 칸 바꾸기: 탈것규칙 {} 지면 거리 {} -> 0", ov, d);
         }
     }
-    if (done == 0) {
+    if (g_dis_bak_n == 0) {
         disguise_teardown();
         return false;
     }
-    // 명부의 종류별 색인도 새 타입으로 따라와야 휠이 찾는다.
-    const mem::Rtti* rtti = clan_rtti();
-    if (rtti != nullptr) {
-        const ReindexResult ix = clan_reindex(reader, *rtti, false);
-        if (ix.partial) {
-            log::warnf("휠 칸 바꾸기: 휠 색인을 다 못 봤다 ({}) - 잠시 뒤"
-                       " [휠 색인 고치기] 를 한 번 눌러 주십시오", ix.note);
-        } else {
-            log::infof("휠 칸 바꾸기: 휠 색인 어긋남 {} · 옮김 {} · 자리없음 {}",
-                       ix.wrong, ix.moved, ix.no_room);
-        }
-    }
+    disguise_tick(reader);   // 지금 상태에 맞춰 타입을 정한다
     return true;
+}
+
+// 월드에 나와 있는 동안은 **제 타입으로 돌려 놓는다.**
+//
+// 휠에서 부를 때만 특수 탑승물 타입이 필요하다. 나온 뒤에도 바꿔 둔 채로 있으면
+// 다른 계통이 이 종을 특수 탑승물로 본다 - A.T.A.G. 개조 UI 자리에 말 UI 가
+// 떴다(사용자 실측 2026-09-15). 그래서 등장/퇴장에 맞춰 오간다.
+//
+// 값이 바뀔 때만 쓴다. 호출자가 몇 초에 한 번씩 부른다.
+void disguise_tick(const mem::Reader& reader) {
+    if (g_dis_bak_n == 0) return;
+    const mem::Rtti* rtti = clan_rtti();
+    if (rtti == nullptr) return;
+    std::uintptr_t clan = 0;
+    if (!clan_component_fast(reader, *rtti, false, &clan)) return;
+    std::vector<ClanEntry> list;
+    if (!read_clan_roster(reader, clan, &list)) return;
+    for (int i = 0; i < g_dis_bak_n; ++i) {
+        DisguiseBak& b = g_dis_bak[i];
+        if (b.rec == 0) continue;
+        // 같은 종이 명부에 여럿일 수 있다(블랙스타가 둘이다). 하나라도 월드에
+        // 나와 있으면 나와 있는 것으로 친다.
+        int out = 0;
+        for (const auto& e : list) {
+            if (e.row == b.row && e.handle != 0) ++out;
+        }
+        const bool want = disguise_wants_swap(out);
+        if (want == b.applied) continue;
+        const std::uint16_t v = want ? b.donor : b.merc;
+        if (!wr16(b.rec + kCiMercInfo, v)) continue;
+        b.applied = want;
+        log::infof("휠 칸 바꾸기: 종행 {} {} - 타입 {} (월드에 {}개)", b.row,
+                   want ? "휠용으로 바꿈" : "제 타입으로 되돌림", v, out);
+    }
 }
 
 void disguise_teardown() {
