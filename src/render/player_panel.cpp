@@ -568,13 +568,74 @@ void draw_skill_gates() {
         " 조사한 뒤에 넣습니다.");
 }
 
-// 스킬 계열 절 셋. **스탯 게이지와 아무 상관이 없다** - 결속·지식은 지식 컴포넌트만
-// 있으면 되고, 관문은 코드 패치라 아무것도 필요 없다. 그래서 게이지를 못 잡은
-// 상태에서도 그린다.
+// 탈것 휠. 게임 데이터(`gamedata/reserveslot`)를 꺼내 읽어 확정한 것을 그린다 -
+// 탈것 휠은 슬롯이 셋이고, 드래곤·ATAG 는 **메인 휠의 허용 목록에서 빠진 채**
+// 자기 전용 슬롯에만 들어간다. 그 전용 슬롯이 스토리로 채워지는 자리다.
+// 여기서는 메인 휠의 목록에 그 카테고리를 얹는다. 자세한 근거는 reserveslot.h.
+void draw_vehicle_wheel(const mem::Reader& reader) {
+    if (!ImGui::CollapsingHeader("탈것 휠 (드래곤·ATAG 슬롯 우회)")) return;
+
+    static Notice s_note;
+    const game::WheelState w = game::wheel_state(reader);
+    if (!w.ready) {
+        ImGui::TextDisabled("%s", w.note[0] != 0
+                                      ? w.note
+                                      : "월드에 들어가면 예약 슬롯 표를 잡습니다.");
+        return;
+    }
+
+    // 무엇을 보고 결정했는지 화면이 먼저 보인다 - 누르기 전에 확인할 수 있어야 한다.
+    auto line = [](const char* name, const game::WheelSlot& s) {
+        std::string v;
+        for (int i = 0; i < s.count; ++i) {
+            if (i != 0) v += ", ";
+            v += std::to_string(s.cats[i]);
+        }
+        ImGui::TextDisabled("%s(키 %d) 허용: [%s]", name, s.key, v.c_str());
+    };
+    line("메인 휠", w.main_slot);
+    line("드래곤", w.dragon);
+    line("ATAG/기계", w.mech);
+
+    bool on = w.on;
+    if (ImGui::Checkbox("메인 휠에 드래곤·ATAG 카테고리 얹기", &on)) {
+        if (game::wheel_unlock(reader, on)) {
+            // 포맷 문자열은 컴파일 타임 상수여야 한다(std::format) - 삼항으로
+            // 고르면 C7595 로 막힌다. 두 줄로 나눈다.
+            if (on) {
+                notice_set(&s_note, NoticeLevel::Ok, "허용 {}개로 늘렸습니다",
+                           w.want_count);
+            } else {
+                notice_set(&s_note, NoticeLevel::Ok, "원래대로 되돌렸습니다");
+            }
+        } else {
+            notice_set(&s_note, NoticeLevel::Bad, "실패 - 목록을 안 건드렸습니다");
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "메인 탈것 휠이 허용하는 카테고리 목록에\n"
+            "드래곤 슬롯·메카닉 슬롯이 쓰는 값을 그대로 더합니다.\n"
+            "번호를 박지 않고 그 슬롯들에서 베껴 옵니다.");
+    }
+    notice_draw(s_note);
+
+    ImGui::TextColored(col::kWarn,
+                       "실험입니다. 휠 목록에 뜨는 것과 실제로 소환·탑승이"
+                       " 되는 것은 다를 수 있습니다.");
+    ImGui::TextDisabled(
+        "정적 표에 쓰므로 세이브에 남지 않습니다 - 게임을 끄면 원래대로 돌아가고,"
+        " 모드를 내릴 때도 되돌립니다.");
+}
+
+// 게이지 없이도 그리는 절들. **스탯 게이지와 아무 상관이 없다** - 결속·지식은 지식
+// 컴포넌트만 있으면 되고, 관문은 코드 패치라, 휠은 정적 표라 아무것도 필요 없다.
+// 그래서 게이지를 못 잡은 상태에서도 그린다.
 void draw_skill_sections(const mem::Reader& reader) {
     draw_skill_bond(reader);
     draw_skill_gates();
     draw_elements(reader);
+    draw_vehicle_wheel(reader);
     draw_knowledge(reader);
 }
 

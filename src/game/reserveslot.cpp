@@ -1,11 +1,13 @@
 #include "game/reserveslot.h"
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "core/log.h"
 #include "game/knowledge.h"
+#include "mem/safe_read.h"
 
 namespace cdtb::game {
 namespace {
@@ -495,5 +497,184 @@ bool element_knowledge(const mem::Reader& reader,
     }
     return true;
 }
+
+// ------------------------------------------------------------- 탈것 휠 해금
+
+namespace {
+
+// 우리가 가리키게 할 배열. **게임이 이 포인터를 들고 읽으므로 DLL 수명 내내
+// 살아 있어야 한다.** 정적이라 해제되지 않고, 프록시 DLL 은 사실상 언로드되지
+// 않는다(nofall 케이브와 같은 판단).
+std::uint16_t g_wheel_buf[kWheelMaxCats] = {};
+
+struct WheelBackup {
+    bool held = false;
+    bool repointed = false;   // 포인터·용량까지 바꿨는가
+    std::uintptr_t info = 0;
+    std::uint64_t ptr = 0;
+    std::uint32_t count = 0;
+    std::uint32_t cap = 0;
+};
+WheelBackup g_wheel_bak;
+
+bool wr(std::uintptr_t a, const void* src, std::size_t n) {
+    return mem::safe_write_bytes(a, src, n);
+}
+bool wr32(std::uintptr_t a, std::uint32_t v) { return wr(a, &v, sizeof v); }
+bool wr64(std::uintptr_t a, std::uint64_t v) { return wr(a, &v, sizeof v); }
+
+bool read_wheel_slot(const mem::Reader& r, std::uintptr_t info, WheelSlot* out) {
+    out->info = info;
+    out->key = static_cast<int>(rd32(r, info + kRsKey));
+    const std::uintptr_t p =
+        static_cast<std::uintptr_t>(rd64(r, info + kRsMercList));
+    const int n = static_cast<int>(rd32(r, info + kRsMercCount));
+    // 목록이 비었거나 터무니없으면 그 슬롯은 안 믿는다.
+    if (p < 0x10000 || n <= 0 || n > kWheelMaxCats) return false;
+    out->count = n;
+    for (int i = 0; i < n; ++i) {
+        out->cats[i] = rd16(r, p + static_cast<std::uintptr_t>(i) * 2);
+    }
+    return true;
+}
+
+// 배열은 런타임 색인(0..count-1)으로 걷고, 데이터 키는 레코드 `+0x00` 에 있다.
+// 색인을 박지 않고 키로 찾는 이유는 갱신 때 색인이 밀려도 따라가기 위해서다.
+std::uintptr_t find_slot_by_key(const mem::Reader& r, const Mgr& m, int key) {
+    for (int i = 0; i < m.count; ++i) {
+        const std::uintptr_t info = info_at(r, m, i);
+        if (info == 0) continue;
+        if (static_cast<int>(rd32(r, info + kRsKey)) == key) return info;
+    }
+    return 0;
+}
+
+void set_note(WheelState* s, const char* msg) {
+    std::snprintf(s->note, sizeof s->note, "%s", msg);
+}
+
+bool wheel_restore() {
+    if (!g_wheel_bak.held) return true;
+    const WheelBackup b = g_wheel_bak;
+    // **개수를 먼저 줄인다.** 포인터를 먼저 되돌리면 그 사이에 게임이 옛 배열을
+    // 늘어난 개수로 읽어 배열 밖을 본다.
+    bool ok = wr32(b.info + kRsMercCount, b.count);
+    if (b.repointed) {
+        ok = wr64(b.info + kRsMercList, b.ptr) && ok;
+        ok = wr32(b.info + kRsMercCap, b.cap) && ok;
+    }
+    g_wheel_bak = WheelBackup{};
+    log::infof("탈것 휠: 되돌렸다 (개수 {}{})", b.count,
+               b.repointed ? ", 포인터도" : "");
+    return ok;
+}
+
+}  // namespace
+
+int wheel_merge(const int* base, int base_n, const int* add, int add_n,
+                int* out, int out_cap) {
+    if (out == nullptr || out_cap <= 0) return 0;
+    int n = 0;
+    if (base != nullptr) {
+        for (int i = 0; i < base_n && n < out_cap; ++i) out[n++] = base[i];
+    }
+    if (add == nullptr) return n;
+    for (int i = 0; i < add_n && n < out_cap; ++i) {
+        bool dup = false;
+        for (int j = 0; j < n; ++j) {
+            if (out[j] == add[i]) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) out[n++] = add[i];
+    }
+    return n;
+}
+
+WheelState wheel_state(const mem::Reader& reader) {
+    WheelState s;
+    // 화면이 프레임마다 부른다 - 조용히 읽는다.
+    const Mgr m = read_mgr(reader, kSlotMgrGlobalRva, "예약슬롯 매니저", true);
+    if (m.object == 0) {
+        set_note(&s, "예약 슬롯 표를 아직 못 잡았습니다");
+        return s;
+    }
+    const std::uintptr_t vi = find_slot_by_key(reader, m, kVehSlotKey);
+    const std::uintptr_t di = find_slot_by_key(reader, m, kDragonSlotKey);
+    const std::uintptr_t mi = find_slot_by_key(reader, m, kMechSlotKey);
+    if (vi == 0 || di == 0 || mi == 0) {
+        set_note(&s, "탈것 슬롯 셋 중 일부를 못 찾았습니다(게임 갱신?)");
+        return s;
+    }
+    if (!read_wheel_slot(reader, vi, &s.main_slot) ||
+        !read_wheel_slot(reader, di, &s.dragon) ||
+        !read_wheel_slot(reader, mi, &s.mech)) {
+        set_note(&s, "허용 목록이 말이 안 됩니다 - 안 건드립니다");
+        return s;
+    }
+    s.ready = true;
+    // 더할 것은 **드래곤·메카닉 슬롯이 지금 들고 있는 값 그대로**다.
+    int add[kWheelMaxCats * 2] = {};
+    int an = 0;
+    for (int i = 0; i < s.dragon.count; ++i) add[an++] = s.dragon.cats[i];
+    for (int i = 0; i < s.mech.count; ++i) add[an++] = s.mech.cats[i];
+    s.want_count = wheel_merge(s.main_slot.cats, s.main_slot.count, add, an,
+                               s.want, kWheelMaxCats);
+    s.on = g_wheel_bak.held && g_wheel_bak.info == vi;
+    return s;
+}
+
+bool wheel_unlock(const mem::Reader& reader, bool on) {
+    if (!on) return wheel_restore();
+    if (g_wheel_bak.held) return true;   // 이미 걸려 있다
+
+    const WheelState s = wheel_state(reader);
+    if (!s.ready) return false;
+    if (s.want_count <= s.main_slot.count) return true;  // 더할 것이 없다
+
+    const std::uintptr_t info = s.main_slot.info;
+    const std::uint64_t ptr = rd64(reader, info + kRsMercList);
+    const std::uint32_t cnt = rd32(reader, info + kRsMercCount);
+    const std::uint32_t cap = rd32(reader, info + kRsMercCap);
+    if (ptr < 0x10000 || static_cast<int>(cnt) != s.main_slot.count) return false;
+
+    g_wheel_bak = WheelBackup{true, false, info, ptr, cnt, cap};
+
+    bool ok = true;
+    if (cap >= static_cast<std::uint32_t>(s.want_count)) {
+        // 용량이 남으면 **제자리로 뒤에 붙인다** - 포인터를 안 바꾸는 쪽이
+        // 훨씬 안전하다(게임이 이 배열을 해제할 일이 생겨도 자기 것이다).
+        for (int i = s.main_slot.count; i < s.want_count && ok; ++i) {
+            const std::uint16_t v = static_cast<std::uint16_t>(s.want[i]);
+            ok = wr(static_cast<std::uintptr_t>(ptr) +
+                        static_cast<std::uintptr_t>(i) * 2,
+                    &v, sizeof v);
+        }
+    } else {
+        for (int i = 0; i < s.want_count; ++i) {
+            g_wheel_buf[i] = static_cast<std::uint16_t>(s.want[i]);
+        }
+        ok = wr64(info + kRsMercList,
+                  static_cast<std::uint64_t>(
+                      reinterpret_cast<std::uintptr_t>(g_wheel_buf)));
+        ok = wr32(info + kRsMercCap, kWheelMaxCats) && ok;
+        g_wheel_bak.repointed = true;
+    }
+    // **개수는 맨 마지막에 올린다** - 값이 다 들어가기 전에 게임이 읽으면
+    // 쓰레기 카테고리를 본다.
+    ok = wr32(info + kRsMercCount, static_cast<std::uint32_t>(s.want_count)) && ok;
+
+    if (!ok) {
+        wheel_restore();
+        log::warnf("탈것 휠: 쓰기에 실패해 되돌렸다");
+        return false;
+    }
+    log::infof("탈것 휠: 메인 슬롯 허용 {}개 -> {}개 ({})", s.main_slot.count,
+               s.want_count, g_wheel_bak.repointed ? "새 배열" : "제자리");
+    return true;
+}
+
+void wheel_teardown() { wheel_restore(); }
 
 }  // namespace cdtb::game

@@ -122,4 +122,73 @@ struct ElementKnow {
 bool element_knowledge(const mem::Reader& reader,
                        ElementKnow out[kElementCount]);
 
+// ------------------------------------------- 탈것 휠 해금 (2026-09-15)
+//
+// 게임 데이터(`0008` 그룹의 `gamedata/reserveslot`)를 직접 꺼내 읽어 확정했다.
+// 탈것 휠은 슬롯이 **셋**이고 각자 허용 카테고리를 들고 있다.
+//
+//   1000006 VehicleSlot           [0x4E 일반 탈것, 0x51 지상 차량]   <- 메인 휠
+//   1000019 VehicleSlot_Mechanic  [0x50 ATAG, 0x52 기계]
+//   1000020 VehicleSlot_Dragon    [0x4F 드래곤]                      <- 전용 슬롯
+//
+// 즉 **드래곤·ATAG 는 메인 휠의 허용 목록에서 빠져 있고** 자기 전용 슬롯에만
+// 들어간다. 그 전용 슬롯이 스토리로 채워지는 자리다(획득 전에는 회색 안장).
+// 메인 휠의 목록에 드래곤·ATAG 카테고리를 얹으면 전용 슬롯을 우회할 수 있다.
+//
+// 앞선 조사가 "소유 타입 레지스트리"라 부르며 그룹 24/25/26 으로 읽은 배열이
+// 바로 이 목록이다(같은 전역 0x6C2E300, 같은 +0x58/+0x60). 그때는 "드래곤이
+// 이미 그룹 26 에 있으니 건드릴 필요 없다"고 닫았는데, 넣어야 할 곳이 26 이
+// 아니라 **메인 휠인 그쪽**이었다.
+//
+// 메모리 배치는 `_enableMercenaryList` - +0x58 포인터 / +0x60 개수 / +0x64 용량
+// 이고 항목은 **u16** 이다(게이트 0x2ACA250 이 `cmp bx,[r8+rax*2]` 로 읽는다).
+// 데이터의 1바이트 카테고리는 로드 때 타입 행으로 옮겨진다(실측 대조:
+// 0x4E->1 · 0x4F->2 · 0x50->3 · 0x51->5 · 0x52->4).
+//
+// **번호를 코드에 안 박는다.** 무엇을 더할지는 드래곤·메카닉 슬롯이 지금 들고
+// 있는 값을 그대로 베껴 온다 - 게임이 갱신돼 타입 행이 밀려도 따라간다.
+//
+// 정적 표라 **세이브에 안 남는다.** 게임을 끄면 원복된다(소켓 상한과 같은 성질).
+inline constexpr int kVehSlotKey = 1000006;
+inline constexpr int kMechSlotKey = 1000019;
+inline constexpr int kDragonSlotKey = 1000020;
+
+inline constexpr std::size_t kRsMercList = 0x58;   // _enableMercenaryList
+inline constexpr std::size_t kRsMercCount = 0x60;
+inline constexpr std::size_t kRsMercCap = 0x64;
+
+inline constexpr int kWheelMaxCats = 16;
+
+struct WheelSlot {
+    std::uintptr_t info = 0;
+    int key = 0;
+    int count = 0;
+    int cats[kWheelMaxCats] = {};
+};
+
+struct WheelState {
+    bool ready = false;                 // 슬롯 셋을 다 잡았는가
+    bool on = false;                    // 지금 우리 값이 걸려 있는가
+    WheelSlot main_slot;                // VehicleSlot
+    WheelSlot dragon;
+    WheelSlot mech;
+    int want[kWheelMaxCats] = {};       // 걸면 메인 휠이 이렇게 된다
+    int want_count = 0;
+    char note[96] = {};                 // 못 잡았으면 그 이유
+};
+
+// **순수 함수.** base 에 없는 것만 뒤에 붙인다. out 이 모자라면 들어가는 만큼만
+// 넣고 그 개수를 돌려준다(자르되 거짓말하지 않는다).
+int wheel_merge(const int* base, int base_n, const int* add, int add_n,
+                int* out, int out_cap);
+
+// 읽기만 한다. 화면이 매 프레임 부르므로 로그를 안 남긴다.
+WheelState wheel_state(const mem::Reader& reader);
+
+// 메인 휠 목록을 늘리거나(on) 원래대로 되돌린다(off). 정적 표에 쓴다.
+bool wheel_unlock(const mem::Reader& reader, bool on);
+
+// 모드를 내릴 때 우리가 건 것을 되돌린다. 안 걸려 있으면 아무것도 안 한다.
+void wheel_teardown();
+
 }  // namespace cdtb::game
