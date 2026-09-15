@@ -92,4 +92,34 @@ void reserveslot_diagnose(const mem::Reader& reader, std::uintptr_t player_actor
 // 0x60 을 떠서 이웃 객체를 읽은 것이었다. 그래서 여기서는 **0x40 을 넘지 않는다.**
 void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor);
 
+// ------------------------------------------------ 원소 습득 (2026-09-15 확정)
+//
+// 휠 칸의 조건이 평문으로 나왔다(`ConditionInfo._stringKey`):
+//
+//   9198  CheckEquipSlotName(Bracelet) && CheckKnowledge(Knowledge_MpFire)       화염
+//   9199  ...(Knowledge_MpIce)        냉기
+//   9200  ...(Knowledge_MpLightning)  벼락
+//   9201  ...(Knowledge_MpWind)       바람
+//
+// **조건은 둘이다** - 팔찌 장착 + 그 지식. 그리고 조건이 보는 것은 **접두사 없는**
+// 이름이다. 캐릭터별 이름(`Knowledge_Kliff_MpFire` 4706, `_Damian_` 4793,
+// `_Oongka_` 4879 …)은 스킬 트리 노드이고 **휠과 무관하다** - 그것들을 쓰느라
+// 여러 번 헛돌았다.
+//
+// **번호를 코드에 안 박는다.** 게임이 갱신되면 지식 번호가 밀리므로
+// `KnowledgeInfo +0x08` 의 내부 이름으로 매번 찾는다(실측: +0x08 이 내부 이름이다 -
+// "Knowledge_Hp", "Knowledge_Fatal" …).
+inline constexpr int kElementCount = 4;
+
+struct ElementKnow {
+    const char* label = "";      // 화염·냉기·벼락·바람
+    const char* internal = "";   // Knowledge_MpFire …
+    int number = -1;             // 지식 번호. -1 이면 못 찾았다
+    int level = 0;               // 지금 레벨(0 = 미습득)
+};
+
+// 넷을 이름으로 찾고 지금 레벨까지 채운다. **읽기만 한다.**
+bool element_knowledge(const mem::Reader& reader,
+                       ElementKnow out[kElementCount]);
+
 }  // namespace cdtb::game

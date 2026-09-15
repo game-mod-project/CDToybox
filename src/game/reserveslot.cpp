@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "game/knowledge.h"
 
 namespace cdtb::game {
 namespace {
@@ -420,6 +421,51 @@ void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor) {
         }
     }
     log::infof("원소 진단 ----- 끝");
+}
+
+
+// ------------------------------------------------ 원소 습득 (2026-09-15)
+
+bool element_knowledge(const mem::Reader& reader,
+                       ElementKnow out[kElementCount]) {
+    static const char* kLabel[kElementCount] = {"화염", "냉기", "벼락", "바람"};
+    static const char* kName[kElementCount] = {
+        "Knowledge_MpFire", "Knowledge_MpIce", "Knowledge_MpLightning",
+        "Knowledge_MpWind"};
+    for (int i = 0; i < kElementCount; ++i) {
+        out[i] = ElementKnow{kLabel[i], kName[i], -1, 0};
+    }
+    const std::uintptr_t image = reader.module_base();
+    const Mgr kn = read_mgr(reader, 0x06C2E2D8, "지식 매니저");
+    if (kn.object == 0) return false;
+
+    // 이름으로 찾는다 - 번호를 박으면 게임 갱신에 밀린다.
+    int hit = 0;
+    for (int k = 0; k < kn.count && hit < kElementCount; ++k) {
+        const std::uintptr_t info = info_at(reader, kn, k);
+        if (info == 0) continue;
+        const std::string nm = read_str(
+            reader, static_cast<std::uintptr_t>(rd64(reader, info + 8)), image);
+        if (nm.empty() || nm.rfind("Knowledge_Mp", 0) != 0) continue;
+        for (int i = 0; i < kElementCount; ++i) {
+            if (out[i].number >= 0 || nm != kName[i]) continue;
+            out[i].number = k;
+            ++hit;
+            break;
+        }
+    }
+    if (hit == 0) return false;
+
+    // 지금 레벨. 서버 realm 의 표를 본다.
+    KnowTable t;
+    if (know_table(reader, 0, &t)) {
+        for (int i = 0; i < kElementCount; ++i) {
+            if (out[i].number < 0) continue;
+            const int lv = know_level(reader, t, out[i].number);
+            out[i].level = lv > 0 ? lv : 0;
+        }
+    }
+    return true;
 }
 
 }  // namespace cdtb::game

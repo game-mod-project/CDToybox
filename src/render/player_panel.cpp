@@ -453,6 +453,56 @@ void draw_knowledge(const mem::Reader& reader) {
         " 기억해 두었다가 리로드 뒤에 다시 겁니다. 기억은 이번 실행 동안만 남습니다.");
 }
 
+// 원소 습득. 휠 칸의 조건이 평문으로 나와 확정됐다(2026-09-15):
+//   CheckEquipSlotName(Bracelet) && CheckKnowledge(Knowledge_MpFire|Ice|Lightning|Wind)
+// **팔찌를 낀 채** 그 지식을 가지면 칸이 켜진다. 조건이 보는 것은 **접두사 없는**
+// 이름이라, 캐릭터별 노드(Knowledge_Kliff_MpFire 등)를 써도 소용이 없다 -
+// 그것으로 여러 번 헛돌았다.
+void draw_elements(const mem::Reader& reader) {
+    if (!ImGui::CollapsingHeader("원소 (어비스 관문 없이 습득)")) return;
+
+    static Notice s_note;
+    game::ElementKnow el[game::kElementCount];
+    if (!game::element_knowledge(reader, el)) {
+        ImGui::TextDisabled("월드에 들어가면 지식 표를 잡습니다 (자동).");
+        return;
+    }
+    ImGui::TextWrapped(
+        "휠 칸이 켜지려면 둘이 다 필요합니다: 팔찌(Bracelet) 장착 + 그 원소 지식."
+        " 여기서는 지식만 넣습니다 - 팔찌는 직접 끼셔야 합니다.");
+    for (int i = 0; i < game::kElementCount; ++i) {
+        const game::ElementKnow& e = el[i];
+        ImGui::PushID(i);
+        if (e.number < 0) {
+            ImGui::TextColored(col::kBad, "%s: 지식을 못 찾았습니다", e.label);
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::TextColored(e.level > 0 ? col::kOk : col::kWarn, "%s", e.label);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d번 · %s", e.number,
+                            e.level > 0 ? "가지고 있음" : "없음");
+        if (e.level == 0) {
+            ImGui::SameLine();
+            if (confirm_small_button("얻기")) {
+                const game::KnowWrite w = game::know_learn(reader, e.number, 1);
+                if (w.changed > 0) {
+                    // 저장을 못 넘으므로 기억해 둔다 - 리로드 뒤 자동으로 다시 건다.
+                    game::know_auto_remember(e.number, 1);
+                    notice_set(&s_note, NoticeLevel::Ok,
+                               "{} 습득 - realm {}개", e.label, w.changed);
+                } else {
+                    notice_set(&s_note, NoticeLevel::Bad, "{}: {}", e.label,
+                               w.last_skip[0] != 0 ? w.last_skip : "쓰기 실패");
+                }
+            }
+        }
+        ImGui::PopID();
+    }
+    notice_draw(s_note);
+    ImGui::TextDisabled("이 쓰기는 저장을 넘지 못합니다 - 리로드 뒤 자동으로 다시 겁니다.");
+}
+
 // 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로
 // 그 사실을 화면이 먼저 말한다.
 void draw_skill_gates() {
@@ -518,6 +568,7 @@ void draw_skill_gates() {
 void draw_skill_sections(const mem::Reader& reader) {
     draw_skill_bond(reader);
     draw_skill_gates();
+    draw_elements(reader);
     draw_knowledge(reader);
 }
 
