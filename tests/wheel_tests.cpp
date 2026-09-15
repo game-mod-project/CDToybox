@@ -102,4 +102,54 @@ TEST(reindex_has_room_needs_spare_capacity) {
     CHECK(!reindex_has_room(9, 8));
 }
 
+// 2026-09-15 사고의 회귀 시험. 대상을 "메인 목록에 없는 것" 으로 잡았더니,
+// 얹기가 메인 목록에 2·3·4 를 붙여 놓은 뒤로 드래곤은 빠지고 반려 동물 열여섯이
+// 대상이 됐다(새끼 와이번이 휠로 올라가고 반려 동물에서 사라짐).
+//
+// 실측 목록: 메인 슬롯 1000006 = [1,5] · 정비 1000019 = [3,4] · 드래곤 1000020 = [2]
+// 타입행 1 말 · 5 특수 탑승물 · 2 드래곤 · 3 A.T.A.G. · 9·11·14·15·18 반려·용병
+TEST(disguise_role_before_wheel_extend) {
+    using cdtb::game::disguise_role;
+    using cdtb::game::DisguiseRole;
+    const int main_cats[] = {1, 5};
+    const int lock[] = {2, 3, 4};
+    CHECK(disguise_role(main_cats, 2, lock, 3, 2) == DisguiseRole::Target);
+    CHECK(disguise_role(main_cats, 2, lock, 3, 3) == DisguiseRole::Target);
+    CHECK(disguise_role(main_cats, 2, lock, 3, 1) == DisguiseRole::DonorCat);
+    CHECK(disguise_role(main_cats, 2, lock, 3, 5) == DisguiseRole::DonorCat);
+    CHECK(disguise_role(main_cats, 2, lock, 3, 9) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 2, lock, 3, 18) == DisguiseRole::None);
+}
+
+TEST(disguise_role_survives_wheel_extend) {
+    using cdtb::game::disguise_role;
+    using cdtb::game::DisguiseRole;
+    // 얹기를 켠 뒤의 메인 목록. 답이 위와 **한 칸도 달라지면 안 된다.**
+    const int main_cats[] = {1, 5, 2, 3, 4};
+    const int lock[] = {2, 3, 4};
+    CHECK(disguise_role(main_cats, 5, lock, 3, 2) == DisguiseRole::Target);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 3) == DisguiseRole::Target);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 4) == DisguiseRole::Target);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 1) == DisguiseRole::DonorCat);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 5) == DisguiseRole::DonorCat);
+    // 사고가 난 자리 - 반려 동물·용병은 무슨 일이 있어도 대상이 아니다.
+    CHECK(disguise_role(main_cats, 5, lock, 3, 9) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 11) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 14) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 15) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 18) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 19) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 5, lock, 3, 0) == DisguiseRole::None);
+}
+
+TEST(disguise_role_handles_empty_lists) {
+    using cdtb::game::disguise_role;
+    using cdtb::game::DisguiseRole;
+    const int main_cats[] = {1, 5};
+    const int lock[] = {2};
+    CHECK(disguise_role(nullptr, 0, nullptr, 0, 2) == DisguiseRole::None);
+    CHECK(disguise_role(main_cats, 2, nullptr, 0, 5) == DisguiseRole::DonorCat);
+    CHECK(disguise_role(nullptr, 0, lock, 1, 2) == DisguiseRole::Target);
+}
+
 }  // namespace

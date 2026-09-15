@@ -310,18 +310,56 @@ void call_place_teardown();
 //   CharacterInfo +0xBE `_mercenaryInfo`  동반자 타입 행 (드래곤 2 · 특수 5)
 //
 // **기증자는 내가 실제로 가진 개체에서 고른다.** 번호를 박지 않는다 - 메인 휠이
-// 허용하는 타입행이면서 내가 가진 탈것 하나를 골라 그 두 값을 베껴 온다.
+// 원래부터 받던 타입행이면서 내가 가진 탈것 하나를 골라 그 두 값을 베껴 온다.
 //
 // 바꾼 뒤에는 **명부의 종류별 색인도 따라와야 한다**(clan.h 휠 색인 고치기).
 // 정적 표라 세이브에 안 남고, 끄면 원래 값으로 되돌린다.
+//
+// ---- 대상을 어떻게 고르는가 (2026-09-15 사고로 다시 씀)
+//
+// 처음엔 "메인 휠 목록에 **없는** 타입행" 을 대상으로 삼았다. 이게 사고를 냈다.
+// **얹기(wheel_unlock)가 메인 목록에 2·3·4 를 이미 붙여 놓기 때문에** 정작
+// 드래곤(2)·ATAG(3)는 목록 안이라 대상에서 빠지고, 목록 밖에 남은 반려 동물·
+// 용병 열여섯이 전부 탈것으로 바뀌었다(사용자 실측: 새끼 와이번이 휠로 올라가고
+// 반려 동물에서 사라짐). 두 기능이 같은 표를 놓고 서로를 밟았다.
+//
+// 그래서 이제 메인 목록을 **묻지 않는다.** 경계는 얹기가 건드리지 않는 두 슬롯이
+// 정한다 - 드래곤 슬롯(1000020)의 목록과 정비 슬롯(1000019)의 목록.
+//
+//   대상   = 그 두 목록에 든 타입행 + `_vehicleInfo != 0xFFFF`(진짜 탈것)
+//   기증자 = 메인 목록에 들되 위 두 목록엔 없는 타입행(= 얹기 전 원래 목록)
+//            + `_vehicleInfo != 0xFFFF`
+//
+// `_vehicleInfo != 0xFFFF` 가 두 번째 안전선이다. 반려 동물·용병은 탈것 규칙이
+// 아예 없어(0xFFFF) 어떤 경우에도 대상이 될 수 없다. 먼젓번 사고에서 바뀐 열여섯
+// 줄은 **전부 원래 값이 0xFFFF** 였다 - 이 한 줄만 있었어도 하나도 안 바뀐다.
+//
+// 실측 배치(2026-09-15, 살아 있는 게임):
+//   타입행 1 말 · 5 특수 탑승물 -> 메인 휠 · 2 드래곤 · 3·4 A.T.A.G. 계열
+//   행 7008 Riding_Dragon_1 veh 3 merc 2 | 행 6818 WarMachine veh 2 merc 3
+//   행 6804 Riding_Wyvern_1000 veh 4 merc 5 (기증자 후보)
+inline constexpr std::uint16_t kInfoNone = 0xFFFF;   // 표에서 "없음"
 inline constexpr int kDisguiseMax = 16;
+
+// **순수 함수.** 이 타입행이 어느 쪽인가.
+//   Target   - 이야기로 잠긴 쪽(드래곤 슬롯·정비 슬롯이 가진 타입)
+//   DonorCat - 메인 휠이 **원래부터** 받던 쪽(잠긴 쪽을 뺀 나머지)
+//   None     - 탈것 휠과 무관(반려 동물·용병)
+//
+// 요점은 `main_cats` 에 얹기가 잠긴 타입을 붙여 놓아도 답이 안 바뀐다는 것이다.
+// 2026-09-15 사고가 정확히 거기서 났다.
+enum class DisguiseRole { None, Target, DonorCat };
+DisguiseRole disguise_role(const int* main_cats, int main_n,
+                           const int* locked_cats, int locked_n, int merc);
 
 struct DisguiseState {
     bool ready = false;
     bool on = false;
-    int targets = 0;       // 바꿀 종 수(내가 가진, 메인 휠이 안 받는 타입)
+    int targets = 0;       // 바꿀 종 수(드래곤·정비 슬롯이 정한 타입 + 진짜 탈것)
     int donor_merc = -1;   // 베껴 올 타입행
     int donor_veh = -1;    // 베껴 올 탈것 규칙 행
+    int donor_row = -1;    // 기증자 종의 행번호
+    std::uint16_t rows[kDisguiseMax] = {};   // 바꿀 종의 행번호
     char note[96] = {};
 };
 

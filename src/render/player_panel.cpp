@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <cstdint>
+#include <cstdio>
 
 #include "game/nofall.h"
 #include "game/player.h"
@@ -702,9 +703,24 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
     if (!dg.ready) {
         ImGui::TextDisabled("%s", dg.note);
     } else {
-        ImGui::TextDisabled("메인 휠이 안 받는 종 %d개 · 베껴 올 값: 타입행 %d ·"
-                            " 탈것규칙 %d",
-                            dg.targets, dg.donor_merc, dg.donor_veh);
+        ImGui::TextDisabled("바꿀 종 %d개 · 기증자 종행 %d (타입행 %d ·"
+                            " 탈것규칙 %d)",
+                            dg.targets, dg.donor_row, dg.donor_merc,
+                            dg.donor_veh);
+        if (dg.targets > 0) {
+            // 누르기 전에 **무엇을 건드리는지** 보여 준다. 2026-09-15 에 대상이
+            // 반려 동물로 번져도 아무 데도 안 보였다.
+            char rows[128] = {};
+            int at = 0;
+            for (int i = 0; i < dg.targets && i < game::kDisguiseMax; ++i) {
+                const int put = std::snprintf(rows + at, sizeof rows - at,
+                                              i == 0 ? "%u" : ", %u",
+                                              dg.rows[i]);
+                if (put <= 0 || at + put >= static_cast<int>(sizeof rows)) break;
+                at += put;
+            }
+            ImGui::TextDisabled("  대상 종행: %s", rows);
+        }
         bool dis = dg.on;
         if (ImGui::Checkbox("드래곤·ATAG 를 특수 탑승물과 같은 규칙으로", &dis)) {
             if (game::disguise_apply(reader, dis)) {
@@ -724,8 +740,11 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
                 "CharacterInfo 의 두 칸만 바꿉니다:\n"
                 "  +0x6E _vehicleInfo    탈것 규칙 행\n"
                 "  +0xBE _mercenaryInfo  동반자 타입 행\n\n"
+                "대상은 **드래곤 슬롯·정비 슬롯이 가진 타입행 + 진짜 탈것** 뿐입니다.\n"
+                "반려 동물·용병은 탈것 규칙이 0xFFFF 라 절대 안 걸립니다.\n"
                 "값은 번호를 박지 않고 **내가 가진 정상 탈것**에서 베껴 옵니다.\n"
                 "바꾼 뒤 명부의 종류별 색인도 같이 맞춥니다.\n"
+                "이걸 켜면 드래곤이 특수 탑승물 칸으로 가므로 **얹기는 필요 없습니다.**\n"
                 "정적 표라 세이브에 안 남고, 끄면 원래 값으로 되돌립니다.");
         }
     }

@@ -899,22 +899,20 @@ bool wr16(std::uintptr_t a, std::uint16_t v) {
     return mem::safe_write_bytes(a, &v, sizeof v);
 }
 
-// 메인 휠이 받는 타입인가.
-bool main_wheel_takes(const WheelState& w, int merc_row) {
-    for (int i = 0; i < w.main_slot.count; ++i) {
-        if (w.main_slot.cats[i] == merc_row) return true;
-    }
-    return false;
-}
 
-// 대상·기증자를 한 번에 고른다. 대상은 **내 명부에 있는** 종 중 메인 휠이 안 받는
-// 것, 기증자는 메인 휠이 받으면서 내가 가진 탈것이다.
+// 대상·기증자를 한 번에 고른다.
+//
+// **메인 휠 목록에 "없는" 것을 대상으로 삼지 않는다.** 얹기가 거기에 2·3·4 를
+// 붙여 놓으면 경계가 뒤집혀 정작 드래곤·ATAG 는 빠지고 반려 동물·용병이
+// 대상이 된다(2026-09-15 사고). 경계는 얹기가 건드리지 않는 드래곤 슬롯·정비
+// 슬롯의 목록이 정한다.
 struct DisguisePlan {
     std::uintptr_t rec[kDisguiseMax] = {};
     std::uint16_t row[kDisguiseMax] = {};
     int n = 0;
     int donor_merc = -1;
     int donor_veh = -1;
+    int donor_row = -1;
 };
 
 bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
@@ -927,6 +925,11 @@ bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
     const WheelState w = wheel_state(r);
     if (!w.ready) {
         std::snprintf(note, note_cap, "%s", w.note);
+        return false;
+    }
+    if (w.dragon.count <= 0 && w.mech.count <= 0) {
+        std::snprintf(note, note_cap, "%s",
+                      "드래곤·정비 슬롯 목록이 비었습니다");
         return false;
     }
     std::uintptr_t clan = 0;
@@ -955,28 +958,67 @@ bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
         return static_cast<std::uintptr_t>(
             rd64(r, recs + static_cast<std::uintptr_t>(row) * 8));
     };
+    // 잠긴 목록 = 드래곤 슬롯 + 정비 슬롯. 얹기는 이 둘을 안 건드리므로, 여기서
+    // 얹기 전의 경계를 그대로 되찾는다.
+    int lock[kWheelMaxCats * 2] = {};
+    int ln = 0;
+    for (int i = 0; i < w.dragon.count && ln < kWheelMaxCats * 2; ++i) {
+        lock[ln++] = w.dragon.cats[i];
+    }
+    for (int i = 0; i < w.mech.count && ln < kWheelMaxCats * 2; ++i) {
+        lock[ln++] = w.mech.cats[i];
+    }
+    auto role = [&](int merc_row) {
+        return disguise_role(w.main_slot.cats, w.main_slot.count, lock, ln,
+                             merc_row);
+    };
+    auto locked = [&](int merc_row) {
+        return role(merc_row) == DisguiseRole::Target;
+    };
+    auto native = [&](int merc_row) {
+        return role(merc_row) == DisguiseRole::DonorCat;
+    };
+    // 탈것 규칙 행이 "지면에서 트인 자리" 를 요구하지 않는가. 드래곤이 막히던
+    // 검사가 바로 그 칸이라, 기증자는 이게 풀린 쪽을 먼저 고른다.
+    std::uintptr_t veh_recs = 0;
+    int veh_n = 0;
+    veh_table(r, &veh_recs, &veh_n);
+    auto ground_free = [&](std::uint16_t veh) {
+        if (veh_recs == 0 || static_cast<int>(veh) >= veh_n) return false;
+        const std::uintptr_t rec = static_cast<std::uintptr_t>(
+            rd64(r, veh_recs + static_cast<std::uintptr_t>(veh) * 8));
+        if (rec < 0x10000) return false;
+        return !vehicle_place_gated(rdf(r, rec + kViGroundDist));
+    };
 
-    // 기증자: 메인 휠이 받는 타입 + 탈것 규칙이 있는 것. 여럿이면 처음 것.
-    for (const auto& e : list) {
-        if (e.merc_row == 0xFFFF || !main_wheel_takes(w, e.merc_row)) continue;
-        const std::uintptr_t rec = char_rec(e.row);
-        if (rec == 0) continue;
-        const std::uint16_t veh = rd16(r, rec + kCiVehicleInfo);
-        if (veh == 0) continue;   // 탈것이 아니면 규칙을 베낄 수 없다
-        p->donor_merc = e.merc_row;
-        p->donor_veh = veh;
-        break;
+    // 기증자: 메인 휠이 **원래** 받던 타입 + 진짜 탈것. 1차는 나는 것만, 없으면
+    // 2차에서 아무거나.
+    for (int pass = 0; pass < 2 && p->donor_merc < 0; ++pass) {
+        for (const auto& e : list) {
+            if (e.merc_row == kInfoNone || !native(e.merc_row)) continue;
+            const std::uintptr_t rec = char_rec(e.row);
+            if (rec == 0) continue;
+            const std::uint16_t veh = rd16(r, rec + kCiVehicleInfo);
+            if (veh == kInfoNone) continue;   // 탈것이 아니면 못 베낀다
+            if (pass == 0 && !ground_free(veh)) continue;
+            p->donor_merc = e.merc_row;
+            p->donor_veh = veh;
+            p->donor_row = static_cast<int>(e.row);
+            break;
+        }
     }
     if (p->donor_merc < 0) {
         std::snprintf(note, note_cap, "%s",
-                      "베껴 올 탈것이 없습니다 (메인 휠이 받는 탈것을 하나 가지십시오)");
+                      "베껴 올 탈것이 없습니다 (특수 탑승물을 하나 가지십시오)");
         return false;
     }
-    // 대상: 메인 휠이 안 받는 타입의 종. 같은 종이 여럿이어도 한 번만.
+    // 대상: 드래곤·정비 슬롯이 가진 타입행 + 진짜 탈것. 반려 동물·용병은 탈것
+    // 규칙이 0xFFFF 라 여기 못 들어온다. 같은 종이 여럿이어도 한 번만.
     for (const auto& e : list) {
-        if (e.merc_row == 0xFFFF || main_wheel_takes(w, e.merc_row)) continue;
+        if (e.merc_row == kInfoNone || !locked(e.merc_row)) continue;
         const std::uintptr_t rec = char_rec(e.row);
         if (rec == 0) continue;
+        if (rd16(r, rec + kCiVehicleInfo) == kInfoNone) continue;
         bool dup = false;
         for (int i = 0; i < p->n; ++i) {
             if (p->rec[i] == rec) { dup = true; break; }
@@ -991,6 +1033,19 @@ bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
 
 }  // namespace
 
+// **잠긴 쪽을 먼저 본다.** 얹기가 메인 목록에 2·3·4 를 붙여 놔도 드래곤은 여전히
+// 대상이고, 목록 밖의 반려 동물은 여전히 None 이다 - 2026-09-15 사고가 난 자리.
+DisguiseRole disguise_role(const int* main_cats, int main_n,
+                           const int* locked_cats, int locked_n, int merc) {
+    for (int i = 0; i < locked_n; ++i) {
+        if (locked_cats[i] == merc) return DisguiseRole::Target;
+    }
+    for (int i = 0; i < main_n; ++i) {
+        if (main_cats[i] == merc) return DisguiseRole::DonorCat;
+    }
+    return DisguiseRole::None;
+}
+
 DisguiseState disguise_state(const mem::Reader& reader) {
     DisguiseState s;
     DisguisePlan p;
@@ -999,6 +1054,8 @@ DisguiseState disguise_state(const mem::Reader& reader) {
     s.targets = p.n;
     s.donor_merc = p.donor_merc;
     s.donor_veh = p.donor_veh;
+    s.donor_row = p.donor_row;
+    for (int i = 0; i < p.n && i < kDisguiseMax; ++i) s.rows[i] = p.row[i];
     s.on = g_dis_bak_n > 0;
     return s;
 }
@@ -1016,11 +1073,21 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
         log::warnf("탈것 규칙 바꾸기: 할 일이 없다 ({})", note);
         return false;
     }
+    log::infof("탈것 규칙 바꾸기: 기증자 종행 {} - 타입행 {} · 탈것규칙 {} ·"
+               " 대상 {}개",
+               p.donor_row, p.donor_merc, p.donor_veh, p.n);
     int done = 0;
     for (int i = 0; i < p.n && g_dis_bak_n < kDisguiseMax; ++i) {
         const std::uintptr_t rec = p.rec[i];
         const std::uint16_t om = rd16(reader, rec + kCiMercInfo);
         const std::uint16_t ov = rd16(reader, rec + kCiVehicleInfo);
+        // **마지막 안전선.** 탈것 규칙이 없는 종(반려 동물·용병)은 어떤 이유로도
+        // 안 건드린다. 2026-09-15 에 바뀐 열여섯은 전부 여기 걸렸을 것들이다.
+        if (ov == kInfoNone) {
+            log::warnf("탈것 규칙 바꾸기: 종행 {} 는 탈것이 아니다 - 건너뛴다",
+                       p.row[i]);
+            continue;
+        }
         g_dis_bak[g_dis_bak_n] = DisguiseBak{rec, om, ov};
         ++g_dis_bak_n;
         // **탈것 규칙을 먼저, 타입을 나중에.** 타입이 바뀌는 순간 다른 코드가
