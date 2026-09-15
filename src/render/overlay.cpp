@@ -650,6 +650,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 번에 관문이 조용히 풀리고 로그만 "되돌림" 이라고 남는다. 이 블록만이
         // "사용자가 모드를 내렸다" 를 뜻한다.
         cdtb::game::skillgate_remove_all();
+        cdtb::game::wheel_teardown();
         cdtb::game::mount_timer_teardown();
         cdtb::game::call_place_teardown();
         input::cursor_guard_sync(false);

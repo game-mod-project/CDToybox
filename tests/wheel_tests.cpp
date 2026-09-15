@@ -12,6 +12,52 @@
 
 namespace {
 
+// 메인 휠 허용 목록 합치기. 실측(2026-09-15): 메인 [1,5] · ATAG [3,4] · 드래곤 [2].
+TEST(wheel_merge_adds_dragon_and_atag) {
+    using cdtb::game::kWheelMaxCats;
+    using cdtb::game::wheel_merge;
+    const int base[] = {1, 5};
+    const int add[] = {2, 3, 4};
+    int out[kWheelMaxCats] = {};
+    const int n = wheel_merge(base, 2, add, 3, out, kWheelMaxCats);
+    CHECK_EQ(n, 5);
+    // 원래 것이 앞에 그대로 남아야 한다 - 게임이 순서에 기대는지 모른다.
+    CHECK_EQ(out[0], 1);
+    CHECK_EQ(out[1], 5);
+    CHECK_EQ(out[2], 2);
+}
+
+TEST(wheel_merge_is_idempotent_and_dedupes) {
+    using cdtb::game::kWheelMaxCats;
+    using cdtb::game::wheel_merge;
+    const int base[] = {1, 5};
+    const int add[] = {2, 2, 3};
+    int a[kWheelMaxCats] = {};
+    const int n1 = wheel_merge(base, 2, add, 3, a, kWheelMaxCats);
+    CHECK_EQ(n1, 4);   // 안의 중복도 한 번만
+    int b[kWheelMaxCats] = {};
+    // 두 번 걸어도 늘어나면 안 된다 - 화면이 토글을 여러 번 누른다.
+    CHECK_EQ(wheel_merge(a, n1, add, 3, b, kWheelMaxCats), n1);
+}
+
+TEST(wheel_merge_truncates_instead_of_overflowing) {
+    using cdtb::game::wheel_merge;
+    const int base[] = {1, 5};
+    const int add[] = {2, 3, 4};
+    int out[3] = {};
+    // 들어가는 만큼만 넣고 **그 개수를 정직하게** 돌려준다.
+    CHECK_EQ(wheel_merge(base, 2, add, 3, out, 3), 3);
+    CHECK_EQ(out[2], 2);
+}
+
+TEST(wheel_merge_rejects_bad_output) {
+    using cdtb::game::wheel_merge;
+    const int base[] = {1};
+    int out[1] = {};
+    CHECK_EQ(wheel_merge(base, 1, nullptr, 0, nullptr, 4), 0);
+    CHECK_EQ(wheel_merge(base, 1, nullptr, 0, out, 0), 0);
+}
+
 TEST(mount_needs_free_picks_timed_mounts) {
     using cdtb::game::mount_needs_free;
     // 드래곤: 쿨다운도 시간제한도 걸려 있다

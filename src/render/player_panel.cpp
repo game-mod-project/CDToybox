@@ -600,9 +600,32 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
     line("드래곤", w.dragon);
     line("ATAG/기계", w.mech);
 
-    ImGui::TextDisabled(
-        "드래곤·ATAG 는 메인 휠의 허용 목록에서 빠진 채 전용 슬롯에만 들어갑니다.");
-
+    // **한 방향이다.** 끄는 길을 두지 않는다 - 목록을 줄이면 게임 쪽 휠이 옛
+    // 목록으로 만든 상태와 어긋나 특수 탑승물이 먹통이 된다(실측 2026-09-15).
+    // 정적 표라 세이브에 안 남으므로 **재시작이 곧 되돌리기**다.
+    if (w.on) {
+        ImGui::TextColored(col::kOk, "메인 휠에 얹었습니다 (허용 %d개)",
+                           w.main_slot.count);
+        ImGui::TextDisabled(
+            "되돌리려면 게임을 다시 시작하십시오 - 목록을 줄이면 게임 쪽 휠이"
+            " 어긋나 특수 탑승물이 먹통이 됩니다.");
+    } else if (confirm_small_button("메인 휠에 드래곤·ATAG 얹기")) {
+        if (game::wheel_unlock(reader, true)) {
+            notice_set(&s_note, NoticeLevel::Ok, "허용 {}개로 늘렸습니다",
+                       w.want_count);
+        } else {
+            notice_set(&s_note, NoticeLevel::Bad, "실패 - 목록을 안 건드렸습니다");
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "메인 탈것 휠이 허용하는 카테고리 목록에\n"
+            "드래곤 슬롯·메카닉 슬롯이 쓰는 값을 그대로 더합니다.\n"
+            "번호를 박지 않고 그 슬롯들에서 베껴 옵니다.\n\n"
+            "7시 전용 드래곤 슬롯은 무반응입니다 - 이것을 눌러야\n"
+            "드래곤이 6시 메인 휠에서 소환 경로까지 갑니다.\n\n"
+            "한 번 누르면 이 판에서는 되돌릴 수 없습니다.");
+    }
     notice_draw(s_note);
 
     // 쿨다운. 휠에 얹고 나니 드래곤이 "쿨타임 중" 으로 막혔다(2026-09-15).
