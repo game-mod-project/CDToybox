@@ -8,6 +8,8 @@
 #include "game/nofall.h"
 #include "game/player.h"
 #include "game/clan.h"
+#include "game/companion.h"
+#include "game/grant.h"
 #include "game/knowledge.h"
 #include "game/reserveslot.h"
 #include "game/skillgate.h"
@@ -666,7 +668,66 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
             ImGui::SetTooltip(
                 "CharacterInfo 의 재소환 쿨다운(+0x70)을 1초로,\n"
                 "강제 하차까지의 시간(+0x78)을 68시간으로 바꿉니다.\n"
-                "원래 시간제한이 없던 탈것에는 새로 걸지 않습니다.");
+                "원래 시간제한이 없던 탈것에는 새로 걸지 않습니다.\n\n"
+                "**이미 돌기 시작한 대기 시간에는 안 듣습니다.** 게임이 부를 때\n"
+                "마감 시각을 따로 박아 두기 때문입니다(실측 2026-09-15). 이건\n"
+                "다음 소환부터 듣습니다 - 지금 도는 것은 아래 아이템으로 줄이십시오.");
+        }
+    }
+
+    // 이미 돌고 있는 대기 시간은 위 스위치로 안 풀린다. 그 자리는 게임이 부를
+    // 때 박아 두는 마감 시각인데, 명부 레코드(0x1C0)·예약 슬롯 런타임 어디에도
+    // 없었다(2026-09-15: 90초·15분 간격 덤프와 아이템 사용 전후 모두 무변화).
+    // 그래서 **게임이 정해 둔 길**을 쓴다 - 게임 자신의 쿨다운 감소 아이템이다.
+    //
+    // 지급만 한다. 사용은 인벤토리에서 하십시오 - 우리가 2976(아이템 사용)을
+    // 구동해 봤지만 대기 시간이 자연 감소분 이상으로 안 줄었다(실측 19:37).
+    ImGui::Separator();
+    ImGui::TextDisabled("돌고 있는 재소환 대기 시간 줄이기 (아이템 지급)");
+    {
+        static int s_cd_count = 12;
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputInt("개수##cdreduce", &s_cd_count)) {
+            if (s_cd_count < 1) s_cd_count = 1;
+            if (s_cd_count > 99) s_cd_count = 99;
+        }
+        auto give_cd = [&](const char* label, std::uint32_t key,
+                           const char* what) {
+            if (!ImGui::SmallButton(label)) return;
+            const std::uintptr_t session = game::companion_pick_session();
+            if (session == 0) {
+                notice_set(&s_note, NoticeLevel::Bad,
+                           "서버 세션을 못 찾았습니다 (월드 밖?)");
+                return;
+            }
+            if (!game::give_ready()) {
+                notice_set(&s_note, NoticeLevel::Bad, "지급 준비가 안 됐습니다");
+                return;
+            }
+            if (game::request_give(session, key, s_cd_count)) {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "{} 쿨다운 감소 {}개를 넣었습니다 - 가방에서 쓰십시오",
+                           what, s_cd_count);
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad,
+                           "지급 대기열이 차 있습니다 - 잠시 뒤 다시");
+            }
+        };
+        give_cd("A.T.A.G. I", 1002632, "A.T.A.G.");
+        ImGui::SameLine();
+        give_cd("A.T.A.G. II", 1003773, "A.T.A.G.");
+        ImGui::SameLine();
+        give_cd("드래곤 I", 1002631, "드래곤");
+        ImGui::SameLine();
+        give_cd("드래곤 II", 1003772, "드래곤");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "게임 자신의 쿨다운 감소 아이템을 가방에 넣습니다.\n"
+                "  1002632 / 1003773  A.T.A.G. I · II\n"
+                "  1002631 / 1003772  드래곤 I · II\n\n"
+                "하나당 5~10분씩 줄어 60분을 지우려면 여러 개가 듭니다.\n"
+                "**사용은 가방에서 하십시오** - 우리가 사용 메시지를 구동해 봤지만\n"
+                "대기 시간이 자연 감소분 이상으로 안 줄었습니다(실측 2026-09-15).");
         }
     }
 
