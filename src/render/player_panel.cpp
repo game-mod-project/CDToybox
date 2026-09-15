@@ -620,9 +620,42 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
     }
     notice_draw(s_note);
 
+    // 쿨다운. 휠에 얹고 나니 드래곤이 "쿨타임 중" 으로 막혔다(2026-09-15).
+    ImGui::Separator();
+    const game::MountTimerState t = game::mount_timer_state(reader);
+    if (!t.ready) {
+        ImGui::TextDisabled("%s", t.note);
+    } else {
+        ImGui::TextDisabled("탈것 %d종 · 쿨다운/시간제한이 걸린 것 %d종", t.mounts,
+                            t.timed);
+        bool free_on = t.on;
+        if (ImGui::Checkbox("소환 쿨다운·탑승 시간제한 풀기", &free_on)) {
+            if (game::mount_timer_free(reader, free_on)) {
+                if (free_on) {
+                    notice_set(&s_note, NoticeLevel::Ok, "{}종을 풀었습니다",
+                               t.timed);
+                } else {
+                    notice_set(&s_note, NoticeLevel::Ok, "타이머를 되돌렸습니다");
+                }
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad,
+                           "실패 - 표를 안 건드렸습니다");
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "CharacterInfo 의 재소환 쿨다운(+0x70)을 1초로,\n"
+                "강제 하차까지의 시간(+0x78)을 68시간으로 바꿉니다.\n"
+                "원래 시간제한이 없던 탈것에는 새로 걸지 않습니다.");
+        }
+    }
+
     ImGui::TextColored(col::kWarn,
                        "실험입니다. 휠 목록에 뜨는 것과 실제로 소환·탑승이"
                        " 되는 것은 다를 수 있습니다.");
+    ImGui::TextDisabled(
+        "\"등록 안 됨\" 으로 막히는 종은 그 타입의 동반자를 하나 가지고 있어야"
+        " 합니다 - 탈것·용병·캐릭터 창에서 종을 바꿔 만드십시오.");
     ImGui::TextDisabled(
         "정적 표에 쓰므로 세이브에 남지 않습니다 - 게임을 끄면 원래대로 돌아가고,"
         " 모드를 내릴 때도 되돌립니다.");

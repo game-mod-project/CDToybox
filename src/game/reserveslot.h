@@ -191,4 +191,49 @@ bool wheel_unlock(const mem::Reader& reader, bool on);
 // 모드를 내릴 때 우리가 건 것을 되돌린다. 안 걸려 있으면 아무것도 안 한다.
 void wheel_teardown();
 
+// ------------------------------ 탈것 소환 쿨다운·시간제한 (2026-09-15)
+//
+// 드래곤을 메인 휠에 얹자 게임이 **"쿨타임 중"** 으로 답했다(사용자 확인
+// 2026-09-15). 등록·카테고리 판정을 통과했다는 뜻이고 - 종 교체해 둔 드래곤이
+// 소유 판정을 채웠다 - 남은 벽이 쿨다운뿐이라는 뜻이다. 같은 시험에서 ATAG 는
+// "등록 안 됨" 이었다(그 타입 동반자를 안 가졌다. 종 교체가 답이다).
+//
+// 두 값은 `CharacterInfo` 의 정적 필드다(우리 빌드 `fields.py` 로 확정):
+//
+//   +0x6E u16 _vehicleInfo                0 이 아니면 탈것
+//   +0x70 u64 _callMercenaryCoolTime      재소환 쿨다운(초).  드래곤 3600
+//   +0x78 u64 _callMercenarySpawnDuration 강제 하차까지(초).  드래곤 600
+//
+// 게임 데이터에서 읽은 값과 같고(`Riding_Dragon_1` 600/3600), 참고 모드
+// (Nexus 356)가 고치는 것이 정확히 이 둘이다.
+//
+// **쿨다운은 0 이 아니라 1 로 둔다** - 0 을 특별하게 보는 코드가 있는지 모르고,
+// 상류 모드도 1초로 내린다. **시간제한은 0 으로 두지 않는다** - `경과 >= 제한`
+// 이면 첫 프레임부터 참이 되어 즉시 하차가 될 수 있다. 크게 준다(68시간,
+// 상류의 MAX 프리셋과 같은 값).
+//
+// 정적 표라 세이브에 안 남는다. 게임을 끄면 원복된다.
+inline constexpr std::size_t kCiVehicleInfo = 0x6E;
+inline constexpr std::size_t kCiCoolTime = 0x70;
+inline constexpr std::size_t kCiSpawnDuration = 0x78;
+inline constexpr std::uint64_t kCoolTimeFree = 1;
+inline constexpr std::uint64_t kDurationFree = 244800;  // 68시간
+inline constexpr int kMountPatchMax = 512;
+
+// **순수 함수.** 이 레코드를 손봐야 하는가. 탈것이 아니거나 이미 풀려 있으면 아니다.
+bool mount_needs_free(std::uint16_t vehicle_info, std::uint64_t cool,
+                      std::uint64_t dur);
+
+struct MountTimerState {
+    bool ready = false;
+    bool on = false;
+    int mounts = 0;   // 탈것 레코드 수
+    int timed = 0;    // 쿨다운·시간제한이 남아 있는 수
+    char note[96] = {};
+};
+
+MountTimerState mount_timer_state(const mem::Reader& reader);
+bool mount_timer_free(const mem::Reader& reader, bool on);
+void mount_timer_teardown();
+
 }  // namespace cdtb::game

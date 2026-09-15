@@ -83,6 +83,30 @@ TEST(wheel_merge_rejects_bad_output) {
     CHECK_EQ(wheel_merge(base, 1, nullptr, 0, out, 0), 0);
 }
 
+// 탈것 타이머. 실측 값(2026-09-15): 드래곤·ATAG 는 쿨 3600 · 제한 600,
+// 낙타·배는 둘 다 0(제한 없음), 곰·사슴은 쿨 300 · 제한 0.
+TEST(mount_needs_free_picks_timed_mounts) {
+    using cdtb::game::mount_needs_free;
+    // 드래곤: 쿨다운도 시간제한도 걸려 있다
+    CHECK(mount_needs_free(16984, 3600, 600));
+    // 곰: 쿨다운만 걸려 있다
+    CHECK(mount_needs_free(16979, 300, 0));
+    // 낙타/배: 아무것도 안 걸려 있다 - 건드릴 이유가 없다
+    CHECK(!mount_needs_free(16978, 0, 0));
+    // 탈것이 아니면 쿨다운이 있어도 건드리지 않는다
+    CHECK(!mount_needs_free(0, 3600, 600));
+}
+
+TEST(mount_needs_free_is_idempotent_after_patch) {
+    using cdtb::game::kCoolTimeFree;
+    using cdtb::game::kDurationFree;
+    using cdtb::game::mount_needs_free;
+    // 우리가 쓴 값이 들어간 뒤에는 다시 손댈 것이 없어야 한다 - 안 그러면
+    // 백업이 우리 값을 "원본" 으로 덮어쓴다.
+    CHECK(!mount_needs_free(16984, kCoolTimeFree, kDurationFree));
+    CHECK(!mount_needs_free(16979, kCoolTimeFree, 0));
+}
+
 TEST(wheel_merge_empty_base_takes_everything) {
     const int add[] = {2, 3};
     int out[kWheelMaxCats] = {};

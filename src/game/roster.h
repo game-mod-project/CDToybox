@@ -263,6 +263,11 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader);
 // 탈것·캐릭터가 준비됐는가. 용병 표는 있으면 좋고 없어도 준비로 친다.
 bool roster_ready();
 
+// 카탈로그를 만들 때 RTTI 로 찾은 `CharacterInfoManager` 인스턴스. 아직 못 찾았으면
+// 0. **고정 전역을 쓰지 말고 이것을 쓴다** - 데이터 전역은 갱신마다 고르지 않게
+// 밀린다(위 소환 표 주석). 레코드를 직접 봐야 하는 기능이 이것으로 표에 닿는다.
+std::uintptr_t roster_char_manager();
+
 // 준비되기 전에 부르면 빈 목록이다.
 const std::vector<RosterEntry>& vehicle_catalog();
 const std::vector<RosterEntry>& mercenary_catalog();

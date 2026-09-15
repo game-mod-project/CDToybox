@@ -7,6 +7,7 @@
 
 #include "core/log.h"
 #include "game/knowledge.h"
+#include "game/roster.h"
 #include "mem/safe_read.h"
 
 namespace cdtb::game {
@@ -676,5 +677,126 @@ bool wheel_unlock(const mem::Reader& reader, bool on) {
 }
 
 void wheel_teardown() { wheel_restore(); }
+
+// ------------------------------------------- 탈것 쿨다운·시간제한
+
+namespace {
+
+struct MountBak {
+    std::uintptr_t rec = 0;
+    std::uint64_t cool = 0;
+    std::uint64_t dur = 0;
+};
+MountBak g_mount_bak[kMountPatchMax];
+int g_mount_bak_n = 0;
+
+// 캐릭터 표를 걷는다. 매니저는 카탈로그가 RTTI 로 찾아 둔 것이다 - 고정 전역은
+// 갱신마다 고르지 않게 밀린다(roster.h 의 소환 표 주석).
+bool char_table(const mem::Reader& r, std::uintptr_t* records, int* count) {
+    const std::uintptr_t mgr = roster_char_manager();
+    if (mgr == 0) return false;
+    std::uint32_t n = 0;
+    std::uintptr_t recs = 0;
+    if (!roster_header(r, mgr, &n, &recs)) return false;
+    if (n == 0 || recs < 0x10000) return false;
+    *records = recs;
+    *count = static_cast<int>(n);
+    return true;
+}
+
+}  // namespace
+
+bool mount_needs_free(std::uint16_t vehicle_info, std::uint64_t cool,
+                      std::uint64_t dur) {
+    if (vehicle_info == 0) return false;               // 탈것이 아니다
+    if (cool > kCoolTimeFree) return true;             // 쿨다운이 남았다
+    if (dur > 0 && dur < kDurationFree) return true;   // 시간제한이 남았다
+    return false;
+}
+
+MountTimerState mount_timer_state(const mem::Reader& reader) {
+    MountTimerState s;
+    std::uintptr_t recs = 0;
+    int n = 0;
+    if (!char_table(reader, &recs, &n)) {
+        std::snprintf(s.note, sizeof s.note,
+                      "%s", "캐릭터 표를 아직 못 잡았습니다 (로스터 준비 중)");
+        return s;
+    }
+    s.ready = true;
+    for (int i = 0; i < n; ++i) {
+        const std::uintptr_t rec = static_cast<std::uintptr_t>(
+            rd64(reader, recs + static_cast<std::uintptr_t>(i) * 8));
+        if (rec < 0x10000) continue;
+        const std::uint16_t vi = rd16(reader, rec + kCiVehicleInfo);
+        if (vi == 0) continue;
+        ++s.mounts;
+        std::uint64_t cool = 0, dur = 0;
+        reader.read_value(rec + kCiCoolTime, &cool);
+        reader.read_value(rec + kCiSpawnDuration, &dur);
+        if (mount_needs_free(vi, cool, dur)) ++s.timed;
+    }
+    s.on = g_mount_bak_n > 0;
+    return s;
+}
+
+bool mount_timer_free(const mem::Reader& reader, bool on) {
+    if (!on) {
+        // 되돌리기는 리더가 필요 없다 - 주소와 원본을 같이 들고 있다.
+        mount_timer_teardown();
+        return true;
+    }
+    if (g_mount_bak_n > 0) return true;   // 이미 걸려 있다
+
+    std::uintptr_t recs = 0;
+    int n = 0;
+    if (!char_table(reader, &recs, &n)) return false;
+
+    int done = 0, skipped = 0;
+    for (int i = 0; i < n && g_mount_bak_n < kMountPatchMax; ++i) {
+        const std::uintptr_t rec = static_cast<std::uintptr_t>(
+            rd64(reader, recs + static_cast<std::uintptr_t>(i) * 8));
+        if (rec < 0x10000) continue;
+        const std::uint16_t vi = rd16(reader, rec + kCiVehicleInfo);
+        std::uint64_t cool = 0, dur = 0;
+        if (!reader.read_value(rec + kCiCoolTime, &cool)) continue;
+        if (!reader.read_value(rec + kCiSpawnDuration, &dur)) continue;
+        if (!mount_needs_free(vi, cool, dur)) continue;
+        // **원본을 먼저 적는다.** 쓰다 실패해도 되돌릴 수 있어야 한다.
+        g_mount_bak[g_mount_bak_n] = MountBak{rec, cool, dur};
+        ++g_mount_bak_n;
+        bool ok = wr64(rec + kCiCoolTime, kCoolTimeFree);
+        // 시간제한은 **원래 걸려 있던 것만** 늘린다. 0(제한 없음)을 큰 수로
+        // 바꾸면 제한이 없던 탈것에 제한을 새로 거는 셈이다.
+        if (ok && dur > 0) ok = wr64(rec + kCiSpawnDuration, kDurationFree);
+        if (ok) {
+            ++done;
+        } else {
+            ++skipped;
+        }
+    }
+    if (done == 0) {
+        mount_timer_teardown();
+        log::warnf("탈것 타이머: 한 건도 못 썼다 - 그대로 둔다");
+        return false;
+    }
+    log::infof("탈것 타이머: {}개 풀었다 (쿨다운 {}초 · 시간제한 {}초){}", done,
+               kCoolTimeFree, kDurationFree,
+               skipped != 0 ? " · 일부 쓰기 실패" : "");
+    return true;
+}
+
+void mount_timer_teardown() {
+    if (g_mount_bak_n == 0) return;
+    int back = 0;
+    for (int i = 0; i < g_mount_bak_n; ++i) {
+        const MountBak& b = g_mount_bak[i];
+        if (b.rec == 0) continue;
+        if (wr64(b.rec + kCiCoolTime, b.cool)) ++back;
+        if (b.dur > 0) wr64(b.rec + kCiSpawnDuration, b.dur);
+    }
+    log::infof("탈것 타이머: {}개 되돌렸다", back);
+    g_mount_bak_n = 0;
+}
 
 }  // namespace cdtb::game

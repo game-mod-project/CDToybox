@@ -626,6 +626,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // "사용자가 모드를 내렸다" 를 뜻한다.
         cdtb::game::skillgate_remove_all();
         cdtb::game::wheel_teardown();   // 탈것 휠 허용 목록도 같은 이유로 여기서
+        cdtb::game::mount_timer_teardown();
         input::cursor_guard_sync(false);
         input::mouse_sync(false);
         input::cursor_guard_remove();
