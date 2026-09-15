@@ -677,7 +677,9 @@ void draw_species_popup() {
             if (rt != nullptr) {
                 const game::ReindexResult ix =
                     game::clan_reindex(g_near_reader, *rt, false);
-                if (ix.moved > 0) {
+                if (ix.partial) {
+                    msg += " · 휠 색인은 못 봤습니다(잠시 뒤 [휠 색인 고치기])";
+                } else if (ix.moved > 0) {
                     msg += " · 휠 색인 " + std::to_string(ix.moved) + "건 정리";
                 } else if (ix.no_room > 0) {
                     msg += " · 휠 색인은 자리가 없어 못 옮겼습니다(세이브·로드"
@@ -736,7 +738,7 @@ void draw_my_companions_tab() {
         } else {
             const game::ReindexResult ix =
                 game::clan_reindex(g_near_reader, *rt, false);
-            if (ix.realms == 0) {
+            if (ix.realms == 0 || ix.partial) {
                 notice_set(&g_species_notice, NoticeLevel::Bad, "{}", ix.note);
             } else if (ix.wrong == 0) {
                 notice_set(&g_species_notice, NoticeLevel::Ok,

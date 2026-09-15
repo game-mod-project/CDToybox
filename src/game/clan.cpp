@@ -730,15 +730,24 @@ ReindexResult clan_reindex(const mem::Reader& reader, const mem::Rtti& rtti,
     // (TROUBLESHOOTING 2.3 을 그대로 다시 밟았다, 사용자 보고 2026-09-15).
     // 캐시가 비어 있으면 `clan_component_cached` 가 배경 재탐색을 걸고 이번은
     // 포기한다 - 멈추는 것보다 낫다.
-    if (clan_component_cached(reader, rtti, false, &srv)) {
-        reindex_one(reader, srv, dry, &res);
-    }
-    if (clan_component_cached(reader, rtti, true, &cli)) {
-        reindex_one(reader, cli, dry, &res);
-    }
+    //
+    // **다만 포기한 것을 포기했다고 말해야 한다.** 예전엔 그냥 건너뛰어서,
+    // 한쪽만 본 결과가 `어긋남 0` 이라는 깨끗한 숫자로 보고됐다(2026-09-15,
+    // 드래곤 휠 칸 바꾼 직후 클라이언트 명부가 캐시에 없었다).
+    const bool have_srv = clan_component_cached(reader, rtti, false, &srv);
+    if (have_srv) reindex_one(reader, srv, dry, &res);
+    const bool have_cli = clan_component_cached(reader, rtti, true, &cli);
+    if (have_cli) reindex_one(reader, cli, dry, &res);
     if (res.realms == 0) {
+        res.partial = true;
         std::snprintf(res.note, sizeof res.note, "%s",
                       "용병단 컴포넌트를 못 찾았습니다 (월드 밖?)");
+    } else if (!have_srv || !have_cli) {
+        res.partial = true;
+        std::snprintf(res.note, sizeof res.note,
+                      "%s 쪽 명부가 아직 캐시에 없어 건너뛰었습니다"
+                      " - 잠시 뒤 다시 한 번 눌러 주십시오",
+                      have_srv ? "클라이언트" : "서버");
     }
     return res;
 }

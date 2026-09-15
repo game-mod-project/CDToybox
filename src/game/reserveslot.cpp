@@ -1140,8 +1140,13 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
     const mem::Rtti* rtti = clan_rtti();
     if (rtti != nullptr) {
         const ReindexResult ix = clan_reindex(reader, *rtti, false);
-        log::infof("휠 칸 바꾸기: 휠 색인 어긋남 {} · 옮김 {} · 자리없음 {}",
-                   ix.wrong, ix.moved, ix.no_room);
+        if (ix.partial) {
+            log::warnf("휠 칸 바꾸기: 휠 색인을 다 못 봤다 ({}) - 잠시 뒤"
+                       " [휠 색인 고치기] 를 한 번 눌러 주십시오", ix.note);
+        } else {
+            log::infof("휠 칸 바꾸기: 휠 색인 어긋남 {} · 옮김 {} · 자리없음 {}",
+                       ix.wrong, ix.moved, ix.no_room);
+        }
     }
     return true;
 }
