@@ -26,6 +26,7 @@
 #include "render/layout.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
+#include "game/knowledge.h"
 #include "game/reserveslot.h"
 #include "game/skillgate.h"
 #include "render/item_panel.h"
@@ -527,9 +528,33 @@ namespace cdtb::overlay {
 
 using namespace detail;
 
+namespace {
+// 자동 재적용 목록을 ini 에 옮겨 적는다. 목록이 바뀔 때마다 지식 층이 부른다.
+void persist_knowledge_keep() {
+    const std::vector<cdtb::game::KnowWant> want = cdtb::game::know_auto_list();
+    g_cfg.knowledge_keep.clear();
+    g_cfg.knowledge_keep.reserve(want.size());
+    for (const cdtb::game::KnowWant& w : want) {
+        g_cfg.knowledge_keep.push_back(Config::KnowKeep{w.number, w.level});
+    }
+    if (g_ini_path.empty()) return;
+    cdtb::config::save(g_ini_path, g_cfg);
+}
+}  // namespace
+
 void set_config(const Config& cfg, const std::wstring& ini_path) {
     g_cfg = cfg;
     g_ini_path = ini_path;
+    // 지난 실행에 걸어 둔 지식을 되살린다. **훅은 되살린 뒤에 건다** - 먼저 걸면
+    // 되살리는 동안 같은 내용을 파일에 몇 번씩 다시 쓴다.
+    for (const Config::KnowKeep& k : cfg.knowledge_keep) {
+        cdtb::game::know_auto_remember(k.number, k.level);
+    }
+    if (!cfg.knowledge_keep.empty()) {
+        log::infof("지식 자동 재적용 {}개를 설정에서 되살렸다",
+                   static_cast<int>(cfg.knowledge_keep.size()));
+    }
+    cdtb::game::know_auto_persist_hook(&persist_knowledge_keep);
     // 장비 창의 캐릭터 선택을 되살린다. 발견은 분석 스레드가 한다.
     cdtb::game::equip_select_character(
         cfg.equip_character_row < 0

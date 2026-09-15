@@ -272,6 +272,12 @@ void know_auto_upsert(std::vector<KnowWant>* v, int number, int level);
 
 void know_auto_remember(int number, int level);
 void know_auto_forget();
+
+// 목록이 바뀔 때 부를 것. 화면 층이 ini 에 적어 두려고 건다 - 이 파일이 설정
+// 층을 직접 알면 층이 뒤집힌다. **자물쇠 밖에서** 부르므로 훅 안에서
+// `know_auto_list()` 를 불러도 된다.
+using KnowAutoPersist = void (*)();
+void know_auto_persist_hook(KnowAutoPersist fn);
 std::vector<KnowWant> know_auto_list();
 
 // 분석 스레드에서 부른다. 기억해 둔 것이 모자라면 다시 건다 - 충분하면 읽기만 하고

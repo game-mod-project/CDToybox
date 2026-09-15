@@ -33,6 +33,17 @@ struct Config {
     // 바뀐다. 0 이면 안 건다.
     int socket_cap = 0;
 
+    // 자동으로 다시 걸어 줄 지식. **지식 쓰기는 세이브를 못 넘으므로**, 기억해
+    // 두지 않으면 게임을 껐다 켤 때마다 사람이 다시 눌러야 한다. 세션 안의
+    // 리로드는 메모리 목록이 받쳐 줬지만 **프로세스 재시작은 못 넘었다** -
+    // 원소 넷을 다시 눌러야 했던 것이 그 때문이다(2026-09-15).
+    // ini 표기: `knowledge_keep = 4883:1,4884:1,4885:1,4886:1`
+    struct KnowKeep {
+        int number = 0;
+        int level = 0;
+    };
+    std::vector<KnowKeep> knowledge_keep;
+
     // 장비 창에서 고른 캐릭터(캐릭터 행). -1 이면 자동(정신력 풀 + 착용 조각 최다).
     // 클리프·웅카·데미안을 번갈아 조종하므로 마지막 선택을 세션 너머로 남긴다.
     // ini 표기: `equip_character_row = 5` (클리프 0, 데미안 3, 웅카 5)
@@ -49,6 +60,9 @@ bool save(const std::wstring& path, const Config& c);
 // 파일 한 줄 때문에 나머지 설정을 잃을 이유가 없다. 값이 0..5 밖이거나
 // 0 이면(=안 건드림) 버린다. 파일 없이 시험할 수 있게 밖으로 낸다.
 std::vector<Config::SocketCapPart> parse_socket_cap_parts(std::string_view v);
+
+// `4883:1,4884:1` 을 지식 목록으로. 위와 같은 규칙 - 어긋난 항목만 버린다.
+std::vector<Config::KnowKeep> parse_knowledge_keep(std::string_view v);
 
 }  // namespace config
 }  // namespace cdtb
