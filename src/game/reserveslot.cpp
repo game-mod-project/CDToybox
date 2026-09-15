@@ -222,4 +222,159 @@ void reserveslot_diagnose(const mem::Reader& reader,
     log::infof("휠 진단 ----- 끝");
 }
 
+
+// ------------------------------------------------ 원소 조건 해독 (2026-09-15)
+
+namespace {
+
+inline constexpr std::uintptr_t kCondNameTableRva = 0x0584FA10;   // char* x466
+inline constexpr int kCondNameCount = 466;
+inline constexpr std::uintptr_t kEmptyStrRva = 0x0692E4C0;
+inline constexpr std::uintptr_t kGpvMgrGlobalRva = 0x06C32880;
+inline constexpr std::size_t kGpvComp = 0x168;   // [액터+0x68] + 0x168
+
+// 문자열 객체 하나를 읽는다. `p` 는 **객체 포인터가 든 자리**가 아니라 객체 자체다.
+std::string read_str(const mem::Reader& r, std::uintptr_t obj,
+                     std::uintptr_t image) {
+    if (obj < 0x10000) return "(널)";
+    if (obj == image + kEmptyStrRva) return "(빈 문자열 싱글턴)";
+    std::uint64_t chars = 0;
+    std::uint32_t len = 0;
+    if (!r.read_value(obj, &chars) || chars < 0x10000) return "(못 읽음)";
+    r.read_value(obj + 8, &len);
+    if (len > 256) len = 256;
+    std::string out(len ? len : 64, '\0');
+    if (!r.read(static_cast<std::uintptr_t>(chars), out.data(), out.size())) {
+        return "(본문 못 읽음)";
+    }
+    const std::size_t z = out.find('\0');
+    if (z != std::string::npos) out.resize(z);
+    return out;
+}
+
+std::string cond_fn_name(const mem::Reader& r, std::uintptr_t image, int idx) {
+    if (idx < 0 || idx >= kCondNameCount) return "(색인 밖)";
+    std::uint64_t p = 0;
+    if (!r.read_value(image + kCondNameTableRva +
+                          static_cast<std::uintptr_t>(idx) * 8,
+                      &p) ||
+        p < 0x10000) {
+        return "(이름 못 읽음)";
+    }
+    char buf[65] = {};
+    if (!r.read(static_cast<std::uintptr_t>(p), buf, 64)) return "(이름 못 읽음)";
+    buf[64] = 0;
+    return buf;
+}
+
+void dump_condition(const mem::Reader& r, const Mgr& cond, int key,
+                    std::uintptr_t image) {
+    const std::uintptr_t ci = info_at(r, cond, key);
+    if (ci == 0) {
+        log::warnf("  조건 {}: 없다", key);
+        return;
+    }
+    // **0x40 을 넘지 않는다** - 넘겨서 이웃 객체를 읽고 틀린 결론을 낸 전례가 있다.
+    log::infof("  조건 {} @0x{:X}: _key {} · blocked {} · parser {}", key, ci,
+               rd32(r, ci + 0x00), rd8(r, ci + 0x10), rd8(r, ci + 0x30));
+    log::infof("    _stringKey    = \"{}\"",
+               read_str(r, static_cast<std::uintptr_t>(rd64(r, ci + 0x08)),
+                        image));
+    log::infof("    _originalStr  = \"{}\"",
+               read_str(r, static_cast<std::uintptr_t>(rd64(r, ci + 0x28)),
+                        image));
+    log::infof("    bool 셋 +20/21/22 = {} {} {}", rd8(r, ci + 0x20),
+               rd8(r, ci + 0x21), rd8(r, ci + 0x22));
+
+    const std::uintptr_t gc = static_cast<std::uintptr_t>(rd64(r, ci + 0x18));
+    if (gc < 0x10000) {
+        log::warnf("    gameCondition 이 없다(0x{:X})", gc);
+        return;
+    }
+    const std::uint64_t vt = rd64(r, gc);
+    const int idx = static_cast<int>(rd16(r, gc + 0x08));
+    log::infof("    gameCondition 0x{:X} vtable RVA 0x{:X} · 색인 {} = {}", gc,
+               vt >= image ? vt - image : 0, idx,
+               cond_fn_name(r, image, idx));
+    // 인자 구간. 클래스마다 다르므로 날로 본다(0x40 만).
+    for (int off = 0x10; off < 0x50; off += 16) {
+        std::uint8_t b[16] = {};
+        if (!r.read(gc + static_cast<std::uintptr_t>(off), b, 16)) break;
+        std::string hex, txt;
+        for (int i = 0; i < 16; ++i) {
+            char t[4];
+            std::snprintf(t, sizeof(t), "%02X ", b[i]);
+            hex += t;
+            txt += (b[i] >= 0x20 && b[i] < 0x7F) ? static_cast<char>(b[i]) : '.';
+        }
+        log::infof("      gc+{:02X}: {}| {}", off, hex, txt);
+    }
+    log::infof("      (u16 @gc+0x18 = {} · u32 @gc+0x30 = {})", rd16(r, gc + 0x18),
+               rd32(r, gc + 0x30));
+}
+
+bool name_interesting(const std::string& a, const std::string& b) {
+    static const char* kWords[] = {"byss", "ate", "lement", "lem_", "torm",
+                                   "ight", "ire",  "ind",   "ce"};
+    for (const char* w : kWords) {
+        if (a.find(w) != std::string::npos) return true;
+        if (b.find(w) != std::string::npos) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor) {
+    const std::uintptr_t image = reader.module_base();
+    log::infof("원소 진단 ----- 모듈 0x{:X}", image);
+
+    // 7.1 조건 넷의 정체
+    const Mgr cond = read_mgr(reader, kCondMgrGlobalRva, "조건 매니저");
+    if (cond.object != 0) {
+        for (int k = 9198; k <= 9201; ++k) dump_condition(reader, cond, k, image);
+    }
+
+    // 7.2 GamePlayVariable 정적 표 - 이름/메모에 단서가 있는 것만
+    const Mgr gpv = read_mgr(reader, kGpvMgrGlobalRva, "진행변수 매니저");
+    int hit = 0;
+    for (int k = 0; gpv.object != 0 && k < gpv.count; ++k) {
+        const std::uintptr_t info = info_at(reader, gpv, k);
+        if (info == 0) continue;
+        const std::string nm =
+            read_str(reader, static_cast<std::uintptr_t>(rd64(reader, info + 8)),
+                     image);
+        const std::string memo = read_str(
+            reader, static_cast<std::uintptr_t>(rd64(reader, info + 0x18)),
+            image);
+        if (!name_interesting(nm, memo)) continue;
+        if (++hit > 80) continue;
+        log::infof("  진행변수[{}] key {} · 기본 {} · blocked {} · \"{}\" / \"{}\"",
+                   k, rd32(reader, info), rd8(reader, info + 0x11),
+                   rd8(reader, info + 0x10), nm, memo);
+    }
+    if (gpv.object != 0) {
+        log::infof("  진행변수 표 {}개 중 단서 있는 것 {}개(80개까지만 찍음)",
+                   gpv.count, hit);
+    }
+
+    // 7.3 플레이어의 진행변수 표
+    if (player_actor != 0) {
+        const std::uintptr_t sub =
+            static_cast<std::uintptr_t>(rd64(reader, player_actor + kActorSub));
+        const std::uintptr_t gc =
+            sub == 0 ? 0
+                     : static_cast<std::uintptr_t>(rd64(reader, sub + kGpvComp));
+        if (gc >= 0x10000) {
+            log::infof("  플레이어 진행변수 컴프 0x{:X}: 버킷 {} · 원소 {} ·"
+                       " 버킷배열 0x{:X} · 값배열 0x{:X}",
+                       gc, rd32(reader, gc + 0x1F8), rd32(reader, gc + 0x1FC),
+                       rd64(reader, gc + 0x208), rd64(reader, gc + 0x210));
+        } else {
+            log::warnf("  플레이어 진행변수 컴프를 못 잡았다(0x{:X})", gc);
+        }
+    }
+    log::infof("원소 진단 ----- 끝");
+}
+
 }  // namespace cdtb::game

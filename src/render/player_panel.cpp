@@ -172,6 +172,9 @@ void draw_knowledge(const mem::Reader& reader) {
     if (ImGui::Button("휠 진단")) {
         // 예약 슬롯(원형 휠) 쪽을 **한 번에** 다 찍는다. 읽기만 한다.
         game::reserveslot_diagnose(reader, game::player_char());
+        // 원소 조건 넷의 정체까지 같은 버튼에서 찍는다 - 배포마다 게임을 꺼야
+        // 하므로 진단은 몰아서 넣는다.
+        game::element_diagnose(reader, game::player_char());
         notice_set(&s_note, NoticeLevel::Ok, "휠 진단을 로그에 남겼습니다");
     }
     if (ImGui::IsItemHovered()) {

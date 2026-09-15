@@ -77,4 +77,19 @@ inline constexpr int kSlotDumpMax = 64;
 // 하므로 진단은 몰아서 넣는다. player_actor 가 0 이면 런타임 컨테이너는 건너뛴다.
 void reserveslot_diagnose(const mem::Reader& reader, std::uintptr_t player_actor);
 
+// 원소 조건 넷(9198~9201)의 정체를 한 번에 밝히는 진단. **읽기만 한다.**
+//
+// 조사(2026-09-15)가 해독 경로를 확정했다:
+//   ConditionInfo(0x40): +0x00 _key · +0x08 _stringKey(문자열 객체) · +0x10 _isBlocked
+//                        +0x18 **GameCondition*** · +0x28 _originalString · +0x30 _parserType
+//   문자열 객체:        +0x00 char*(UTF-8) · +0x08 u32 길이 · +0x10 i32 refcount
+//                        공유 빈 문자열 = 이미지 + 0x0692E4C0
+//   GameCondition+0x08 u16 = **466개 조건 함수 이름표**(이미지 + 0x0584FA10)의 색인
+//     386 CheckGamePlayVariable (인자 u16 @ +0x18)
+//     298 CheckReserveSlot · 35 CheckKnowledge · 69/71/74 CompleteQuest/Mission/Stage
+//
+// 한때 이 조건들의 문자열을 읽었다고 적었다가 틀렸다 - ConditionInfo 가 0x40 인데
+// 0x60 을 떠서 이웃 객체를 읽은 것이었다. 그래서 여기서는 **0x40 을 넘지 않는다.**
+void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor);
+
 }  // namespace cdtb::game
