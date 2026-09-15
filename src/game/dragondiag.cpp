@@ -37,6 +37,11 @@ constexpr std::uint64_t kSpawnRva = 0x2A22DE0;  // 실제 스폰 프리미티브
 // 드래곤 클릭은 아무 줄도 안 남긴다.** 이 둘 중 어디까지 오는지가 다음을 정한다.
 constexpr std::uint64_t kCallFnRva = 0x2B78330;    // 휠 소환 루틴
 constexpr std::uint64_t kWheelFnRva = 0x2941350;   // 그 한 겹 위
+// 소환 경로가 **둘**이다. 스폰 로그의 호출자가 두 가지로 찍힌다 -
+// `+0x2B78493`(함수 0x2B78330) 과 `+0x2AC9E58`(함수 0x2AC87C0). 하나만 걸어
+// 두면 드래곤이 다른 쪽으로 갔을 때 또 "아무것도 없음" 이 나와 무의미해진다.
+// 프롤로그 `48 8b c4 48 89 58 18 48 89 50 10 55 56 57 41 54` - 표준이다.
+constexpr std::uint64_t kAltFnRva = 0x2AC87C0;     // 또 하나의 소환 경로
 // **거부 코드를 직접 찍는다(2026-09-15).** 드래곤이 "호출할 수 없는 장소입니다" 로
 // 막히는데 후보가 여럿이다(`eErrNoCallVehicleInvalidPosition` · `...InvalidAir` ·
 // `...MercenaryIndoor` · `...MercenaryRegion` · `...BlockedSpawnPositionByObstacle` ·
@@ -71,6 +76,9 @@ GateFn g_orig_gate = nullptr;
 using CallFn = void*(__fastcall*)(void*, void*, void*, std::uint64_t);
 CallFn g_orig_callfn = nullptr;
 CallFn g_orig_wheelfn = nullptr;
+CallFn g_orig_altfn = nullptr;
+void* g_altfn_target = nullptr;
+std::atomic<int> g_altfn_budget{300};
 void* g_callfn_target = nullptr;
 void* g_wheelfn_target = nullptr;
 std::atomic<int> g_callfn_budget{300};
@@ -148,6 +156,19 @@ void* __fastcall det_wheelfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
     return g_orig_wheelfn(a1, a2, a3, a4);
 }
 
+// 또 하나의 소환 경로(0x2AC87C0). 스폰 호출자가 `+0x2AC9E58` 로 찍히는 쪽이다.
+void* __fastcall det_altfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
+    const void* ret = _ReturnAddress();
+    if (g_altfn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+        log::infof("다른경로 진입(0x2AC87C0): 호출자=+0x{:X} rcx=0x{:X}"
+                   " rdx=0x{:X} r8=0x{:X} r9=0x{:X}",
+                   caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
+                   reinterpret_cast<std::uintptr_t>(a2),
+                   reinterpret_cast<std::uintptr_t>(a3), a4);
+    }
+    return g_orig_altfn(a1, a2, a3, a4);
+}
+
 void* __fastcall det_gate(void* a1, void* out, void* a3, std::uint64_t a4) {
     const void* ret = _ReturnAddress();
     const std::uint16_t key = static_cast<std::uint16_t>(a4);
@@ -187,6 +208,14 @@ bool dragondiag_install(const mem::Reader& reader) {
     g_base = reader.module_base();
     if (g_base == 0) return false;
     if (!mem::hook_init()) return false;
+
+    g_altfn_target = reinterpret_cast<void*>(g_base + kAltFnRva);
+    const bool altfn_ok = mem::hook_install(
+        g_altfn_target, &det_altfn, reinterpret_cast<void**>(&g_orig_altfn));
+    if (!altfn_ok) {
+        log::errorf("다른경로 후킹 실패 (RVA 0x{:X})", kAltFnRva);
+        g_altfn_target = nullptr;
+    }
 
     g_wheelfn_target = reinterpret_cast<void*>(g_base + kWheelFnRva);
     const bool wheelfn_ok = mem::hook_install(
@@ -237,13 +266,14 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v6 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 게이트 0x{:X} {} ·"
-        " 스폰 0x{:X} {} (알림 훅은 뗐다 - 게임을 팅기게 했다)",
+        "소환 진단 v7 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {}"
+        " · 게이트 0x{:X} {} · 스폰 0x{:X} {} (알림 훅은 뗐다 - 팅기게 했다)",
         kWheelFnRva, wheelfn_ok ? "후킹" : "실패", kCallFnRva,
-        callfn_ok ? "후킹" : "실패", kGateRva, gate_ok ? "후킹" : "실패",
-        kSpawnRva, spawn_ok ? "후킹" : "실패");
+        callfn_ok ? "후킹" : "실패", kAltFnRva, altfn_ok ? "후킹" : "실패",
+        kGateRva, gate_ok ? "후킹" : "실패", kSpawnRva,
+        spawn_ok ? "후킹" : "실패");
     (void)notify_ok;
-    return gate_ok || spawn_ok || callfn_ok || wheelfn_ok;
+    return gate_ok || spawn_ok || callfn_ok || wheelfn_ok || altfn_ok;
 }
 
 }  // namespace cdtb::game
