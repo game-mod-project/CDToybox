@@ -231,4 +231,42 @@ MountTimerState mount_timer_state(const mem::Reader& reader);
 bool mount_timer_free(const mem::Reader& reader, bool on);
 void mount_timer_teardown();
 
+// ------------------------------ 호출 장소 제한 (2026-09-15, 게임 검증으로 특정)
+//
+// 드래곤을 휠에서 부르면 게임이 **"호출할 수 없는 장소입니다"** 로 거부했다
+// (사용자 확인 2026-09-15). 즉 소유·카테고리·쿨다운을 전부 통과하고 **장소
+// 검사**까지 갔다는 뜻이다. 실행 파일의 오류 이름표가 그 가족을 보여 준다 -
+// `eErrNoCallVehicleInvalidPosition` · `...InvalidAir` · `...InvalidAltitude` ·
+// `...MercenaryIndoor` · `...BlockedSpawnPositionByObstacle` …
+//
+// 라이브로 드래곤(VehicleInfo 행 3)과 **정상 동작하는** 와이번(행 4)을 비교하니
+// 장소 관련 필드에서 딱 하나가 갈렸다:
+//
+//   +0x8C `_checkDistanceToGround`   드래곤 **30.0** · 와이번 **0**
+//
+// (`_maxAllowableHeight`(+0x9C)는 둘이 같았다 - 높이 상한은 원인이 아니다.)
+//
+// 즉 드래곤은 "지면에서 30만큼 트인 공간" 을 요구한다. 그 값을 0 으로 두면
+// 와이번과 같은 규칙이 된다. `CharacterInfo._vehicleInfo`(+0x6E)가 이 표의 행을
+// 가리킨다 - 드래곤 3 · 와이번 4.
+//
+// 정적 표라 **세이브에 안 남고** 게임을 끄면 원복된다.
+inline constexpr std::size_t kViGroundDist = 0x8C;   // float
+inline constexpr int kVehiclePatchMax = 64;
+
+// **순수 함수.** 이 탈것의 장소 검사를 풀어야 하는가.
+bool vehicle_place_gated(float ground_dist);
+
+struct CallPlaceState {
+    bool ready = false;
+    bool on = false;
+    int rows = 0;     // 탈것 표 행 수
+    int gated = 0;    // 지면 거리 검사가 걸린 행 수
+    char note[96] = {};
+};
+
+CallPlaceState call_place_state(const mem::Reader& reader);
+bool call_place_free(const mem::Reader& reader, bool on);
+void call_place_teardown();
+
 }  // namespace cdtb::game

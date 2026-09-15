@@ -1467,6 +1467,131 @@ void cmd_recdiff(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     std::printf("총 %d 바이트 다름\n", diffs);
 }
 
+// VehicleInfo 레코드 둘을 비교한다.
+//
+//     vehdiff <행A> <행B> [바이트수=0xC0]
+//
+// 탈것 호출 거부("호출할 수 없는 장소입니다")의 조건이 여기 있다 - 실패 메시지가
+// 알려 준 이름표: +0x8C `_checkDistanceToGround` · +0x9C `_maxAllowableHeight` ·
+// +0xA4 부근 `_callVehicleVoxelType`. `CharacterInfo._vehicleInfo`(+0x6E)가 이 표의
+// 행을 가리킨다 - 드래곤 3 · 와이번 4(실측 2026-09-15).
+void cmd_vehdiff(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: vehdiff <행A> <행B> [바이트수]\n");
+        return;
+    }
+    const int ra = static_cast<int>(std::strtol(argv[2], nullptr, 0));
+    const int rb = static_cast<int>(std::strtol(argv[3], nullptr, 0));
+    const int bytes = argc > 4 ? static_cast<int>(std::strtol(argv[4], nullptr, 0))
+                               : 0xC0;
+    std::uintptr_t mgr = 0;
+    if (!game::find_static_manager(reader, rt, ".?AVVehicleInfoManager@pa@@",
+                                   &mgr)) {
+        std::printf("VehicleInfoManager 를 못 찾았습니다.\n");
+        return;
+    }
+    std::uint32_t n = 0;
+    std::uintptr_t recs = 0;
+    if (!game::roster_header(reader, mgr, &n, &recs)) {
+        std::printf("표 머리를 못 읽었습니다.\n");
+        return;
+    }
+    std::printf("VehicleInfoManager 0x%llX · %u행\n", (unsigned long long)mgr, n);
+    if (ra < 0 || rb < 0 || ra >= static_cast<int>(n) || rb >= static_cast<int>(n)) {
+        std::printf("행 번호가 표 범위를 넘습니다.\n");
+        return;
+    }
+    std::uint64_t pa = 0, pb = 0;
+    reader.read_value(recs + static_cast<std::uintptr_t>(ra) * 8, &pa);
+    reader.read_value(recs + static_cast<std::uintptr_t>(rb) * 8, &pb);
+    if (pa < 0x10000 || pb < 0x10000) {
+        std::printf("레코드 포인터가 비었습니다.\n");
+        return;
+    }
+    auto label = [](int off) -> const char* {
+        switch (off) {
+            case 0x08: return " _stringKey";
+            case 0x10: return " _isBlocked";
+            case 0x14: return " _vehicleTypeNameHash";
+            case 0x18: return " _iconPath";
+            case 0x1A: return " _maxVehicleSeat";
+            case 0x5C: return " _maxParentLinkAttachCount";
+            case 0x68: return " _riderSpawnUpperAction";
+            case 0x6C: return " _vehicleSpawnUpperAction";
+            case 0x70: return " _escapeRoadGroupType";
+            case 0x8C: return " ★_checkDistanceToGround";
+            case 0x90: return " _showCountOnUI";
+            case 0x94: return " _riderDetectInfo";
+            case 0x98: return " _contactImpulseEvent";
+            case 0x9C: return " ★_maxAllowableHeight";
+            case 0xA0: return " _attachToDockingGimmickTag";
+            case 0xA4: return " ★_callVehicleVoxelType 외";
+            default: return "";
+        }
+    };
+    std::vector<std::uint8_t> ba(bytes), bb(bytes);
+    if (!reader.read(static_cast<std::uintptr_t>(pa), ba.data(), bytes) ||
+        !reader.read(static_cast<std::uintptr_t>(pb), bb.data(), bytes)) {
+        std::printf("레코드를 못 읽었습니다.\n");
+        return;
+    }
+    std::printf("A 행 %d 0x%llX   B 행 %d 0x%llX\n", ra, (unsigned long long)pa,
+                rb, (unsigned long long)pb);
+    for (int off = 0; off < bytes; off += 4) {
+        std::uint32_t va = 0, vb = 0;
+        std::memcpy(&va, &ba[off], 4);
+        std::memcpy(&vb, &bb[off], 4);
+        float fa = 0, fb = 0;
+        std::memcpy(&fa, &va, 4);
+        std::memcpy(&fb, &vb, 4);
+        const char* mark = (va == vb) ? "  " : "!=";
+        std::printf("  %s +0x%03X  A %08X (%g)  B %08X (%g)%s\n", mark, off, va,
+                    fa, vb, fb, label(off));
+    }
+}
+
+// 명부의 소환 판정(`[월드]` 표식)이 **진짜인지** 본다.
+//
+//     clanalive
+//
+// 핸들이 남아 있는데 그 액터가 죽었으면, 게임은 "이미 나와 있다" 로 보고 새로
+// 만들지 않는다 - 부르기가 이동만 시도하다 대상이 없어 **아무 일도 안 일어난다**
+// (사용자 보고 2026-09-15: 특수 탑승물 호출 무반응). 그 상태를 눈으로 보려는 것이다.
+void cmd_clanalive(mem::Rtti& rt, const mem::Reader& reader) {
+    game::discover_roster(rt, reader);
+    std::uintptr_t clan = 0;
+    if (!game::find_clan_component(reader, rt, &clan)) {
+        std::printf("서버 용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::vector<game::ClanEntry> list;
+    if (!game::read_clan_roster(reader, clan, &list)) {
+        std::printf("명부를 읽지 못했습니다.\n");
+        return;
+    }
+    int marked = 0, dead = 0, alive = 0, unknown = 0;
+    for (const auto& e : list) {
+        if (e.handle == 0) continue;
+        ++marked;
+        bool known = false;
+        const bool ok = game::actor_handle_alive(reader, e.handle, &known);
+        if (!known) {
+            ++unknown;
+        } else if (ok) {
+            ++alive;
+        } else {
+            ++dead;
+        }
+        std::printf("  번호 %llu  타입행 %u  핸들 0x%08X  %s  %s\n",
+                    (unsigned long long)e.merc_no, e.merc_row, e.handle,
+                    !known ? "판정불가" : (ok ? "살아있음" : "**죽음**"),
+                    e.label.empty() ? e.name.c_str() : e.label.c_str());
+    }
+    std::printf("[월드] 표식 %d개 - 살아있음 %d · 죽음 %d · 판정불가 %d\n", marked,
+                alive, dead, unknown);
+}
+
 // 명부 레코드 둘을 바이트로 나란히 놓고 다른 칸만 표시한다.
 //
 //     clandiff <번호A> <번호B> [바이트수=0x180]
@@ -4125,6 +4250,8 @@ int main(int argc, char** argv) {
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
     if (cmd == "wheel") { cmd_wheel(rt, reader); return 0; }
     if (cmd == "clandiff") { cmd_clandiff(rt, reader, argc, argv); return 0; }
+    if (cmd == "clanalive") { cmd_clanalive(rt, reader); return 0; }
+    if (cmd == "vehdiff") { cmd_vehdiff(rt, reader, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
         return 0;

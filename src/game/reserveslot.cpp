@@ -672,6 +672,112 @@ bool mount_timer_free(const mem::Reader& reader, bool on) {
     return true;
 }
 
+// ------------------------------------------- 호출 장소 제한
+
+namespace {
+
+struct VehBak {
+    std::uintptr_t rec = 0;
+    float dist = 0.0f;
+};
+VehBak g_veh_bak[kVehiclePatchMax];
+int g_veh_bak_n = 0;
+
+bool veh_table(const mem::Reader& r, std::uintptr_t* records, int* count) {
+    const std::uintptr_t mgr = roster_vehicle_manager();
+    if (mgr == 0) return false;
+    std::uint32_t n = 0;
+    std::uintptr_t recs = 0;
+    if (!roster_header(r, mgr, &n, &recs)) return false;
+    if (n == 0 || n > 4096 || recs < 0x10000) return false;
+    *records = recs;
+    *count = static_cast<int>(n);
+    return true;
+}
+
+float rdf(const mem::Reader& r, std::uintptr_t a) {
+    float v = 0.0f;
+    return r.read_value(a, &v) ? v : 0.0f;
+}
+
+}  // namespace
+
+bool vehicle_place_gated(float ground_dist) {
+    // NaN 은 비교가 전부 거짓이라 여기서도 조용히 빠진다 - 그것이 맞다
+    // (모르는 값을 0 으로 덮지 않는다).
+    return ground_dist > 0.0f;
+}
+
+CallPlaceState call_place_state(const mem::Reader& reader) {
+    CallPlaceState s;
+    std::uintptr_t recs = 0;
+    int n = 0;
+    if (!veh_table(reader, &recs, &n)) {
+        std::snprintf(s.note, sizeof s.note, "%s",
+                      "탈것 표를 아직 못 잡았습니다 (로스터 준비 중)");
+        return s;
+    }
+    s.ready = true;
+    s.rows = n;
+    for (int i = 0; i < n; ++i) {
+        const std::uintptr_t rec = static_cast<std::uintptr_t>(
+            rd64(reader, recs + static_cast<std::uintptr_t>(i) * 8));
+        if (rec < 0x10000) continue;
+        if (vehicle_place_gated(rdf(reader, rec + kViGroundDist))) ++s.gated;
+    }
+    s.on = g_veh_bak_n > 0;
+    return s;
+}
+
+bool call_place_free(const mem::Reader& reader, bool on) {
+    if (!on) {
+        call_place_teardown();
+        return true;
+    }
+    if (g_veh_bak_n > 0) return true;
+
+    std::uintptr_t recs = 0;
+    int n = 0;
+    if (!veh_table(reader, &recs, &n)) return false;
+
+    int done = 0;
+    for (int i = 0; i < n && g_veh_bak_n < kVehiclePatchMax; ++i) {
+        const std::uintptr_t rec = static_cast<std::uintptr_t>(
+            rd64(reader, recs + static_cast<std::uintptr_t>(i) * 8));
+        if (rec < 0x10000) continue;
+        const float d = rdf(reader, rec + kViGroundDist);
+        if (!vehicle_place_gated(d)) continue;
+        // 원본을 먼저 적는다 - 쓰다 실패해도 되돌릴 수 있어야 한다.
+        g_veh_bak[g_veh_bak_n] = VehBak{rec, d};
+        ++g_veh_bak_n;
+        const float zero = 0.0f;
+        if (mem::safe_write_bytes(rec + kViGroundDist, &zero, sizeof zero)) {
+            ++done;
+        }
+    }
+    if (done == 0) {
+        call_place_teardown();
+        log::warnf("호출 장소 제한: 한 건도 못 썼다 - 그대로 둔다");
+        return false;
+    }
+    log::infof("호출 장소 제한: {}개 풀었다 (지면 거리 검사 -> 0)", done);
+    return true;
+}
+
+void call_place_teardown() {
+    if (g_veh_bak_n == 0) return;
+    int back = 0;
+    for (int i = 0; i < g_veh_bak_n; ++i) {
+        const VehBak& b = g_veh_bak[i];
+        if (b.rec == 0) continue;
+        if (mem::safe_write_bytes(b.rec + kViGroundDist, &b.dist, sizeof b.dist)) {
+            ++back;
+        }
+    }
+    log::infof("호출 장소 제한: {}개 되돌렸다", back);
+    g_veh_bak_n = 0;
+}
+
 void mount_timer_teardown() {
     if (g_mount_bak_n == 0) return;
     int back = 0;

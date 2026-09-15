@@ -34,4 +34,13 @@ TEST(mount_needs_free_is_idempotent_after_patch) {
     CHECK(!mount_needs_free(16979, kCoolTimeFree, 0));
 }
 
+TEST(vehicle_place_gated_picks_ground_checked) {
+    using cdtb::game::vehicle_place_gated;
+    CHECK(vehicle_place_gated(30.0f));    // 드래곤
+    CHECK(!vehicle_place_gated(0.0f));    // 와이번(정상 동작)
+    CHECK(!vehicle_place_gated(-1.0f));   // 음수는 안 건드린다
+    // 우리가 쓴 뒤에는 다시 손댈 것이 없어야 한다(백업이 우리 값을 덮지 않게).
+    CHECK(!vehicle_place_gated(0.0f));
+}
+
 }  // namespace

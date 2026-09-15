@@ -635,6 +635,32 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
         }
     }
 
+    // 호출 장소. "호출할 수 없는 장소입니다" 로 막히는 자리다(2026-09-15 확정).
+    const game::CallPlaceState cp = game::call_place_state(reader);
+    if (cp.ready) {
+        ImGui::TextDisabled("탈것 표 %d행 · 지면 거리 검사가 걸린 것 %d행", cp.rows,
+                            cp.gated);
+        bool place_on = cp.on;
+        if (ImGui::Checkbox("호출 장소 제한 풀기", &place_on)) {
+            if (game::call_place_free(reader, place_on)) {
+                if (place_on) {
+                    notice_set(&s_note, NoticeLevel::Ok, "{}행을 풀었습니다",
+                               cp.gated);
+                } else {
+                    notice_set(&s_note, NoticeLevel::Ok, "장소 제한을 되돌렸습니다");
+                }
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad, "실패 - 표를 안 건드렸습니다");
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "VehicleInfo 의 _checkDistanceToGround(+0x8C)를 0 으로 둡니다.\n"
+                "드래곤은 30, 정상 동작하는 와이번은 0 입니다 - 드래곤이\n"
+                "\"호출할 수 없는 장소입니다\" 로 막히던 자리입니다.");
+        }
+    }
+
     ImGui::TextColored(col::kWarn,
                        "실험입니다. 휠 목록에 뜨는 것과 실제로 소환·탑승이"
                        " 되는 것은 다를 수 있습니다.");

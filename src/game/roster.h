@@ -268,6 +268,10 @@ bool roster_ready();
 // 밀린다(위 소환 표 주석). 레코드를 직접 봐야 하는 기능이 이것으로 표에 닿는다.
 std::uintptr_t roster_char_manager();
 
+// 같은 이유로 들고 있는 `VehicleInfoManager` 인스턴스. 탈것 호출의 장소 검사
+// (`_checkDistanceToGround`)가 이 표에 있다.
+std::uintptr_t roster_vehicle_manager();
+
 // 준비되기 전에 부르면 빈 목록이다.
 const std::vector<RosterEntry>& vehicle_catalog();
 const std::vector<RosterEntry>& mercenary_catalog();
