@@ -600,27 +600,9 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
     line("드래곤", w.dragon);
     line("ATAG/기계", w.mech);
 
-    bool on = w.on;
-    if (ImGui::Checkbox("메인 휠에 드래곤·ATAG 카테고리 얹기", &on)) {
-        if (game::wheel_unlock(reader, on)) {
-            // 포맷 문자열은 컴파일 타임 상수여야 한다(std::format) - 삼항으로
-            // 고르면 C7595 로 막힌다. 두 줄로 나눈다.
-            if (on) {
-                notice_set(&s_note, NoticeLevel::Ok, "허용 {}개로 늘렸습니다",
-                           w.want_count);
-            } else {
-                notice_set(&s_note, NoticeLevel::Ok, "원래대로 되돌렸습니다");
-            }
-        } else {
-            notice_set(&s_note, NoticeLevel::Bad, "실패 - 목록을 안 건드렸습니다");
-        }
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "메인 탈것 휠이 허용하는 카테고리 목록에\n"
-            "드래곤 슬롯·메카닉 슬롯이 쓰는 값을 그대로 더합니다.\n"
-            "번호를 박지 않고 그 슬롯들에서 베껴 옵니다.");
-    }
+    ImGui::TextDisabled(
+        "드래곤·ATAG 는 메인 휠의 허용 목록에서 빠진 채 전용 슬롯에만 들어갑니다.");
+
     notice_draw(s_note);
 
     // 쿨다운. 휠에 얹고 나니 드래곤이 "쿨타임 중" 으로 막혔다(2026-09-15).

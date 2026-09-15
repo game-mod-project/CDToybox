@@ -148,7 +148,16 @@ bool element_knowledge(const mem::Reader& reader,
 // **번호를 코드에 안 박는다.** 무엇을 더할지는 드래곤·메카닉 슬롯이 지금 들고
 // 있는 값을 그대로 베껴 온다 - 게임이 갱신돼 타입 행이 밀려도 따라간다.
 //
-// 정적 표라 **세이브에 안 남는다.** 게임을 끄면 원복된다(소켓 상한과 같은 성질).
+// ⛔ **메인 휠에 얹는 것은 폐기했다(2026-09-15, 게임 검증 뒤).** 실제로 해 보면
+// 드래곤·ATAG 가 6시 메인 휠에 나타나고 클릭도 소환 경로까지 간다. 그런데
+//
+//   - **소환은 여전히 안 된다.** 벽은 카테고리가 아니라 그 뒤였다(아래).
+//   - 슬롯의 "지금 고른 카테고리" 는 런타임 레코드 **`+0xD8` 한 칸**뿐이라,
+//     한 슬롯에 셋을 넣으면 셋이 그 한 칸을 다툰다(실측: 드래곤을 고르자
+//     `D8` 이 5 -> 2 로 덮였다).
+//
+// 얻는 것 없이 위험만 늘어 쓰기 경로를 걷어냈다. **읽기(어느 슬롯이 무엇을
+// 허용하는가)는 남긴다** - 이 구조를 다시 볼 때 근거가 된다.
 inline constexpr int kVehSlotKey = 1000006;
 inline constexpr int kMechSlotKey = 1000019;
 inline constexpr int kDragonSlotKey = 1000020;
@@ -168,28 +177,14 @@ struct WheelSlot {
 
 struct WheelState {
     bool ready = false;                 // 슬롯 셋을 다 잡았는가
-    bool on = false;                    // 지금 우리 값이 걸려 있는가
     WheelSlot main_slot;                // VehicleSlot
     WheelSlot dragon;
     WheelSlot mech;
-    int want[kWheelMaxCats] = {};       // 걸면 메인 휠이 이렇게 된다
-    int want_count = 0;
     char note[96] = {};                 // 못 잡았으면 그 이유
 };
 
-// **순수 함수.** base 에 없는 것만 뒤에 붙인다. out 이 모자라면 들어가는 만큼만
-// 넣고 그 개수를 돌려준다(자르되 거짓말하지 않는다).
-int wheel_merge(const int* base, int base_n, const int* add, int add_n,
-                int* out, int out_cap);
-
-// 읽기만 한다. 화면이 매 프레임 부르므로 로그를 안 남긴다.
+// **읽기만 한다.** 화면이 매 프레임 부르므로 로그를 안 남긴다.
 WheelState wheel_state(const mem::Reader& reader);
-
-// 메인 휠 목록을 늘리거나(on) 원래대로 되돌린다(off). 정적 표에 쓴다.
-bool wheel_unlock(const mem::Reader& reader, bool on);
-
-// 모드를 내릴 때 우리가 건 것을 되돌린다. 안 걸려 있으면 아무것도 안 한다.
-void wheel_teardown();
 
 // ------------------------------ 탈것 소환 쿨다운·시간제한 (2026-09-15)
 //
