@@ -607,8 +607,8 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
         ImGui::TextColored(col::kOk, "메인 휠에 얹었습니다 (허용 %d개)",
                            w.main_slot.count);
         ImGui::TextDisabled(
-            "되돌리려면 게임을 다시 시작하십시오 - 목록을 줄이면 게임 쪽 휠이"
-            " 어긋나 특수 탑승물이 먹통이 됩니다.");
+            "되돌리려면 게임을 다시 시작하십시오 - 체크를 푸는 것으로는 안"
+            " 돌아옵니다(실측).");
     } else if (confirm_small_button("메인 휠에 드래곤·ATAG 얹기")) {
         if (game::wheel_unlock(reader, true)) {
             notice_set(&s_note, NoticeLevel::Ok, "허용 {}개로 늘렸습니다",
@@ -624,8 +624,12 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
             "번호를 박지 않고 그 슬롯들에서 베껴 옵니다.\n\n"
             "7시 전용 드래곤 슬롯은 무반응입니다 - 이것을 눌러야\n"
             "드래곤이 6시 메인 휠에서 소환 경로까지 갑니다.\n\n"
-            "한 번 누르면 이 판에서는 되돌릴 수 없습니다.");
+            "대가: 이 판에서 같은 휠의 특수 탑승물 호출이 먹통이 됩니다.\n"
+            "체크를 풀어도 안 돌아옵니다 - 게임을 다시 켜야 합니다(실측).");
     }
+    ImGui::TextColored(col::kWarn,
+                       "누르면 이 판에서 특수 탑승물 호출이 먹통이 됩니다."
+                       " 되돌리기는 게임 재시작뿐입니다.");
     notice_draw(s_note);
 
     // 쿨다운. 휠에 얹고 나니 드래곤이 "쿨타임 중" 으로 막혔다(2026-09-15).
