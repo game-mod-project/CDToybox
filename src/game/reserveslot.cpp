@@ -358,6 +358,51 @@ void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor) {
                    gpv.count, hit);
     }
 
+    // ---- 지식의 **내부 이름**으로 원소 지식 넷을 찾는다 (2026-09-15)
+    //
+    // 조건 넷이 평문으로 나왔다:
+    //   CheckEquipSlotName(Bracelet) && CheckKnowledge(Knowledge_MpFire|Ice|Lightning|Wind)
+    // 즉 필요한 것은 **팔찌 장착 + 그 지식**이다. 사용자가 배운 "원소 : …" 여섯은
+    // 원소 강화 스킬이지 이 Mp* 지식이 아니었다.
+    //
+    // `ConditionInfo` 와 `GamePlayVariableInfo` 가 둘 다 `+0x08` 에 내부 이름 문자열을
+    // 들고 있었으므로 `KnowledgeInfo` 도 같은 배치일 것으로 본다. **가정이므로**
+    // 못 찾으면 앞쪽 몇 개를 그대로 찍어 무엇이 들어 있는지 보이게 한다.
+    {
+        const Mgr kn = read_mgr(reader, 0x06C2E2D8, "지식 매니저");
+        int found = 0, sampled = 0;
+        for (int k = 0; kn.object != 0 && k < kn.count; ++k) {
+            const std::uintptr_t info = info_at(reader, kn, k);
+            if (info == 0) continue;
+            const std::string nm = read_str(
+                reader, static_cast<std::uintptr_t>(rd64(reader, info + 8)),
+                image);
+            if (nm.find("Mp") != std::string::npos ||
+                nm.find("Elem") != std::string::npos) {
+                ++found;
+                if (found <= 40) {
+                    log::infof("  지식[{}] 내부이름 \"{}\" · 붙는스킬 {}", k, nm,
+                               rd16(reader, info + 0x104));
+                }
+            } else if (sampled < 5 && !nm.empty() && nm[0] != '(') {
+                ++sampled;
+                log::infof("  (표본) 지식[{}] +0x08 = \"{}\"", k, nm);
+            }
+        }
+        if (kn.object != 0) {
+            log::infof("  지식 {}개 중 이름에 Mp/Elem 이 든 것 {}개", kn.count,
+                       found);
+            if (found == 0 && sampled == 0) {
+                log::warnf("  +0x08 이 이름이 아닌 것 같다 - 앞 3개를 날로 찍는다");
+                for (int k = 0; k < 3; ++k) {
+                    const std::uintptr_t info = info_at(reader, kn, k);
+                    if (info == 0) continue;
+                    dump_raw(reader, info, 0x20, "KnowledgeInfo 머리");
+                }
+            }
+        }
+    }
+
     // 7.3 플레이어의 진행변수 표
     if (player_actor != 0) {
         const std::uintptr_t sub =
