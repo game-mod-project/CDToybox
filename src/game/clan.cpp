@@ -720,10 +720,15 @@ ReindexResult clan_reindex(const mem::Reader& reader, const mem::Rtti& rtti,
                            bool dry) {
     ReindexResult res;
     std::uintptr_t srv = 0, cli = 0;
-    if (find_clan_component(reader, rtti, &srv)) {
+    // **캐시된 것만 쓴다.** `find_clan_component` 는 RTTI 힙 스캔이라 10초대이고,
+    // 이 함수는 버튼(렌더 스레드)에서 불린다 - 그대로 부르면 화면이 그만큼 멈춘다
+    // (TROUBLESHOOTING 2.3 을 그대로 다시 밟았다, 사용자 보고 2026-09-15).
+    // 캐시가 비어 있으면 `clan_component_cached` 가 배경 재탐색을 걸고 이번은
+    // 포기한다 - 멈추는 것보다 낫다.
+    if (clan_component_cached(reader, rtti, false, &srv)) {
         reindex_one(reader, srv, dry, &res);
     }
-    if (find_clan_component_client(reader, rtti, &cli)) {
+    if (clan_component_cached(reader, rtti, true, &cli)) {
         reindex_one(reader, cli, dry, &res);
     }
     if (res.realms == 0) {
