@@ -459,7 +459,10 @@ void draw_knowledge(const mem::Reader& reader) {
 // 이름이라, 캐릭터별 노드(Knowledge_Kliff_MpFire 등)를 써도 소용이 없다 -
 // 그것으로 여러 번 헛돌았다.
 void draw_elements(const mem::Reader& reader) {
-    if (!ImGui::CollapsingHeader("원소 (어비스 관문 없이 습득)")) return;
+    if (!ImGui::CollapsingHeader("원소 (어비스 관문 없이 습득)",
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
 
     static Notice s_note;
     game::ElementKnow el[game::kElementCount];
@@ -470,6 +473,9 @@ void draw_elements(const mem::Reader& reader) {
     ImGui::TextWrapped(
         "휠 칸이 켜지려면 둘이 다 필요합니다: 팔찌(Bracelet) 장착 + 그 원소 지식."
         " 여기서는 지식만 넣습니다 - 팔찌는 직접 끼셔야 합니다.");
+    ImGui::TextColored(col::kWarn,
+                       "아래 선행 조건 표의 \"원소 : ...\" 줄들은 여기와 다른"
+                       " 것입니다 - 캐릭터별 스킬트리 노드라 눌러도 휠은 안 켜집니다.");
     for (int i = 0; i < game::kElementCount; ++i) {
         const game::ElementKnow& e = el[i];
         ImGui::PushID(i);

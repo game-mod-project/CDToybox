@@ -34,21 +34,26 @@ struct Mgr {
     int count = 0;
 };
 
-Mgr read_mgr(const mem::Reader& r, std::uintptr_t rva, const char* what) {
+// `quiet` 는 **매 프레임 부르는 자리**를 위한 것이다. 이 함수는 부를 때마다 한 줄씩
+// 찍는데, 화면 절이 프레임마다 부르면 진단 로그가 통째로 묻힌다.
+Mgr read_mgr(const mem::Reader& r, std::uintptr_t rva, const char* what,
+             bool quiet = false) {
     Mgr m;
     const std::uintptr_t base = r.module_base();
     if (base == 0 || rva + 8 > r.module_size()) return m;
     const std::uintptr_t obj = static_cast<std::uintptr_t>(rd64(r, base + rva));
     if (obj < 0x10000) {
-        log::warnf("  {} 전역이 비었다(0x{:X})", what, obj);
+        if (!quiet) log::warnf("  {} 전역이 비었다(0x{:X})", what, obj);
         return m;
     }
     const int cnt = static_cast<int>(rd32(r, obj + kMgrCount));
     const std::uintptr_t arr =
         static_cast<std::uintptr_t>(rd64(r, obj + kMgrArray));
-    log::infof("  {} 0x{:X} 개수 {} 배열 0x{:X}", what, obj, cnt, arr);
+    if (!quiet) {
+        log::infof("  {} 0x{:X} 개수 {} 배열 0x{:X}", what, obj, cnt, arr);
+    }
     if (cnt <= 0 || cnt > kSlotMaxCount || arr < 0x10000) {
-        log::warnf("  {} 가 말이 안 된다 - 안 따라간다", what);
+        if (!quiet) log::warnf("  {} 가 말이 안 된다 - 안 따라간다", what);
         return m;
     }
     m.object = obj;
@@ -426,6 +431,12 @@ void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor) {
 
 // ------------------------------------------------ 원소 습득 (2026-09-15)
 
+namespace {
+// 이름 훑기 결과. 매니저 주소가 그대로면 다시 안 찾는다.
+std::uintptr_t g_elem_mgr = 0;
+int g_elem_num[kElementCount] = {-1, -1, -1, -1};
+}  // namespace
+
 bool element_knowledge(const mem::Reader& reader,
                        ElementKnow out[kElementCount]) {
     static const char* kLabel[kElementCount] = {"화염", "냉기", "벼락", "바람"};
@@ -436,25 +447,42 @@ bool element_knowledge(const mem::Reader& reader,
         out[i] = ElementKnow{kLabel[i], kName[i], -1, 0};
     }
     const std::uintptr_t image = reader.module_base();
-    const Mgr kn = read_mgr(reader, 0x06C2E2D8, "지식 매니저");
-    if (kn.object == 0) return false;
-
-    // 이름으로 찾는다 - 번호를 박으면 게임 갱신에 밀린다.
-    int hit = 0;
-    for (int k = 0; k < kn.count && hit < kElementCount; ++k) {
-        const std::uintptr_t info = info_at(reader, kn, k);
-        if (info == 0) continue;
-        const std::string nm = read_str(
-            reader, static_cast<std::uintptr_t>(rd64(reader, info + 8)), image);
-        if (nm.empty() || nm.rfind("Knowledge_Mp", 0) != 0) continue;
-        for (int i = 0; i < kElementCount; ++i) {
-            if (out[i].number >= 0 || nm != kName[i]) continue;
-            out[i].number = k;
-            ++hit;
-            break;
-        }
+    const Mgr kn = read_mgr(reader, 0x06C2E2D8, "지식 매니저", true);
+    if (kn.object == 0) {
+        g_elem_mgr = 0;
+        return false;
     }
-    if (hit == 0) return false;
+
+    // 이름으로 찾는다 - 번호를 박으면 게임 갱신에 밀린다. 다만 이름 훑기는 6천 개를
+    // 도는 일이라 **화면이 프레임마다 할 짓이 아니다.** 매니저가 그대로면 한 번
+    // 찾은 것을 그대로 쓴다.
+    if (g_elem_mgr != kn.object) {
+        int found[kElementCount] = {-1, -1, -1, -1};
+        int hit = 0;
+        for (int k = 0; k < kn.count && hit < kElementCount; ++k) {
+            const std::uintptr_t info = info_at(reader, kn, k);
+            if (info == 0) continue;
+            const std::string nm =
+                read_str(reader,
+                         static_cast<std::uintptr_t>(rd64(reader, info + 8)),
+                         image);
+            if (nm.empty() || nm.rfind("Knowledge_Mp", 0) != 0) continue;
+            for (int i = 0; i < kElementCount; ++i) {
+                if (found[i] >= 0 || nm != kName[i]) continue;
+                found[i] = k;
+                ++hit;
+                break;
+            }
+        }
+        if (hit == 0) return false;
+        for (int i = 0; i < kElementCount; ++i) g_elem_num[i] = found[i];
+        g_elem_mgr = kn.object;
+        // **증거를 남긴다.** 다음에 "안 켜진다" 가 오면 어느 번호를 쓴 건지부터 본다.
+        log::infof("원소 지식을 이름으로 찾았다: 화염 {} · 냉기 {} · 벼락 {} ·"
+                   " 바람 {} (지식 {}개 중)",
+                   found[0], found[1], found[2], found[3], kn.count);
+    }
+    for (int i = 0; i < kElementCount; ++i) out[i].number = g_elem_num[i];
 
     // 지금 레벨. 서버 realm 의 표를 본다.
     KnowTable t;
