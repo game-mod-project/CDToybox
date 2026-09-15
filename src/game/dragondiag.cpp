@@ -25,18 +25,18 @@ namespace {
 // 스폰인지 _ReturnAddress 로 가린다.
 constexpr std::uint64_t kGateRva = 0x2ACA250;   // (대조) 소환 게이트
 constexpr std::uint64_t kSpawnRva = 0x2A22DE0;  // 실제 스폰 프리미티브
-// 게이트를 부르는 **바깥 함수**의 입구 (2026-09-15).
+// 휠 소환 사슬의 두 지점 (2026-09-15 실측으로 자리를 고쳤다).
 //
-// 드래곤을 휠에서 누르면 "호출할 수 없는 위치" 가 뜨는데, 그때 우리 훅이 하나도
-// 안 찍힌다 - 게이트도, 스폰도, 알림도, 동반자 캡처 11경로도. 반면 A.T.A.G. 는
-// 같은 자리에서 `키=0x5 결과=0` 으로 게이트를 지나 1초 뒤 월드에 나온다.
+// v4 에서 `0x2ADBA00`(게이트를 부르는 함수)에 걸었는데 **A.T.A.G. 도 드래곤도
+// 안 들어왔다.** 그 함수는 목록에서 부를 때 같은 다른 경로였다. 실제 휠 경로는
+// 스폰 로그가 찍어 준 호출자 `+0x2B78493` 쪽이고, 거기서 뒤로 훑어 함수 시작을
+// 찾았다 - `0x2B78330`(프롤로그 `48 89 5c 24 08 48 89 74 24 18 55 57 41 54 41 56`).
+// 한 겹 위는 앞선 세션이 기록해 둔 `0x2941350` 이다.
 //
-// 그래서 **이 함수에 들어오기는 하는지**부터 봐야 한다. 들어오는데 게이트까지
-// 못 가면 거부는 이 함수 안이고, 아예 안 들어오면 더 앞(UI)이다.
-//
-// 자리: 게이트 호출이 +0x2ADBBA4 이고, 거기서 뒤로 훑어 int3 패딩 다음의 표준
-// 프롤로그(`48 89 5c 24 10 48 89 74 24 18 55 57 41 54 41 56`)를 찾았다.
-constexpr std::uint64_t kCallFnRva = 0x2ADBA00;
+// 실측된 갈림: **A.T.A.G. 클릭은 스폰 프리미티브까지 가고(r8=1000019),
+// 드래곤 클릭은 아무 줄도 안 남긴다.** 이 둘 중 어디까지 오는지가 다음을 정한다.
+constexpr std::uint64_t kCallFnRva = 0x2B78330;    // 휠 소환 루틴
+constexpr std::uint64_t kWheelFnRva = 0x2941350;   // 그 한 겹 위
 // **거부 코드를 직접 찍는다(2026-09-15).** 드래곤이 "호출할 수 없는 장소입니다" 로
 // 막히는데 후보가 여럿이다(`eErrNoCallVehicleInvalidPosition` · `...InvalidAir` ·
 // `...MercenaryIndoor` · `...MercenaryRegion` · `...BlockedSpawnPositionByObstacle` ·
@@ -70,8 +70,11 @@ GateFn g_orig_gate = nullptr;
 // 바깥 함수도 레지스터 넷만 흘려보낸다(스택 인자는 호출자 프레임에 그대로 있다).
 using CallFn = void*(__fastcall*)(void*, void*, void*, std::uint64_t);
 CallFn g_orig_callfn = nullptr;
+CallFn g_orig_wheelfn = nullptr;
 void* g_callfn_target = nullptr;
+void* g_wheelfn_target = nullptr;
 std::atomic<int> g_callfn_budget{300};
+std::atomic<int> g_wheelfn_budget{300};
 SpawnFn g_orig_spawn = nullptr;
 NotifyFn g_orig_notify = nullptr;
 void* g_gate_target = nullptr;
@@ -123,13 +126,26 @@ void* __fastcall det_notify(void* a1, std::uint64_t a2, void* body,
 void* __fastcall det_callfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
     const void* ret = _ReturnAddress();
     if (g_callfn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("호출함수 진입: 호출자=+0x{:X} rcx=0x{:X} rdx=0x{:X}"
+        log::infof("휠소환 진입(0x2B78330): 호출자=+0x{:X} rcx=0x{:X} rdx=0x{:X}"
                    " r8=0x{:X} r9=0x{:X}",
                    caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
                    reinterpret_cast<std::uintptr_t>(a2),
                    reinterpret_cast<std::uintptr_t>(a3), a4);
     }
     return g_orig_callfn(a1, a2, a3, a4);
+}
+
+// 휠 소환 사슬의 한 겹 위. 여기까지도 안 오면 거부는 UI 안이다.
+void* __fastcall det_wheelfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
+    const void* ret = _ReturnAddress();
+    if (g_wheelfn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+        log::infof("휠함수 진입(0x2941350): 호출자=+0x{:X} rcx=0x{:X} rdx=0x{:X}"
+                   " r8=0x{:X} r9=0x{:X}",
+                   caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
+                   reinterpret_cast<std::uintptr_t>(a2),
+                   reinterpret_cast<std::uintptr_t>(a3), a4);
+    }
+    return g_orig_wheelfn(a1, a2, a3, a4);
 }
 
 void* __fastcall det_gate(void* a1, void* out, void* a3, std::uint64_t a4) {
@@ -172,6 +188,15 @@ bool dragondiag_install(const mem::Reader& reader) {
     if (g_base == 0) return false;
     if (!mem::hook_init()) return false;
 
+    g_wheelfn_target = reinterpret_cast<void*>(g_base + kWheelFnRva);
+    const bool wheelfn_ok = mem::hook_install(
+        g_wheelfn_target, &det_wheelfn,
+        reinterpret_cast<void**>(&g_orig_wheelfn));
+    if (!wheelfn_ok) {
+        log::errorf("휠함수 후킹 실패 (RVA 0x{:X})", kWheelFnRva);
+        g_wheelfn_target = nullptr;
+    }
+
     g_callfn_target = reinterpret_cast<void*>(g_base + kCallFnRva);
     const bool callfn_ok = mem::hook_install(
         g_callfn_target, &det_callfn,
@@ -207,13 +232,14 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v4 - 호출함수 0x{:X} {} · 게이트 0x{:X} {} · 스폰 0x{:X} {} ·"
-        " 알림 0x{:X} {} (드래곤을 눌렀을 때 '호출함수 진입' 줄이 나오는지가"
-        " 갈림길이다)",
-        kCallFnRva, callfn_ok ? "후킹" : "실패", kGateRva,
-        gate_ok ? "후킹" : "실패", kSpawnRva,
-        spawn_ok ? "후킹" : "실패", kNotifyRva, notify_ok ? "후킹" : "실패");
-    return gate_ok || spawn_ok || notify_ok || callfn_ok;
+        "소환 진단 v5 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 게이트 0x{:X} {} ·"
+        " 스폰 0x{:X} {} · 알림 0x{:X} {} (드래곤을 눌렀을 때 '휠함수 진입' ·"
+        " '휠소환 진입' 중 어디까지 나오는지가 갈림길이다)",
+        kWheelFnRva, wheelfn_ok ? "후킹" : "실패", kCallFnRva,
+        callfn_ok ? "후킹" : "실패", kGateRva, gate_ok ? "후킹" : "실패",
+        kSpawnRva, spawn_ok ? "후킹" : "실패", kNotifyRva,
+        notify_ok ? "후킹" : "실패");
+    return gate_ok || spawn_ok || notify_ok || callfn_ok || wheelfn_ok;
 }
 
 }  // namespace cdtb::game
