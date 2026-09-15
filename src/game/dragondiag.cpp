@@ -50,6 +50,24 @@ constexpr std::uint64_t kWheelFnRva = 0x29411E0;   // 그 한 겹 위
 // 두면 드래곤이 다른 쪽으로 갔을 때 또 "아무것도 없음" 이 나와 무의미해진다.
 // 프롤로그 `48 8b c4 48 89 58 18 48 89 50 10 55 56 57 41 54` - 표준이다.
 constexpr std::uint64_t kAltFnRva = 0x2AC9C10;     // 또 하나의 소환 경로
+
+// **거부 코드를 내는 함수** (2026-09-15 밤, 디스어셈블로 확정).
+//
+// 사슬: 휠함수(0x29411E0) -> 휠소환(0x2B78330) -> 슬롯조회(0x2A22DE0)
+//       -> **0x20170E0** -> 여기서 갈린다.
+//
+//   0x2017103  rsi = rdx          <- 두 번째 인자가 오류코드 버퍼다
+//   0x201713B  xor r12d, r12d
+//   0x201713E  mov [rsi], r12d    <- **0 = 성공**
+//   0x2017141  mov rax, rsi       <- 반환값은 그 버퍼의 포인터(값이 아니다)
+//
+// `[rsi]` 에 쓰는 자리가 **열한 곳**이다 - 성공 하나와 서로 다른 오류 코드 열.
+// 각각 전역에서 값을 읽어 온다(예: 0x20175A1 은 `[0x6BBC008]`).
+//
+// 우리가 `스폰0x2A22DE0` 줄에 찍던 "결과물" 은 바깥 함수가
+// `0x2A22F4B mov [rsi],eax` 로 옮겨 적은 **포인터의 하위 32비트**였다. 그래서
+// 0/비0 의 뜻이 오락가락했다. 진짜 코드는 **여기 rdx 가 가리키는 u32** 다.
+constexpr std::uint64_t kErrFnRva = 0x20170E0;
 // **거부 코드를 직접 찍는다(2026-09-15).** 드래곤이 "호출할 수 없는 장소입니다" 로
 // 막히는데 후보가 여럿이다(`eErrNoCallVehicleInvalidPosition` · `...InvalidAir` ·
 // `...MercenaryIndoor` · `...MercenaryRegion` · `...BlockedSpawnPositionByObstacle` ·
@@ -85,6 +103,10 @@ using CallFn = void*(__fastcall*)(void*, void*, void*, std::uint64_t);
 CallFn g_orig_callfn = nullptr;
 CallFn g_orig_wheelfn = nullptr;
 CallFn g_orig_altfn = nullptr;
+using ErrFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint64_t, void*);
+ErrFn g_orig_errfn = nullptr;
+void* g_errfn_target = nullptr;
+std::atomic<int> g_errfn_budget{300};
 void* g_altfn_target = nullptr;
 std::atomic<int> g_altfn_budget{300};
 void* g_callfn_target = nullptr;
@@ -177,6 +199,26 @@ void* __fastcall det_altfn(void* a1, void* a2, void* a3, std::uint64_t a4) {
     return g_orig_altfn(a1, a2, a3, a4);
 }
 
+// 거부 코드를 내는 함수. **원본을 부른 뒤 rdx 가 가리키는 u32 를 읽는다** -
+// 그것이 진짜 오류 코드다(0 = 성공). 반환값은 그 버퍼의 포인터라 뜻이 없다.
+void* __fastcall det_errfn(void* a1, std::uint32_t* out_err, std::uint64_t a3,
+                           void* a4) {
+    const void* ret = _ReturnAddress();
+    void* r = g_orig_errfn(a1, out_err, a3, a4);
+    std::uint32_t code = 0xFFFFFFFFu;
+    if (out_err != nullptr) {
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(out_err), &code,
+                             sizeof code);
+    }
+    if (g_errfn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+        log::infof("거부코드(0x20170E0): 호출자=+0x{:X} 슬롯u16={} -> 코드={}"
+                   " ({})",
+                   caller_rva(ret), static_cast<std::uint16_t>(a3), code,
+                   code == 0 ? "성공" : "거부");
+    }
+    return r;
+}
+
 void* __fastcall det_gate(void* a1, void* out, void* a3, std::uint64_t a4) {
     const void* ret = _ReturnAddress();
     const std::uint16_t key = static_cast<std::uint16_t>(a4);
@@ -216,6 +258,14 @@ bool dragondiag_install(const mem::Reader& reader) {
     g_base = reader.module_base();
     if (g_base == 0) return false;
     if (!mem::hook_init()) return false;
+
+    g_errfn_target = reinterpret_cast<void*>(g_base + kErrFnRva);
+    const bool errfn_ok = mem::hook_install(
+        g_errfn_target, &det_errfn, reinterpret_cast<void**>(&g_orig_errfn));
+    if (!errfn_ok) {
+        log::errorf("거부코드 후킹 실패 (RVA 0x{:X})", kErrFnRva);
+        g_errfn_target = nullptr;
+    }
 
     g_altfn_target = reinterpret_cast<void*>(g_base + kAltFnRva);
     const bool altfn_ok = mem::hook_install(
@@ -274,14 +324,17 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v8 - 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {}"
-        " · 게이트 0x{:X} {} · 스폰 0x{:X} {} (알림 훅은 뗐다 - 팅기게 했다)",
-        kWheelFnRva, wheelfn_ok ? "후킹" : "실패", kCallFnRva,
+        "소환 진단 v9 - **거부코드 0x{:X} {}** · 휠함수 0x{:X} {} ·"
+        " 휠소환 0x{:X} {} · 다른경로 0x{:X} {} · 게이트 0x{:X} {} · 스폰 0x{:X}"
+        " {} (드래곤을 누르면 '거부코드' 줄에 진짜 사유가 찍힌다)",
+        kErrFnRva, errfn_ok ? "후킹" : "실패", kWheelFnRva,
+        wheelfn_ok ? "후킹" : "실패", kCallFnRva,
         callfn_ok ? "후킹" : "실패", kAltFnRva, altfn_ok ? "후킹" : "실패",
         kGateRva, gate_ok ? "후킹" : "실패", kSpawnRva,
         spawn_ok ? "후킹" : "실패");
     (void)notify_ok;
-    return gate_ok || spawn_ok || callfn_ok || wheelfn_ok || altfn_ok;
+    return gate_ok || spawn_ok || callfn_ok || wheelfn_ok || altfn_ok ||
+           errfn_ok;
 }
 
 }  // namespace cdtb::game
