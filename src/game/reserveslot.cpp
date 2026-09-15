@@ -827,6 +827,12 @@ bool vehicle_place_gated(float ground_dist) {
     return ground_dist > 0.0f;
 }
 
+bool vehicle_flies(float max_allowable_height) {
+    // 천장이 있어야 나는 것이다. FLT_MAX(3.40282e+38)는 "상한 없음" = 땅 것.
+    // NaN 도 여기서 거짓으로 떨어진다.
+    return max_allowable_height > 0.0f && max_allowable_height < 1.0e30f;
+}
+
 CallPlaceState call_place_state(const mem::Reader& reader) {
     CallPlaceState s;
     std::uintptr_t recs = 0;
@@ -894,6 +900,11 @@ struct DisguiseBak {
 };
 DisguiseBak g_dis_bak[kDisguiseMax];
 int g_dis_bak_n = 0;
+
+// 대상이 **자기** 탈것 규칙에 가진 지면 거리 검사를 푼 자국. 규칙 행 자체는
+// 안 바꾸므로(그건 무엇이 나오는지를 정한다) 이 칸 하나만 되돌리면 된다.
+VehBak g_dis_vbak[kDisguiseMax];
+int g_dis_vbak_n = 0;
 
 bool wr16(std::uintptr_t a, std::uint16_t v) {
     return mem::safe_write_bytes(a, &v, sizeof v);
@@ -978,17 +989,19 @@ bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
     auto native = [&](int merc_row) {
         return role(merc_row) == DisguiseRole::DonorCat;
     };
-    // 탈것 규칙 행이 "지면에서 트인 자리" 를 요구하지 않는가. 드래곤이 막히던
-    // 검사가 바로 그 칸이라, 기증자는 이게 풀린 쪽을 먼저 고른다.
+    // 기증자는 **드래곤과 같은 부류**, 즉 나는 것에서 고른다. 땅 것은 높이
+    // 상한이 아예 없고(FLT_MAX) 나는 것은 천장이 있다 - 실측 와이번 1350 ·
+    // 말 3.40282e+38(2026-09-15). 처음엔 지면 거리 검사로 갈랐는데 말도 0 이라
+    // 안 갈렸고, 그래서 말이 기증자가 됐다.
     std::uintptr_t veh_recs = 0;
     int veh_n = 0;
     veh_table(r, &veh_recs, &veh_n);
-    auto ground_free = [&](std::uint16_t veh) {
+    auto flies = [&](std::uint16_t veh) {
         if (veh_recs == 0 || static_cast<int>(veh) >= veh_n) return false;
         const std::uintptr_t rec = static_cast<std::uintptr_t>(
             rd64(r, veh_recs + static_cast<std::uintptr_t>(veh) * 8));
         if (rec < 0x10000) return false;
-        return !vehicle_place_gated(rdf(r, rec + kViGroundDist));
+        return vehicle_flies(rdf(r, rec + kViMaxHeight));
     };
 
     // 기증자: 메인 휠이 **원래** 받던 타입 + 진짜 탈것. 1차는 나는 것만, 없으면
@@ -1000,7 +1013,7 @@ bool build_plan(const mem::Reader& r, DisguisePlan* p, char* note,
             if (rec == 0) continue;
             const std::uint16_t veh = rd16(r, rec + kCiVehicleInfo);
             if (veh == kInfoNone) continue;   // 탈것이 아니면 못 베낀다
-            if (pass == 0 && !ground_free(veh)) continue;
+            if (pass == 0 && !flies(veh)) continue;
             p->donor_merc = e.merc_row;
             p->donor_veh = veh;
             p->donor_row = static_cast<int>(e.row);
@@ -1070,11 +1083,15 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
     DisguisePlan p;
     char note[96] = {};
     if (!build_plan(reader, &p, note, sizeof note) || p.n == 0) {
-        log::warnf("탈것 규칙 바꾸기: 할 일이 없다 ({})", note);
+        log::warnf("휠 칸 바꾸기: 할 일이 없다 ({})", note);
         return false;
     }
-    log::infof("탈것 규칙 바꾸기: 기증자 종행 {} - 타입행 {} · 탈것규칙 {} ·"
-               " 대상 {}개",
+    std::uintptr_t veh_recs = 0;
+    int veh_n = 0;
+    veh_table(reader, &veh_recs, &veh_n);
+
+    log::infof("휠 칸 바꾸기: 기증자 종행 {} - 타입행 {} (탈것규칙 {} 은 안 베낀다)"
+               " · 대상 {}개",
                p.donor_row, p.donor_merc, p.donor_veh, p.n);
     int done = 0;
     for (int i = 0; i < p.n && g_dis_bak_n < kDisguiseMax; ++i) {
@@ -1084,22 +1101,35 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
         // **마지막 안전선.** 탈것 규칙이 없는 종(반려 동물·용병)은 어떤 이유로도
         // 안 건드린다. 2026-09-15 에 바뀐 열여섯은 전부 여기 걸렸을 것들이다.
         if (ov == kInfoNone) {
-            log::warnf("탈것 규칙 바꾸기: 종행 {} 는 탈것이 아니다 - 건너뛴다",
+            log::warnf("휠 칸 바꾸기: 종행 {} 는 탈것이 아니다 - 건너뛴다",
                        p.row[i]);
             continue;
         }
         g_dis_bak[g_dis_bak_n] = DisguiseBak{rec, om, ov};
         ++g_dis_bak_n;
-        // **탈것 규칙을 먼저, 타입을 나중에.** 타입이 바뀌는 순간 다른 코드가
-        // 이 종을 특수 탑승물로 보기 시작하므로, 그때 규칙은 이미 맞아야 한다.
-        bool ok = wr16(rec + kCiVehicleInfo,
-                       static_cast<std::uint16_t>(p.donor_veh));
-        ok = wr16(rec + kCiMercInfo,
-                  static_cast<std::uint16_t>(p.donor_merc)) && ok;
-        if (ok) {
-            ++done;
-            log::infof("탈것 규칙 바꾸기: 종행 {} - 타입 {} -> {} · 탈것규칙 {} -> {}",
-                       p.row[i], om, p.donor_merc, ov, p.donor_veh);
+        // **`_vehicleInfo` 는 건드리지 않는다.** 그 칸은 규칙이 아니라 *무엇이
+        // 나오는가* 를 정한다 - 말의 18 을 씌웠더니 드래곤 자리에서 말이
+        // 나왔다(사용자 실측 2026-09-15 17:23). 바꿀 것은 휠 칸뿐이다.
+        if (!wr16(rec + kCiMercInfo, static_cast<std::uint16_t>(p.donor_merc))) {
+            continue;
+        }
+        ++done;
+        log::infof("휠 칸 바꾸기: 종행 {} - 타입 {} -> {} · 탈것규칙 {} 그대로",
+                   p.row[i], om, p.donor_merc, ov);
+        // 자기 탈것 규칙은 그대로 두되, 그 규칙의 지면 거리 검사만 푼다.
+        // 드래곤 30 · 와이번 0 - 여기가 "호출할 수 없는 장소" 가 나오던 자리다.
+        if (veh_recs == 0 || static_cast<int>(ov) >= veh_n) continue;
+        const std::uintptr_t vrec = static_cast<std::uintptr_t>(
+            rd64(reader, veh_recs + static_cast<std::uintptr_t>(ov) * 8));
+        if (vrec < 0x10000) continue;
+        const float d = rdf(reader, vrec + kViGroundDist);
+        if (!vehicle_place_gated(d)) continue;   // 이미 0 이면 둔다
+        const float zero = 0.0f;
+        if (mem::safe_write_bytes(vrec + kViGroundDist, &zero, sizeof zero) &&
+            g_dis_vbak_n < kDisguiseMax) {
+            g_dis_vbak[g_dis_vbak_n] = VehBak{vrec, d};
+            ++g_dis_vbak_n;
+            log::infof("휠 칸 바꾸기: 탈것규칙 {} 지면 거리 {} -> 0", ov, d);
         }
     }
     if (done == 0) {
@@ -1110,24 +1140,33 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
     const mem::Rtti* rtti = clan_rtti();
     if (rtti != nullptr) {
         const ReindexResult ix = clan_reindex(reader, *rtti, false);
-        log::infof("탈것 규칙 바꾸기: 휠 색인 어긋남 {} · 옮김 {} · 자리없음 {}",
+        log::infof("휠 칸 바꾸기: 휠 색인 어긋남 {} · 옮김 {} · 자리없음 {}",
                    ix.wrong, ix.moved, ix.no_room);
     }
     return true;
 }
 
 void disguise_teardown() {
-    if (g_dis_bak_n == 0) return;
+    if (g_dis_bak_n == 0 && g_dis_vbak_n == 0) return;
     int back = 0;
     for (int i = 0; i < g_dis_bak_n; ++i) {
         const DisguiseBak& b = g_dis_bak[i];
         if (b.rec == 0) continue;
-        // 되돌릴 때는 순서를 뒤집는다 - 타입을 먼저 원래대로.
+        // `_vehicleInfo` 는 애초에 안 썼으니 되돌릴 것도 없다.
         if (wr16(b.rec + kCiMercInfo, b.merc)) ++back;
-        wr16(b.rec + kCiVehicleInfo, b.veh);
     }
-    log::infof("탈것 규칙 바꾸기: {}개 되돌렸다", back);
+    int vback = 0;
+    for (int i = 0; i < g_dis_vbak_n; ++i) {
+        const VehBak& b = g_dis_vbak[i];
+        if (b.rec == 0) continue;
+        if (mem::safe_write_bytes(b.rec + kViGroundDist, &b.dist,
+                                  sizeof b.dist)) {
+            ++vback;
+        }
+    }
+    log::infof("휠 칸 바꾸기: {}개 되돌렸다 (지면 거리 {}개)", back, vback);
     g_dis_bak_n = 0;
+    g_dis_vbak_n = 0;
 }
 
 void call_place_teardown() {

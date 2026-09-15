@@ -278,10 +278,20 @@ void mount_timer_teardown();
 //
 // 정적 표라 **세이브에 안 남고** 게임을 끄면 원복된다.
 inline constexpr std::size_t kViGroundDist = 0x8C;   // float
+inline constexpr std::size_t kViMaxHeight = 0x9C;    // float _maxAllowableHeight
 inline constexpr int kVehiclePatchMax = 64;
 
 // **순수 함수.** 이 탈것의 장소 검사를 풀어야 하는가.
 bool vehicle_place_gated(float ground_dist);
+
+// **순수 함수.** 이 탈것 규칙은 나는 것인가.
+//
+// 땅 것은 높이 상한이 아예 없어(FLT_MAX) 하늘을 안 쓰고, 나는 것은 천장이 있다.
+// 실측 2026-09-15: 드래곤 1350 · 와이번 1350 · 말 3.40282e+38.
+//
+// 지면 거리 검사(+0x8C)로는 안 갈린다 - 말도 0 이다. 그걸로 갈랐다가 말이
+// 기증자로 뽑혀 드래곤 자리에서 말이 나왔다.
+bool vehicle_flies(float max_allowable_height);
 
 struct CallPlaceState {
     bool ready = false;
@@ -304,10 +314,22 @@ void call_place_teardown();
 //   - 같은 휠에서 **특수 탑승물(타입행 5)은 정상**이다.
 //
 // 그래서 검사를 하나씩 찾아 푸는 대신 **드래곤을 그 정상 경로에 태운다.** 종의
-// 두 칸만 바꾸면 게임의 모든 판정이 특수 탑승물과 같아진다:
+// **한 칸만** 바꾼다:
 //
-//   CharacterInfo +0x6E `_vehicleInfo`    탈것 규칙 행 (드래곤 3 · 와이번 4)
-//   CharacterInfo +0xBE `_mercenaryInfo`  동반자 타입 행 (드래곤 2 · 특수 5)
+//   CharacterInfo +0xBE `_mercenaryInfo`  동반자 타입 행 = 휠의 어느 칸인가
+//                                         (드래곤 2 · ATAG 3 · 특수 탑승물 5)
+//
+// ---- +0x6E `_vehicleInfo` 는 건드리지 않는다 (2026-09-15 실측)
+//
+// 처음엔 이 칸도 기증자 값으로 덮었다. 그랬더니 **드래곤 자리에서 말이 나왔다**
+// (사용자 실측 17:23, 기증자가 말이라 규칙 18 이 씌워졌다). 즉 이 칸은 "규칙"
+// 이 아니라 **무엇이 나오는가**를 정한다. 덮으면 안 된다.
+//
+// 대신 그 값이 가리키는 탈것 행의 지면 거리 검사(+0x8C)만 0 으로 둔다 - 드래곤
+// 30 · 와이번 0. "호출할 수 없는 장소" 가 나오던 자리다.
+//
+// 그리고 이 시험이 알려 준 가장 큰 것: **소환 자체는 됐다.** 장소도 쿨다운도
+// 서버도 아니라 **카테고리**가 벽이었다.
 //
 // **기증자는 내가 실제로 가진 개체에서 고른다.** 번호를 박지 않는다 - 메인 휠이
 // 원래부터 받던 타입행이면서 내가 가진 탈것 하나를 골라 그 두 값을 베껴 온다.

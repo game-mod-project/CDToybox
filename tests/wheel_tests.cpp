@@ -152,4 +152,15 @@ TEST(disguise_role_handles_empty_lists) {
     CHECK(disguise_role(nullptr, 0, lock, 1, 2) == DisguiseRole::Target);
 }
 
+// 기증자를 고르는 기준. 지면 거리 검사로는 말과 와이번이 안 갈려(둘 다 0) 말이
+// 기증자로 뽑혔고, 드래곤 자리에서 말이 나왔다(2026-09-15 17:23).
+// 실측 _maxAllowableHeight: 드래곤 1350 · 와이번 1350 · 말 3.40282e+38.
+TEST(vehicle_flies_needs_a_ceiling) {
+    using cdtb::game::vehicle_flies;
+    CHECK(vehicle_flies(1350.0f));              // 드래곤·와이번
+    CHECK(!vehicle_flies(3.40282347e+38f));     // 말 - 상한 없음 = 땅 것
+    CHECK(!vehicle_flies(0.0f));
+    CHECK(!vehicle_flies(-1.0f));
+}
+
 }  // namespace

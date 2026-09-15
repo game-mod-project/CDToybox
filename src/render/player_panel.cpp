@@ -704,7 +704,7 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
         ImGui::TextDisabled("%s", dg.note);
     } else {
         ImGui::TextDisabled("바꿀 종 %d개 · 기증자 종행 %d (타입행 %d ·"
-                            " 탈것규칙 %d)",
+                            " 탈것규칙 %d 는 안 베낍니다)",
                             dg.targets, dg.donor_row, dg.donor_merc,
                             dg.donor_veh);
         if (dg.targets > 0) {
@@ -722,7 +722,7 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
             ImGui::TextDisabled("  대상 종행: %s", rows);
         }
         bool dis = dg.on;
-        if (ImGui::Checkbox("드래곤·ATAG 를 특수 탑승물과 같은 규칙으로", &dis)) {
+        if (ImGui::Checkbox("드래곤·ATAG 를 특수 탑승물 칸으로 옮기기", &dis)) {
             if (game::disguise_apply(reader, dis)) {
                 if (dis) {
                     notice_set(&s_note, NoticeLevel::Ok, "{}개 종을 바꿨습니다",
@@ -737,12 +737,15 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(
-                "CharacterInfo 의 두 칸만 바꿉니다:\n"
-                "  +0x6E _vehicleInfo    탈것 규칙 행\n"
-                "  +0xBE _mercenaryInfo  동반자 타입 행\n\n"
-                "대상은 **드래곤 슬롯·정비 슬롯이 가진 타입행 + 진짜 탈것** 뿐입니다.\n"
+                "CharacterInfo 의 **한 칸만** 바꿉니다:\n"
+                "  +0xBE _mercenaryInfo  동반자 타입 행 (= 휠의 어느 칸인가)\n\n"
+                "+0x6E _vehicleInfo 는 **건드리지 않습니다.** 그 칸은 규칙이 아니라\n"
+                "무엇이 나오는가를 정합니다 - 말 값을 씌웠더니 드래곤 자리에서\n"
+                "말이 나왔습니다(2026-09-15 실측).\n\n"
+                "대상은 드래곤 슬롯·정비 슬롯이 가진 타입행 + 진짜 탈것 뿐입니다.\n"
                 "반려 동물·용병은 탈것 규칙이 0xFFFF 라 절대 안 걸립니다.\n"
-                "값은 번호를 박지 않고 **내가 가진 정상 탈것**에서 베껴 옵니다.\n"
+                "기증자는 **나는 것**에서 고릅니다(높이 상한이 있는 쪽).\n"
+                "대상이 자기 탈것 규칙에 가진 지면 거리 검사도 같이 풉니다.\n"
                 "바꾼 뒤 명부의 종류별 색인도 같이 맞춥니다.\n"
                 "이걸 켜면 드래곤이 특수 탑승물 칸으로 가므로 **얹기는 필요 없습니다.**\n"
                 "정적 표라 세이브에 안 남고, 끄면 원래 값으로 되돌립니다.");
