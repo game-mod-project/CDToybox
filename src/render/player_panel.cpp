@@ -317,8 +317,8 @@ void draw_knowledge(const mem::Reader& reader) {
                 const game::KnowWrite w =
                     game::know_learn(reader, e.number, e.need_level);
                 if (w.changed > 0) {
-                    // **기억해 둔다.** 이 쓰기는 저장을 못 넘고 리로드가 컴포넌트를
-                    // 새로 만들므로, 분석 스레드가 모자랄 때마다 다시 건다.
+                    // **기억해 둔다.** 저장을 잊고 끄면 사라지고 리로드는
+                    // 컴포넌트를 새로 만드므로, 모자랄 때마다 다시 건다.
                     game::know_auto_remember(e.number, e.need_level);
                     notice_set(&s_note, NoticeLevel::Ok,
                                "{}번을 레벨 {} 로 - realm {}개",
@@ -449,8 +449,9 @@ void draw_knowledge(const mem::Reader& reader) {
         }
     }
     ImGui::TextWrapped(
-        "이 쓰기는 저장을 넘지 못합니다(실측). 게임을 새로 켜면 사라지므로, 건 것을"
-        " 기억해 두었다가 리로드 뒤에 다시 겁니다. 기억은 이번 실행 동안만 남습니다.");
+        "건 뒤에 게임에서 저장하면 남습니다(실측). 저장을 안 하고 끄면 사라지므로,"
+        " 건 것을 기억해 두었다가 모자라면 다시 겁니다. 이 기억은 설정 파일에 남아"
+        " 다음 실행에도 이어집니다.");
 }
 
 // 원소 습득. 휠 칸의 조건이 평문으로 나와 확정됐다(2026-09-15):
@@ -493,7 +494,7 @@ void draw_elements(const mem::Reader& reader) {
             if (confirm_small_button("얻기")) {
                 const game::KnowWrite w = game::know_learn(reader, e.number, 1);
                 if (w.changed > 0) {
-                    // 저장을 못 넘으므로 기억해 둔다 - 리로드 뒤 자동으로 다시 건다.
+                    // 저장을 잊고 껐을 때를 받친다 - 모자라면 자동으로 다시 건다.
                     game::know_auto_remember(e.number, 1);
                     notice_set(&s_note, NoticeLevel::Ok,
                                "{} 습득 - realm {}개", e.label, w.changed);
@@ -506,7 +507,9 @@ void draw_elements(const mem::Reader& reader) {
         ImGui::PopID();
     }
     notice_draw(s_note);
-    ImGui::TextDisabled("이 쓰기는 저장을 넘지 못합니다 - 리로드 뒤 자동으로 다시 겁니다.");
+    ImGui::TextDisabled(
+        "얻은 뒤 게임에서 저장하면 남습니다. 저장을 잊어도 다음 실행에 자동으로"
+        " 다시 겁니다.");
 }
 
 // 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로
