@@ -121,6 +121,8 @@ Config load(const std::wstring& path) {
             c.socket_cap_parts = parse_socket_cap_parts(val);
         } else if (key == "vehicle_wheel_extend") {
             c.vehicle_wheel_extend = (to_int(val, 0) != 0);
+        } else if (key == "summon_diag") {
+            c.summon_diag = (to_int(val, 0) != 0);
         } else if (key == "knowledge_keep") {
             c.knowledge_keep = parse_knowledge_keep(val);
         } else if (key == "equip_character_row") {
@@ -147,6 +149,8 @@ bool save(const std::wstring& path, const Config& c) {
     out << "; 게임이 휠을 만들기 전에 걸어야 하므로 **시작할 때** 걸린다 -\n";
     out << "; 다 만들어진 뒤에 늘리면 특수 탑승물 호출이 먹통이 된다.\n";
     out << "vehicle_wheel_extend = " << (c.vehicle_wheel_extend ? 1 : 0) << "\n";
+    out << "; 소환 진단 훅. 조사할 때만 1. 기본 0 (기능이 아니라 조사용이다).\n";
+    out << "summon_diag = " << (c.summon_diag ? 1 : 0) << "\n";
     out << "; 부위별 소켓 칸 수. `분류:장비타입=칸수` 를 쉼표로 잇는다.\n";
     out << "; 부위는 아이템표의 (+0xA3, +0x42) 쌍이다 - 갑옷 3:5, 망토 3:75,\n";
     out << "; 투구 24:4, 장갑 22:6, 신발 9:7, 귀걸이 15:8, 목걸이 34:9, 반지 49:10.\n";

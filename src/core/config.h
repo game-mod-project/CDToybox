@@ -58,6 +58,12 @@ struct Config {
     // 예약 슬롯 표도 매 실행 데이터에서 새로 읽히므로 세션마다 다시 걸려야 한다.
     // ini 표기: `vehicle_wheel_extend = 1`
     bool vehicle_wheel_extend = false;
+
+    // 소환 진단 훅(게이트·스폰·소환 루틴 입구). **기본은 끔.**
+    // 이 훅들은 우리 조사용일 뿐 기능이 아니고, 그중 하나가 게임을 팅기게
+    // 했다(2026-09-15, 알림 훅). 조사할 때만 켠다.
+    // ini 표기: `summon_diag = 1`
+    bool summon_diag = false;
 };
 
 namespace config {

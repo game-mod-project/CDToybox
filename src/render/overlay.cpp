@@ -716,7 +716,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
         cdtb::game::spawnguard_install(reader);
-        cdtb::game::dragondiag_install(reader);
+        // 소환 진단 훅은 **설정으로 켤 때만** 건다. 기능이 아니라 조사용이고,
+        // 그중 하나가 게임을 팅기게 했다(2026-09-15).
+        if (g_cfg.summon_diag) cdtb::game::dragondiag_install(reader);
         // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
         // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
         // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
