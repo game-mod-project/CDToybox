@@ -361,6 +361,23 @@ void call_place_teardown();
 //   행 7008 Riding_Dragon_1 veh 3 merc 2 | 행 6818 WarMachine veh 2 merc 3
 //   행 6804 Riding_Wyvern_1000 veh 4 merc 5 (기증자 후보)
 inline constexpr std::uint16_t kInfoNone = 0xFFFF;   // 표에서 "없음"
+// `CharacterInfo._callMercenarySpawnVoxelType`(+0x448) 목록의 개수(u32).
+//
+// **이것이 "호출할 수 없는 위치입니다" 의 진짜 출처다** (2026-09-15 실측).
+// 목록이 비어 있으면 아무 데서나 부를 수 있다. 살아 있는 게임에서 잰 값:
+//
+//   A.T.A.G.(행 6818)  0개        -> 어디서나 소환·탑승 성공
+//   와이번 (행 6804)   2개 {4, 3} -> 정상
+//   블랙스타(행 7008)  1개 {3}    -> "호출할 수 없는 위치"
+//
+// 즉 드래곤만 복셀 3 을 요구하고, 와이번은 3·4 를 받는다. 그래서 같은 자리에서
+// 와이번은 되고 드래곤은 거부된다 - 사용자가 "장소를 바꿔도 안 된다" 던 이유다.
+// 개수만 0 으로 두면 A.T.A.G. 와 같은 상태가 된다. 목록과 용량은 안 건드린다.
+inline constexpr std::size_t kCiSpawnVoxelCount = 0x450;   // u32
+
+// **순수 함수.** 이 종의 호출 지형 요구를 풀어야 하는가.
+bool spawn_voxel_gated(std::uint32_t count);
+
 inline constexpr int kDisguiseMax = 16;
 
 // **순수 함수.** 이 타입행이 어느 쪽인가.

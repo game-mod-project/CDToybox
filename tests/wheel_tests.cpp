@@ -163,4 +163,14 @@ TEST(vehicle_flies_needs_a_ceiling) {
     CHECK(!vehicle_flies(-1.0f));
 }
 
+// "호출할 수 없는 위치입니다" 의 진짜 출처. 살아 있는 게임에서 잰 값
+// (2026-09-15): A.T.A.G. 0개 -> 어디서나 성공 · 와이번 2개{4,3} -> 정상 ·
+// 블랙스타 1개{3} -> 거부. 개수만 0 으로 두면 A.T.A.G. 와 같은 상태가 된다.
+TEST(spawn_voxel_gated_frees_only_restricted_species) {
+    using cdtb::game::spawn_voxel_gated;
+    CHECK(spawn_voxel_gated(1));    // 블랙스타 - 복셀 3 하나만 받는다
+    CHECK(spawn_voxel_gated(2));    // 와이번
+    CHECK(!spawn_voxel_gated(0));   // A.T.A.G. - 이미 자유, 손대지 않는다
+}
+
 }  // namespace

@@ -827,6 +827,11 @@ bool vehicle_place_gated(float ground_dist) {
     return ground_dist > 0.0f;
 }
 
+bool spawn_voxel_gated(std::uint32_t count) {
+    // 목록이 비면 아무 데서나 부를 수 있다 - A.T.A.G. 가 그 상태다.
+    return count > 0;
+}
+
 bool vehicle_flies(float max_allowable_height) {
     // 천장이 있어야 나는 것이다. FLT_MAX(3.40282e+38)는 "상한 없음" = 땅 것.
     // NaN 도 여기서 거짓으로 떨어진다.
@@ -905,6 +910,15 @@ int g_dis_bak_n = 0;
 // 안 바꾸므로(그건 무엇이 나오는지를 정한다) 이 칸 하나만 되돌리면 된다.
 VehBak g_dis_vbak[kDisguiseMax];
 int g_dis_vbak_n = 0;
+
+// 호출 지형 요구를 푼 자국. 목록 포인터와 용량은 그대로 두고 개수만 0 으로
+// 둔다 - 되돌릴 때 개수만 쓰면 원래 목록이 그대로 살아난다.
+struct VoxBak {
+    std::uintptr_t rec = 0;
+    std::uint32_t count = 0;
+};
+VoxBak g_dis_xbak[kDisguiseMax];
+int g_dis_xbak_n = 0;
 
 bool wr16(std::uintptr_t a, std::uint16_t v) {
     return mem::safe_write_bytes(a, &v, sizeof v);
@@ -1116,6 +1130,20 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
         ++done;
         log::infof("휠 칸 바꾸기: 종행 {} - 타입 {} -> {} · 탈것규칙 {} 그대로",
                    p.row[i], om, p.donor_merc, ov);
+        // **호출 지형 요구를 푼다.** 여기가 "호출할 수 없는 위치입니다" 의 진짜
+        // 출처다 - A.T.A.G. 는 요구가 0개라 그대로 됐고(사용자 실측 2026-09-15
+        // 17:46), 드래곤은 1개(복셀 3)만 허용해 거부됐다. 개수만 0 으로 둔다.
+        const std::uint32_t vx = rd32(reader, rec + kCiSpawnVoxelCount);
+        if (spawn_voxel_gated(vx) && g_dis_xbak_n < kDisguiseMax) {
+            const std::uint32_t none = 0;
+            if (mem::safe_write_bytes(rec + kCiSpawnVoxelCount, &none,
+                                      sizeof none)) {
+                g_dis_xbak[g_dis_xbak_n] = VoxBak{rec, vx};
+                ++g_dis_xbak_n;
+                log::infof("휠 칸 바꾸기: 종행 {} 호출 지형 요구 {}개 -> 0",
+                           p.row[i], vx);
+            }
+        }
         // 자기 탈것 규칙은 그대로 두되, 그 규칙의 지면 거리 검사만 푼다.
         // 드래곤 30 · 와이번 0 - 여기가 "호출할 수 없는 장소" 가 나오던 자리다.
         if (veh_recs == 0 || static_cast<int>(ov) >= veh_n) continue;
@@ -1152,13 +1180,22 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
 }
 
 void disguise_teardown() {
-    if (g_dis_bak_n == 0 && g_dis_vbak_n == 0) return;
+    if (g_dis_bak_n == 0 && g_dis_vbak_n == 0 && g_dis_xbak_n == 0) return;
     int back = 0;
     for (int i = 0; i < g_dis_bak_n; ++i) {
         const DisguiseBak& b = g_dis_bak[i];
         if (b.rec == 0) continue;
         // `_vehicleInfo` 는 애초에 안 썼으니 되돌릴 것도 없다.
         if (wr16(b.rec + kCiMercInfo, b.merc)) ++back;
+    }
+    int xback = 0;
+    for (int i = 0; i < g_dis_xbak_n; ++i) {
+        const VoxBak& b = g_dis_xbak[i];
+        if (b.rec == 0) continue;
+        if (mem::safe_write_bytes(b.rec + kCiSpawnVoxelCount, &b.count,
+                                  sizeof b.count)) {
+            ++xback;
+        }
     }
     int vback = 0;
     for (int i = 0; i < g_dis_vbak_n; ++i) {
@@ -1169,9 +1206,11 @@ void disguise_teardown() {
             ++vback;
         }
     }
-    log::infof("휠 칸 바꾸기: {}개 되돌렸다 (지면 거리 {}개)", back, vback);
+    log::infof("휠 칸 바꾸기: {}개 되돌렸다 (지형 요구 {}개 · 지면 거리 {}개)",
+               back, xback, vback);
     g_dis_bak_n = 0;
     g_dis_vbak_n = 0;
+    g_dis_xbak_n = 0;
 }
 
 void call_place_teardown() {
