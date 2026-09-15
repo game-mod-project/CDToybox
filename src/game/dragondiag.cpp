@@ -11,6 +11,7 @@
 #include "core/log.h"
 #include "mem/hook.h"
 #include "mem/reader.h"
+#include "mem/safe_read.h"
 
 namespace cdtb::game {
 namespace {
@@ -25,26 +26,80 @@ namespace {
 constexpr std::uint64_t kGateRva = 0x2ACA250;   // (대조) 소환 게이트
 constexpr std::uint64_t kSpawnRva = 0x2A22DE0;  // 실제 스폰 프리미티브
 
+// **거부 코드를 직접 찍는다(2026-09-15).** 드래곤이 "호출할 수 없는 장소입니다" 로
+// 막히는데 후보가 여럿이다(`eErrNoCallVehicleInvalidPosition` · `...InvalidAir` ·
+// `...MercenaryIndoor` · `...MercenaryRegion` · `...BlockedSpawnPositionByObstacle` ·
+// `eErrNoFailToFindSummonMercenaryPosition` …). 하나씩 찍어 보는 대신 **게임이
+// 실제로 내는 코드를 읽는다.**
+//
+// 근거: 휠 소환 헬퍼가 스폰 결과를 보고 0 이 아니면 그 코드를 알림으로 실어 보낸다.
+//
+//   0x2B7849E  ebx = [rbp+0xA8]        스폰이 쓴 결과 코드
+//   0x2B784A4  test ebx,ebx / je       0 이면 조용히 지나간다
+//   0x2B784AC  esi = 0x3F5             알림 메시지 id
+//   0x2B784BB  [rsp+0x43] = ebx        ★ 그 코드가 본문에 실린다
+//
+// 그래서 **알림 송신(AsyncRequestSend)** 에 걸고 본문 머리가 0x3F5 인 것만 찍는다.
+// 다른 알림은 건드리지 않는다. 읽기만 하고 원본을 그대로 부른다.
+constexpr std::uint64_t kNotifyRva = 0xFB7F060;
+constexpr std::uint16_t kNotifyMsgId = 0x3F5;   // 클라 알림
+constexpr std::size_t kNotifyCodeOff = 3;       // 본문 +3 에 u32 코드
+
 // 게이트: void* gate(rcx, rdx=out, r8, r9). r9 하위16=검색 키. 4 레지스터뿐.
 using GateFn = void*(__fastcall*)(void*, void*, void*, std::uint64_t);
 // 스폰: 관찰된 5곳 모두 rcx, rdx=out, r8d, r9, [rsp+0x20]=out5 로 부른다.
 // 결과는 *rdx 에 쓰인다(호출자들이 그 자리를 읽는다). 반환값 rax 는 안 쓰임.
 using SpawnFn = void*(__fastcall*)(void*, void*, std::uint32_t, void*, void*);
 
+// 알림 송신: 진입부가 `rdi = r8`(본문) · `esi = r9w` · `r12d = dx` 로 받는다.
+// 레지스터 넷을 그대로 흘려보내면 되므로 4인자로 선언한다(스택 인자를 안 쓴다).
+using NotifyFn = void*(__fastcall*)(void*, std::uint64_t, void*, std::uint64_t);
+
 GateFn g_orig_gate = nullptr;
 SpawnFn g_orig_spawn = nullptr;
+NotifyFn g_orig_notify = nullptr;
 void* g_gate_target = nullptr;
 void* g_spawn_target = nullptr;
+void* g_notify_target = nullptr;
 std::uintptr_t g_base = 0;
 std::atomic<bool> g_installed{false};
 
 std::atomic<int> g_gate_budget{1000};
 std::atomic<int> g_spawn_budget{2000};
+// 알림은 거부가 날 때만 찍히지만, 예산을 둬서 로그가 묻히지 않게 한다
+// (TROUBLESHOOTING 6.19 - 한 줄이 로그를 묻는다).
+std::atomic<int> g_notify_budget{200};
 std::atomic<long> g_spawn_seq{0};
 
 std::uintptr_t caller_rva(const void* ret) {
     const std::uintptr_t raw = reinterpret_cast<std::uintptr_t>(ret);
     return (g_base != 0 && raw > g_base) ? raw - g_base : raw;
+}
+
+// 알림 본문 머리가 0x3F5 인 것만 찍는다. **읽기만** 하고 그대로 흘려보낸다.
+void* __fastcall det_notify(void* a1, std::uint64_t a2, void* body,
+                            std::uint64_t a4) {
+    if (body != nullptr) {
+        const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(body);
+        std::uint8_t head[16] = {};
+        // **SEH 로 감싼 읽기를 쓴다** - 본문이 늘 16바이트 이상이라는 보장이 없다.
+        if (mem::safe_read_bytes(at, head, sizeof head)) {
+            std::uint16_t id = 0;
+            std::memcpy(&id, head, sizeof id);
+            if (id == kNotifyMsgId &&
+                g_notify_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+                std::uint32_t code = 0;
+                std::memcpy(&code, head + kNotifyCodeOff, sizeof code);
+                log::infof("클라 알림 0x3F5: 코드 0x{:08X} ({}) · 본문 "
+                           "{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} "
+                           "{:02X} {:02X} {:02X} {:02X} {:02X}",
+                           code, code, head[0], head[1], head[2], head[3],
+                           head[4], head[5], head[6], head[7], head[8], head[9],
+                           head[10], head[11]);
+            }
+        }
+    }
+    return g_orig_notify(a1, a2, body, a4);
 }
 
 void* __fastcall det_gate(void* a1, void* out, void* a3, std::uint64_t a4) {
@@ -99,13 +154,21 @@ bool dragondiag_install(const mem::Reader& reader) {
         g_spawn_target = nullptr;
     }
 
+    g_notify_target = reinterpret_cast<void*>(g_base + kNotifyRva);
+    const bool notify_ok = mem::hook_install(
+        g_notify_target, &det_notify, reinterpret_cast<void**>(&g_orig_notify));
+    if (!notify_ok) {
+        log::errorf("알림 후킹 실패 (RVA 0x{:X})", kNotifyRva);
+        g_notify_target = nullptr;
+    }
+
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v2 - 게이트 0x{:X} {} · 스폰 0x{:X} {} "
-        "(휠에서 사자·드래곤 클릭 후 '스폰0x2A22DE0' 줄로 실경로 판정)",
+        "소환 진단 v3 - 게이트 0x{:X} {} · 스폰 0x{:X} {} · 알림 0x{:X} {} "
+        "(거부되면 '클라 알림 0x3F5: 코드 ...' 줄에 진짜 오류 코드가 찍힌다)",
         kGateRva, gate_ok ? "후킹" : "실패", kSpawnRva,
-        spawn_ok ? "후킹" : "실패");
-    return gate_ok || spawn_ok;
+        spawn_ok ? "후킹" : "실패", kNotifyRva, notify_ok ? "후킹" : "실패");
+    return gate_ok || spawn_ok || notify_ok;
 }
 
 }  // namespace cdtb::game
