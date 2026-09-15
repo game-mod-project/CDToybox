@@ -600,7 +600,19 @@ KnowRegister register_held(const mem::Reader& reader, int number,
 namespace {
 std::mutex g_auto_mtx;
 std::vector<KnowWant> g_auto;
+std::atomic<KnowAutoPersist> g_auto_persist{nullptr};
+
+// **자물쇠를 놓은 뒤에** 부른다. 훅이 `know_auto_list()` 를 부르는데 그것이
+// 같은 자물쇠를 잡는다 - 안에서 부르면 그 자리에서 멈춘다.
+void auto_persist() {
+    const KnowAutoPersist fn = g_auto_persist.load(std::memory_order_acquire);
+    if (fn != nullptr) fn();
+}
 }  // namespace
+
+void know_auto_persist_hook(KnowAutoPersist fn) {
+    g_auto_persist.store(fn, std::memory_order_release);
+}
 
 void know_auto_upsert(std::vector<KnowWant>* v, int number, int level) {
     if (v == nullptr || number < 0 || level < 1) return;
@@ -615,16 +627,22 @@ void know_auto_upsert(std::vector<KnowWant>* v, int number, int level) {
 }
 
 void know_auto_remember(int number, int level) {
-    std::lock_guard<std::mutex> lk(g_auto_mtx);
-    know_auto_upsert(&g_auto, number, level);
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        know_auto_upsert(&g_auto, number, level);
+    }
+    auto_persist();
 }
 
 void know_auto_forget() {
-    std::lock_guard<std::mutex> lk(g_auto_mtx);
-    if (g_auto.empty()) return;
-    log::infof("지식 자동 재적용 해제: {}개를 잊는다",
-               static_cast<int>(g_auto.size()));
-    g_auto.clear();
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        if (g_auto.empty()) return;
+        log::infof("지식 자동 재적용 해제: {}개를 잊는다",
+                   static_cast<int>(g_auto.size()));
+        g_auto.clear();
+    }
+    auto_persist();
 }
 
 std::vector<KnowWant> know_auto_list() {

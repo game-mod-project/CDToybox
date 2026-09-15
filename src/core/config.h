@@ -33,10 +33,37 @@ struct Config {
     // 바뀐다. 0 이면 안 건다.
     int socket_cap = 0;
 
+    // 자동으로 다시 걸어 줄 지식. 쓴 값 자체는 **게임에서 저장하면 남지만**
+    // (실측 2026-09-15), 저장을 잊고 끄면 사라진다. 그때 사람이 다시 누르지
+    // 않도록 이 목록이 받친다 - 메모리에만 두면 프로세스가 죽을 때 목록째
+    // 사라지므로 파일에 적는다.
+    // ini 표기: `knowledge_keep = 4883:1,4884:1,4885:1,4886:1`
+    struct KnowKeep {
+        int number = 0;
+        int level = 0;
+    };
+    std::vector<KnowKeep> knowledge_keep;
+
     // 장비 창에서 고른 캐릭터(캐릭터 행). -1 이면 자동(정신력 풀 + 착용 조각 최다).
     // 클리프·웅카·데미안을 번갈아 조종하므로 마지막 선택을 세션 너머로 남긴다.
     // ini 표기: `equip_character_row = 5` (클리프 0, 데미안 3, 웅카 5)
     int equip_character_row = -1;
+
+    // 메인 탈것 휠에 드래곤·ATAG 카테고리를 얹는다.
+    //
+    // **반드시 게임이 휠을 만들기 전에 걸어야 한다.** 다 만들어진 뒤에 목록을
+    // 늘리면 게임 쪽 휠이 어긋나 같은 휠의 특수 탑승물 호출이 먹통이 된다
+    // (실측 2026-09-15, TROUBLESHOOTING 3.12). 그래서 화면에서 즉시 걸지 않고
+    // 이 설정에 적어 **다음 실행의 시작 지점**에서 건다 - 소켓 상한과 같은 방식이다.
+    // 예약 슬롯 표도 매 실행 데이터에서 새로 읽히므로 세션마다 다시 걸려야 한다.
+    // ini 표기: `vehicle_wheel_extend = 1`
+    bool vehicle_wheel_extend = false;
+
+    // 소환 진단 훅(게이트·스폰·소환 루틴 입구). **기본은 끔.**
+    // 이 훅들은 우리 조사용일 뿐 기능이 아니고, 그중 하나가 게임을 팅기게
+    // 했다(2026-09-15, 알림 훅). 조사할 때만 켠다.
+    // ini 표기: `summon_diag = 1`
+    bool summon_diag = false;
 };
 
 namespace config {
@@ -49,6 +76,9 @@ bool save(const std::wstring& path, const Config& c);
 // 파일 한 줄 때문에 나머지 설정을 잃을 이유가 없다. 값이 0..5 밖이거나
 // 0 이면(=안 건드림) 버린다. 파일 없이 시험할 수 있게 밖으로 낸다.
 std::vector<Config::SocketCapPart> parse_socket_cap_parts(std::string_view v);
+
+// `4883:1,4884:1` 을 지식 목록으로. 위와 같은 규칙 - 어긋난 항목만 버린다.
+std::vector<Config::KnowKeep> parse_knowledge_keep(std::string_view v);
 
 }  // namespace config
 }  // namespace cdtb

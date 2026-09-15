@@ -163,6 +163,7 @@ add_executable(cdtb_tests
     tests/nofall_tests.cpp
     tests/bag_capacity_tests.cpp
     tests/bag_backup_tests.cpp
+    tests/wheel_tests.cpp
     src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp

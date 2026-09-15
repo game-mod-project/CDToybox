@@ -289,6 +289,8 @@ Cache g_vehicle;
 Cache g_mercenary;
 Cache g_character;
 // 행 번호 -> 캐릭터 항목 위치. 널 슬롯이 있어 항목 순번과 행 번호가 어긋난다.
+std::atomic<std::uintptr_t> g_char_mgr{0};
+std::atomic<std::uintptr_t> g_veh_mgr{0};
 std::atomic<const std::vector<const RosterEntry*>*> g_char_rows{nullptr};
 std::vector<std::unique_ptr<std::vector<const RosterEntry*>>> g_char_row_versions;
 std::atomic<bool> g_ready{false};
@@ -399,8 +401,10 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
 
     std::vector<RosterEntry> v, m, c;
+    std::uintptr_t veh_manager = 0;
     const bool ok_v = build_static_catalog(reader, rtti, kVehicleClass,
-                                           RosterKind::Vehicle, &v);
+                                           RosterKind::Vehicle, &v,
+                                           &veh_manager);
     std::uintptr_t char_manager = 0;
     const bool ok_c = build_static_catalog(reader, rtti, kCharacterClass,
                                            RosterKind::Character, &c,
@@ -444,6 +448,11 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     for (const auto& e : c) {
         if (e.is_companion()) ++companions;
     }
+    // 캐릭터 매니저를 들고 있는다. 고정 전역은 갱신마다 밀리므로(위 주석) RTTI 로
+    // 찾은 이 인스턴스가 정답이고, 탈것 쿨다운처럼 **레코드를 직접 봐야 하는**
+    // 기능이 여기서 받아 간다.
+    g_char_mgr.store(char_manager, std::memory_order_release);
+    g_veh_mgr.store(veh_manager, std::memory_order_release);
     g_vehicle.swap(std::move(v));
     g_character.swap(std::move(c));
     {
@@ -468,6 +477,14 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
 }
 
 bool roster_ready() { return g_ready.load(std::memory_order_acquire); }
+
+std::uintptr_t roster_char_manager() {
+    return g_char_mgr.load(std::memory_order_acquire);
+}
+
+std::uintptr_t roster_vehicle_manager() {
+    return g_veh_mgr.load(std::memory_order_acquire);
+}
 
 const std::vector<RosterEntry>& vehicle_catalog() {
     return *g_vehicle.live.load(std::memory_order_acquire);

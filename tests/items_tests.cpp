@@ -510,6 +510,38 @@ TEST(config_drops_socket_cap_parts_past_the_vector) {
     CHECK(cdtb::config::parse_socket_cap_parts("3:5=0").empty());
 }
 
+// ---------------------------------------- 자동 재적용 지식 목록 (knowledge_keep)
+//
+// 지식 쓰기가 세이브를 못 넘으므로 이 목록이 게임 재시작을 건너게 해 준다.
+// `번호:레벨` 을 쉼표로 잇는다.
+
+TEST(config_reads_knowledge_keep) {
+    const auto k = cdtb::config::parse_knowledge_keep("4883:1,4884:2");
+    CHECK_EQ(k.size(), std::size_t{2});
+    if (k.size() < 2) return;
+    CHECK_EQ(k[0].number, 4883);
+    CHECK_EQ(k[0].level, 1);
+    CHECK_EQ(k[1].number, 4884);
+    CHECK_EQ(k[1].level, 2);
+}
+
+TEST(config_drops_a_broken_knowledge_keep_but_keeps_the_rest) {
+    const auto k = cdtb::config::parse_knowledge_keep("4883:1,쓰레기,4886:1");
+    CHECK_EQ(k.size(), std::size_t{2});
+    if (k.size() < 2) return;
+    CHECK_EQ(k[0].number, 4883);
+    CHECK_EQ(k[1].number, 4886);
+}
+
+TEST(config_drops_knowledge_keep_that_makes_no_sense) {
+    // 레벨 0 은 "안 건다" 라 적을 이유가 없다.
+    CHECK(cdtb::config::parse_knowledge_keep("4883:0").empty());
+    CHECK(cdtb::config::parse_knowledge_keep("4883:-1").empty());
+    CHECK(cdtb::config::parse_knowledge_keep("-1:1").empty());
+    // 레벨이 없으면 항목이 아니다.
+    CHECK(cdtb::config::parse_knowledge_keep("4883").empty());
+}
+
 // ------------------------------------------------------ 보석 거르기
 
 TEST(is_socket_gem_needs_category_74_and_a_name) {

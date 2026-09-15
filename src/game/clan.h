@@ -202,6 +202,63 @@ bool find_clan_component_client(const mem::Reader& reader, const mem::Rtti& rtti
                                 std::uintptr_t* out);
 
 
+// 캐시된 용병단 컴포넌트. **값싼 길이다** - `find_clan_component` 는 RTTI 힙
+// 스캔(10초대)이라 렌더 스레드에서 부르면 화면이 그만큼 멈춘다. 캐시가 비어
+// 있으면 배경 재탐색을 걸고 false 를 준다(이번 프레임은 포기).
+bool clan_component_fast(const mem::Reader& reader, const mem::Rtti& rtti,
+                         bool client, std::uintptr_t* out);
+
+// ------------------------------------------- 휠 색인 고치기 (2026-09-15)
+//
+// **종 교체분이 휠에서만 안 불린다**(사용자 실측 2026-09-15). 목록은 번호로 가니
+// 정상인데, 휠은 **종류별 색인**(용병단 안의 해시)을 훑어 목록을 만들기 때문이다.
+// 그 색인의 버킷 키는 **명부에 넣을 때의 종**에서 파생되므로, 종만 제자리에서
+// 바꾸면 개체가 **옛 타입 벡터에 남는다.**
+//
+// 실측으로 눈에 보였다(`probe clanindex`):
+//
+//   타입키 9(펫)  개수 7/용량 8   [3] 번호 1000595 종행 6810 **타입행 5** 붉은깃 랩터
+//   타입키 5(특수) 개수 13/용량 18                                       <- 여기 있어야 한다
+//
+// 지금까지의 해결책은 "저장하고 다시 불러오기"(명부 재구축)였다. 그러지 않고
+// **제자리로 옮긴다.** 벡터에 여유 칸이 있으면 재할당도 게임 함수 호출도 필요 없다.
+//
+// 배치(실측 2026-09-12·09-15):
+//   M = clan + 0x18
+//   M+0x30 u32 버킷 수 · M+0x40 버킷표(버킷 0x100 간격) · M+0x48 슬롯 배열
+//   버킷: [0] u32 개수, +8 부터 {u32 타입키, u32 슬롯색인}
+//   슬롯 원소 +8 = 벡터 {begin, u32 개수, u32 용량}, 원소는 `record*`
+inline constexpr std::size_t kClanIndexObj = 0x18;
+inline constexpr std::size_t kClanIdxBuckets = 0x30;   // M 기준
+inline constexpr std::size_t kClanIdxTable = 0x40;
+inline constexpr std::size_t kClanIdxSlots = 0x48;
+inline constexpr std::size_t kClanBucketStride = 0x100;
+inline constexpr std::uint32_t kClanBucketMax = 31;
+inline constexpr std::uint32_t kClanIdxMaxBuckets = 4096;
+inline constexpr std::size_t kClanVecOff = 0x08;       // 원소 기준
+inline constexpr std::uint32_t kClanVecMax = 256;
+
+struct ReindexResult {
+    int realms = 0;    // 손댄 realm 수
+    int wrong = 0;     // 자리가 틀린 개체 수
+    int moved = 0;     // 실제로 옮긴 수
+    int no_room = 0;   // 갈 벡터에 여유가 없어 못 옮긴 수
+    // **한쪽 realm 을 못 봤다.** 이때 `wrong 0` 은 "어긋난 것이 없다" 가 아니라
+    // "거기는 안 봤다" 다. 캐시에 없는 명부는 배경 탐색을 걸고 건너뛰므로
+    // (렌더 스레드를 10초 멈추지 않으려고) 흔히 일어난다 - 2026-09-15 에
+    // 드래곤 휠 칸을 바꾼 직후가 정확히 그랬고, 깨끗한 0 으로 보고됐다.
+    bool partial = false;
+    char note[128] = {};
+};
+
+// **순수 함수.** 여유가 있어야 옮긴다. 용량이 개수보다 커야 한 칸 들어간다.
+bool reindex_has_room(std::uint32_t count, std::uint32_t cap);
+
+// 종류별 색인에서 **타입행과 자리가 어긋난 개체**를 제자리로 옮긴다.
+// 서버·클라 양쪽에 건다. 읽기만 하려면 `dry` 를 참으로 준다.
+ReindexResult clan_reindex(const mem::Reader& reader, const mem::Rtti& rtti,
+                           bool dry);
+
 // 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
 std::vector<std::string> clan_scan_classes();
 
