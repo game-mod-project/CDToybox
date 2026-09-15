@@ -832,6 +832,11 @@ bool disguise_wants_swap(int in_world_count) {
     return in_world_count <= 0;
 }
 
+bool escape_road_differs(std::uint8_t mine, std::uint8_t donor) {
+    // 0 은 "없음" 으로 보고 안 건드린다 - 기증자가 0 이면 베낄 것이 없다.
+    return donor != 0 && mine != donor;
+}
+
 bool spawn_voxel_gated(std::uint32_t count) {
     // 목록이 비면 아무 데서나 부를 수 있다 - A.T.A.G. 가 그 상태다.
     return count > 0;
@@ -927,6 +932,14 @@ struct VoxBak {
 };
 VoxBak g_dis_xbak[kDisguiseMax];
 int g_dis_xbak_n = 0;
+
+// 탈출로 그룹을 기증자 값으로 맞춘 자국(탈것 규칙 행의 u8 한 칸).
+struct RoadBak {
+    std::uintptr_t rec = 0;
+    std::uint8_t group = 0;
+};
+RoadBak g_dis_rbak[kDisguiseMax];
+int g_dis_rbak_n = 0;
 
 bool wr16(std::uintptr_t a, std::uint16_t v) {
     return mem::safe_write_bytes(a, &v, sizeof v);
@@ -1111,6 +1124,13 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
     std::uintptr_t veh_recs = 0;
     int veh_n = 0;
     veh_table(reader, &veh_recs, &veh_n);
+    // 기증자의 탈것 규칙 행. 장소 관련 칸을 여기서 베껴 온다.
+    std::uintptr_t donor_vrec = 0;
+    if (veh_recs != 0 && p.donor_veh >= 0 && p.donor_veh < veh_n) {
+        donor_vrec = static_cast<std::uintptr_t>(
+            rd64(reader, veh_recs + static_cast<std::uintptr_t>(p.donor_veh) * 8));
+        if (donor_vrec < 0x10000) donor_vrec = 0;
+    }
 
     log::infof("휠 칸 바꾸기: 기증자 종행 {} - 타입행 {} (탈것규칙 {} 은 안 베낀다)"
                " · 대상 {}개",
@@ -1155,19 +1175,37 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
                            p.row[i], vx);
             }
         }
-        // 자기 탈것 규칙의 지면 거리 검사만 푼다. 드래곤 30 · 와이번 0.
+        // 자기 탈것 규칙에서 **장소에 관한 두 칸만** 기증자와 맞춘다. 규칙 행
+        // 자체는 안 바꾼다(그건 무엇이 나오는지를 정한다).
         if (veh_recs == 0 || static_cast<int>(ov) >= veh_n) continue;
         const std::uintptr_t vrec = static_cast<std::uintptr_t>(
             rd64(reader, veh_recs + static_cast<std::uintptr_t>(ov) * 8));
         if (vrec < 0x10000) continue;
+        // (1) 지면 거리 검사. 드래곤 30 · 와이번 0.
         const float d = rdf(reader, vrec + kViGroundDist);
-        if (!vehicle_place_gated(d)) continue;   // 이미 0 이면 둔다
-        const float zero = 0.0f;
-        if (mem::safe_write_bytes(vrec + kViGroundDist, &zero, sizeof zero) &&
-            g_dis_vbak_n < kDisguiseMax) {
-            g_dis_vbak[g_dis_vbak_n] = VehBak{vrec, d};
-            ++g_dis_vbak_n;
-            log::infof("휠 칸 바꾸기: 탈것규칙 {} 지면 거리 {} -> 0", ov, d);
+        if (vehicle_place_gated(d) && g_dis_vbak_n < kDisguiseMax) {
+            const float zero = 0.0f;
+            if (mem::safe_write_bytes(vrec + kViGroundDist, &zero,
+                                      sizeof zero)) {
+                g_dis_vbak[g_dis_vbak_n] = VehBak{vrec, d};
+                ++g_dis_vbak_n;
+                log::infof("휠 칸 바꾸기: 탈것규칙 {} 지면 거리 {} -> 0", ov, d);
+            }
+        }
+        // (2) **탈출로 그룹.** 되는 둘과 안 되는 하나가 여기서 갈렸다 - 실측
+        // 2026-09-15: A.T.A.G.(행 2) 5 · 와이번(행 4) 5 · **드래곤(행 3) 2**.
+        // 지형 요구와 지면 거리를 다 풀어도 드래곤만 "호출할 수 없는 위치" 가
+        // 남았고, 그때 남아 있던 유일한 깨끗한 차이가 이 칸이다. 기증자 값으로
+        // 맞춘다 - 번호를 박지 않는다.
+        if (donor_vrec == 0 || g_dis_rbak_n >= kDisguiseMax) continue;
+        const std::uint8_t want = rd8(reader, donor_vrec + kViEscapeRoad);
+        const std::uint8_t mine = rd8(reader, vrec + kViEscapeRoad);
+        if (!escape_road_differs(mine, want)) continue;
+        if (mem::safe_write_bytes(vrec + kViEscapeRoad, &want, sizeof want)) {
+            g_dis_rbak[g_dis_rbak_n] = RoadBak{vrec, mine};
+            ++g_dis_rbak_n;
+            log::infof("휠 칸 바꾸기: 탈것규칙 {} 탈출로 그룹 {} -> {}", ov, mine,
+                       want);
         }
     }
     if (g_dis_bak_n == 0) {
@@ -1213,7 +1251,10 @@ void disguise_tick(const mem::Reader& reader) {
 }
 
 void disguise_teardown() {
-    if (g_dis_bak_n == 0 && g_dis_vbak_n == 0 && g_dis_xbak_n == 0) return;
+    if (g_dis_bak_n == 0 && g_dis_vbak_n == 0 && g_dis_xbak_n == 0 &&
+        g_dis_rbak_n == 0) {
+        return;
+    }
     int back = 0;
     for (int i = 0; i < g_dis_bak_n; ++i) {
         const DisguiseBak& b = g_dis_bak[i];
@@ -1239,11 +1280,22 @@ void disguise_teardown() {
             ++vback;
         }
     }
-    log::infof("휠 칸 바꾸기: {}개 되돌렸다 (지형 요구 {}개 · 지면 거리 {}개)",
-               back, xback, vback);
+    int rback = 0;
+    for (int i = 0; i < g_dis_rbak_n; ++i) {
+        const RoadBak& b = g_dis_rbak[i];
+        if (b.rec == 0) continue;
+        if (mem::safe_write_bytes(b.rec + kViEscapeRoad, &b.group,
+                                  sizeof b.group)) {
+            ++rback;
+        }
+    }
+    log::infof("휠 칸 바꾸기: {}개 되돌렸다 (지형 요구 {} · 지면 거리 {} ·"
+               " 탈출로 {})",
+               back, xback, vback, rback);
     g_dis_bak_n = 0;
     g_dis_vbak_n = 0;
     g_dis_xbak_n = 0;
+    g_dis_rbak_n = 0;
 }
 
 void call_place_teardown() {

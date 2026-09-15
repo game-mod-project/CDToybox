@@ -184,4 +184,15 @@ TEST(disguise_wants_swap_only_while_out_of_world) {
     CHECK(disguise_wants_swap(-1));    // 말도 안 되는 값은 0 과 같이 본다
 }
 
+// 탈출로 그룹. 장소 검사를 다 풀어도 드래곤만 "호출할 수 없는 위치" 가 남았고,
+// 그때 장소 관련 칸 중 되는 둘과 안 되는 하나를 가른 유일한 칸이었다
+// (실측 2026-09-15: A.T.A.G. 행2 = 5 · 와이번 행4 = 5 · 드래곤 행3 = 2).
+TEST(escape_road_differs_copies_only_a_real_group) {
+    using cdtb::game::escape_road_differs;
+    CHECK(escape_road_differs(2, 5));    // 드래곤 <- 와이번
+    CHECK(!escape_road_differs(5, 5));   // 이미 같다 - 백업이 우리 값을 덮지 않게
+    CHECK(!escape_road_differs(2, 0));   // 기증자가 없음이면 베낄 것이 없다
+    CHECK(!escape_road_differs(0, 0));
+}
+
 }  // namespace

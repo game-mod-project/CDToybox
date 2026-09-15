@@ -279,7 +279,20 @@ void mount_timer_teardown();
 // 정적 표라 **세이브에 안 남고** 게임을 끄면 원복된다.
 inline constexpr std::size_t kViGroundDist = 0x8C;   // float
 inline constexpr std::size_t kViMaxHeight = 0x9C;    // float _maxAllowableHeight
+// `_escapeRoadGroupType`(+0x70). 탈것을 놓을 자리를 고를 때 쓰는 "탈출로" 그룹.
+//
+// **되는 둘과 안 되는 하나가 여기서 갈렸다** (실측 2026-09-15):
+//   A.T.A.G.(탈것행 2) **5** - 소환·탑승 됨
+//   와이번  (탈것행 4) **5** - 정상
+//   드래곤  (탈것행 3) **2** - "호출할 수 없는 위치"
+//
+// 호출 지형 요구(CharacterInfo +0x450)와 지면 거리(+0x8C)를 둘 다 0 으로 만든
+// 뒤에도 드래곤만 막혔고, 그때 장소 관련 칸 중 남아 있던 유일한 깨끗한 차이다.
+inline constexpr std::size_t kViEscapeRoad = 0x70;   // u8
 inline constexpr int kVehiclePatchMax = 64;
+
+// **순수 함수.** 탈출로 그룹을 기증자 값으로 맞춰야 하는가.
+bool escape_road_differs(std::uint8_t mine, std::uint8_t donor);
 
 // **순수 함수.** 이 탈것의 장소 검사를 풀어야 하는가.
 bool vehicle_place_gated(float ground_dist);
