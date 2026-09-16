@@ -20,7 +20,12 @@ struct WindowSpec {
     Win id;
     const char* title;   // ImGui 창 제목(= ImGui ID)
     const char* label;   // 본창 체크박스 글자. 본창 자신은 ""
-    bool default_open;
+    // 기본 배치 묶음. 함께 쓰일 법한 창들이라 서로 겹치지 않게 자리를
+    // 잡는다(layout_tests 가 이 묶음과 나머지 묶음을 각각 검사한다).
+    // **시작 시 열리는가와는 무관하다** - 최초 실행에는 본창만 열리고,
+    // 그 뒤로는 사용자가 마지막에 둔 상태를 기억한다(ui_persist).
+    // 열 창을 전부 안 겹치게 놓을 자리는 1920 폭에 없어서 묶음이 둘이다.
+    bool primary;
     float x, y, w, h;
     float min_w, min_h;
 };

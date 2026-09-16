@@ -26,6 +26,7 @@
 #include "render/diagnostics.h"
 #include "render/icon_atlas.h"
 #include "render/layout.h"
+#include "render/ui_persist.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
 #include "game/knowledge.h"
@@ -316,6 +317,11 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
     static std::string ini_path = detail::self_dir_utf8() + "cdtoybox_ui.ini";
     io.IniFilename = ini_path.empty() ? nullptr : ini_path.c_str();
 
+    // 창 열림/닫힘과 헤더 펼침은 ImGui 가 저장하지 않는다. 우리 구역을
+    // 같은 파일에 얹는다 - **첫 NewFrame 전에** 붙여야 그 프레임의 읽기에
+    // 걸린다.
+    cdtb::render::ui_persist_install();
+
     // 기본 폰트(ProggyClean)에는 한글 글리프가 없어 ??로 표시된다.
     // 1.92부터 글리프는 필요할 때 동적으로 래스터화되므로 범위를 지정할
     // 필요 없이 한글이 든 폰트를 얹기만 하면 된다. 파일이 없을 때
@@ -371,7 +377,7 @@ bool initialize(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
 // 창마다 ✕ 를 달아 치울 수 있게 했으면, **다시 여는 자리**가 반드시
 // 있어야 한다. 없으면 한 번 닫은 창은 영영 못 본다. 그 자리가 본창
 // 이고, 그래서 본창은 닫히지 않는다.
-// 켜 둔 창. 초기값은 배치 표의 default_open 이다.
+// 켜 둔 창. 초기값은 저장값이고, 없으면 본창만이다(init_show_flags).
 bool g_show[cdtb::render::kWinCount] = {};
 bool g_show_inited = false;
 
@@ -381,8 +387,16 @@ bool& shown(cdtb::render::Win w) {
 
 void init_show_flags() {
     if (g_show_inited) return;
+    // ImGui 가 ini 를 읽기 전이면 저장값이 늘 비어 있다 - 그때 씨를 뿌리면
+    // 지난 실행의 상태를 기본값으로 덮는다. 아직이면 다음 프레임에 다시 온다.
+    // (지금 부르는 자리는 전부 프레임 안이지만, 밖에서 부르는 날이 오면
+    // 증상이 "가끔 창 배치가 초기화된다" 라 원인을 찾기 어렵다.)
+    if (!cdtb::render::ui_persist_loaded()) return;
+    // 저장값이 있으면 그것, 없으면(최초 실행) **본창만** 연다. 한꺼번에
+    // 다섯이 뜨면 화면이 가려지고, 어차피 한 번 고르면 기억된다.
     for (const auto& s : cdtb::render::window_specs()) {
-        shown(s.id) = s.default_open;
+        const bool first_run_default = s.id == cdtb::render::Win::Main;
+        shown(s.id) = cdtb::render::ui_window_open(s.id, first_run_default);
     }
     g_show_inited = true;
 }
@@ -402,6 +416,12 @@ void draw_windows() {
     if (shown(Win::Player)) cdtb::render::draw_player_panel(&shown(Win::Player));
     if (shown(Win::Camera)) cdtb::render::draw_camera_panel(&shown(Win::Camera));
     if (shown(Win::Log)) cdtb::render::draw_log_panel(&shown(Win::Log));
+
+    // ✕ 는 그리는 동안 플래그를 내린다. 그린 뒤에 봐야 이번 프레임 것이
+    // 잡힌다. 안 바뀐 것은 ui_set_window_open 이 걸러 ini 를 안 더럽힌다.
+    for (const auto& s : cdtb::render::window_specs()) {
+        cdtb::render::ui_set_window_open(s.id, shown(s.id));
+    }
 }
 
 // 게임 exe 의 버전. 한 번 읽어 둔다 - 매 프레임 자원을 뒤질 이유가 없다.
@@ -493,7 +513,7 @@ void draw_ui() {
         return;
     }
 
-    if (ImGui::CollapsingHeader("모듈")) {
+    if (cdtb::render::collapsing_header("main.module", "모듈")) {
         ImGui::Text("베이스    0x%llX",
                     static_cast<unsigned long long>(d.game_base));
         ImGui::Text("이미지    %.1f MB",
@@ -508,7 +528,7 @@ void draw_ui() {
         ImGui::Unindent();
     }
 
-    if (ImGui::CollapsingHeader("스캐너 진단")) {
+    if (cdtb::render::collapsing_header("main.scanner", "스캐너 진단")) {
         const bool exact = d.self_marker_found &&
                            d.self_marker_found_at == d.self_marker_expected;
         ImGui::TextColored(
