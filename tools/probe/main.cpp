@@ -1868,6 +1868,112 @@ void cmd_gate(const mem::Rtti& rt, const mem::Reader& reader) {
 
 // 캐릭터를 이름으로 찾는다. **행 번호**를 내는 것이 목적이다 -
 // 명부 레코드의 +0x20 과 고용 검사가 쓰는 것이 키가 아니라 행이다.
+// `charinfo <행> [행...]` - 캐릭터 정적 정보의 **호출 관련 칸**을 이름과 함께
+// 낸다. 드래곤이 왜 호출 모션조차 없는지 보려고 넣었다(2026-09-16). 읽기만
+// 한다. 오프셋은 `tools/rtti/fields.py` 가 리플렉션에서 뽑은 이름 그대로다.
+// `mercinfo <행> [행...]` - 용병 타입(동반자 카테고리) 표의 **소환 방식 칸**을
+// 이름과 함께 낸다. 드래곤(타입 2)만 호출 모션이 없는 이유를 찾으려고 넣었다
+// (2026-09-16). 읽기만 한다. 오프셋은 fields.py 가 리플렉션에서 뽑은 것이다.
+void cmd_mercinfo(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_static_manager(reader, rt, ".?AVMercenaryInfoManager@pa@@",
+                                   &mgr)) {
+        std::printf("MercenaryInfoManager 를 못 찾았습니다.\n");
+        return;
+    }
+    std::uint32_t n = 0;
+    std::uintptr_t recs = 0;
+    if (!game::roster_header(reader, mgr, &n, &recs)) {
+        std::printf("표 머리를 못 읽었습니다.\n");
+        return;
+    }
+    std::printf("용병타입 표 0x%llX · %u행\n\n", (unsigned long long)recs, n);
+    std::printf("%-5s %-14s %-7s %-7s %-7s %-7s %-7s %-7s %s\n", "행", "레코드",
+                "타입", "스폰위치", "선택소환", "주인옵션", "실내검사",
+                "소환수", "연결필요");
+    for (int i = 2; i < argc; ++i) {
+        const std::uint32_t row =
+            static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 0));
+        if (row >= n) { std::printf("%-5u (범위 밖)\n", row); continue; }
+        std::uintptr_t rec = 0;
+        if (!reader.read(recs + static_cast<std::uintptr_t>(row) * 8, &rec,
+                         sizeof(rec)) || rec < 0x10000) {
+            std::printf("%-5u (레코드를 못 읽었습니다)\n", row);
+            continue;
+        }
+        std::uint8_t mtype = 0, spos = 0, sel = 0, owner = 0, indoor = 0,
+                     conn = 0;
+        std::uint32_t lim = 0;
+        reader.read(rec + 0x20, &mtype, sizeof(mtype));
+        reader.read(rec + 0x5C, &spos, sizeof(spos));
+        reader.read(rec + 0x29, &sel, sizeof(sel));
+        reader.read(rec + 0x5D, &owner, sizeof(owner));
+        reader.read(rec + 0x58, &indoor, sizeof(indoor));
+        reader.read(rec + 0x14, &lim, sizeof(lim));
+        reader.read(rec + 0x4D, &conn, sizeof(conn));
+        std::printf("%-5u 0x%-12llX %-7u %-7u %-7u %-7u %-7u %-7u %u\n", row,
+                    (unsigned long long)rec, mtype, spos, sel, owner, indoor,
+                    lim, conn);
+    }
+    std::printf("\n칸: 타입 _mercenaryType(+0x20) · 스폰위치"
+                " _spawnPositionType(+0x5C) · 선택소환"
+                " _isSelectMercenarySpawn(+0x29) · 주인옵션"
+                " _summonOwnerOption(+0x5D) · 실내검사 _checkIndoor(+0x58) ·"
+                " 소환수 _defaultLimitSummonCount(+0x14) · 연결필요"
+                " _isConnectionRequired(+0x4D)\n");
+}
+void cmd_charinfo(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_static_manager(reader, rt, ".?AVCharacterInfoManager@pa@@",
+                                   &mgr)) {
+        std::printf("CharacterInfoManager 를 못 찾았습니다.\n");
+        return;
+    }
+    std::uint32_t n = 0;
+    std::uintptr_t recs = 0;
+    if (!game::roster_header(reader, mgr, &n, &recs)) {
+        std::printf("표 머리를 못 읽었습니다.\n");
+        return;
+    }
+    std::printf("캐릭터 표 0x%llX · %u행\n\n", (unsigned long long)recs, n);
+    std::printf("%-6s %-14s %-10s %-10s %-12s %-10s %s\n", "행", "레코드",
+                "용병타입", "탈것규칙", "호출기믹", "기본동작", "동작차트");
+    for (int i = 2; i < argc; ++i) {
+        const std::uint32_t row =
+            static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 0));
+        if (row >= n) {
+            std::printf("%-6u (범위 밖)\n", row);
+            continue;
+        }
+        std::uintptr_t rec = 0;
+        if (!reader.read(recs + static_cast<std::uintptr_t>(row) * 8, &rec,
+                         sizeof(rec)) ||
+            rec < 0x10000) {
+            std::printf("%-6u (레코드를 못 읽었습니다)\n", row);
+            continue;
+        }
+        std::uint16_t merc = 0xFFFF;
+        std::uint16_t veh = 0xFFFF;
+        std::uint16_t gim = 0xFFFF;
+        std::uint32_t defact = 0;
+        std::uint16_t up = 0xFFFF;
+        std::uint16_t lo = 0xFFFF;
+        reader.read(rec + 0xBE, &merc, sizeof(merc));
+        reader.read(rec + 0x6E, &veh, sizeof(veh));
+        reader.read(rec + 0x442, &gim, sizeof(gim));
+        reader.read(rec + 0x1CC, &defact, sizeof(defact));
+        reader.read(rec + 0x8C, &up, sizeof(up));
+        reader.read(rec + 0x8E, &lo, sizeof(lo));
+        std::printf("%-6u 0x%-12llX %-10u %-10u %-12u %-10u %u/%u\n", row,
+                    (unsigned long long)rec, merc, veh, gim, defact, up, lo);
+    }
+    std::printf("\n칸: 용병타입 _mercenaryInfo(+0xBE) · 탈것규칙"
+                " _vehicleInfo(+0x6E) · 호출기믹 _callVehicleGimmickInfo"
+                "(+0x442) · 기본동작 _defaultActionActionIndex(+0x1CC) ·"
+                " 동작차트 상/하(+0x8C/+0x8E). 65535 = 없음\n");
+}
 void cmd_charfind(mem::Rtti& rt, const mem::Reader& reader, int argc,
                   char** argv) {
     if (argc < 3) {
@@ -4299,6 +4405,8 @@ int main(int argc, char** argv) {
     if (cmd == "recdump") { cmd_recdump(rt, reader, argc, argv); return 0; }
     if (cmd == "recdiff") { cmd_recdiff(rt, reader, argc, argv); return 0; }
     if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
+    if (cmd == "charinfo") { cmd_charinfo(rt, reader, argc, argv); return 0; }
+    if (cmd == "mercinfo") { cmd_mercinfo(rt, reader, argc, argv); return 0; }
     if (cmd == "gate") { cmd_gate(rt, reader); return 0; }
     if (cmd == "playable") { cmd_playable(rt, reader); return 0; }
     if (cmd == "setspecies") { cmd_setspecies(rt, reader, r, argc, argv); return 0; }
