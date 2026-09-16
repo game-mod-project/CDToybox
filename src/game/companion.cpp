@@ -152,7 +152,8 @@ using DeserFn = void*(__fastcall*)(void*, void*, void*, void*);
 
 constexpr std::size_t kPacketLen = 0x10;      // u16 전체길이
 constexpr std::size_t kPacketPayload = 0x18;  // 페이로드 포인터
-constexpr int kMaxDumps = 80;
+constexpr int kMaxDumps = 600;   // 전체 상한(태그별 상한이 주된 조절기다)
+constexpr int kMaxPerTag = 12;   // 한 계통이 로그를 묻지 못하게
 constexpr std::size_t kHexCap = 768;
 
 std::atomic<int> g_dumps{0};
@@ -162,8 +163,16 @@ HireAck g_acks[kHireAckSlots];
 int g_ack_next = 0;
 CatchCapture g_last_catch;
 
-void dump_payload(void* packet, const char* tag) {
+// **예산은 태그마다 따로 센다** (2026-09-16). 전역 하나로 묶었더니 시작
+// 동기화에서 한 메시지가 80건을 한꺼번에 쏟아 예산을 다 태웠고, 정작 보려던
+// 클릭이 2분 뒤에 와서 한 줄도 안 찍혔다. 한 계통의 폭주가 다른 계통을
+// 굶기면 안 된다(TROUBLESHOOTING 6.19 - 한 줄이 로그를 묻는다).
+void dump_payload(void* packet, const char* tag, std::atomic<int>* budget) {
     if (packet == nullptr) return;
+    if (budget != nullptr &&
+        budget->load(std::memory_order_relaxed) >= kMaxPerTag) {
+        return;
+    }
     if (g_dumps.load(std::memory_order_relaxed) >= kMaxDumps) return;
     auto* p = reinterpret_cast<const std::uint8_t*>(packet);
     std::uint16_t len = 0;
@@ -172,6 +181,7 @@ void dump_payload(void* packet, const char* tag) {
     std::memcpy(&payload, p + kPacketPayload, sizeof(payload));
     if (payload == 0 || len == 0 || len > 8192) return;
     g_dumps.fetch_add(1, std::memory_order_relaxed);
+    if (budget != nullptr) budget->fetch_add(1, std::memory_order_relaxed);
     auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
     std::uint16_t id = 0, body = 0;
     decode_message_header(pl, len, &id, &body);
@@ -226,8 +236,9 @@ void dump_payload(void* packet, const char* tag) {
 // 메시지마다 detour·원본이 따로 있어야 해서 매크로로 찍어 낸다.
 #define CDTB_COMP_DETOUR(id, tag)                                            \
     DeserFn g_orig_##id = nullptr;                                          \
+    std::atomic<int> g_budget_##id{0};                                      \
     void* __fastcall det_##id(void* a, void* b, void* p, void* d) {         \
-        dump_payload(p, tag);                                                \
+        dump_payload(p, tag, &g_budget_##id);                                \
         return g_orig_##id(a, b, p, d);                                      \
     }
 CDTB_COMP_DETOUR(hire_target, "획득/대상")
