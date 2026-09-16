@@ -270,11 +270,30 @@ void know_diagnose_names(const mem::Rtti* rtti, const mem::Reader& reader,
 // 읽는 방법에서 **버킷·해시를 가정하지 않는다.** 값 배열은 원소 수(+0xF4)와
 // 배열 포인터(+0x100)만으로 조밀하게 읽히므로 추측이 하나 적다. 버킷 배치
 // (+0xE8/+0xF8)는 다른 엔진 맵에서 본 모양일 뿐 **이 맵에서 확인한 적이 없다.**
-inline constexpr std::size_t kKnowMapValues = 0x100;   // {u32 SkillKey, i32 레벨} 배열
-inline constexpr std::size_t kKnowMapValueStride = 8;
+//
+// **값 배열은 포인터 배열이다**(실측 2026-09-16, 탐침). STATUS §1.19 가
+// "값 = {u32 SkillKey, i32 레벨}" 이라 적은 것은 **한 겹 얕았다** - 그 쌍은
+// 배열에 바로 있지 않고 포인터가 가리키는 객체 안에 있다. 첫 판을 그렇게 읽어
+// 대조군까지 "없음" 으로 나왔고, 가드가 그것을 잡았다.
+//
+// 항목 하나(실측으로 확정 - 지식 키 1000000 `Knowledge_Wrestle` ->
+// 스킬 키 10202 `Skill_Wrestle` 레벨 5 가 게임 데이터와 정확히 맞는다):
+//
+//   +0x00 u32 ?        0 또는 31 - 아직 모른다
+//   +0x04 u32 **지식 키**  KnowledgeInfo._key. **행 번호가 아니다**
+//   +0x08 u32 **스킬 키**  SkillInfo._key
+//   +0x0C i32 **레벨**
+//   +0x10 · +0x18 u64  시각으로 보이는 값 둘
+inline constexpr std::size_t kKnowMapValues = 0x100;   // 항목 **포인터** 배열
+inline constexpr std::size_t kKnowMapValueStride = 8;  // 포인터 하나
 inline constexpr int kKnowMapMaxCount = 1 << 16;       // 말이 안 되는 개수를 거른다
+inline constexpr std::size_t kSkillEntryKnowKey = 0x04;
+inline constexpr std::size_t kSkillEntrySkillKey = 0x08;
+inline constexpr std::size_t kSkillEntryLevel = 0x0C;
+inline constexpr std::size_t kInfoDataKey = 0x00;      // KnowledgeInfo._key
 
 struct KnowSkillSlot {
+    int know_key = 0;
     int skill_key = 0;
     int level = 0;
 };
@@ -295,26 +314,43 @@ bool know_skill_slots(const mem::Reader& reader, int realm,
                       std::vector<KnowSkillSlot>* out);
 
 // `KnowledgeInfo._learnApplySkillInfo`(+0x104, u16). 0xFFFF 면 붙을 스킬이 없다.
-// 못 읽으면 -1.
+// 못 읽으면 -1. **둘을 갈라 쓴다** - 첫 판은 로그에서 둘 다 -1 로 찍어 어느
+// 쪽인지 알 수 없었다.
 int know_apply_skill(const mem::Reader& reader, const KnowMgr& mgr, int number);
+
+// `KnowledgeInfo._key`(+0x00). 맵은 행 번호가 아니라 이 키로 색인한다.
+// 못 읽으면 0.
+int know_data_key(const mem::Reader& reader, const KnowMgr& mgr, int number);
 
 // 내부 이름(`KnowledgeInfo +0x08`)으로 찾는다. 못 찾으면 -1.
 // **6천 개를 도는 일이다** - 프레임마다 부르지 않는다.
 int know_find_by_name(const mem::Reader& reader, const KnowMgr& mgr,
                       const char* internal);
 
-// 호출 지식 둘. `[0]` 이 대조군(탈것), `[1]` 이 대상(드래곤)이다.
+// 호출 지식과 **대조군 둘**.
+//
+//   [0] Knowledge_Wrestle     맵-양성 대조군 - 이 맵에 실제로 들어 있다.
+//                             여기서 "없음" 이 나오면 **조회가 틀린 것**이다
+//   [1] Knowledge_CallVehicle 기능-양성 대조군 - 말이 잘 불린다
+//   [2] Knowledge_CallDragon  대상
+//
+// 대조군을 둘 둔 이유: 첫 판에서 "대조군이 맵에 없다" 가 *조회가 틀렸다* 는
+// 뜻인지 *호출 스킬은 이 맵을 안 탄다* 는 뜻인지 가릴 수가 없었다. 맵에 확실히
+// 있는 것을 하나 끼워 두면 그 둘이 갈린다.
+//
 // **번호를 코드에 안 박는다** - 게임이 갱신되면 밀리므로 이름으로 찾는다
 // (원소 넷에서 번호를 잘못 골라 여러 번 헛돌았다, STATUS §1.20).
-inline constexpr int kCallKnowCount = 2;
+inline constexpr int kCallKnowCount = 3;
 
 struct CallKnow {
     const char* label = "";
     const char* internal = "";
     int number = -1;        // 지식 번호(표의 행). -1 이면 못 찾았다
+    int data_key = 0;       // KnowledgeInfo._key. 맵이 쓰는 것은 이쪽이다
     int level = 0;          // 레벨 표의 지금 레벨
     int apply_skill = -1;   // 붙을 스킬 키. 0xFFFF = 없음, -1 = 못 읽음
-    bool in_skill_map = false;  // 서버 스킬 맵에 그 스킬이 있는가
+    bool in_skill_map = false;  // 서버 스킬 맵에 그 지식이 있는가
+    int map_skill = 0;          // 있으면 거기 적힌 스킬 키
     int map_level = 0;          // 있으면 거기 적힌 레벨
 };
 

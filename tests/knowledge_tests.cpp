@@ -204,31 +204,63 @@ TEST(know_map_value_uses_the_eight_byte_stride) {
     CHECK(cdtb::game::know_map_value(0x1000, -1) == 0);
 }
 
-TEST(know_skill_slots_reads_the_dense_value_array) {
-    // 버킷·해시를 쓰지 않는다 - 원소 수와 값 배열만으로 읽힌다는 것이 이 조회의
-    // 설계이고, 그것을 여기서 못박는다.
+TEST(know_skill_slots_follows_the_pointer_array) {
+    // **값 배열은 포인터 배열이다**(실측 2026-09-16). 한 겹 얕게 읽으면 스킬 키
+    // 자리에서 주소의 하위 32비트를 읽고, 대조군까지 "없음" 으로 나온다.
     cdtb::tests::FakeMemory m;
-    m.heap.assign(0x400, 0);
+    m.heap.assign(0x600, 0);
     constexpr std::size_t kComp = 0x40;
     constexpr std::size_t kVals = 0x200;
-    m.put_u32(kComp + cdtb::game::kKnowMapCount, 3);
+    constexpr std::size_t kEnt0 = 0x300;
+    constexpr std::size_t kEnt1 = 0x380;
+    m.put_u32(kComp + cdtb::game::kKnowMapCount, 2);
     m.put_u64(kComp + cdtb::game::kKnowMapValues, m.heap_addr(kVals));
-    m.put_u32(kVals + 0, 1505);  m.put_u32(kVals + 4, 1);   // Skill_CallVehicle
-    m.put_u32(kVals + 8, 1506);  m.put_u32(kVals + 12, 2);  // Skill_CallDragon
-    m.put_u32(kVals + 16, 42);   m.put_u32(kVals + 20, 3);
+    m.put_u64(kVals + 0, m.heap_addr(kEnt0));
+    m.put_u64(kVals + 8, m.heap_addr(kEnt1));
+    // 실측 항목: 지식키 1000000 Knowledge_Wrestle -> 스킬키 10202 레벨 5
+    m.put_u32(kEnt0 + cdtb::game::kSkillEntryKnowKey, 1000000);
+    m.put_u32(kEnt0 + cdtb::game::kSkillEntrySkillKey, 10202);
+    m.put_u32(kEnt0 + cdtb::game::kSkillEntryLevel, 5);
+    m.put_u32(kEnt1 + cdtb::game::kSkillEntryKnowKey, 1005839);
+    m.put_u32(kEnt1 + cdtb::game::kSkillEntrySkillKey, 15002);
+    m.put_u32(kEnt1 + cdtb::game::kSkillEntryLevel, 8);
 
     std::vector<cdtb::game::KnowSkillSlot> got;
     CHECK(cdtb::game::know_skill_slots_at(m, m.heap_addr(kComp), &got));
-    CHECK(got.size() == 3);
-    CHECK(got[0].skill_key == 1505 && got[0].level == 1);
-    CHECK(got[1].skill_key == 1506 && got[1].level == 2);
-    CHECK(got[2].skill_key == 42 && got[2].level == 3);
+    CHECK(got.size() == 2);
+    CHECK(got[0].know_key == 1000000 && got[0].skill_key == 10202 &&
+          got[0].level == 5);
+    CHECK(got[1].know_key == 1005839 && got[1].skill_key == 15002 &&
+          got[1].level == 8);
+}
+
+TEST(know_skill_slots_skips_an_empty_pointer_without_stopping) {
+    // 빈 칸은 건너뛰되 배열 읽기는 이어 간다 - 중간 한 칸 때문에 뒤를 다 놓치면
+    // "등록 안 돼 있다" 를 거짓으로 말하게 된다.
+    cdtb::tests::FakeMemory m;
+    m.heap.assign(0x600, 0);
+    constexpr std::size_t kComp = 0x40;
+    constexpr std::size_t kVals = 0x200;
+    constexpr std::size_t kEnt = 0x300;
+    m.put_u32(kComp + cdtb::game::kKnowMapCount, 3);
+    m.put_u64(kComp + cdtb::game::kKnowMapValues, m.heap_addr(kVals));
+    m.put_u64(kVals + 0, 0);                    // 빈 칸
+    m.put_u64(kVals + 8, m.heap_addr(kEnt));
+    m.put_u64(kVals + 16, 0);                   // 빈 칸
+    m.put_u32(kEnt + cdtb::game::kSkillEntryKnowKey, 1000174);
+    m.put_u32(kEnt + cdtb::game::kSkillEntrySkillKey, 1505);
+    m.put_u32(kEnt + cdtb::game::kSkillEntryLevel, 1);
+
+    std::vector<cdtb::game::KnowSkillSlot> got;
+    CHECK(cdtb::game::know_skill_slots_at(m, m.heap_addr(kComp), &got));
+    CHECK(got.size() == 1);
+    CHECK(got[0].know_key == 1000174 && got[0].skill_key == 1505);
 }
 
 TEST(know_skill_slots_refuses_a_component_it_cannot_read) {
     cdtb::tests::FakeMemory m;
     m.heap.assign(0x400, 0);
-    std::vector<cdtb::game::KnowSkillSlot> got{{9, 9}};
+    std::vector<cdtb::game::KnowSkillSlot> got{{9, 9, 9}};
     // 컴포넌트가 0 이면 아무것도 안 읽는다.
     CHECK(!cdtb::game::know_skill_slots_at(m, 0, &got));
     CHECK(got.empty());   // 앞의 내용은 지우고 나간다 - 남은 값을 답으로 읽으면 안 된다
@@ -238,17 +270,20 @@ TEST(know_skill_slots_refuses_a_component_it_cannot_read) {
 }
 
 TEST(know_skill_slots_stops_at_the_end_of_readable_memory) {
-    // 값 배열이 힙 끝에 걸쳐 있으면 읽히는 데까지만 담고 멈춘다. 못 읽은 것을
-    // 0 으로 채워 "스킬 0 이 등록됨" 으로 말하면 안 된다.
+    // 포인터 배열이 힙 끝에 걸쳐 있으면 읽히는 데까지만 담고 멈춘다. 못 읽은 것을
+    // 0 으로 채워 "지식 0 이 등록됨" 으로 말하면 안 된다.
     cdtb::tests::FakeMemory m;
     // 힙은 컴포넌트 필드(+0x100)를 담을 만큼은 돼야 한다 - 작게 잡으면
     // put_* 가 벡터 밖에 써서 시험 자신이 깨진다.
     m.heap.assign(0x200, 0);
     constexpr std::size_t kComp = 0x10;
     m.put_u32(kComp + cdtb::game::kKnowMapCount, 100);          // 힙보다 많다
-    // 값 배열을 **힙 끝에** 둔다 - 0x1F0·0x1F8 만 읽히고 0x200 에서 막힌다.
-    m.put_u64(kComp + cdtb::game::kKnowMapValues, m.heap_addr(0x1F0));
+    // 포인터 배열을 **힙 끝에** 둔다 - 0x1F8 하나만 읽히고 0x200 에서 막힌다.
+    m.put_u64(kComp + cdtb::game::kKnowMapValues, m.heap_addr(0x1F8));
+    m.put_u64(0x1F8, m.heap_addr(0x100));
+    m.put_u32(0x100 + cdtb::game::kSkillEntryKnowKey, 777);
     std::vector<cdtb::game::KnowSkillSlot> got;
     cdtb::game::know_skill_slots_at(m, m.heap_addr(kComp), &got);
-    CHECK(got.size() == 2);   // 0xF0..0xFF 두 칸만 읽힌다
+    CHECK(got.size() == 1);
+    CHECK(got[0].know_key == 777);
 }
