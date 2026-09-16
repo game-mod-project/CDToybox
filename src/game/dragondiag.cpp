@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "core/log.h"
+#include "game/wheelfill.h"
 #include "mem/hook.h"
 #include "mem/reader.h"
 #include "mem/safe_read.h"
@@ -78,6 +79,38 @@ constexpr std::uint64_t kAltFnRva = 0x2AC9C10;     // 또 하나의 소환 경�
 // 관문을 통과했다는 뜻**이다. 실제로 A.T.A.G. 가 받았던 4205559856 은 위
 // 표의 0x6BBC008 과 정확히 같다(자리 0x20175A7).
 constexpr std::uint64_t kErrFnRva = 0x20170E0;
+
+// **마지막 관문** (2026-09-16 실측). 갈래 7 의 끝에서 이 조회가 빈손이면
+// 0x20175A7 이 코드 4205559856(0xFAABC030) 을 낸다 - 드래곤이 받는 바로 그
+// 값이다. 그 **앞의 카테고리 관문은 통과**한다(막혔다면 300143221 이 나온다).
+// 즉 얹기로 바꾼 카테고리 5 자체는 슬롯이 받아 준다.
+//
+//   0x2096C30(주인, 카테고리, 행번호)
+//     rcx += 0x18                   <- 카테고리별 해시 표의 뿌리
+//     0x20910C0(뿌리, 카테고리)      -> 레코드+8 = {항목배열, 개수}
+//     항목마다 0x20A1470(항목, 행번호) 로 맞춰 본다
+//     못 찾으면 **전역 0x6BB80C0** 을 돌려준다
+//       (+0x20 = 0xFFFF · +0x28 = -1 - 실행 중 게임에서 확인했다)
+//
+// 표 배치는 ReserveSlotInfoManager 와 같다:
+//   +0x30 버킷 수 · +0x34 0이면 없음 · +0x40 버킷표(0x100 간격) · +0x48 레코드
+//   버킷: [0] 항목 수 · +8 부터 {u32 키, u32 색인}
+//   레코드: +0x04 u16 키 · +0x08 항목배열 · +0x10 개수
+// **실제 소환 배달부** (2026-09-16). `0x2A22DE0` 의 꼬리는 분기가 없는
+// 직선이라 늘 성공(0)을 쓴다 - 일은 전부 여기로 넘어간다.
+//
+//   0x2A23194  rcx = r15 ([r14+8])  · rdx = rsp+0x38 (작은 서술자)
+//   0x2A2318C  r8  = 0x382A30 결과  · r9  = rbp+0x280 (0x2390F40 이 만든 것)
+//   0x2A23197  call 0x292B040       <- 여기
+//
+// 말은 휠에서 불러 **실제로 나온다**(사용자 실측 2026-09-16). 드래곤은 여기까지
+// 똑같이 오는데(코드=0) 안 나온다. 그러니 갈리는 자리는 이 함수 안이다.
+constexpr std::uint64_t kDispRva = 0x292B040;
+// 휠 소환이 이 함수를 부르고 **돌아오는** 자리. 다른 호출자는 안 찍는다.
+constexpr std::uintptr_t kDispWheelRet = 0x2A2319C;
+constexpr std::uint64_t kFindRva = 0x2096C30;
+constexpr std::uint64_t kEmptyRecRva = 0x6BB80C0;
+constexpr std::uintptr_t kMapOff = 0x18;
 // **거부 코드를 직접 찍는다(2026-09-15).** 드래곤이 "호출할 수 없는 장소입니다" 로
 // 막히는데 후보가 여럿이다(`eErrNoCallVehicleInvalidPosition` · `...InvalidAir` ·
 // `...MercenaryIndoor` · `...MercenaryRegion` · `...BlockedSpawnPositionByObstacle` ·
@@ -117,6 +150,32 @@ using ErrFn = void*(__fastcall*)(void*, std::uint32_t*, std::uint64_t, void*);
 ErrFn g_orig_errfn = nullptr;
 void* g_errfn_target = nullptr;
 std::atomic<int> g_errfn_budget{300};
+// 마지막 관문의 조회. 인자는 전부 정수·포인터라 평범한 디투어로 안전하다.
+using FindFn = void*(__fastcall*)(void*, std::uint64_t, std::uint64_t,
+                                  std::uint64_t);
+FindFn g_orig_find = nullptr;
+void* g_find_target = nullptr;
+// 소환 배달부. **인자가 여섯이다** - 넷으로 선언했다가 게임을 팅기게 했다
+// (2026-09-16, 로드 중 사망). 호출 자리가 분명히 여섯을 싣는다:
+//
+//   0x2A23176  [rsp+0x28] = rbp+0x4C0   6번째
+//   0x2A23180  [rsp+0x20] = rsp+0x30    5번째
+//   0x2A23185  r9 · r8 · rdx · rcx      1~4번째
+//
+// 넷짜리 디투어는 원본을 부를 때 **자기 프레임**을 새로 잡으므로, 원본이
+// `[rsp+0x20]`·`[rsp+0x28]` 에서 읽는 것은 우리 스택의 쓰레기가 된다.
+// "스택 인자는 호출자 프레임에 그대로 있다" 는 다른 훅의 주석을 그대로
+// 가져다 쓴 것이 잘못이었다 - 그 함수들은 스택 인자를 **안 읽는다**.
+using DispFn = void*(__fastcall*)(void*, void*, void*, void*, void*, void*);
+DispFn g_orig_disp = nullptr;
+void* g_disp_target = nullptr;
+std::atomic<int> g_disp_budget{60};
+// 목록까지 통째로 찍으므로 예산을 작게 잡는다.
+std::atomic<int> g_find_budget{24};
+// 휠 칸 등록 채우기. 종행을 못 박지 않으면 빈 말 칸까지 채워 버린다.
+constexpr std::uintptr_t kEntrySpecies = 0x20;   // u16 종행
+constexpr std::uintptr_t kEntrySlot = 0x148;     // u16 올려 둔 휠 칸
+std::atomic<int> g_fill_log_budget{12};
 void* g_altfn_target = nullptr;
 std::atomic<int> g_altfn_budget{300};
 void* g_callfn_target = nullptr;
@@ -230,6 +289,154 @@ void* __fastcall det_errfn(void* a1, std::uint32_t* out_err, std::uint64_t a3,
     return r;
 }
 
+// 카테고리 하나의 항목 배열을 찾는다. 표 배치는 ReserveSlotInfoManager 와
+// 같다. 못 찾으면 false - 그건 정상이다(그 카테고리가 없을 수 있다).
+bool find_category_list(std::uintptr_t owner, std::uint32_t cat,
+                        std::uintptr_t* out_arr, std::uint32_t* out_cnt,
+                        std::uintptr_t* out_rec) {
+    const std::uintptr_t map = owner + kMapOff;
+    std::uint32_t buckets = 0;
+    std::uint32_t live = 0;
+    if (!mem::safe_read_bytes(map + 0x30, &buckets, sizeof buckets)) return false;
+    if (!mem::safe_read_bytes(map + 0x34, &live, sizeof live)) return false;
+    if (buckets == 0 || live == 0) return false;
+    std::uintptr_t table = 0;
+    if (!mem::safe_read_bytes(map + 0x40, &table, sizeof table)) return false;
+    const std::uintptr_t bucket = table + (cat % buckets) * 0x100;
+    std::uint32_t n = 0;
+    if (!mem::safe_read_bytes(bucket, &n, sizeof n)) return false;
+    for (std::uint32_t i = 0; i < n && i < 64; ++i) {
+        std::uint32_t key = 0;
+        if (!mem::safe_read_bytes(bucket + i * 8 + 8, &key, sizeof key)) break;
+        if (key != cat) continue;
+        std::uint32_t idx = 0;
+        std::uintptr_t recs = 0;
+        std::uintptr_t rec = 0;
+        if (!mem::safe_read_bytes(bucket + i * 8 + 12, &idx, sizeof idx)) break;
+        if (!mem::safe_read_bytes(map + 0x48, &recs, sizeof recs)) break;
+        if (!mem::safe_read_bytes(recs + idx * 8, &rec, sizeof rec)) break;
+        std::uintptr_t arr = 0;
+        std::uint32_t cnt = 0;
+        if (!mem::safe_read_bytes(rec + 8, &arr, sizeof arr)) break;
+        if (!mem::safe_read_bytes(rec + 0x10, &cnt, sizeof cnt)) break;
+        if (arr == 0 || cnt > 4096) break;
+        *out_arr = arr;
+        *out_cnt = cnt;
+        *out_rec = rec;
+        return true;
+    }
+    return false;
+}
+
+// 카테고리 하나의 목록을 그대로 걸어 찍는다. **읽기만** 한다.
+void dump_category_list(std::uintptr_t owner, std::uint32_t cat) {
+    std::uintptr_t arr = 0;
+    std::uintptr_t rec = 0;
+    std::uint32_t cnt = 0;
+    if (!find_category_list(owner, cat, &arr, &cnt, &rec)) {
+        log::infof("  카테고리 {} 목록을 못 찾았다", cat);
+        return;
+    }
+    log::infof("  카테고리 {} 레코드 0x{:X} - 항목 {}개", cat, rec, cnt);
+    for (std::uint32_t k = 0; k < cnt && k < 32; ++k) {
+        std::uintptr_t ent = 0;
+        if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
+        std::uint16_t slot = 0xFFFF;
+        std::uint16_t sp = 0xFFFF;
+        mem::safe_read_bytes(ent + kEntrySlot, &slot, sizeof slot);
+        mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp);
+        log::infof("    [{}] 0x{:X}  종행={}  칸={}", k, ent, sp, slot);
+    }
+}
+
+// **지정한 종행의 항목만** 골라 휠 칸을 채운다. 조회가 바로 뒤에 일어나므로
+// 조회가 묻는 칸 번호(`want`)를 그대로 적는다.
+void fill_category_slots(std::uintptr_t owner, std::uint32_t cat,
+                         std::uint16_t want) {
+    const std::uint16_t* fill_rows = nullptr;
+    const int n = wheel_fill_rows(&fill_rows);
+    if (n <= 0 || want == 0xFFFF) return;
+    std::uintptr_t arr = 0;
+    std::uintptr_t rec = 0;
+    std::uint32_t cnt = 0;
+    if (!find_category_list(owner, cat, &arr, &cnt, &rec)) return;
+    for (std::uint32_t k = 0; k < cnt; ++k) {
+        std::uintptr_t ent = 0;
+        if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
+        std::uint16_t slot = 0xFFFF;
+        std::uint16_t sp = 0xFFFF;
+        if (!mem::safe_read_bytes(ent + kEntrySlot, &slot, sizeof slot)) continue;
+        if (!mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp)) continue;
+        if (!wheel_fill_wanted(slot, sp, fill_rows, n)) continue;
+        if (!mem::safe_write_bytes(ent + kEntrySlot, &want, sizeof want)) continue;
+        if (g_fill_log_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+            log::infof("휠 칸 등록: 종행 {} 를 카테고리 {} 의 칸 {} 에 올렸다"
+                       " (항목 0x{:X})",
+                       sp, cat, want, ent);
+        }
+    }
+}
+
+// **마지막 관문의 조회**. 빈손이면 드래곤이 받는 4205559856 이 나온다.
+// 무엇을 찾고 있었는지와, 그 카테고리 목록에 실제로 무엇이 들어 있는지를
+// 나란히 찍는다. 원본을 그대로 부르고 결과만 읽는다.
+// **소환 배달부**. 말과 드래곤을 같은 자로 재려고 인자와 반환을 그대로 찍는다.
+// 읽기만 한다.
+void* __fastcall det_disp(void* a1, void* a2, void* a3, void* a4, void* a5,
+                          void* a6) {
+    const void* ret = _ReturnAddress();
+    void* r = g_orig_disp(a1, a2, a3, a4, a5, a6);
+    // **휠 경로만 찍는다.** 로드 중에 다른 호출자(+0x282B243)가 이 함수를
+    // 자주 불러 예산을 다 태운다 - 정작 보고 싶은 클릭이 안 찍힌다.
+    const bool from_wheel = (caller_rva(ret) == kDispWheelRet);
+    if (from_wheel &&
+        g_disp_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+        // **출력 인자 둘을 읽는다.** 호출 자리가 둘 다 0 으로 초기화해서
+        // 넘긴다(0x2A2311B · 0x2A23122) - 함수가 결과를 거기 쓴다는 뜻이다.
+        // 반환값(0xF4240)은 말·A.T.A.G.·드래곤이 전부 같아서 뜻이 없었다.
+        std::uint64_t o5 = 0;
+        std::uint64_t o6 = 0;
+        std::uint32_t slot_key = 0;
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(a5), &o5,
+                             sizeof o5);
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(a6), &o6,
+                             sizeof o6);
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(a3), &slot_key,
+                             sizeof slot_key);
+        log::infof("소환배달(0x292B040): 슬롯키={} a3=0x{:X}"
+                   " -> 반환=0x{:X} · [a5]=0x{:X} · [a6]=0x{:X}",
+                   slot_key, reinterpret_cast<std::uintptr_t>(a3),
+                   reinterpret_cast<std::uintptr_t>(r), o5, o6);
+    }
+    return r;
+}
+
+void* __fastcall det_find(void* owner, std::uint64_t cat, std::uint64_t row,
+                          std::uint64_t a4) {
+    if (wheel_fill_enabled()) {
+        fill_category_slots(reinterpret_cast<std::uintptr_t>(owner),
+                            static_cast<std::uint32_t>(cat),
+                            static_cast<std::uint16_t>(row));
+    }
+    void* r = g_orig_find(owner, cat, row, a4);
+    if (g_find_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+        const std::uintptr_t got = reinterpret_cast<std::uintptr_t>(r);
+        const std::uintptr_t empty = g_base + kEmptyRecRva;
+        std::uint16_t f20 = 0xFFFF;
+        std::int64_t f28 = -1;
+        mem::safe_read_bytes(got + 0x20, &f20, sizeof f20);
+        mem::safe_read_bytes(got + 0x28, &f28, sizeof f28);
+        log::infof("등록조회(0x2096C30): 카테고리={} 행={} -> {} "
+                   "(+0x20={} +0x28={})",
+                   static_cast<std::uint16_t>(cat),
+                   static_cast<std::uint16_t>(row),
+                   got == empty ? "빈손" : "찾음", f20, f28);
+        dump_category_list(reinterpret_cast<std::uintptr_t>(owner),
+                           static_cast<std::uint32_t>(cat));
+    }
+    return r;
+}
+
 void* __fastcall det_gate(void* a1, void* out, void* a3, std::uint64_t a4) {
     const void* ret = _ReturnAddress();
     const std::uint16_t key = static_cast<std::uint16_t>(a4);
@@ -276,6 +483,22 @@ bool dragondiag_install(const mem::Reader& reader) {
     if (!errfn_ok) {
         log::errorf("거부코드 후킹 실패 (RVA 0x{:X})", kErrFnRva);
         g_errfn_target = nullptr;
+    }
+
+    g_disp_target = reinterpret_cast<void*>(g_base + kDispRva);
+    const bool disp_ok = mem::hook_install(
+        g_disp_target, &det_disp, reinterpret_cast<void**>(&g_orig_disp));
+    if (!disp_ok) {
+        log::errorf("소환배달 후킹 실패 (RVA 0x{:X})", kDispRva);
+        g_disp_target = nullptr;
+    }
+
+    g_find_target = reinterpret_cast<void*>(g_base + kFindRva);
+    const bool find_ok = mem::hook_install(
+        g_find_target, &det_find, reinterpret_cast<void**>(&g_orig_find));
+    if (!find_ok) {
+        log::errorf("등록조회 후킹 실패 (RVA 0x{:X})", kFindRva);
+        g_find_target = nullptr;
     }
 
     g_altfn_target = reinterpret_cast<void*>(g_base + kAltFnRva);
@@ -335,17 +558,21 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v9 - **거부코드 0x{:X} {}** · 휠함수 0x{:X} {} ·"
-        " 휠소환 0x{:X} {} · 다른경로 0x{:X} {} · 게이트 0x{:X} {} · 스폰 0x{:X}"
-        " {} (드래곤을 누르면 '거부코드' 줄에 진짜 사유가 찍힌다)",
-        kErrFnRva, errfn_ok ? "후킹" : "실패", kWheelFnRva,
+        "소환 진단 v11 - **소환배달 0x{:X} {}** · 등록조회 0x{:X} {} ·"
+        " 거부코드 0x{:X} {} ·"
+        " 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {} ·"
+        " 게이트 0x{:X} {} · 스폰 0x{:X} {}"
+        " (말과 드래곤을 하나씩 부르면 '소환배달' 줄이 나란히 찍힌다)",
+        kDispRva, disp_ok ? "후킹" : "실패", kFindRva,
+        find_ok ? "후킹" : "실패", kErrFnRva,
+        errfn_ok ? "후킹" : "실패", kWheelFnRva,
         wheelfn_ok ? "후킹" : "실패", kCallFnRva,
         callfn_ok ? "후킹" : "실패", kAltFnRva, altfn_ok ? "후킹" : "실패",
         kGateRva, gate_ok ? "후킹" : "실패", kSpawnRva,
         spawn_ok ? "후킹" : "실패");
     (void)notify_ok;
     return gate_ok || spawn_ok || callfn_ok || wheelfn_ok || altfn_ok ||
-           errfn_ok;
+           errfn_ok || find_ok || disp_ok;
 }
 
 }  // namespace cdtb::game

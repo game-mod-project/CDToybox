@@ -427,6 +427,11 @@ bool disguise_wants_swap(int in_world_count);
 // 호출자가 몇 초에 한 번씩 부른다(매 프레임 부르지 말 것 - 명부를 읽는다).
 void disguise_tick(const mem::Reader& reader);
 
+// 얹기가 **동반자 칸까지** 옮길지. 끄면 장소 제한만 풀고 칸은 제자리에 둔다 -
+// 등록(+0x148)을 채운 뒤에는 제 칸에서 그대로 불리므로 옮길 이유가 없다.
+void disguise_set_swap_slot(bool on);
+bool disguise_swap_slot();
+
 void disguise_teardown();
 
 }  // namespace cdtb::game

@@ -13,6 +13,7 @@
 #include "game/knowledge.h"
 #include "game/reserveslot.h"
 #include "game/skillgate.h"
+#include "game/wheelfill.h"
 #include "game/skillpoint.h"
 #include "render/colors.h"
 #include "render/confirm.h"
@@ -795,6 +796,35 @@ void draw_vehicle_wheel(const mem::Reader& reader) {
                 notice_set(&s_note, NoticeLevel::Bad,
                            "실패 - 표를 안 건드렸습니다");
             }
+        }
+        // **등록 채우기.** 동반자마다 "올려 둔 휠 칸" 이 있고, 드래곤은 그 자리가
+        // 비어 있어 소환 판정의 마지막 관문에서 거부됐다(2026-09-16 실측).
+        // 위에서 고른 종에 한해 그 자리를 채운다.
+        static bool s_fill = game::wheel_fill_enabled();
+        if (ImGui::Checkbox("휠 칸에 등록까지 채우기", &s_fill)) {
+            game::wheel_fill_set_enabled(s_fill);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "동반자 항목의 '올려 둔 휠 칸' 이 비어 있으면 소환이 거부됩니다.\n"
+                "드래곤이 그 상태였습니다 - 잠긴 게 아니라 칸에 안 올라가\n"
+                "있었습니다. 위에서 고른 종만 채웁니다.");
+        }
+        // 등록을 채우면 제 칸에서 그대로 불리므로 옮길 이유가 없다. 옮기면
+        // 카테고리가 달라져 채운 등록이 안 닿는다.
+        static bool s_swap = game::disguise_swap_slot();
+        if (ImGui::Checkbox("동반자 칸까지 옮기기", &s_swap)) {
+            game::disguise_set_swap_slot(s_swap);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "끄면 장소 제한만 풀고 칸은 제자리에 둡니다.\n"
+                "등록을 채웠다면 끄는 쪽이 맞습니다 - 옮기면 카테고리가\n"
+                "달라져 채운 등록이 안 닿습니다.");
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(

@@ -64,6 +64,16 @@ struct Config {
     // 했다(2026-09-15, 알림 훅). 조사할 때만 켠다.
     // ini 표기: `summon_diag = 1`
     bool summon_diag = false;
+
+    // **휠 칸 등록 채우기.** 동반자 항목의 "올려 둔 휠 칸"(+0x148)이 0xFFFF 면
+    // 소환 판정의 마지막 관문이 빈손이 되어 거부된다. 드래곤이 그 상태였다.
+    // 얹기가 고른 종행에 한해 그 자리를 채운다. ini 표기: `wheel_fill = 1`
+    bool wheel_fill = false;
+
+    // 얹기가 **동반자 칸까지** 옮길지. 끄면 장소 제한만 풀고 칸은 제자리에
+    // 둔다 - 등록을 채운 뒤에는 제 칸(7시 드래곤)에서 그대로 불린다.
+    // ini 표기: `wheel_swap_slot = 1`
+    bool wheel_swap_slot = true;
 };
 
 namespace config {

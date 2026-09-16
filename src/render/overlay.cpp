@@ -49,6 +49,7 @@
 #include "game/specguard.h"
 #include "game/spawnguard.h"
 #include "game/dragondiag.h"
+#include "game/wheelfill.h"
 #include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
@@ -718,7 +719,18 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::spawnguard_install(reader);
         // 소환 진단 훅은 **설정으로 켤 때만** 건다. 기능이 아니라 조사용이고,
         // 그중 하나가 게임을 팅기게 했다(2026-09-15).
-        if (g_cfg.summon_diag) cdtb::game::dragondiag_install(reader);
+        // 휠 칸 등록 채우기도 같은 훅(0x2096C30)을 쓰므로 그때도 건다.
+        if (g_cfg.summon_diag || g_cfg.wheel_fill) {
+            cdtb::game::dragondiag_install(reader);
+        }
+        // ini 값은 **처음 한 번만** 밀어 넣는다. 매 프레임 밀면 패널에서
+        // 켠 것을 곧바로 되돌려 버린다.
+        static bool s_wheel_pushed = false;
+        if (!s_wheel_pushed) {
+            s_wheel_pushed = true;
+            cdtb::game::wheel_fill_set_enabled(g_cfg.wheel_fill);
+            cdtb::game::disguise_set_swap_slot(g_cfg.wheel_swap_slot);
+        }
         // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
         // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
         // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
