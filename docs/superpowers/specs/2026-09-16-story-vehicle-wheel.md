@@ -89,10 +89,43 @@ A.T.A.G. 를 막던 것은 서버가 아니라 **동반자 카테고리 한 칸*
 - `_callVehicleGimmickInfo`(+0x442)는 **전부 65535** - 차이가 아니다
 - **6804 가 드래곤과 같은 동작차트를 쓴다.** 즉 모션 데이터 자체는 있다
 
-다음으로 볼 곳은 **용병 타입 표**(`MercenaryInfo`)다 - `_spawnPositionType`
-(+0x5C) · `_isSelectMercenarySpawn`(+0x29) · `_summonOwnerOption`(+0x5D) 를
-카테고리 1·2·3·5 로 비교하면 "왜 타입 2 만 모션이 없나" 가 갈릴 자리다
-(프로브 `mercinfo`, 읽기 전용).
+### 0-4. 정적 표 넷을 이름으로 비교했다 - **전부 같다**
+
+"왜 드래곤만 호출 모션이 없나" 를 짐작이 아니라 **리플렉션 필드 이름**으로
+좁혔다. 되는 것(A.T.A.G., 5시 슬롯 1000019)과 안 되는 것(드래곤, 7시 슬롯
+1000020)을 표마다 맞댔다.
+
+| 표 | 비교 | 결과 |
+|---|---|---|
+| `MercenaryInfo` | 카테고리 2 vs 3 | `_spawnPositionType` 3=3 · `_isSelectMercenarySpawn` 0=0 · `_summonOwnerOption` 2=2 — **완전 동일** |
+| `CharacterInfo` | 행 7008 vs 6818 | `_callVehicleGimmickInfo` 둘 다 65535. 드래곤은 얹기 기증자 6804 와 **동작차트(6217/6218) 공유** |
+| `ReserveSlotInfo` | 1000020 vs 1000019 | `_usingType` 둘 다 7, `_isBlocked`·`_timeLimit`·`_coolTime`·`_reserveSlotType` 전부 같음. **`_enableMercenaryList` 개수만 다름**(1 vs 2) |
+| `VehicleInfo` | 행 3 vs 2 | **`_riderSpawnUpperAction` = 0x7B6AFF57 · `_vehicleSpawnUpperAction` = 0x72487D24 — 둘이 같다** |
+
+마지막 줄이 핵심이다. `_riderSpawnUpperAction` 은 **부르는 사람이 재생하는
+동작**인데 드래곤과 A.T.A.G. 가 **같은 동작을 쓴다.** 그런데 A.T.A.G. 만
+그 동작이 나온다.
+
+### 0-5. 드래곤은 제대로 소유한 동반자다
+
+명부(`clan`)에 멀쩡히 있다:
+
+```
+번호 1000483  행 7008  키 17759  타입행 2  Riding_Dragon_1  블랙스타          [클리프]
+번호 1000602  행 6818  키 18427  타입행 3  Riding_WarMachine_Unique_1  A.T.A.G.  [월드] [클리프]
+```
+
+번호·행·키·소유자가 다 있고 A.T.A.G. 와 같은 자격이다. 차이는 `[월드]`
+표시뿐인데 그건 A.T.A.G. 가 지금 나와 있다는 **결과**지 원인이 아니다.
+
+**그러니 스토리 잠금이라는 설명도 성립하지 않는다.** 소유·등록·슬롯·정적
+데이터가 전부 갖춰져 있는데 클릭해도 동작이 안 나온다.
+
+### 0-6. 남은 곳
+
+정적 데이터로는 더 좁힐 것이 없다. 갈리는 자리는 **`0x2A22DE0` 이 성공을
+돌려준 뒤부터 동작이 시작되기까지의 클라이언트 코드**이고, 거기는 아직
+계측하지 않았다. 동작을 거는 자리를 찾아 두 경로를 같은 자로 재야 한다.
 
 ## 1. 휠 클릭부터 스폰까지
 
