@@ -147,14 +147,40 @@ eErrNoCallVehicleCoolTimeExist
 
 ## 5. 푸는 길 — 후보와 값 (**아직 아무것도 시험 안 했다**)
 
-### 5-1. 먼저 가를 것 (읽기만)
+### 5-0. **화면 문구가 원인을 알려 준다** (실측, 가장 싼 계측)
+
+`failmessageinfo` 항목마다 **조건별로 다른 메시지 id** 가 붙어 있다. 즉 거부
+문구만 읽으면 셋 중 어느 조건이 섰는지 **메모리를 안 걷고** 알 수 있다.
+
+| 상황 | 메시지 id | 조건 |
+|---|---|---|
+| 드래곤 못 부름 | 4294975885935344 | `!CheckVehicleAllowableHeight()` |
+| 드래곤 못 부름 | 4294975886197488 | `IsInTown() && !IsAboveRoad(Bird,20)` |
+| 드래곤 강제하차 | 4294967296000752 | `!CheckVehicleAllowableHeight()` |
+| 드래곤 강제하차 | 4294967296262896 | `IsInTown() && !IsAboveRoad(Bird,20)` |
+| 드래곤 강제하차 | 4294967296525040 | `!IsVehicleAllowedInEnteredRegion(Vehicle_Dragon)` |
+| A.T.A.G. 못 부름 | 4294971590968048 | `IsInTown()` |
+| A.T.A.G. 못 부름 | 4294971591230192 | `CheckDistanceHorizontalToTarget()<30` |
+| A.T.A.G. 강제하차 | 4294988770837232 | `IsInTown()` |
+| A.T.A.G. 강제하차 | 4294988771099376 | `!IsVehicleAllowedInEnteredRegion(Vehicle_WarMachine)` |
+
+id 는 `(레코드 _key << 32) | 순번` 이다(예: 1000002<<32 + 752). 현지화 키이므로
+게임 안에서 문구로 풀린다.
+
+**그래서 계측은 이것으로 한다** — 막히는 자리에서 문구를 읽고 위 표와 맞댄다.
+`RegionInfoManager` 를 걷는 것보다 훨씬 싸다(§5-1 은 그 시도의 기록으로 남긴다).
+
+### 5-1. `RegionInfoManager` 를 걸으려다 멈춘 자리 (기록)
 
 어느 조건이 실제로 걸리는지부터 본다. 지금은 **셋 다 가능성**이고, 마을에서
 막히는 것이 `IsInTown()` 인지 `IsVehicleAllowedInEnteredRegion` 인지 모른다.
 
-- 런타임 `RegionInfoManager` 를 잡아 지금 있는 지역의 `_isTown` ·
-  `_limitVehicleRun` · `_forbiddenMercenaryKeyList` 를 읽는다. **매니저 전역
-  RVA 를 아직 안 찾았다** - 그것이 첫 작업이다.
+- RTTI 로 `RegionInfoManager` 인스턴스는 **찾았다**(vtable `0x14549B360`,
+  인스턴스 2개). 그런데 **배치가 다른 매니저와 다르다** — 클래스가
+  `StaticInfoManager2<RegionKey, RegionInfo, RegionInfoManager, u16>` 템플릿이고,
+  `KnowledgeInfoManager` 의 `+0x08 개수 / +0x58 배열` 이 여기서는 안 맞는다
+  (`+0x08` 이 48680, 후보 포인터 셋을 떠 봤지만 `RegionInfo*` 배열이 아니었다).
+  **여기서 멈췄다** - §5-0 이 훨씬 싸다.
 - 커뮤니티 `regioninfo_parser.py` 는 **우리 빌드에서 안 돌았다**(1007개 중 0개
   파싱). 예약 슬롯 파서와 같은 문제다 - 버전이 다르다. 쓰지 말 것.
 
