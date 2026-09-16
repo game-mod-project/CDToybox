@@ -105,22 +105,6 @@ constexpr std::uint64_t kErrFnRva = 0x20170E0;
 //
 // 말은 휠에서 불러 **실제로 나온다**(사용자 실측 2026-09-16). 드래곤은 여기까지
 // 똑같이 오는데(코드=0) 안 나온다. 그러니 갈리는 자리는 이 함수 안이다.
-// **관문 통과 뒤의 갈림** (2026-09-16). `0x2A22DE0` 안에서 두 가지로 나뉜다:
-//
-//   0x2A22FCB  call 0x200BDC0(rbp+0x170)  -> al      <- 판정
-//   0x2A22FD8  je  -> 0x2A22FE6
-//   0x2A22FDF  call 0x2014DF0(r14, di, rsp+0x50)     <- 가지A (al != 0)
-//   0x2A23005  call 0x2014CA0(r14, di, rbp+0x170)    <- 가지B (al == 0)
-//
-// 말과 드래곤이 다른 가지로 가는지가 답이다. 셋 다 **레지스터 인자만** 쓰고
-// `[rsp+0x28]` 이상을 안 읽는다(확인함) - 인자 개수 함정이 없다.
-//
-// 판정 함수는 `0x20170E0` 머리에서도 불리므로 **복귀 주소 0x2A22FD0** 인
-// 것만 찍는다.
-constexpr std::uint64_t kDecideRva = 0x200BDC0;
-constexpr std::uintptr_t kDecideRet = 0x2A22FD0;
-constexpr std::uint64_t kBranchARva = 0x2014DF0;
-constexpr std::uint64_t kBranchBRva = 0x2014CA0;
 constexpr std::uint64_t kDispRva = 0x292B040;
 // 휠 소환이 이 함수를 부르고 **돌아오는** 자리. 다른 호출자는 안 찍는다.
 constexpr std::uintptr_t kDispWheelRet = 0x2A2319C;
@@ -186,15 +170,6 @@ using DispFn = void*(__fastcall*)(void*, void*, void*, void*, void*, void*);
 DispFn g_orig_disp = nullptr;
 void* g_disp_target = nullptr;
 std::atomic<int> g_disp_budget{60};
-using BranchFn = void*(__fastcall*)(void*, std::uint64_t, void*, void*);
-using DecideFn = std::uintptr_t(__fastcall*)(void*);
-DecideFn g_orig_decide = nullptr;
-BranchFn g_orig_branch_a = nullptr;
-BranchFn g_orig_branch_b = nullptr;
-void* g_decide_target = nullptr;
-void* g_branch_a_target = nullptr;
-void* g_branch_b_target = nullptr;
-std::atomic<int> g_branch_budget{80};
 // 한 줄 요약은 넉넉히, **목록 덤프만** 따로 조인다. 예전에 둘을 같은
 // 예산으로 묶었다가 시작 직후 열거에서 24건을 다 태워, 정작 보고 싶은
 // 클릭이 한 줄도 안 찍혔다(2026-09-16).
@@ -439,36 +414,6 @@ void* __fastcall det_disp(void* a1, void* a2, void* a3, void* a4, void* a5,
     return r;
 }
 
-// 갈림을 정하는 판정. `0x2A22DE0` 에서 온 것만 찍는다(머리에서도 불린다).
-std::uintptr_t __fastcall det_decide(void* a1) {
-    const void* ret = _ReturnAddress();
-    const std::uintptr_t r = g_orig_decide(a1);
-    if (caller_rva(ret) == kDecideRet &&
-        g_branch_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("갈림판정(0x200BDC0): 결과=0x{:X} -> 가지{}", r,
-                   (r & 0xFF) != 0 ? "A(0x2014DF0)" : "B(0x2014CA0)");
-    }
-    return r;
-}
-
-void* __fastcall det_branch_a(void* a1, std::uint64_t a2, void* a3, void* a4) {
-    const void* ret = _ReturnAddress();
-    if (g_branch_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("가지A(0x2014DF0): 호출자=+0x{:X} 슬롯u16={}",
-                   caller_rva(ret), static_cast<std::uint16_t>(a2));
-    }
-    return g_orig_branch_a(a1, a2, a3, a4);
-}
-
-void* __fastcall det_branch_b(void* a1, std::uint64_t a2, void* a3, void* a4) {
-    const void* ret = _ReturnAddress();
-    if (g_branch_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("가지B(0x2014CA0): 호출자=+0x{:X} 슬롯u16={}",
-                   caller_rva(ret), static_cast<std::uint16_t>(a2));
-    }
-    return g_orig_branch_b(a1, a2, a3, a4);
-}
-
 void* __fastcall det_find(void* owner, std::uint64_t cat, std::uint64_t row,
                           std::uint64_t a4) {
     if (wheel_fill_enabled()) {
@@ -566,24 +511,6 @@ bool dragondiag_install(const mem::Reader& reader) {
         g_errfn_target = nullptr;
     }
 
-    g_decide_target = reinterpret_cast<void*>(g_base + kDecideRva);
-    const bool decide_ok = mem::hook_install(
-        g_decide_target, &det_decide,
-        reinterpret_cast<void**>(&g_orig_decide));
-    if (!decide_ok) g_decide_target = nullptr;
-
-    g_branch_a_target = reinterpret_cast<void*>(g_base + kBranchARva);
-    const bool br_a_ok = mem::hook_install(
-        g_branch_a_target, &det_branch_a,
-        reinterpret_cast<void**>(&g_orig_branch_a));
-    if (!br_a_ok) g_branch_a_target = nullptr;
-
-    g_branch_b_target = reinterpret_cast<void*>(g_base + kBranchBRva);
-    const bool br_b_ok = mem::hook_install(
-        g_branch_b_target, &det_branch_b,
-        reinterpret_cast<void**>(&g_orig_branch_b));
-    if (!br_b_ok) g_branch_b_target = nullptr;
-
     g_disp_target = reinterpret_cast<void*>(g_base + kDispRva);
     const bool disp_ok = mem::hook_install(
         g_disp_target, &det_disp, reinterpret_cast<void**>(&g_orig_disp));
@@ -657,14 +584,11 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v13 - **갈림 0x{:X}/{:X}/{:X} {}/{}/{}** ·"
-        " 소환배달 0x{:X} {} · 등록조회 0x{:X} {} ·"
+        "소환 진단 v11 - **소환배달 0x{:X} {}** · 등록조회 0x{:X} {} ·"
         " 거부코드 0x{:X} {} ·"
         " 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {} ·"
         " 게이트 0x{:X} {} · 스폰 0x{:X} {}"
-        " (말과 드래곤을 하나씩 부르면 '갈림판정' 줄이 나란히 찍힌다)",
-        kDecideRva, kBranchARva, kBranchBRva, decide_ok ? "후킹" : "실패",
-        br_a_ok ? "후킹" : "실패", br_b_ok ? "후킹" : "실패",
+        " (말과 드래곤을 하나씩 부르면 '소환배달' 줄이 나란히 찍힌다)",
         kDispRva, disp_ok ? "후킹" : "실패", kFindRva,
         find_ok ? "후킹" : "실패", kErrFnRva,
         errfn_ok ? "후킹" : "실패", kWheelFnRva,
