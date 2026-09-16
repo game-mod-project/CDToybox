@@ -152,7 +152,8 @@ using DeserFn = void*(__fastcall*)(void*, void*, void*, void*);
 
 constexpr std::size_t kPacketLen = 0x10;      // u16 전체길이
 constexpr std::size_t kPacketPayload = 0x18;  // 페이로드 포인터
-constexpr int kMaxDumps = 80;
+constexpr int kMaxDumps = 600;   // 전체 상한(태그별 상한이 주된 조절기다)
+constexpr int kMaxPerTag = 12;   // 한 계통이 로그를 묻지 못하게
 constexpr std::size_t kHexCap = 768;
 
 std::atomic<int> g_dumps{0};
@@ -162,8 +163,16 @@ HireAck g_acks[kHireAckSlots];
 int g_ack_next = 0;
 CatchCapture g_last_catch;
 
-void dump_payload(void* packet, const char* tag) {
+// **예산은 태그마다 따로 센다** (2026-09-16). 전역 하나로 묶었더니 시작
+// 동기화에서 한 메시지가 80건을 한꺼번에 쏟아 예산을 다 태웠고, 정작 보려던
+// 클릭이 2분 뒤에 와서 한 줄도 안 찍혔다. 한 계통의 폭주가 다른 계통을
+// 굶기면 안 된다(TROUBLESHOOTING 6.19 - 한 줄이 로그를 묻는다).
+void dump_payload(void* packet, const char* tag, std::atomic<int>* budget) {
     if (packet == nullptr) return;
+    if (budget != nullptr &&
+        budget->load(std::memory_order_relaxed) >= kMaxPerTag) {
+        return;
+    }
     if (g_dumps.load(std::memory_order_relaxed) >= kMaxDumps) return;
     auto* p = reinterpret_cast<const std::uint8_t*>(packet);
     std::uint16_t len = 0;
@@ -172,6 +181,7 @@ void dump_payload(void* packet, const char* tag) {
     std::memcpy(&payload, p + kPacketPayload, sizeof(payload));
     if (payload == 0 || len == 0 || len > 8192) return;
     g_dumps.fetch_add(1, std::memory_order_relaxed);
+    if (budget != nullptr) budget->fetch_add(1, std::memory_order_relaxed);
     auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
     std::uint16_t id = 0, body = 0;
     decode_message_header(pl, len, &id, &body);
@@ -226,8 +236,9 @@ void dump_payload(void* packet, const char* tag) {
 // 메시지마다 detour·원본이 따로 있어야 해서 매크로로 찍어 낸다.
 #define CDTB_COMP_DETOUR(id, tag)                                            \
     DeserFn g_orig_##id = nullptr;                                          \
+    std::atomic<int> g_budget_##id{0};                                      \
     void* __fastcall det_##id(void* a, void* b, void* p, void* d) {         \
-        dump_payload(p, tag);                                                \
+        dump_payload(p, tag, &g_budget_##id);                                \
         return g_orig_##id(a, b, p, d);                                      \
     }
 CDTB_COMP_DETOUR(hire_target, "획득/대상")
@@ -241,6 +252,28 @@ CDTB_COMP_DETOUR(after_regist, "등록후소환")
 CDTB_COMP_DETOUR(hire_response, "획득응답")
 CDTB_COMP_DETOUR(use_item, "아이템사용")
 CDTB_COMP_DETOUR(use_item_info, "아이템사용/정보")
+// 휠 소환이 보내는 메시지는 **2742** 다(0x292B040 이 송신, `mov word ptr
+// [r15], 0xAB6`). 그런데 `부르기`(CallSpecialVehicleByQuickSlotReq) 캡처가
+// 휠 클릭에서 한 줄도 안 찍혔다 - 말이 실제로 나올 때도 안 찍혔다. 즉 2742
+// 는 그 클래스가 아니다. 남은 퀵슬롯 후보를 같이 걸어 가린다.
+CDTB_COMP_DETOUR(call_hyosi, "부르기/효시")
+// **휠 소환의 진짜 요청 클래스** (2026-09-16 확정). 메시지 번호 2742 로
+// 좁힌 뒤, 그 번호를 버퍼에 박는 송신 함수(0x292B040)에서 서버 쪽으로
+// 거슬러 올라가 vtable 을 맞춰 이름을 얻었다:
+//
+//   응답 2406 을 박는 코드 0x28B2F50 -> 부르는 자리 둘
+//     -> 0x2ADDAE0 -> 0x2ADC010 -> **0x29656C0**
+//   0x29656C0 은 vtable 0x5A09A30 의 +0x10, 즉 vtable[2](역직렬화)이고
+//   그 vtable 의 RTTI 가 TrocTrFrameEventCallMercenaryReq 다.
+CDTB_COMP_DETOUR(call_frame, "부르기/프레임")
+// **예약 슬롯 사용 계통** (2026-09-16). 휠 클릭이 보내는 2742 는 소환 요청이
+// 아니라 `TrocTrChangeUseItemReserveSlotAck` - "슬롯을 썼다" 는 상태 알림이다
+// (실행 중 메시지 등록표에서 확인). 드래곤도 똑같이 보낸다. 모션을 시작하는
+// 것이 이 계통인지 보려고 받는 쪽을 건다.
+CDTB_COMP_DETOUR(slot_use_req, "슬롯사용/요청")
+CDTB_COMP_DETOUR(slot_change_ack, "슬롯사용/변경")
+CDTB_COMP_DETOUR(slot_clear_ack, "슬롯사용/해제")
+CDTB_COMP_DETOUR(call_mercenary, "부르기/용병")
 #undef CDTB_COMP_DETOUR
 
 // 클래스 이름 -> 서술자 vtable[2] (역직렬화). 부분일치가 여럿이면
@@ -319,6 +352,14 @@ bool companion_capture_install(const mem::Rtti& rtti,
     CDTB_HOOK("TrocTrFrameEventRegistMercenaryReq", regist_event, "등록이벤트");
     CDTB_HOOK("TrocTrSelectMercenarySpawnReq", select_spawn, "스폰선택");
     CDTB_HOOK("TrocTrCallSpecialVehicleByQuickSlotReq", call_quick, "부르기");
+    CDTB_HOOK("TrocTrCallHyosiByQuickSlotReq", call_hyosi, "부르기/효시");
+    CDTB_HOOK("TrocTrFrameEventCallMercenaryReq", call_frame, "부르기/프레임");
+    CDTB_HOOK("TrocTrUseItemReserveSlotReq", slot_use_req, "슬롯사용/요청");
+    CDTB_HOOK("TrocTrChangeUseItemReserveSlotAck", slot_change_ack,
+              "슬롯사용/변경");
+    CDTB_HOOK("TrocTrClearUseItemReserveSlotAck", slot_clear_ack,
+              "슬롯사용/해제");
+    CDTB_HOOK("TrocTrCallVehicleMercenaryAck", call_mercenary, "부르기/용병");
     CDTB_HOOK("TrocTrMercenaryDataListAck", data_list, "소유목록");
     CDTB_HOOK("TrocTrSummonMercenaryAfterRegistAck", after_regist, "등록후소환");
     CDTB_HOOK("TrocTrResponseHiredMercenaryToTargetAck", hire_response,

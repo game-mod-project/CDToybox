@@ -170,8 +170,11 @@ using DispFn = void*(__fastcall*)(void*, void*, void*, void*, void*, void*);
 DispFn g_orig_disp = nullptr;
 void* g_disp_target = nullptr;
 std::atomic<int> g_disp_budget{60};
-// 목록까지 통째로 찍으므로 예산을 작게 잡는다.
-std::atomic<int> g_find_budget{24};
+// 한 줄 요약은 넉넉히, **목록 덤프만** 따로 조인다. 예전에 둘을 같은
+// 예산으로 묶었다가 시작 직후 열거에서 24건을 다 태워, 정작 보고 싶은
+// 클릭이 한 줄도 안 찍혔다(2026-09-16).
+std::atomic<int> g_find_budget{400};
+std::atomic<int> g_find_dump_budget{12};
 // 휠 칸 등록 채우기. 종행을 못 박지 않으면 빈 말 칸까지 채워 버린다.
 constexpr std::uintptr_t kEntrySpecies = 0x20;   // u16 종행
 constexpr std::uintptr_t kEntrySlot = 0x148;     // u16 올려 둔 휠 칸
@@ -431,8 +434,10 @@ void* __fastcall det_find(void* owner, std::uint64_t cat, std::uint64_t row,
                    static_cast<std::uint16_t>(cat),
                    static_cast<std::uint16_t>(row),
                    got == empty ? "빈손" : "찾음", f20, f28);
-        dump_category_list(reinterpret_cast<std::uintptr_t>(owner),
-                           static_cast<std::uint32_t>(cat));
+        if (g_find_dump_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+            dump_category_list(reinterpret_cast<std::uintptr_t>(owner),
+                               static_cast<std::uint32_t>(cat));
+        }
     }
     return r;
 }
@@ -456,14 +461,35 @@ void* __fastcall det_spawn(void* rcx, void* out, std::uint32_t r8, void* r9,
     void* r = g_orig_spawn(rcx, out, r8, r9, a5);
     std::uint32_t result = 0xFFFFFFFFu;
     if (out != nullptr) std::memcpy(&result, out, sizeof(result));
+    // **관문 통과 직후의 가상 호출 대상을 같이 찍는다** (2026-09-16).
+    //
+    //   0x2A23050  rax = [r14]            r14 = [arg1+8]
+    //   0x2A23065  call qword ptr [rax + 0x208]
+    //
+    // 이 자리가 슬롯에 대한 **동작(호출 모션)을 거는 곳**으로 보인다.
+    // 드래곤과 말이 서로 다른 함수로 가는지가 갈림이다. 새 훅을 걸지 않고
+    // 이미 안전한 이 훅에서 값만 읽는다 - 읽기뿐이라 인자 위험이 없다.
+    std::uintptr_t act_fn = 0;
+    {
+        std::uintptr_t r14 = 0;
+        std::uintptr_t vt = 0;
+        if (mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(rcx) + 8,
+                                 &r14, sizeof r14) &&
+            r14 > 0x10000 &&
+            mem::safe_read_bytes(r14, &vt, sizeof vt) && vt > 0x10000) {
+            mem::safe_read_bytes(vt + 0x208, &act_fn, sizeof act_fn);
+        }
+    }
     const long seq = g_spawn_seq.fetch_add(1, std::memory_order_relaxed);
     if (g_spawn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
         // **게이트의 "결과" 와 뜻이 다르다.** 게이트는 오류 코드(0 = 오류 없음)
         // 이고, 여기 out 자리는 만들어진 객체다 - 큰 값이면 만든 것, 0 이면 못
         // 만든 것이다. 같은 이름으로 찍다가 거꾸로 읽었다(2026-09-15).
-        log::infof("스폰0x2A22DE0[{}]: 호출자=+0x{:X} r8={} 결과물=0x{:X} ({})",
+        log::infof("스폰0x2A22DE0[{}]: 호출자=+0x{:X} r8={} 결과물=0x{:X} ({})"
+                   " · 동작함수=+0x{:X}",
                    seq, caller_rva(ret), r8, result,
-                   result != 0 ? "만듦" : "없음");
+                   result != 0 ? "거부" : "통과",
+                   act_fn == 0 ? 0 : caller_rva(reinterpret_cast<void*>(act_fn)));
     }
     return r;
 }

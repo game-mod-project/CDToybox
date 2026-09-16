@@ -80,7 +80,7 @@ git -C E:/CDToybox worktree add E:/CDToybox-xxx -b <브랜치> develop
 
 ```powershell
 .\scripts\build.ps1          # VS2022 BuildTools + Ninja, RelWithDebInfo
-.\build\cdtb_tests.exe       # 단위 시험 (현재 575개)
+.\build\cdtb_tests.exe       # 단위 시험 (현재 596개)
 .\scripts\deploy.ps1         # build\xinput1_4.dll -> 게임 bin64\
 ```
 
@@ -136,8 +136,14 @@ docs/       아래 참조
 |---|---|
 | `docs/STATUS.md` | **먼저 읽을 것.** 지금 무엇이 되고 · 안 되고 · 왜 그런가 |
 | `docs/TROUBLESHOOTING.md` | 겪은 문제와 해결. 증상 색인이 앞에 있다 |
-| `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (40여 편) |
-| `docs/superpowers/plans/` | 단계별 구현 계획 |
+| `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (50여 편). 한 주제가 여러 편이면 **최신 편의 머리말이 어느 편이 정본인지 밝힌다** |
+| `docs/superpowers/plans/` | 단계별 구현 계획 (6편, 전부 구현 완료 — 머리말의 완료 배너를 볼 것) |
+| `docs/special-function-items.md` | `specguard` 대상 32종 — 치트로 만들면 인벤 렌더에서 죽는 장비 |
+
+문서 곳곳이 `.superpowers/sdd/<플랜>/progress.md` 를 실행 장부로 가리킨다.
+**그것들은 레포에 없다** — 로컬 SDD 작업 부산물이라 추적하지 않고(`.gitignore`),
+작업한 트리에만 남으며 대개 이미 지워졌다. 레포 안에서 확인 가능한 근거는
+`docs/superpowers/specs/` 쪽이다.
 
 ## 6. 추적하지 않는 것
 
