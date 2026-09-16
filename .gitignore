@@ -19,6 +19,10 @@ cheat_report.txt
 .semgrep/
 .superpowers/
 
+# 화면 검증 캡처(overlay-check.ps1 의 -OutDir 기본값). 게임 화면이 통째로
+# 찍히므로 저장소에 둘 것이 아니다.
+shots/
+
 # 참고 모드 내려받기 (Nexus CT/ASI)와 그 부산물, 참고용 제3자 모드 배포물.
 # 레포에 두고 보되 추적하지 않는다 - git status 를 매번 어지럽혔고, 제3자
 # 배포물은 남의 저작물이다.
