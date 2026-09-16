@@ -1,3 +1,7 @@
+> **[2026-09-16] 구현 완료.** 필터바(`render/filter_bar`) · 필터 술어
+> (`game/item_view`) · 보석 선택기(`render/gem_picker`) 전부 들어왔다.
+> `docs/STATUS.md` §1.14. **아래 체크박스는 실행 당시 안 찍었다** — 미완으로 읽지 말 것.
+
 # 패널 공통화 구현 계획 — 필터바·필터 술어·보석 선택기
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
