@@ -10,6 +10,7 @@
 #include "core/log.h"
 #include "core/write_log.h"
 #include "game/localization.h"
+#include "game/roster.h"   // read_engine_string - 내부 이름으로 지식을 찾는다
 #include "game/skillpoint.h"
 
 namespace cdtb::game {
@@ -897,6 +898,188 @@ KnowQueue knowledge_queue_state() {
 void knowledge_queue_clear_result() {
     std::lock_guard<std::mutex> lk(g_q_mtx);
     g_q.has_result = false;
+}
+
+// ------------------------------------- 스킬 맵 읽기 · 호출 지식 (2026-09-16)
+//
+// **쓰기가 하나도 없다.** 드래곤 호출 모션이 스킬이고 그 스킬을 지식이 준다는
+// 가설을, 세이브에 남는 쓰기를 하기 **전에** 확인하려고 만든 조회다.
+// 근거: `docs/superpowers/specs/2026-09-16-dragon-external-research.md`.
+
+namespace {
+// 이름 훑기는 6천 개를 도는 일이라 매니저가 그대로면 한 번 찾은 것을 쓴다.
+// 원소 쪽(`reserveslot.cpp`)과 같은 방식이다.
+std::uintptr_t g_call_mgr = 0;
+int g_call_num[kCallKnowCount] = {-1, -1};
+}  // namespace
+
+bool know_map_sane(int count, std::uintptr_t values) {
+    if (count <= 0 || count > kKnowMapMaxCount) return false;
+    // 아래쪽 64KB 는 어떤 할당도 안 오는 자리다 - 오프셋이 밀리면 여기가 읽힌다.
+    if (values < 0x10000) return false;
+    return true;
+}
+
+std::uintptr_t know_map_value(std::uintptr_t values, int index) {
+    if (values == 0 || index < 0) return 0;
+    return values + static_cast<std::uintptr_t>(index) * kKnowMapValueStride;
+}
+
+bool know_skill_slots_at(const mem::Reader& reader, std::uintptr_t comp,
+                         std::vector<KnowSkillSlot>* out) {
+    if (out == nullptr) return false;
+    out->clear();
+    if (comp == 0) return false;
+    const int count = rd32(reader, comp + kKnowMapCount);
+    const std::uintptr_t values =
+        static_cast<std::uintptr_t>(rd64(reader, comp + kKnowMapValues));
+    if (!know_map_sane(count, values)) return false;
+    out->reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const std::uintptr_t at = know_map_value(values, i);
+        if (at == 0) break;
+        std::uint32_t key = 0;
+        std::int32_t lv = 0;
+        // **못 읽으면 멈춘다.** 0 으로 채우면 "스킬 0 이 등록돼 있다" 를 답으로 낸다.
+        if (!reader.read_value(at, &key)) break;
+        if (!reader.read_value(at + 4, &lv)) break;
+        out->push_back(KnowSkillSlot{static_cast<int>(key), lv});
+    }
+    return !out->empty();
+}
+
+bool know_skill_slots(const mem::Reader& reader, int realm,
+                      std::vector<KnowSkillSlot>* out) {
+    return know_skill_slots_at(reader, comp_of(realm), out);
+}
+
+int know_apply_skill(const mem::Reader& reader, const KnowMgr& mgr, int number) {
+    if (number < 0 || number >= mgr.count || mgr.array == 0) return -1;
+    const std::uintptr_t info = static_cast<std::uintptr_t>(
+        rd64(reader, mgr.array + static_cast<std::uintptr_t>(number) * 8));
+    if (info == 0) return -1;
+    std::uint16_t v = 0;
+    if (!reader.read_value(info + kInfoApplySkill, &v)) return -1;
+    return static_cast<int>(v);
+}
+
+int know_find_by_name(const mem::Reader& reader, const KnowMgr& mgr,
+                      const char* internal) {
+    if (internal == nullptr || *internal == 0) return -1;
+    if (mgr.array == 0 || mgr.count <= 0) return -1;
+    for (int k = 0; k < mgr.count; ++k) {
+        const std::uintptr_t info = static_cast<std::uintptr_t>(
+            rd64(reader, mgr.array + static_cast<std::uintptr_t>(k) * 8));
+        if (info == 0) continue;
+        const std::uintptr_t s =
+            static_cast<std::uintptr_t>(rd64(reader, info + kInfoInternalName));
+        if (s == 0) continue;
+        if (read_engine_string(reader, s) == internal) return k;
+    }
+    return -1;
+}
+
+bool call_knowledge(const mem::Reader& reader, CallKnow out[kCallKnowCount]) {
+    static const char* kLabel[kCallKnowCount] = {"탈것(대조군)", "드래곤"};
+    static const char* kName[kCallKnowCount] = {"Knowledge_CallVehicle",
+                                                "Knowledge_CallDragon"};
+    for (int i = 0; i < kCallKnowCount; ++i) {
+        out[i] = CallKnow{};
+        out[i].label = kLabel[i];
+        out[i].internal = kName[i];
+    }
+    KnowMgr mgr;
+    if (!know_manager(reader, &mgr)) return false;
+    if (g_call_mgr != mgr.object) {
+        for (int i = 0; i < kCallKnowCount; ++i) {
+            g_call_num[i] = know_find_by_name(reader, mgr, kName[i]);
+        }
+        g_call_mgr = mgr.object;
+        // **증거를 남긴다.** 다음에 "안 된다" 가 오면 어느 번호를 쓴 건지부터 본다.
+        log::infof("호출 지식을 이름으로 찾았다: 탈것 {} · 드래곤 {} (지식 {}개 중)",
+                   g_call_num[0], g_call_num[1], mgr.count);
+    }
+
+    KnowTable t;
+    const bool have_table = know_table(reader, 0, &t);
+    std::vector<KnowSkillSlot> slots;
+    const bool have_map = know_skill_slots(reader, 0, &slots);
+
+    for (int i = 0; i < kCallKnowCount; ++i) {
+        out[i].number = g_call_num[i];
+        if (out[i].number < 0) continue;
+        if (have_table) {
+            const int lv = know_level(reader, t, out[i].number);
+            out[i].level = lv > 0 ? lv : 0;
+        }
+        out[i].apply_skill = know_apply_skill(reader, mgr, out[i].number);
+        if (!have_map) continue;
+        if (out[i].apply_skill <= 0 ||
+            out[i].apply_skill == static_cast<int>(kNoApplySkill)) {
+            continue;
+        }
+        for (const KnowSkillSlot& s : slots) {
+            if (s.skill_key != out[i].apply_skill) continue;
+            out[i].in_skill_map = true;
+            out[i].map_level = s.level;
+            break;
+        }
+    }
+    return true;
+}
+
+void know_diagnose_call(const mem::Reader& reader) {
+    log::infof("호출 지식 진단 ----- 읽기만 한다");
+    const std::uintptr_t comp = comp_of(0);
+    if (comp == 0) {
+        log::warnf("  서버 지식 컴포넌트를 아직 못 잡았다 - 월드에 들어간 뒤 다시");
+        return;
+    }
+    log::infof("  서버 comp 0x{:X} · 맵 원소수(+0xF4) {} · 값배열(+0x100) 0x{:X}",
+               comp, rd32(reader, comp + kKnowMapCount),
+               rd64(reader, comp + kKnowMapValues));
+
+    std::vector<KnowSkillSlot> slots;
+    if (know_skill_slots(reader, 0, &slots)) {
+        // **한 줄로 찍는다.** 줄마다 찍으면 로그가 묻힌다(TROUBLESHOOTING 6.19).
+        std::string line;
+        for (std::size_t i = 0; i < slots.size() && i < 16; ++i) {
+            if (!line.empty()) line += " ";
+            line += std::to_string(slots[i].skill_key);
+            line += ":";
+            line += std::to_string(slots[i].level);
+        }
+        log::infof("  값 배열 {}개 (스킬키:레벨, 앞 16개) {}", slots.size(), line);
+    } else {
+        log::warnf("  값 배열을 못 읽었다 - 배치가 다르거나 맵이 비었다");
+    }
+
+    CallKnow ck[kCallKnowCount];
+    if (!call_knowledge(reader, ck)) {
+        log::warnf("  지식 매니저를 못 잡았다");
+        return;
+    }
+    for (int i = 0; i < kCallKnowCount; ++i) {
+        const int skill = ck[i].apply_skill;
+        log::infof("  {} [{}] 번호 {} · 레벨 {} · 붙을스킬 {} · 스킬맵 {} (레벨 {})",
+                   ck[i].label, ck[i].internal, ck[i].number, ck[i].level,
+                   skill == static_cast<int>(kNoApplySkill) ? -1 : skill,
+                   ck[i].in_skill_map ? "있음" : "없음", ck[i].map_level);
+    }
+    // **판정을 사람 대신 읽어 준다.** 대조군이 있고 대상이 없으면 가설이 맞는
+    // 모양이다. 둘 다 있으면 가설은 틀렸고 벽은 다른 데 있다.
+    if (ck[0].number >= 0 && ck[1].number >= 0) {
+        if (ck[0].in_skill_map && !ck[1].in_skill_map) {
+            log::infof("  => 대조군은 스킬맵에 있고 드래곤은 없다."
+                       " 호출 모션이 없던 것과 아귀가 맞는다");
+        } else if (ck[0].in_skill_map && ck[1].in_skill_map) {
+            log::infof("  => 둘 다 스킬맵에 있다. **지식은 벽이 아니다** -"
+                       " 가설을 접고 다른 자리를 본다");
+        } else if (!ck[0].in_skill_map) {
+            log::warnf("  => 대조군(탈것)마저 스킬맵에 없다. 말이 잘 불리는데도"
+                       " 그렇다면 **이 조회가 보는 자리가 틀렸다** - 판정에 쓰지 말 것");
+        }
+    }
 }
 
 }  // namespace cdtb::game

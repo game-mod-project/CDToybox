@@ -201,6 +201,19 @@ void draw_knowledge(const mem::Reader& reader) {
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("이름이 안 뜰 때 누르십시오. 먼저 훑기를 한 번 하십시오.");
     }
+    ImGui::SameLine();
+    if (ImGui::Button("호출 지식")) {
+        // **읽기만 한다.** 드래곤 호출 모션이 스킬이고 그 스킬을 지식이 준다는
+        // 가설을, 세이브에 남는 쓰기를 하기 전에 확인한다.
+        game::know_diagnose_call(reader);
+        notice_set(&s_note, NoticeLevel::Ok, "호출 지식 진단을 로그에 남겼습니다");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Knowledge_CallVehicle(말, 대조군)와 Knowledge_CallDragon 이\n"
+            "서버 스킬 맵에 등록돼 있는지 로그에 적습니다. 읽기만 합니다.\n"
+            "대조군은 있는데 드래곤만 없다면 그것이 호출 모션이 없던 이유입니다.");
+    }
     notice_draw(s_note);
 
     if (!s_scanned || !s_scan.ok) return;

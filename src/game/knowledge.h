@@ -188,6 +188,9 @@ inline constexpr std::uintptr_t kServerCompVtableRva = 0x05A13200;
 inline constexpr std::size_t kKnowMapCount = 0xF4;      // u32 맵 원소 수
 inline constexpr std::size_t kInfoApplySkill = 0x104;   // u16, 0xFFFF = 붙을 스킬 없음
 inline constexpr std::uint16_t kNoApplySkill = 0xFFFF;
+// `KnowledgeInfo +0x08` = 내부 이름 문자열 객체 포인터("Knowledge_Hp" …).
+// 원소 넷을 이름으로 찾을 때 확인한 자리다(STATUS §1.20).
+inline constexpr std::size_t kInfoInternalName = 0x08;
 
 struct KnowRegister {
     bool ok = false;
@@ -251,6 +254,75 @@ void know_diagnose(const mem::Reader& reader);
 // 아직 **가정**이고, 2026-09-14 에 이름이 하나도 안 나왔다.
 void know_diagnose_names(const mem::Rtti* rtti, const mem::Reader& reader,
                          int number);
+
+// ------------------------------------- 스킬 맵 읽기 · 호출 지식 (2026-09-16)
+//
+// **왜 이것이 있나.** 드래곤 호출 모션은 **스킬**이고 그 스킬은 **지식**이 준다
+// (게임 데이터 실측, `docs/superpowers/specs/2026-09-16-dragon-external-research.md`):
+//
+//   Knowledge_CallVehicle -> Skill_CallVehicle  "탈승물 호출"   <- 말. 잘 된다
+//   Knowledge_CallDragon  -> Skill_CallDragon   "용을 호출한다" <- 드래곤. 안 된다
+//
+// 정본이 남긴 마지막 벽이 "7시 슬롯 경로에 호출 모션이 아예 없다" 인데, 모션이
+// 스킬이라면 **그 스킬이 안 붙어서**일 수 있다. 여기 있는 것은 그것을 **쓰지 않고
+// 확인하는** 조회다 - 세이브에 남는 쓰기를 헛되이 쓰지 않으려는 것이다.
+//
+// 읽는 방법에서 **버킷·해시를 가정하지 않는다.** 값 배열은 원소 수(+0xF4)와
+// 배열 포인터(+0x100)만으로 조밀하게 읽히므로 추측이 하나 적다. 버킷 배치
+// (+0xE8/+0xF8)는 다른 엔진 맵에서 본 모양일 뿐 **이 맵에서 확인한 적이 없다.**
+inline constexpr std::size_t kKnowMapValues = 0x100;   // {u32 SkillKey, i32 레벨} 배열
+inline constexpr std::size_t kKnowMapValueStride = 8;
+inline constexpr int kKnowMapMaxCount = 1 << 16;       // 말이 안 되는 개수를 거른다
+
+struct KnowSkillSlot {
+    int skill_key = 0;
+    int level = 0;
+};
+
+// 순수 - 시험한다. 맵 머리가 말이 되는가.
+bool know_map_sane(int count, std::uintptr_t values);
+// 순수 - 시험한다. 값 하나의 주소. 말이 안 되면 0.
+std::uintptr_t know_map_value(std::uintptr_t values, int index);
+
+// 값 배열을 통째로 읽는다. **쓰기 없음.** 컴포넌트를 직접 받는 쪽이 본체이고
+// 시험 대상이다 - realm 판은 전역 게터만 씌운 껍데기다.
+//
+// **못 읽는 칸에서 멈춘다.** 개수가 말하는 만큼 다 못 읽어도 0 으로 채우지
+// 않는다 - 그러면 "스킬 0 이 등록돼 있다" 를 답으로 내게 된다.
+bool know_skill_slots_at(const mem::Reader& reader, std::uintptr_t comp,
+                         std::vector<KnowSkillSlot>* out);
+bool know_skill_slots(const mem::Reader& reader, int realm,
+                      std::vector<KnowSkillSlot>* out);
+
+// `KnowledgeInfo._learnApplySkillInfo`(+0x104, u16). 0xFFFF 면 붙을 스킬이 없다.
+// 못 읽으면 -1.
+int know_apply_skill(const mem::Reader& reader, const KnowMgr& mgr, int number);
+
+// 내부 이름(`KnowledgeInfo +0x08`)으로 찾는다. 못 찾으면 -1.
+// **6천 개를 도는 일이다** - 프레임마다 부르지 않는다.
+int know_find_by_name(const mem::Reader& reader, const KnowMgr& mgr,
+                      const char* internal);
+
+// 호출 지식 둘. `[0]` 이 대조군(탈것), `[1]` 이 대상(드래곤)이다.
+// **번호를 코드에 안 박는다** - 게임이 갱신되면 밀리므로 이름으로 찾는다
+// (원소 넷에서 번호를 잘못 골라 여러 번 헛돌았다, STATUS §1.20).
+inline constexpr int kCallKnowCount = 2;
+
+struct CallKnow {
+    const char* label = "";
+    const char* internal = "";
+    int number = -1;        // 지식 번호(표의 행). -1 이면 못 찾았다
+    int level = 0;          // 레벨 표의 지금 레벨
+    int apply_skill = -1;   // 붙을 스킬 키. 0xFFFF = 없음, -1 = 못 읽음
+    bool in_skill_map = false;  // 서버 스킬 맵에 그 스킬이 있는가
+    int map_level = 0;          // 있으면 거기 적힌 레벨
+};
+
+// 둘을 이름으로 찾아 레벨·붙을스킬·맵 등록 여부까지 채운다. **읽기만 한다.**
+bool call_knowledge(const mem::Reader& reader, CallKnow out[kCallKnowCount]);
+
+// 위를 로그로 찍는다(맵 머리와 표본 포함). **읽기만 한다.**
+void know_diagnose_call(const mem::Reader& reader);
 
 // ------------------------------------------------------------ 자동 재적용
 //
