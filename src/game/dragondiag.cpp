@@ -170,8 +170,11 @@ using DispFn = void*(__fastcall*)(void*, void*, void*, void*, void*, void*);
 DispFn g_orig_disp = nullptr;
 void* g_disp_target = nullptr;
 std::atomic<int> g_disp_budget{60};
-// 목록까지 통째로 찍으므로 예산을 작게 잡는다.
-std::atomic<int> g_find_budget{24};
+// 한 줄 요약은 넉넉히, **목록 덤프만** 따로 조인다. 예전에 둘을 같은
+// 예산으로 묶었다가 시작 직후 열거에서 24건을 다 태워, 정작 보고 싶은
+// 클릭이 한 줄도 안 찍혔다(2026-09-16).
+std::atomic<int> g_find_budget{400};
+std::atomic<int> g_find_dump_budget{12};
 // 휠 칸 등록 채우기. 종행을 못 박지 않으면 빈 말 칸까지 채워 버린다.
 constexpr std::uintptr_t kEntrySpecies = 0x20;   // u16 종행
 constexpr std::uintptr_t kEntrySlot = 0x148;     // u16 올려 둔 휠 칸
@@ -431,8 +434,10 @@ void* __fastcall det_find(void* owner, std::uint64_t cat, std::uint64_t row,
                    static_cast<std::uint16_t>(cat),
                    static_cast<std::uint16_t>(row),
                    got == empty ? "빈손" : "찾음", f20, f28);
-        dump_category_list(reinterpret_cast<std::uintptr_t>(owner),
-                           static_cast<std::uint32_t>(cat));
+        if (g_find_dump_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+            dump_category_list(reinterpret_cast<std::uintptr_t>(owner),
+                               static_cast<std::uint32_t>(cat));
+        }
     }
     return r;
 }
