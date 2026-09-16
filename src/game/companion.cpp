@@ -241,6 +241,21 @@ CDTB_COMP_DETOUR(after_regist, "등록후소환")
 CDTB_COMP_DETOUR(hire_response, "획득응답")
 CDTB_COMP_DETOUR(use_item, "아이템사용")
 CDTB_COMP_DETOUR(use_item_info, "아이템사용/정보")
+// 휠 소환이 보내는 메시지는 **2742** 다(0x292B040 이 송신, `mov word ptr
+// [r15], 0xAB6`). 그런데 `부르기`(CallSpecialVehicleByQuickSlotReq) 캡처가
+// 휠 클릭에서 한 줄도 안 찍혔다 - 말이 실제로 나올 때도 안 찍혔다. 즉 2742
+// 는 그 클래스가 아니다. 남은 퀵슬롯 후보를 같이 걸어 가린다.
+CDTB_COMP_DETOUR(call_hyosi, "부르기/효시")
+// **휠 소환의 진짜 요청 클래스** (2026-09-16 확정). 메시지 번호 2742 로
+// 좁힌 뒤, 그 번호를 버퍼에 박는 송신 함수(0x292B040)에서 서버 쪽으로
+// 거슬러 올라가 vtable 을 맞춰 이름을 얻었다:
+//
+//   응답 2406 을 박는 코드 0x28B2F50 -> 부르는 자리 둘
+//     -> 0x2ADDAE0 -> 0x2ADC010 -> **0x29656C0**
+//   0x29656C0 은 vtable 0x5A09A30 의 +0x10, 즉 vtable[2](역직렬화)이고
+//   그 vtable 의 RTTI 가 TrocTrFrameEventCallMercenaryReq 다.
+CDTB_COMP_DETOUR(call_frame, "부르기/프레임")
+CDTB_COMP_DETOUR(call_mercenary, "부르기/용병")
 #undef CDTB_COMP_DETOUR
 
 // 클래스 이름 -> 서술자 vtable[2] (역직렬화). 부분일치가 여럿이면
@@ -319,6 +334,9 @@ bool companion_capture_install(const mem::Rtti& rtti,
     CDTB_HOOK("TrocTrFrameEventRegistMercenaryReq", regist_event, "등록이벤트");
     CDTB_HOOK("TrocTrSelectMercenarySpawnReq", select_spawn, "스폰선택");
     CDTB_HOOK("TrocTrCallSpecialVehicleByQuickSlotReq", call_quick, "부르기");
+    CDTB_HOOK("TrocTrCallHyosiByQuickSlotReq", call_hyosi, "부르기/효시");
+    CDTB_HOOK("TrocTrFrameEventCallMercenaryReq", call_frame, "부르기/프레임");
+    CDTB_HOOK("TrocTrCallVehicleMercenaryAck", call_mercenary, "부르기/용병");
     CDTB_HOOK("TrocTrMercenaryDataListAck", data_list, "소유목록");
     CDTB_HOOK("TrocTrSummonMercenaryAfterRegistAck", after_regist, "등록후소환");
     CDTB_HOOK("TrocTrResponseHiredMercenaryToTargetAck", hire_response,
