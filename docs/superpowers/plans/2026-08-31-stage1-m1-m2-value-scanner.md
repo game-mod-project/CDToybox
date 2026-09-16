@@ -1,3 +1,8 @@
+> **[2026-09-16] 값 스캐너는 구현 완료 · 카메라는 보류.** 값 스캐너
+> (`mem/regions` · `mem/value_scanner` · `render/scan_panel`)는 들어왔다.
+> **카메라 쪽 목표는 답을 못 찾아 보류**이고 `freecam` 은 훅을 설치하지
+> 않는다(`kDeferred`) — `docs/STATUS.md` §2.4 · §3. **아래 체크박스는 실행 당시 안 찍었다** — 미완으로 읽지 말 것.
+
 # 1단계 M1·M2 구현 계획 — 값 스캐너와 카메라 구조체 확보
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
