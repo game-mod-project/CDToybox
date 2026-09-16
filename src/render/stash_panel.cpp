@@ -1,3 +1,4 @@
+#include "render/ui_persist.h"
 #include "render/stash_panel.h"
 
 #include <windows.h>
@@ -425,7 +426,7 @@ void draw_stash_panel(bool* open) {
     const auto favs = g_stash.favorites();   // 지우면서 도니 복사한다
     char fav_hdr[48];
     std::snprintf(fav_hdr, sizeof(fav_hdr), "즐겨찾기 (%zu)###favs", favs.size());
-    if (ImGui::CollapsingHeader(fav_hdr, ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (collapsing_header("stash.favorites", fav_hdr)) {
         // 즐겨찾기가 많아도 세트를 스크롤 밖으로 밀어내지 않게 창 높이의 45% 까지만.
         // 줄 높이는 아이콘(22)이 아니라 AlignTextToFramePadding 이 정한다(폰트 18 → 24).
         // 아이콘으로 세면 3개부터 스크롤바가 선다(wave 2 재리뷰).
@@ -494,11 +495,13 @@ void draw_stash_panel(bool* open) {
         char label[256];
         std::snprintf(label, sizeof(label), "%s (%zu개)###set:%s", set->name.c_str(),
                       set->items.size(), set->name.c_str());
-        if (!g_open_new_set.empty() && g_open_new_set == set->name) {
-            ImGui::SetNextItemOpen(true, ImGuiCond_Always);   // 방금 만든 세트를 펼친다
-            g_open_new_set.clear();
-        }
-        if (ImGui::CollapsingHeader(label)) {
+        // 방금 만든 세트는 이번 프레임에만 강제로 펼친다. 그 뒤로는 저장된
+        // 상태가 이긴다.
+        const bool just_made =
+            !g_open_new_set.empty() && g_open_new_set == set->name;
+        if (just_made) g_open_new_set.clear();
+        const std::string set_key = "stash.set." + set->name;
+        if (collapsing_header(set_key.c_str(), label, just_made)) {
             // 인벤토리 창이 "어디에 담을지" 를 이걸로 안다.
             open_name = set->name;
             if (ImGui::SmallButton("전부 지급")) {

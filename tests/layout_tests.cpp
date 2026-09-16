@@ -42,13 +42,13 @@ TEST(layout_everything_fits_1080p) {
     }
 }
 
-TEST(layout_default_open_windows_do_not_overlap) {
+TEST(layout_primary_windows_do_not_overlap) {
     const auto specs = cdtb::render::window_specs();
     for (const auto& a : specs) {
-        if (!a.default_open && a.id != Win::Main) continue;
+        if (!a.primary && a.id != Win::Main) continue;
         for (const auto& b : specs) {
             if (&a == &b) continue;
-            if (!b.default_open && b.id != Win::Main) continue;
+            if (!b.primary && b.id != Win::Main) continue;
             CHECK(!cdtb::render::specs_overlap(a, b));
         }
     }
@@ -58,10 +58,10 @@ TEST(layout_on_demand_windows_keep_main_visible_and_apart) {
     const auto specs = cdtb::render::window_specs();
     const WindowSpec& main = cdtb::render::window_spec(Win::Main);
     for (const auto& a : specs) {
-        if (a.default_open || a.id == Win::Main) continue;
+        if (a.primary || a.id == Win::Main) continue;
         CHECK(!cdtb::render::specs_overlap(a, main));
         for (const auto& b : specs) {
-            if (&a == &b || b.default_open || b.id == Win::Main) continue;
+            if (&a == &b || b.primary || b.id == Win::Main) continue;
             CHECK(!cdtb::render::specs_overlap(a, b));
         }
     }
