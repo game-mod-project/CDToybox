@@ -7,6 +7,8 @@
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
 
+#include <chrono>
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -26,6 +28,8 @@
 #include "render/layout.h"
 #include "render/grant_panel.h"
 #include "render/inventory_panel.h"
+#include "game/knowledge.h"
+#include "game/reserveslot.h"
 #include "game/skillgate.h"
 #include "render/item_panel.h"
 #include "render/log_panel.h"
@@ -44,6 +48,8 @@
 #include "game/player.h"
 #include "game/specguard.h"
 #include "game/spawnguard.h"
+#include "game/dragondiag.h"
+#include "game/wheelfill.h"
 #include "mem/reader.h"
 
 // 상태와 헬퍼는 detail에 둔다. cdtb::render::on_frame 이 이 상태에
@@ -525,9 +531,33 @@ namespace cdtb::overlay {
 
 using namespace detail;
 
+namespace {
+// 자동 재적용 목록을 ini 에 옮겨 적는다. 목록이 바뀔 때마다 지식 층이 부른다.
+void persist_knowledge_keep() {
+    const std::vector<cdtb::game::KnowWant> want = cdtb::game::know_auto_list();
+    g_cfg.knowledge_keep.clear();
+    g_cfg.knowledge_keep.reserve(want.size());
+    for (const cdtb::game::KnowWant& w : want) {
+        g_cfg.knowledge_keep.push_back(Config::KnowKeep{w.number, w.level});
+    }
+    if (g_ini_path.empty()) return;
+    cdtb::config::save(g_ini_path, g_cfg);
+}
+}  // namespace
+
 void set_config(const Config& cfg, const std::wstring& ini_path) {
     g_cfg = cfg;
     g_ini_path = ini_path;
+    // 지난 실행에 걸어 둔 지식을 되살린다. **훅은 되살린 뒤에 건다** - 먼저 걸면
+    // 되살리는 동안 같은 내용을 파일에 몇 번씩 다시 쓴다.
+    for (const Config::KnowKeep& k : cfg.knowledge_keep) {
+        cdtb::game::know_auto_remember(k.number, k.level);
+    }
+    if (!cfg.knowledge_keep.empty()) {
+        log::infof("지식 자동 재적용 {}개를 설정에서 되살렸다",
+                   static_cast<int>(cfg.knowledge_keep.size()));
+    }
+    cdtb::game::know_auto_persist_hook(&persist_knowledge_keep);
     // 장비 창의 캐릭터 선택을 되살린다. 발견은 분석 스레드가 한다.
     cdtb::game::equip_select_character(
         cfg.equip_character_row < 0
@@ -538,6 +568,14 @@ void set_config(const Config& cfg, const std::wstring& ini_path) {
 void show_window(cdtb::render::Win w) {
     init_show_flags();
     shown(w) = true;
+}
+
+bool vehicle_wheel_setting() { return g_cfg.vehicle_wheel_extend; }
+
+bool set_vehicle_wheel_setting(bool on) {
+    g_cfg.vehicle_wheel_extend = on;
+    if (g_ini_path.empty()) return false;
+    return cdtb::config::save(g_ini_path, g_cfg);
 }
 
 std::vector<Config::SocketCapPart> socket_cap_setting() {
@@ -623,6 +661,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 번에 관문이 조용히 풀리고 로그만 "되돌림" 이라고 남는다. 이 블록만이
         // "사용자가 모드를 내렸다" 를 뜻한다.
         cdtb::game::skillgate_remove_all();
+        cdtb::game::wheel_teardown();
+        cdtb::game::mount_timer_teardown();
+        cdtb::game::call_place_teardown();
+        cdtb::game::disguise_teardown();
         input::cursor_guard_sync(false);
         input::mouse_sync(false);
         input::cursor_guard_remove();
@@ -675,6 +717,20 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
         cdtb::game::spawnguard_install(reader);
+        // 소환 진단 훅은 **설정으로 켤 때만** 건다. 기능이 아니라 조사용이고,
+        // 그중 하나가 게임을 팅기게 했다(2026-09-15).
+        // 휠 칸 등록 채우기도 같은 훅(0x2096C30)을 쓰므로 그때도 건다.
+        if (g_cfg.summon_diag || g_cfg.wheel_fill) {
+            cdtb::game::dragondiag_install(reader);
+        }
+        // ini 값은 **처음 한 번만** 밀어 넣는다. 매 프레임 밀면 패널에서
+        // 켠 것을 곧바로 되돌려 버린다.
+        static bool s_wheel_pushed = false;
+        if (!s_wheel_pushed) {
+            s_wheel_pushed = true;
+            cdtb::game::wheel_fill_set_enabled(g_cfg.wheel_fill);
+            cdtb::game::disguise_set_swap_slot(g_cfg.wheel_swap_slot);
+        }
         // 보관함 자동 저장·일괄 지급 큐. 오버레이를 숨겨도, 창을 닫아도 돈다 -
         // ImGui 프레임 밖이지만 그리지 않고, 시각은 ImGui 시계(NewFrame 안에서만
         // 흐른다)가 아니라 단조 시계를 쓴다(3단계 리뷰). draw_windows 에 두면 숨김
@@ -700,6 +756,34 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 표가 올라온 그 순간 한 번만 본다. 설정이 꺼져 있어도 그때
         // 끝낸다 - 안 그러면 나중에 화면에서 체크박스를 켜는 순간
         // 여기서도 걸려, "다음 실행부터" 라는 문구와 어긋난다.
+        // 탈것 휠 목록도 매 실행 다시 걸어야 한다(예약 슬롯 표는 데이터에서
+        // 새로 읽힌다). **반드시 게임이 휠을 만들기 전이어야 한다** - 다 만들어진
+        // 뒤에 늘리면 같은 휠의 특수 탑승물 호출이 먹통이 된다(실측 2026-09-15,
+        // TROUBLESHOOTING 3.12). 그래서 화면에서 즉시 걸지 않고 설정에 적어
+        // **여기서**, 표가 읽히는 가장 이른 프레임에 한 번만 건다. 이 블록은
+        // 타이틀 화면부터 돌므로 월드 진입(= 휠이 만들어지는 시점)보다 앞선다.
+        static bool s_wheel_done = false;
+        if (!s_wheel_done && g_cfg.vehicle_wheel_extend) {
+            if (cdtb::game::wheel_state(reader).ready) {
+                s_wheel_done = true;
+                cdtb::game::wheel_unlock(reader, true);
+            }
+        }
+
+        // 휠 칸을 바꿔 둔 종은 **월드에 나와 있는 동안 제 타입으로 돌려 놓는다.**
+        // 바꿔 둔 채로 두면 다른 계통이 특수 탑승물로 보고 엉뚱하게 군다 -
+        // A.T.A.G. 개조 UI 자리에 말 UI 가 떴다(사용자 실측 2026-09-15).
+        // 명부를 읽으므로 매 프레임이 아니라 몇 초에 한 번만 본다. 시계는
+        // **단조 시계**다 - ImGui 시계는 오버레이를 숨기면 멈춘다.
+        {
+            static std::chrono::steady_clock::time_point s_dis_at{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - s_dis_at >= std::chrono::seconds(2)) {
+                s_dis_at = now;
+                cdtb::game::disguise_tick(reader);
+            }
+        }
+
         static bool s_cap_done = false;
         if (!s_cap_done && cdtb::game::items_ready()) {
             s_cap_done = true;

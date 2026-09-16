@@ -96,6 +96,8 @@ add_library(cdtoybox SHARED
     src/game/skillpoint.cpp
     src/game/skillgate.cpp
     src/game/knowledge.cpp
+    src/game/reserveslot.cpp
+    src/game/wheelfill.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -108,6 +110,7 @@ add_library(cdtoybox SHARED
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/spec_heal.cpp
+    src/game/dragondiag.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
@@ -161,6 +164,7 @@ add_executable(cdtb_tests
     tests/nofall_tests.cpp
     tests/bag_capacity_tests.cpp
     tests/bag_backup_tests.cpp
+    tests/wheel_tests.cpp
     src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
@@ -178,6 +182,8 @@ add_executable(cdtb_tests
     src/game/skillpoint.cpp
     src/game/skillgate.cpp
     src/game/knowledge.cpp
+    src/game/reserveslot.cpp
+    src/game/wheelfill.cpp
     src/render/notice_state.cpp
     src/render/stash_queue.cpp
     src/render/confirm_state.cpp
@@ -214,6 +220,8 @@ add_executable(cdtb_probe
     src/game/clan.cpp
     src/game/skillpoint.cpp
     src/game/knowledge.cpp
+    src/game/reserveslot.cpp
+    src/game/wheelfill.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp

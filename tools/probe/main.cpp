@@ -33,6 +33,7 @@
 #include "game/nofall_cave.h"
 #include "game/localization.h"
 #include "game/player.h"
+#include "game/reserveslot.h"
 #include "game/roster.h"
 #include "game/stash.h"
 
@@ -1391,6 +1392,378 @@ void cmd_inv(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // 내가 가진 동반자 명부. 전부 읽기다.
 //
 // 용병단 컴포넌트의 레코드 배열을 걷는다(game/clan.h).
+
+// characterinfo 레코드 원시 덤프·비교 - 소환 가능 필드 탐색용(2026-09-15).
+static bool char_record_addr(const mem::Rtti& rt, const mem::Reader& reader,
+                             std::uint32_t row, std::uintptr_t* out) {
+    std::uintptr_t mgr = 0;
+    if (!game::find_static_manager(reader, rt,
+                                   ".?AVCharacterInfoManager@pa@@", &mgr))
+        return false;
+    std::uint32_t count = 0;
+    std::uintptr_t records = 0;
+    if (!game::roster_header(reader, mgr, &count, &records)) return false;
+    if (row >= count) return false;
+    std::uint64_t rec = 0;
+    if (!reader.read_value(records + static_cast<std::uintptr_t>(row) * 8, &rec) ||
+        rec == 0)
+        return false;
+    *out = static_cast<std::uintptr_t>(rec);
+    return true;
+}
+
+void cmd_recdump(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc < 3) { std::printf("recdump <행> [바이트=0x200]\n"); return; }
+    const std::uint32_t row =
+        static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 0));
+    const std::size_t n =
+        (argc > 3) ? static_cast<std::size_t>(std::strtoull(argv[3], nullptr, 0))
+                   : 0x200;
+    std::uintptr_t rec = 0;
+    if (!char_record_addr(rt, reader, row, &rec)) {
+        std::printf("행 %u 레코드 못 찾음\n", row); return;
+    }
+    std::printf("행 %u 레코드 0x%llX (%zu바이트):\n", row,
+                static_cast<unsigned long long>(rec), n);
+    std::vector<std::uint8_t> b(n, 0);
+    if (!reader.read(rec, b.data(), n)) { std::printf("읽기 실패\n"); return; }
+    for (std::size_t o = 0; o < n; o += 16) {
+        std::printf("  +0x%03zX:", o);
+        for (int j = 0; j < 16 && o + j < n; ++j)
+            std::printf(" %02X", b[o + static_cast<std::size_t>(j)]);
+        std::printf("\n");
+    }
+}
+
+void cmd_recdiff(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc < 4) { std::printf("recdiff <행1> <행2> [바이트=0x200]\n"); return; }
+    const std::uint32_t r1 =
+        static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 0));
+    const std::uint32_t r2 =
+        static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 0));
+    const std::size_t n =
+        (argc > 4) ? static_cast<std::size_t>(std::strtoull(argv[4], nullptr, 0))
+                   : 0x200;
+    std::uintptr_t a1 = 0, a2 = 0;
+    if (!char_record_addr(rt, reader, r1, &a1) ||
+        !char_record_addr(rt, reader, r2, &a2)) {
+        std::printf("레코드 못 찾음\n"); return;
+    }
+    std::vector<std::uint8_t> b1(n, 0), b2(n, 0);
+    reader.read(a1, b1.data(), n);
+    reader.read(a2, b2.data(), n);
+    std::printf("행 %u(0x%llX) vs 행 %u(0x%llX) - 다른 오프셋:\n", r1,
+                static_cast<unsigned long long>(a1), r2,
+                static_cast<unsigned long long>(a2));
+    int diffs = 0;
+    for (std::size_t o = 0; o < n; ++o) {
+        if (b1[o] != b2[o]) {
+            std::printf("  +0x%03zX: %02X vs %02X\n", o, b1[o], b2[o]);
+            ++diffs;
+        }
+    }
+    std::printf("총 %d 바이트 다름\n", diffs);
+}
+
+// VehicleInfo 레코드 둘을 비교한다.
+//
+//     vehdiff <행A> <행B> [바이트수=0xC0]
+//
+// 탈것 호출 거부("호출할 수 없는 장소입니다")의 조건이 여기 있다 - 실패 메시지가
+// 알려 준 이름표: +0x8C `_checkDistanceToGround` · +0x9C `_maxAllowableHeight` ·
+// +0xA4 부근 `_callVehicleVoxelType`. `CharacterInfo._vehicleInfo`(+0x6E)가 이 표의
+// 행을 가리킨다 - 드래곤 3 · 와이번 4(실측 2026-09-15).
+void cmd_vehdiff(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: vehdiff <행A> <행B> [바이트수]\n");
+        return;
+    }
+    const int ra = static_cast<int>(std::strtol(argv[2], nullptr, 0));
+    const int rb = static_cast<int>(std::strtol(argv[3], nullptr, 0));
+    const int bytes = argc > 4 ? static_cast<int>(std::strtol(argv[4], nullptr, 0))
+                               : 0xC0;
+    std::uintptr_t mgr = 0;
+    if (!game::find_static_manager(reader, rt, ".?AVVehicleInfoManager@pa@@",
+                                   &mgr)) {
+        std::printf("VehicleInfoManager 를 못 찾았습니다.\n");
+        return;
+    }
+    std::uint32_t n = 0;
+    std::uintptr_t recs = 0;
+    if (!game::roster_header(reader, mgr, &n, &recs)) {
+        std::printf("표 머리를 못 읽었습니다.\n");
+        return;
+    }
+    std::printf("VehicleInfoManager 0x%llX · %u행\n", (unsigned long long)mgr, n);
+    if (ra < 0 || rb < 0 || ra >= static_cast<int>(n) || rb >= static_cast<int>(n)) {
+        std::printf("행 번호가 표 범위를 넘습니다.\n");
+        return;
+    }
+    std::uint64_t pa = 0, pb = 0;
+    reader.read_value(recs + static_cast<std::uintptr_t>(ra) * 8, &pa);
+    reader.read_value(recs + static_cast<std::uintptr_t>(rb) * 8, &pb);
+    if (pa < 0x10000 || pb < 0x10000) {
+        std::printf("레코드 포인터가 비었습니다.\n");
+        return;
+    }
+    auto label = [](int off) -> const char* {
+        switch (off) {
+            case 0x08: return " _stringKey";
+            case 0x10: return " _isBlocked";
+            case 0x14: return " _vehicleTypeNameHash";
+            case 0x18: return " _iconPath";
+            case 0x1A: return " _maxVehicleSeat";
+            case 0x5C: return " _maxParentLinkAttachCount";
+            case 0x68: return " _riderSpawnUpperAction";
+            case 0x6C: return " _vehicleSpawnUpperAction";
+            case 0x70: return " _escapeRoadGroupType";
+            case 0x8C: return " ★_checkDistanceToGround";
+            case 0x90: return " _showCountOnUI";
+            case 0x94: return " _riderDetectInfo";
+            case 0x98: return " _contactImpulseEvent";
+            case 0x9C: return " ★_maxAllowableHeight";
+            case 0xA0: return " _attachToDockingGimmickTag";
+            case 0xA4: return " ★_callVehicleVoxelType 외";
+            default: return "";
+        }
+    };
+    std::vector<std::uint8_t> ba(bytes), bb(bytes);
+    if (!reader.read(static_cast<std::uintptr_t>(pa), ba.data(), bytes) ||
+        !reader.read(static_cast<std::uintptr_t>(pb), bb.data(), bytes)) {
+        std::printf("레코드를 못 읽었습니다.\n");
+        return;
+    }
+    std::printf("A 행 %d 0x%llX   B 행 %d 0x%llX\n", ra, (unsigned long long)pa,
+                rb, (unsigned long long)pb);
+    for (int off = 0; off < bytes; off += 4) {
+        std::uint32_t va = 0, vb = 0;
+        std::memcpy(&va, &ba[off], 4);
+        std::memcpy(&vb, &bb[off], 4);
+        float fa = 0, fb = 0;
+        std::memcpy(&fa, &va, 4);
+        std::memcpy(&fb, &vb, 4);
+        const char* mark = (va == vb) ? "  " : "!=";
+        std::printf("  %s +0x%03X  A %08X (%g)  B %08X (%g)%s\n", mark, off, va,
+                    fa, vb, fb, label(off));
+    }
+}
+
+// 종류별 색인에서 자리가 어긋난 개체를 제자리로 옮긴다.
+//
+//     clanfix [dry]
+//
+// 종 교체분이 옛 타입 벡터에 남아 휠에서만 안 불리는 것을 고친다.
+void cmd_clanfix(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
+    game::discover_roster(rt, reader);
+    const bool dry = (argc > 2 && std::strcmp(argv[2], "dry") == 0);
+    const game::ReindexResult r = game::clan_reindex(reader, rt, dry);
+    std::printf("%s realm %d · 어긋남 %d · 옮김 %d · 자리없음 %d %s\n",
+                dry ? "[읽기만]" : "[적용]", r.realms, r.wrong, r.moved,
+                r.no_room, r.note);
+}
+
+// 용병단의 **종류별 색인**(휠이 목록을 만들 때 쓰는 해시)을 통째로 찍는다.
+//
+//     clanindex
+//
+// 종 교체는 명부 레코드의 종(`+0x20`)만 바꾸고 이 색인은 안 건드린다 - 버킷 키가
+// **넣을 때의 종**에서 파생되기 때문이다. 그래서 바꾼 개체가 옛 종류 버킷에 남고,
+// 번호로 가는 목록은 멀쩡한데 **휠만 못 찾는다**(사용자 실측 2026-09-15).
+// 제자리로 옮기려면 먼저 이 구조를 눈으로 봐야 한다.
+//
+// 배치(실측 2026-09-12, `2026-09-12-summon-wheel-research.md` 실측 3):
+//   M = clan + 0x18
+//   M+0x30 버킷 수 · M+0x40 버킷표(버킷 0x100 간격) · M+0x48 슬롯 배열
+//   버킷: [0] u32 개수, +8 부터 {u32 키, u32 슬롯색인} 쌍
+//   슬롯 원소: {해시@+0, 키(u32)@+4, 벡터헤더@+8}
+void cmd_clanindex(mem::Rtti& rt, const mem::Reader& reader) {
+    game::discover_roster(rt, reader);
+    std::uintptr_t clan = 0;
+    if (!game::find_clan_component(reader, rt, &clan)) {
+        std::printf("서버 용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    auto r64 = [&](std::uintptr_t a) {
+        std::uint64_t v = 0;
+        return reader.read_value(a, &v) ? v : 0ull;
+    };
+    auto r32 = [&](std::uintptr_t a) {
+        std::uint32_t v = 0;
+        return reader.read_value(a, &v) ? v : 0u;
+    };
+    // 번호·종을 곁들이려고 명부도 읽는다.
+    std::vector<game::ClanEntry> list;
+    game::read_clan_roster(reader, clan, &list);
+    auto describe = [&](std::uintptr_t rec) {
+        for (const auto& e : list) {
+            if (e.record == rec) {
+                static char buf[160];
+                std::snprintf(buf, sizeof buf, "번호 %llu 종행 %u 타입행 %u %s",
+                              (unsigned long long)e.merc_no, e.row, e.merc_row,
+                              e.display().c_str());
+                return (const char*)buf;
+            }
+        }
+        return "(명부에 없음)";
+    };
+
+    const std::uintptr_t m = clan + 0x18;
+    const std::uint32_t nb = r32(m + 0x30);
+    const std::uintptr_t table = static_cast<std::uintptr_t>(r64(m + 0x40));
+    const std::uintptr_t slots = static_cast<std::uintptr_t>(r64(m + 0x48));
+    std::printf("clan 0x%llX · M 0x%llX · 버킷수 %u · 표 0x%llX · 슬롯 0x%llX\n",
+                (unsigned long long)clan, (unsigned long long)m, nb,
+                (unsigned long long)table, (unsigned long long)slots);
+    if (nb == 0 || nb > 4096 || table < 0x10000 || slots < 0x10000) {
+        std::printf("배치가 말이 안 됩니다 - 안 따라갑니다.\n");
+        return;
+    }
+    for (std::uint32_t b = 0; b < nb; ++b) {
+        const std::uintptr_t bucket = table + static_cast<std::uintptr_t>(b) * 0x100;
+        const std::uint32_t cnt = r32(bucket);
+        if (cnt == 0 || cnt > 31) continue;
+        for (std::uint32_t i = 0; i < cnt; ++i) {
+            const std::uint32_t key = r32(bucket + 8 + i * 8);
+            const std::uint32_t idx = r32(bucket + 0xC + i * 8);
+            const std::uintptr_t elem = static_cast<std::uintptr_t>(
+                r64(slots + static_cast<std::uintptr_t>(idx) * 8));
+            if (elem < 0x10000) continue;
+            const std::uintptr_t vec = elem + 8;
+            const std::uintptr_t begin = static_cast<std::uintptr_t>(r64(vec));
+            // 벡터 머리는 {begin, u32 개수, u32 용량} 이다 - qword 로 읽으면 둘이
+            // 한 덩어리로 붙어 말이 안 되는 수가 나온다(처음에 그렇게 읽었다).
+            const std::uint32_t vcnt = r32(vec + 8);
+            const std::uint32_t vcap = r32(vec + 0xC);
+            std::printf("  타입키 %u (버킷 %u·슬롯 %u) 벡터 0x%llX 개수 %u 용량 %u"
+                        " 여유 %d\n",
+                        key, b, idx, (unsigned long long)begin, vcnt, vcap,
+                        static_cast<int>(vcap) - static_cast<int>(vcnt));
+            if (begin < 0x10000 || vcnt > 256) continue;
+            for (std::uint32_t k = 0; k < vcnt; ++k) {
+                const std::uintptr_t rec = static_cast<std::uintptr_t>(
+                    r64(begin + static_cast<std::uintptr_t>(k) * 8));
+                std::printf("      [%u] 0x%llX  %s\n", k,
+                            (unsigned long long)rec, describe(rec));
+            }
+        }
+    }
+}
+
+// 명부의 소환 판정(`[월드]` 표식)이 **진짜인지** 본다.
+//
+//     clanalive
+//
+// 핸들이 남아 있는데 그 액터가 죽었으면, 게임은 "이미 나와 있다" 로 보고 새로
+// 만들지 않는다 - 부르기가 이동만 시도하다 대상이 없어 **아무 일도 안 일어난다**
+// (사용자 보고 2026-09-15: 특수 탑승물 호출 무반응). 그 상태를 눈으로 보려는 것이다.
+void cmd_clanalive(mem::Rtti& rt, const mem::Reader& reader) {
+    game::discover_roster(rt, reader);
+    std::uintptr_t clan = 0;
+    if (!game::find_clan_component(reader, rt, &clan)) {
+        std::printf("서버 용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::vector<game::ClanEntry> list;
+    if (!game::read_clan_roster(reader, clan, &list)) {
+        std::printf("명부를 읽지 못했습니다.\n");
+        return;
+    }
+    int marked = 0, dead = 0, alive = 0, unknown = 0;
+    for (const auto& e : list) {
+        if (e.handle == 0) continue;
+        ++marked;
+        bool known = false;
+        const bool ok = game::actor_handle_alive(reader, e.handle, &known);
+        if (!known) {
+            ++unknown;
+        } else if (ok) {
+            ++alive;
+        } else {
+            ++dead;
+        }
+        std::printf("  번호 %llu  타입행 %u  핸들 0x%08X  %s  %s\n",
+                    (unsigned long long)e.merc_no, e.merc_row, e.handle,
+                    !known ? "판정불가" : (ok ? "살아있음" : "**죽음**"),
+                    e.label.empty() ? e.name.c_str() : e.label.c_str());
+    }
+    std::printf("[월드] 표식 %d개 - 살아있음 %d · 죽음 %d · 판정불가 %d\n", marked,
+                alive, dead, unknown);
+}
+
+// 명부 레코드 둘을 바이트로 나란히 놓고 다른 칸만 표시한다.
+//
+//     clandiff <번호A> <번호B> [바이트수=0x180]
+//
+// 쓰임: 같은 표에 있는데 하나만 소환되는 경우, 차이가 곧 답이다(2026-09-15,
+// 블랙스타 1000724 vs 와이번 1000605). 종·번호·소유자처럼 **당연히 다른 칸**은
+// 이름을 붙여 둔다 - 그것까지 후보로 세면 눈이 흐려진다.
+void cmd_clandiff(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                  char** argv) {
+    if (argc < 4) {
+        std::printf("사용법: clandiff <번호A> <번호B> [바이트수]\n");
+        return;
+    }
+    const std::uint64_t na = std::strtoull(argv[2], nullptr, 0);
+    const std::uint64_t nb = std::strtoull(argv[3], nullptr, 0);
+    const int bytes = argc > 4 ? static_cast<int>(std::strtol(argv[4], nullptr, 0))
+                               : 0x180;
+    game::discover_roster(rt, reader);
+    std::uintptr_t clan = 0;
+    if (!game::find_clan_component(reader, rt, &clan)) {
+        std::printf("서버 용병단 컴포넌트를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    std::vector<game::ClanEntry> list;
+    if (!game::read_clan_roster(reader, clan, &list)) {
+        std::printf("명부를 읽지 못했습니다.\n");
+        return;
+    }
+    const game::ClanEntry* a = nullptr;
+    const game::ClanEntry* b = nullptr;
+    for (const auto& e : list) {
+        if (e.merc_no == na) a = &e;
+        if (e.merc_no == nb) b = &e;
+    }
+    if (a == nullptr || b == nullptr) {
+        std::printf("번호를 못 찾았습니다 (A %s · B %s)\n",
+                    a != nullptr ? "찾음" : "없음", b != nullptr ? "찾음" : "없음");
+        return;
+    }
+    std::printf("A 번호 %llu 행 %u %s 0x%llX\n", (unsigned long long)a->merc_no,
+                a->row, a->name.c_str(), (unsigned long long)a->record);
+    std::printf("B 번호 %llu 행 %u %s 0x%llX\n", (unsigned long long)b->merc_no,
+                b->row, b->name.c_str(), (unsigned long long)b->record);
+
+    auto label = [](int off) -> const char* {
+        switch (off) {
+            case 0x20: return " (종=캐릭터 행)";
+            case 0x22: return " (0xFFFF 표식)";
+            case 0x28: return " (용병번호)";
+            case 0x148: return " (소유자 행)";
+            default: return "";
+        }
+    };
+    std::vector<std::uint8_t> ba(bytes), bb(bytes);
+    if (!reader.read(a->record, ba.data(), bytes) ||
+        !reader.read(b->record, bb.data(), bytes)) {
+        std::printf("레코드를 못 읽었습니다.\n");
+        return;
+    }
+    int diff = 0;
+    for (int off = 0; off < bytes; off += 4) {
+        std::uint32_t va = 0, vb = 0;
+        std::memcpy(&va, &ba[off], 4);
+        std::memcpy(&vb, &bb[off], 4);
+        if (va == vb) continue;
+        ++diff;
+        std::printf("  +0x%03X  A %08X  B %08X%s\n", off, va, vb, label(off));
+    }
+    std::printf("다른 4바이트 칸 %d개 / %d개\n", diff, bytes / 4);
+}
+
 void cmd_clan(mem::Rtti& rt, const mem::Reader& reader, int argc, char** argv) {
     if (!game::discover_roster(rt, reader)) {
         std::printf("로스터(캐릭터 표)를 못 찾았습니다 - 이름 없이 행 번호만 냅니다.\n");
@@ -2466,6 +2839,98 @@ void dump_status_ints(const mem::Reader& reader, std::uintptr_t base) {
             reader.read_value(base + off, &fv);
             std::printf("  +0x%03zX = %d\n", off, iv);
         }
+    }
+}
+
+// 탈것 휠 진단. 오버레이의 "휠 진단" 버튼과 같은 자리를 **게임을 끄지 않고** 밖에서
+// 본다 - 배포마다 게임을 껐다 켜는 왕복을 없앤다(트러블슈팅 6.21·7.10).
+//
+// 보는 것은 둘이다.
+//  1. 정적 `ReserveSlotInfo` 의 허용 카테고리(`_enableMercenaryList`)
+//  2. 플레이어의 **런타임 예약 슬롯 레코드** - 작동하는 탈것 슬롯과 드래곤 슬롯을
+//     나란히 놓고 어느 칸이 다른지 본다. 원소가 `+0xEA` 한 칸으로 풀렸던 그 구조다.
+void cmd_wheel(const mem::Rtti& rt, const mem::Reader& reader) {
+    using namespace cdtb::game;
+    auto r64 = [&](std::uintptr_t a) {
+        std::uint64_t v = 0;
+        return reader.read_value(a, &v) ? v : 0ull;
+    };
+    auto r32 = [&](std::uintptr_t a) {
+        std::uint32_t v = 0;
+        return reader.read_value(a, &v) ? v : 0u;
+    };
+    auto r16 = [&](std::uintptr_t a) {
+        std::uint16_t v = 0;
+        return reader.read_value(a, &v) ? v : std::uint16_t{0};
+    };
+    auto r8 = [&](std::uintptr_t a) {
+        std::uint8_t v = 0;
+        return reader.read_value(a, &v) ? v : std::uint8_t{0};
+    };
+
+    const std::uintptr_t image = reader.module_base();
+    const std::uintptr_t mgr =
+        static_cast<std::uintptr_t>(r64(image + kSlotMgrGlobalRva));
+    if (mgr < 0x10000) {
+        std::printf("예약슬롯 매니저를 못 읽었다 (전역 0x%llX)\n",
+                    (unsigned long long)(image + kSlotMgrGlobalRva));
+        return;
+    }
+    const int cnt = static_cast<int>(r32(mgr + kMgrCount));
+    const std::uintptr_t arr = static_cast<std::uintptr_t>(r64(mgr + kMgrArray));
+    std::printf("예약슬롯 매니저 0x%llX 개수 %d 배열 0x%llX\n",
+                (unsigned long long)mgr, cnt, (unsigned long long)arr);
+
+    for (int i = 0; i < cnt; ++i) {
+        const std::uintptr_t info =
+            static_cast<std::uintptr_t>(r64(arr + static_cast<std::uintptr_t>(i) * 8));
+        if (info < 0x10000) continue;
+        const std::uint32_t key = r32(info + kRsKey);
+        const std::uintptr_t lst =
+            static_cast<std::uintptr_t>(r64(info + kRsMercList));
+        const std::uint32_t n = r32(info + kRsMercCount);
+        const std::uint32_t cap = r32(info + kRsMercCap);
+        if (n == 0 || n > 64) continue;   // 허용 목록이 있는 슬롯만
+        std::printf("  슬롯[%2d] key %u · usingType %u · 허용 %u개(용량 %u):",
+                    i, key, r8(info + kRsUsingType), n, cap);
+        for (std::uint32_t j = 0; j < n; ++j) {
+            std::printf(" %u", r16(lst + static_cast<std::uintptr_t>(j) * 2));
+        }
+        std::printf("\n");
+    }
+
+    // ---- 런타임 레코드
+    game::equip_discover(rt, reader);
+    game::player_discover(reader);
+    const std::uintptr_t actor = game::player_char();
+    std::printf("player_char = 0x%llX\n", (unsigned long long)actor);
+    if (actor == 0) {
+        std::printf("플레이어를 못 잡았다 - 런타임 슬롯은 건너뛴다\n");
+        return;
+    }
+    const std::uintptr_t sub =
+        static_cast<std::uintptr_t>(r64(actor + kActorSub));
+    const std::uintptr_t sc =
+        sub == 0 ? 0 : static_cast<std::uintptr_t>(r64(sub + kSubSlotComp));
+    if (sc < 0x10000) {
+        std::printf("슬롯 컴포넌트를 못 잡았다 (0x%llX)\n", (unsigned long long)sc);
+        return;
+    }
+    const std::uintptr_t base = static_cast<std::uintptr_t>(r64(sc + kScData));
+    const int n = static_cast<int>(r32(sc + kScCount));
+    std::printf("슬롯컴프 0x%llX 배열 0x%llX 개수 %d\n", (unsigned long long)sc,
+                (unsigned long long)base, n);
+    if (base < 0x10000 || n <= 0 || n > 256) return;
+    for (int i = 0; i < n; ++i) {
+        const std::uintptr_t ent =
+            base + static_cast<std::uintptr_t>(i) * kScStride;
+        const std::uintptr_t rec = ent + kScRec;
+        std::printf("  런타임[%2d] key %u: C8 %u · CA %u · CC %u · D8 %u · DC %u"
+                    " · E0 %u · E8 %u · EA %u · EC %u\n",
+                    i, r16(ent), r16(rec + 0xC8), r16(rec + 0xCA),
+                    r32(rec + 0xCC), r16(rec + 0xD8), r32(rec + 0xDC),
+                    r32(rec + 0xE0), r16(rec + 0xE8), r16(rec + 0xEA),
+                    r16(rec + 0xEC));
     }
 }
 
@@ -3831,6 +4296,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "clan") { cmd_clan(rt, reader, argc, argv); return 0; }
+    if (cmd == "recdump") { cmd_recdump(rt, reader, argc, argv); return 0; }
+    if (cmd == "recdiff") { cmd_recdiff(rt, reader, argc, argv); return 0; }
     if (cmd == "charfind") { cmd_charfind(rt, reader, argc, argv); return 0; }
     if (cmd == "gate") { cmd_gate(rt, reader); return 0; }
     if (cmd == "playable") { cmd_playable(rt, reader); return 0; }
@@ -3882,6 +4349,12 @@ int main(int argc, char** argv) {
     if (cmd == "nofall") { cmd_nofall(rt, reader); return 0; }
     if (cmd == "equipchars") { cmd_equipchars(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
+    if (cmd == "wheel") { cmd_wheel(rt, reader); return 0; }
+    if (cmd == "clandiff") { cmd_clandiff(rt, reader, argc, argv); return 0; }
+    if (cmd == "clanalive") { cmd_clanalive(rt, reader); return 0; }
+    if (cmd == "clanindex") { cmd_clanindex(rt, reader); return 0; }
+    if (cmd == "clanfix") { cmd_clanfix(rt, reader, argc, argv); return 0; }
+    if (cmd == "vehdiff") { cmd_vehdiff(rt, reader, argc, argv); return 0; }
     if (cmd == "itemmap") {
         cmd_itemmap(rt, reader, argc, argv);
         return 0;

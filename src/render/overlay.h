@@ -15,6 +15,12 @@ namespace cdtb::overlay {
 void set_config(const Config& cfg, const std::wstring& ini_path);
 
 // 지금 설정의 부위별 소켓 상한. 비어 있으면 자동으로 걸지 않는다.
+// 메인 탈것 휠에 드래곤·ATAG 를 얹을 것인가. **다음 실행의 시작 지점에서** 걸린다 -
+// 게임이 휠을 만든 뒤에 늘리면 특수 탑승물 호출이 먹통이 되기 때문이다
+// (실측 2026-09-15, TROUBLESHOOTING 3.12).
+bool vehicle_wheel_setting();
+bool set_vehicle_wheel_setting(bool on);
+
 std::vector<Config::SocketCapPart> socket_cap_setting();
 
 // 부위별 소켓 상한 설정을 바꾸고 ini 에 저장한다. 저장에 성공하면 true.

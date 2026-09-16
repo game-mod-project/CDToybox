@@ -289,9 +289,14 @@ Cache g_vehicle;
 Cache g_mercenary;
 Cache g_character;
 // 행 번호 -> 캐릭터 항목 위치. 널 슬롯이 있어 항목 순번과 행 번호가 어긋난다.
+std::atomic<std::uintptr_t> g_char_mgr{0};
+std::atomic<std::uintptr_t> g_veh_mgr{0};
 std::atomic<const std::vector<const RosterEntry*>*> g_char_rows{nullptr};
 std::vector<std::unique_ptr<std::vector<const RosterEntry*>>> g_char_row_versions;
 std::atomic<bool> g_ready{false};
+// 표시명(현지화)이 실제로 붙었는가. 현지화가 카탈로그보다 늦게 올라오면
+// 첫 빌드는 표시명 0개다 - 이 플래그가 false 인 동안 다음 틱에 다시 만든다.
+std::atomic<bool> g_have_labels{false};
 
 }  // namespace
 
@@ -388,11 +393,18 @@ bool read_spawn_table(const mem::Reader& reader, std::uintptr_t manager,
 }
 
 bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (g_ready.load(std::memory_order_acquire)) return true;
+    // 표시명이 아직 안 붙었으면(현지화 지연) 다시 만든다. 목록 자체는 g_ready 로
+    // 이미 보이지만, 라벨이 붙을 때까지 재빌드한다(아이템 표와 동일한 재시도).
+    if (g_ready.load(std::memory_order_acquire) &&
+        g_have_labels.load(std::memory_order_acquire)) {
+        return true;
+    }
 
     std::vector<RosterEntry> v, m, c;
+    std::uintptr_t veh_manager = 0;
     const bool ok_v = build_static_catalog(reader, rtti, kVehicleClass,
-                                           RosterKind::Vehicle, &v);
+                                           RosterKind::Vehicle, &v,
+                                           &veh_manager);
     std::uintptr_t char_manager = 0;
     const bool ok_c = build_static_catalog(reader, rtti, kCharacterClass,
                                            RosterKind::Character, &c,
@@ -407,7 +419,8 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 목록을 못 그리는 것보다 낫다.
     LocSystem sys;
     std::size_t labeled = 0;
-    if (find_loc_system(rtti, reader, &sys)) {
+    const bool has_loc = find_loc_system(rtti, reader, &sys);
+    if (has_loc) {
         labeled += apply_roster_labels(reader, sys, &v);
         labeled += apply_roster_labels(reader, sys, &c);
     }
@@ -435,6 +448,11 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     for (const auto& e : c) {
         if (e.is_companion()) ++companions;
     }
+    // 캐릭터 매니저를 들고 있는다. 고정 전역은 갱신마다 밀리므로(위 주석) RTTI 로
+    // 찾은 이 인스턴스가 정답이고, 탈것 쿨다운처럼 **레코드를 직접 봐야 하는**
+    // 기능이 여기서 받아 간다.
+    g_char_mgr.store(char_manager, std::memory_order_release);
+    g_veh_mgr.store(veh_manager, std::memory_order_release);
     g_vehicle.swap(std::move(v));
     g_character.swap(std::move(c));
     {
@@ -448,6 +466,9 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
         g_char_rows.store(p, std::memory_order_release);
     }
     if (ok_m) g_mercenary.swap(std::move(m));
+    // 표시명이 하나라도 붙었거나 현지화 시스템이 준비됐으면 재시도를 멈춘다.
+    // (현지화가 아직이면 has_loc=false 라 다음 틱에 다시 만든다.)
+    g_have_labels.store(labeled > 0 || has_loc, std::memory_order_release);
     g_ready.store(true, std::memory_order_release);
     log::infof(
         "로스터: 탈것 {}개, 캐릭터 {}개(동반자 {}개), 용병 타입 {}개, 표시명 {}개",
@@ -456,6 +477,14 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
 }
 
 bool roster_ready() { return g_ready.load(std::memory_order_acquire); }
+
+std::uintptr_t roster_char_manager() {
+    return g_char_mgr.load(std::memory_order_acquire);
+}
+
+std::uintptr_t roster_vehicle_manager() {
+    return g_veh_mgr.load(std::memory_order_acquire);
+}
 
 const std::vector<RosterEntry>& vehicle_catalog() {
     return *g_vehicle.live.load(std::memory_order_acquire);

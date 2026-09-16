@@ -65,6 +65,28 @@ std::vector<Config::SocketCapPart> parse_socket_cap_parts(std::string_view v) {
     return out;
 }
 
+// `4883:1,4884:1` 을 지식 목록으로. 번호는 지식 표의 색인이고 레벨은 1 부터다.
+// 레벨 0 은 "안 건다" 라 적을 이유가 없으니 버린다.
+std::vector<Config::KnowKeep> parse_knowledge_keep(std::string_view v) {
+    std::vector<Config::KnowKeep> out;
+    while (!v.empty()) {
+        const std::size_t comma = v.find(',');
+        std::string_view item = trim(v.substr(0, comma));
+        v = (comma == std::string_view::npos) ? std::string_view{}
+                                              : v.substr(comma + 1);
+        if (item.empty()) continue;
+
+        const std::size_t colon = item.find(':');
+        if (colon == std::string_view::npos) continue;
+        const int num = to_int(trim(item.substr(0, colon)), -1);
+        const int lv = to_int(trim(item.substr(colon + 1)), -1);
+        if (num < 0 || num > 65535) continue;
+        if (lv < 1 || lv > 99) continue;
+        out.push_back(Config::KnowKeep{num, lv});
+    }
+    return out;
+}
+
 Config load(const std::wstring& path) {
     Config c;
     std::ifstream in(path);
@@ -97,6 +119,16 @@ Config load(const std::wstring& path) {
             c.socket_cap = (v < 0 || v > 5) ? 0 : v;
         } else if (key == "socket_cap_parts") {
             c.socket_cap_parts = parse_socket_cap_parts(val);
+        } else if (key == "vehicle_wheel_extend") {
+            c.vehicle_wheel_extend = (to_int(val, 0) != 0);
+        } else if (key == "summon_diag") {
+            c.summon_diag = (to_int(val, 0) != 0);
+        } else if (key == "wheel_fill") {
+            c.wheel_fill = (to_int(val, 0) != 0);
+        } else if (key == "wheel_swap_slot") {
+            c.wheel_swap_slot = (to_int(val, 1) != 0);
+        } else if (key == "knowledge_keep") {
+            c.knowledge_keep = parse_knowledge_keep(val);
         } else if (key == "equip_character_row") {
             // 캐릭터 행은 u16 이고 0xFFFF 는 "자동" 이다. 그 밖은 자동으로 본다.
             const int v = to_int(val, -1);
@@ -117,6 +149,16 @@ bool save(const std::wstring& path, const Config& c) {
     out << "show_diagnostics = " << (c.show_diagnostics ? 1 : 0) << "\n";
     out << "; (구) 전 부위 일괄. 부위 목록이 비어 있을 때만 쓴다\n";
     out << "socket_cap = " << c.socket_cap << "\n";
+    out << "; 메인 탈것 휠에 드래곤·ATAG 카테고리를 얹는다(1 = 켬).\n";
+    out << "; 게임이 휠을 만들기 전에 걸어야 하므로 **시작할 때** 걸린다 -\n";
+    out << "; 다 만들어진 뒤에 늘리면 특수 탑승물 호출이 먹통이 된다.\n";
+    out << "vehicle_wheel_extend = " << (c.vehicle_wheel_extend ? 1 : 0) << "\n";
+    out << "; 소환 진단 훅. 조사할 때만 1. 기본 0 (기능이 아니라 조사용이다).\n";
+    out << "summon_diag = " << (c.summon_diag ? 1 : 0) << "\n";
+    out << "; 휠 칸 등록 채우기. 얹기가 고른 종만 '올려 둔 칸' 을 채운다.\n";
+    out << "wheel_fill = " << (c.wheel_fill ? 1 : 0) << "\n";
+    out << "; 얹기가 동반자 칸까지 옮길지. 0 이면 장소 제한만 푼다.\n";
+    out << "wheel_swap_slot = " << (c.wheel_swap_slot ? 1 : 0) << "\n";
     out << "; 부위별 소켓 칸 수. `분류:장비타입=칸수` 를 쉼표로 잇는다.\n";
     out << "; 부위는 아이템표의 (+0xA3, +0x42) 쌍이다 - 갑옷 3:5, 망토 3:75,\n";
     out << "; 투구 24:4, 장갑 22:6, 신발 9:7, 귀걸이 15:8, 목걸이 34:9, 반지 49:10.\n";
@@ -126,6 +168,16 @@ bool save(const std::wstring& path, const Config& c) {
         const auto& p = c.socket_cap_parts[i];
         if (i != 0) out << ",";
         out << p.category << ":" << p.equip_type << "=" << p.want;
+    }
+    out << "\n";
+    out << "; 다시 걸어 줄 지식. `번호:레벨` 을 쉼표로 잇는다.\n";
+    out << "; 지식 쓰기는 세이브를 못 넘어서, 이 목록이 있어야 게임을 다시 켤 때\n";
+    out << "; 사람이 또 누르지 않는다. 화면의 [잊기] 가 이 줄을 비운다.\n";
+    out << "knowledge_keep = ";
+    for (std::size_t i = 0; i < c.knowledge_keep.size(); ++i) {
+        const auto& k = c.knowledge_keep[i];
+        if (i != 0) out << ",";
+        out << k.number << ":" << k.level;
     }
     out << "\n";
     out << "; 장비 창의 캐릭터 선택(캐릭터 행). -1 = 자동(착용 조각 최다). 클리프 0, 데미안 3, 웅카 5.\n";

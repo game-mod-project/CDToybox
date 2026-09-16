@@ -366,6 +366,20 @@ KnowScan know_scan(const mem::Rtti* rtti, const mem::Reader& reader, int realm) 
                    " {}개(보여 주는 것 {}개)",
                    static_cast<int>(s.needs.size()), with_skill, fresh,
                    s.fresh_total, static_cast<int>(s.fresh.size()));
+        // **표의 내용을 로그에도 적는다.** 예전에는 사용자가 화면을 읽어 알려
+        // 주셔야 했다 - 목록·이름·스킬키를 그대로 찍으면 그럴 일이 없다.
+        for (const auto& e : s.needs) {
+            log::infof("  [선행] {}번 \"{}\" 지금 {} / 필요 {} · {}곳{} · 스킬 {}",
+                       e.number, e.name.empty() ? "?" : e.name, e.have_level,
+                       e.need_level, e.wanted_by, e.any_of ? " · 중 하나" : "",
+                       (e.skill_key == 0 || e.skill_key == kNoApplySkill)
+                           ? std::string("없음")
+                           : std::to_string(e.skill_key));
+        }
+        for (const auto& e : s.fresh) {
+            log::infof("  [미습득] {}번 \"{}\" 스킬 {}", e.number,
+                       e.name.empty() ? "?" : e.name, e.skill_key);
+        }
     }
     if (has_loc) {
         for (auto& e : s.needs) {
@@ -586,7 +600,19 @@ KnowRegister register_held(const mem::Reader& reader, int number,
 namespace {
 std::mutex g_auto_mtx;
 std::vector<KnowWant> g_auto;
+std::atomic<KnowAutoPersist> g_auto_persist{nullptr};
+
+// **자물쇠를 놓은 뒤에** 부른다. 훅이 `know_auto_list()` 를 부르는데 그것이
+// 같은 자물쇠를 잡는다 - 안에서 부르면 그 자리에서 멈춘다.
+void auto_persist() {
+    const KnowAutoPersist fn = g_auto_persist.load(std::memory_order_acquire);
+    if (fn != nullptr) fn();
+}
 }  // namespace
+
+void know_auto_persist_hook(KnowAutoPersist fn) {
+    g_auto_persist.store(fn, std::memory_order_release);
+}
 
 void know_auto_upsert(std::vector<KnowWant>* v, int number, int level) {
     if (v == nullptr || number < 0 || level < 1) return;
@@ -601,16 +627,22 @@ void know_auto_upsert(std::vector<KnowWant>* v, int number, int level) {
 }
 
 void know_auto_remember(int number, int level) {
-    std::lock_guard<std::mutex> lk(g_auto_mtx);
-    know_auto_upsert(&g_auto, number, level);
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        know_auto_upsert(&g_auto, number, level);
+    }
+    auto_persist();
 }
 
 void know_auto_forget() {
-    std::lock_guard<std::mutex> lk(g_auto_mtx);
-    if (g_auto.empty()) return;
-    log::infof("지식 자동 재적용 해제: {}개를 잊는다",
-               static_cast<int>(g_auto.size()));
-    g_auto.clear();
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        if (g_auto.empty()) return;
+        log::infof("지식 자동 재적용 해제: {}개를 잊는다",
+                   static_cast<int>(g_auto.size()));
+        g_auto.clear();
+    }
+    auto_persist();
 }
 
 std::vector<KnowWant> know_auto_list() {

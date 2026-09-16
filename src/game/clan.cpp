@@ -563,6 +563,195 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
 }
 
 
+// ------------------------------------------- 휠 색인 고치기 (2026-09-15)
+
+bool clan_component_fast(const mem::Reader& reader, const mem::Rtti& rtti,
+                         bool client, std::uintptr_t* out) {
+    return clan_component_cached(reader, rtti, client, out);
+}
+
+bool reindex_has_room(std::uint32_t count, std::uint32_t cap) {
+    return cap > count;
+}
+
+namespace {
+
+// 색인 벡터 하나. 못 읽으면 begin 이 0 이다.
+struct IdxVec {
+    std::uintptr_t header = 0;   // {begin, u32 개수, u32 용량}
+    std::uintptr_t begin = 0;
+    std::uint32_t count = 0;
+    std::uint32_t cap = 0;
+};
+
+std::uint64_t ird64(const mem::Reader& r, std::uintptr_t a) {
+    std::uint64_t v = 0;
+    return r.read_value(a, &v) ? v : 0;
+}
+std::uint32_t ird32(const mem::Reader& r, std::uintptr_t a) {
+    std::uint32_t v = 0;
+    return r.read_value(a, &v) ? v : 0;
+}
+
+// 타입키 -> 벡터. 없으면 begin 0.
+bool find_type_vec(const mem::Reader& r, std::uintptr_t clan, std::uint32_t key,
+                   IdxVec* out) {
+    const std::uintptr_t m = clan + kClanIndexObj;
+    const std::uint32_t nb = ird32(r, m + kClanIdxBuckets);
+    const std::uintptr_t table = static_cast<std::uintptr_t>(ird64(r, m + kClanIdxTable));
+    const std::uintptr_t slots = static_cast<std::uintptr_t>(ird64(r, m + kClanIdxSlots));
+    if (nb == 0 || nb > kClanIdxMaxBuckets || table < 0x10000 || slots < 0x10000) {
+        return false;
+    }
+    for (std::uint32_t b = 0; b < nb; ++b) {
+        const std::uintptr_t bucket =
+            table + static_cast<std::uintptr_t>(b) * kClanBucketStride;
+        const std::uint32_t cnt = ird32(r, bucket);
+        if (cnt == 0 || cnt > kClanBucketMax) continue;
+        for (std::uint32_t i = 0; i < cnt; ++i) {
+            if (ird32(r, bucket + 8 + i * 8) != key) continue;
+            const std::uint32_t idx = ird32(r, bucket + 0xC + i * 8);
+            const std::uintptr_t elem = static_cast<std::uintptr_t>(
+                ird64(r, slots + static_cast<std::uintptr_t>(idx) * 8));
+            if (elem < 0x10000) return false;
+            IdxVec v;
+            v.header = elem + kClanVecOff;
+            v.begin = static_cast<std::uintptr_t>(ird64(r, v.header));
+            v.count = ird32(r, v.header + 8);
+            v.cap = ird32(r, v.header + 0xC);
+            if (v.begin < 0x10000 || v.count > kClanVecMax) return false;
+            *out = v;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 한 realm 을 손본다.
+void reindex_one(const mem::Reader& r, std::uintptr_t clan, bool dry,
+                 ReindexResult* res) {
+    const std::uintptr_t m = clan + kClanIndexObj;
+    const std::uint32_t nb = ird32(r, m + kClanIdxBuckets);
+    const std::uintptr_t table = static_cast<std::uintptr_t>(ird64(r, m + kClanIdxTable));
+    const std::uintptr_t slots = static_cast<std::uintptr_t>(ird64(r, m + kClanIdxSlots));
+    if (nb == 0 || nb > kClanIdxMaxBuckets || table < 0x10000 || slots < 0x10000) {
+        return;
+    }
+    ++res->realms;
+    for (std::uint32_t b = 0; b < nb; ++b) {
+        const std::uintptr_t bucket =
+            table + static_cast<std::uintptr_t>(b) * kClanBucketStride;
+        const std::uint32_t bcnt = ird32(r, bucket);
+        if (bcnt == 0 || bcnt > kClanBucketMax) continue;
+        for (std::uint32_t i = 0; i < bcnt; ++i) {
+            const std::uint32_t key = ird32(r, bucket + 8 + i * 8);
+            const std::uint32_t idx = ird32(r, bucket + 0xC + i * 8);
+            const std::uintptr_t elem = static_cast<std::uintptr_t>(
+                ird64(r, slots + static_cast<std::uintptr_t>(idx) * 8));
+            if (elem < 0x10000) continue;
+            IdxVec src;
+            src.header = elem + kClanVecOff;
+            src.begin = static_cast<std::uintptr_t>(ird64(r, src.header));
+            src.count = ird32(r, src.header + 8);
+            src.cap = ird32(r, src.header + 0xC);
+            if (src.begin < 0x10000 || src.count == 0 ||
+                src.count > kClanVecMax) {
+                continue;
+            }
+            // **뒤에서부터 본다.** 앞에서 지우면 뒤 칸이 당겨져 색인이 밀린다.
+            for (int k = static_cast<int>(src.count) - 1; k >= 0; --k) {
+                const std::uintptr_t slot =
+                    src.begin + static_cast<std::uintptr_t>(k) * 8;
+                const std::uintptr_t rec =
+                    static_cast<std::uintptr_t>(ird64(r, slot));
+                if (rec < 0x10000) continue;
+                std::uint16_t species = 0xFFFF;
+                if (!r.read_value(rec + kClanRecordRow, &species)) continue;
+                const RosterEntry* e = character_by_row(species);
+                if (e == nullptr || e->merc_row == 0xFFFF) continue;
+                if (e->merc_row == key) continue;   // 제자리다
+                ++res->wrong;
+
+                IdxVec dst;
+                if (!find_type_vec(r, clan, e->merc_row, &dst) ||
+                    !reindex_has_room(dst.count, dst.cap)) {
+                    ++res->no_room;
+                    continue;
+                }
+                if (dry) continue;
+
+                // (1) 갈 벡터 끝에 넣고 개수를 올린다. **넣기가 먼저다** -
+                //     중간에 실패해도 개체가 어느 목록에서도 사라지지 않는다.
+                const std::uint64_t recv = static_cast<std::uint64_t>(rec);
+                if (!mem::safe_write_bytes(
+                        dst.begin + static_cast<std::uintptr_t>(dst.count) * 8,
+                        &recv, sizeof recv)) {
+                    continue;
+                }
+                const std::uint32_t dn = dst.count + 1;
+                if (!mem::safe_write_bytes(dst.header + 8, &dn, sizeof dn)) {
+                    continue;
+                }
+                // (2) 옛 벡터에서 뺀다 - 뒤를 한 칸씩 당기고 개수를 내린다.
+                bool ok = true;
+                for (std::uint32_t t = static_cast<std::uint32_t>(k) + 1;
+                     t < src.count && ok; ++t) {
+                    const std::uint64_t nxt =
+                        ird64(r, src.begin + static_cast<std::uintptr_t>(t) * 8);
+                    ok = mem::safe_write_bytes(
+                        src.begin + static_cast<std::uintptr_t>(t - 1) * 8, &nxt,
+                        sizeof nxt);
+                }
+                const std::uint32_t sn = src.count - 1;
+                if (ok && mem::safe_write_bytes(src.header + 8, &sn, sizeof sn)) {
+                    src.count = sn;
+                    ++res->moved;
+                    log::infof("휠 색인: 번호 {} (종행 {}) 를 타입 {} -> {} 로 옮겼다",
+                               ird64(r, rec + kClanRecordNo), species, key,
+                               e->merc_row);
+                } else {
+                    log::warnf("휠 색인: 옛 벡터에서 빼는 데 실패했다 - 양쪽에"
+                               " 들어간 상태다(번호 {})",
+                               ird64(r, rec + kClanRecordNo));
+                }
+            }
+        }
+    }
+}
+
+}  // namespace
+
+ReindexResult clan_reindex(const mem::Reader& reader, const mem::Rtti& rtti,
+                           bool dry) {
+    ReindexResult res;
+    std::uintptr_t srv = 0, cli = 0;
+    // **캐시된 것만 쓴다.** `find_clan_component` 는 RTTI 힙 스캔이라 10초대이고,
+    // 이 함수는 버튼(렌더 스레드)에서 불린다 - 그대로 부르면 화면이 그만큼 멈춘다
+    // (TROUBLESHOOTING 2.3 을 그대로 다시 밟았다, 사용자 보고 2026-09-15).
+    // 캐시가 비어 있으면 `clan_component_cached` 가 배경 재탐색을 걸고 이번은
+    // 포기한다 - 멈추는 것보다 낫다.
+    //
+    // **다만 포기한 것을 포기했다고 말해야 한다.** 예전엔 그냥 건너뛰어서,
+    // 한쪽만 본 결과가 `어긋남 0` 이라는 깨끗한 숫자로 보고됐다(2026-09-15,
+    // 드래곤 휠 칸 바꾼 직후 클라이언트 명부가 캐시에 없었다).
+    const bool have_srv = clan_component_cached(reader, rtti, false, &srv);
+    if (have_srv) reindex_one(reader, srv, dry, &res);
+    const bool have_cli = clan_component_cached(reader, rtti, true, &cli);
+    if (have_cli) reindex_one(reader, cli, dry, &res);
+    if (res.realms == 0) {
+        res.partial = true;
+        std::snprintf(res.note, sizeof res.note, "%s",
+                      "용병단 컴포넌트를 못 찾았습니다 (월드 밖?)");
+    } else if (!have_srv || !have_cli) {
+        res.partial = true;
+        std::snprintf(res.note, sizeof res.note,
+                      "%s 쪽 명부가 아직 캐시에 없어 건너뛰었습니다"
+                      " - 잠시 뒤 다시 한 번 눌러 주십시오",
+                      have_srv ? "클라이언트" : "서버");
+    }
+    return res;
+}
+
 std::vector<std::string> clan_scan_classes() { return {kClanClass, kClanClientClass}; }
 
 }  // namespace cdtb::game
