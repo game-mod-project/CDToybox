@@ -96,6 +96,16 @@ constexpr std::uint64_t kErrFnRva = 0x20170E0;
 //   +0x30 버킷 수 · +0x34 0이면 없음 · +0x40 버킷표(0x100 간격) · +0x48 레코드
 //   버킷: [0] 항목 수 · +8 부터 {u32 키, u32 색인}
 //   레코드: +0x04 u16 키 · +0x08 항목배열 · +0x10 개수
+// **실제 소환 배달부** (2026-09-16). `0x2A22DE0` 의 꼬리는 분기가 없는
+// 직선이라 늘 성공(0)을 쓴다 - 일은 전부 여기로 넘어간다.
+//
+//   0x2A23194  rcx = r15 ([r14+8])  · rdx = rsp+0x38 (작은 서술자)
+//   0x2A2318C  r8  = 0x382A30 결과  · r9  = rbp+0x280 (0x2390F40 이 만든 것)
+//   0x2A23197  call 0x292B040       <- 여기
+//
+// 말은 휠에서 불러 **실제로 나온다**(사용자 실측 2026-09-16). 드래곤은 여기까지
+// 똑같이 오는데(코드=0) 안 나온다. 그러니 갈리는 자리는 이 함수 안이다.
+constexpr std::uint64_t kDispRva = 0x292B040;
 constexpr std::uint64_t kFindRva = 0x2096C30;
 constexpr std::uint64_t kEmptyRecRva = 0x6BB80C0;
 constexpr std::uintptr_t kMapOff = 0x18;
@@ -143,6 +153,12 @@ using FindFn = void*(__fastcall*)(void*, std::uint64_t, std::uint64_t,
                                   std::uint64_t);
 FindFn g_orig_find = nullptr;
 void* g_find_target = nullptr;
+// 소환 배달부. 스택 인자 둘은 호출자 프레임에 그대로 있으므로 레지스터 넷만
+// 받아 흘려보낸다(다른 디투어와 같은 방식).
+using DispFn = void*(__fastcall*)(void*, void*, void*, void*);
+DispFn g_orig_disp = nullptr;
+void* g_disp_target = nullptr;
+std::atomic<int> g_disp_budget{60};
 // 목록까지 통째로 찍으므로 예산을 작게 잡는다.
 std::atomic<int> g_find_budget{24};
 // 휠 칸 등록 채우기. 종행을 못 박지 않으면 빈 말 칸까지 채워 버린다.
@@ -353,6 +369,23 @@ void fill_category_slots(std::uintptr_t owner, std::uint32_t cat,
 // **마지막 관문의 조회**. 빈손이면 드래곤이 받는 4205559856 이 나온다.
 // 무엇을 찾고 있었는지와, 그 카테고리 목록에 실제로 무엇이 들어 있는지를
 // 나란히 찍는다. 원본을 그대로 부르고 결과만 읽는다.
+// **소환 배달부**. 말과 드래곤을 같은 자로 재려고 인자와 반환을 그대로 찍는다.
+// 읽기만 한다.
+void* __fastcall det_disp(void* a1, void* a2, void* a3, void* a4) {
+    const void* ret = _ReturnAddress();
+    void* r = g_orig_disp(a1, a2, a3, a4);
+    if (g_disp_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+        log::infof("소환배달(0x292B040): 호출자=+0x{:X} a1=0x{:X} a2=0x{:X}"
+                   " a3=0x{:X} a4=0x{:X} -> 0x{:X}",
+                   caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
+                   reinterpret_cast<std::uintptr_t>(a2),
+                   reinterpret_cast<std::uintptr_t>(a3),
+                   reinterpret_cast<std::uintptr_t>(a4),
+                   reinterpret_cast<std::uintptr_t>(r));
+    }
+    return r;
+}
+
 void* __fastcall det_find(void* owner, std::uint64_t cat, std::uint64_t row,
                           std::uint64_t a4) {
     if (wheel_fill_enabled()) {
@@ -427,6 +460,14 @@ bool dragondiag_install(const mem::Reader& reader) {
         g_errfn_target = nullptr;
     }
 
+    g_disp_target = reinterpret_cast<void*>(g_base + kDispRva);
+    const bool disp_ok = mem::hook_install(
+        g_disp_target, &det_disp, reinterpret_cast<void**>(&g_orig_disp));
+    if (!disp_ok) {
+        log::errorf("소환배달 후킹 실패 (RVA 0x{:X})", kDispRva);
+        g_disp_target = nullptr;
+    }
+
     g_find_target = reinterpret_cast<void*>(g_base + kFindRva);
     const bool find_ok = mem::hook_install(
         g_find_target, &det_find, reinterpret_cast<void**>(&g_orig_find));
@@ -492,11 +533,13 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     g_installed.store(true, std::memory_order_release);
     log::infof(
-        "소환 진단 v10 - **등록조회 0x{:X} {}** · 거부코드 0x{:X} {} ·"
+        "소환 진단 v11 - **소환배달 0x{:X} {}** · 등록조회 0x{:X} {} ·"
+        " 거부코드 0x{:X} {} ·"
         " 휠함수 0x{:X} {} · 휠소환 0x{:X} {} · 다른경로 0x{:X} {} ·"
         " 게이트 0x{:X} {} · 스폰 0x{:X} {}"
-        " (드래곤을 누르면 '등록조회' 줄에 카테고리 목록이 통째로 찍힌다)",
-        kFindRva, find_ok ? "후킹" : "실패", kErrFnRva,
+        " (말과 드래곤을 하나씩 부르면 '소환배달' 줄이 나란히 찍힌다)",
+        kDispRva, disp_ok ? "후킹" : "실패", kFindRva,
+        find_ok ? "후킹" : "실패", kErrFnRva,
         errfn_ok ? "후킹" : "실패", kWheelFnRva,
         wheelfn_ok ? "후킹" : "실패", kCallFnRva,
         callfn_ok ? "후킹" : "실패", kAltFnRva, altfn_ok ? "후킹" : "실패",
@@ -504,7 +547,7 @@ bool dragondiag_install(const mem::Reader& reader) {
         spawn_ok ? "후킹" : "실패");
     (void)notify_ok;
     return gate_ok || spawn_ok || callfn_ok || wheelfn_ok || altfn_ok ||
-           errfn_ok || find_ok;
+           errfn_ok || find_ok || disp_ok;
 }
 
 }  // namespace cdtb::game
