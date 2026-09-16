@@ -461,14 +461,35 @@ void* __fastcall det_spawn(void* rcx, void* out, std::uint32_t r8, void* r9,
     void* r = g_orig_spawn(rcx, out, r8, r9, a5);
     std::uint32_t result = 0xFFFFFFFFu;
     if (out != nullptr) std::memcpy(&result, out, sizeof(result));
+    // **관문 통과 직후의 가상 호출 대상을 같이 찍는다** (2026-09-16).
+    //
+    //   0x2A23050  rax = [r14]            r14 = [arg1+8]
+    //   0x2A23065  call qword ptr [rax + 0x208]
+    //
+    // 이 자리가 슬롯에 대한 **동작(호출 모션)을 거는 곳**으로 보인다.
+    // 드래곤과 말이 서로 다른 함수로 가는지가 갈림이다. 새 훅을 걸지 않고
+    // 이미 안전한 이 훅에서 값만 읽는다 - 읽기뿐이라 인자 위험이 없다.
+    std::uintptr_t act_fn = 0;
+    {
+        std::uintptr_t r14 = 0;
+        std::uintptr_t vt = 0;
+        if (mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(rcx) + 8,
+                                 &r14, sizeof r14) &&
+            r14 > 0x10000 &&
+            mem::safe_read_bytes(r14, &vt, sizeof vt) && vt > 0x10000) {
+            mem::safe_read_bytes(vt + 0x208, &act_fn, sizeof act_fn);
+        }
+    }
     const long seq = g_spawn_seq.fetch_add(1, std::memory_order_relaxed);
     if (g_spawn_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
         // **게이트의 "결과" 와 뜻이 다르다.** 게이트는 오류 코드(0 = 오류 없음)
         // 이고, 여기 out 자리는 만들어진 객체다 - 큰 값이면 만든 것, 0 이면 못
         // 만든 것이다. 같은 이름으로 찍다가 거꾸로 읽었다(2026-09-15).
-        log::infof("스폰0x2A22DE0[{}]: 호출자=+0x{:X} r8={} 결과물=0x{:X} ({})",
+        log::infof("스폰0x2A22DE0[{}]: 호출자=+0x{:X} r8={} 결과물=0x{:X} ({})"
+                   " · 동작함수=+0x{:X}",
                    seq, caller_rva(ret), r8, result,
-                   result != 0 ? "만듦" : "없음");
+                   result != 0 ? "거부" : "통과",
+                   act_fn == 0 ? 0 : caller_rva(reinterpret_cast<void*>(act_fn)));
     }
     return r;
 }
