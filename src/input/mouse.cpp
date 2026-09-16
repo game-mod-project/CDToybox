@@ -238,10 +238,10 @@ void mouse_sync(bool overlay_visible) {
                raw_mouse_flags_text());
     // 진단(기능 없음): 좌표 원천이 둘인 프레임이 얼마나 되고 얼마나 어긋났는가.
     // 어긋남이 0 이면 "원천 둘" 가설은 폐기한다.
-    log::infof("마우스 좌표 원천: 우리만 {} 프레임, 둘 다 {} 프레임 (그중 어긋남 {}, "
-               "최대 {:.1f}px)",
-               g_n_pos_ours_only, g_n_pos_both, g_n_pos_disagree,
-               static_cast<double>(g_max_disagree));
+    log::infof("마우스 좌표: 백엔드가 넣은 프레임 {} (그중 우리 값과 달랐을 것 {}, "
+               "최대 {:.1f}px - 우리는 안 넣었다), 우리가 넣은 프레임 {}",
+               g_n_pos_both, g_n_pos_disagree,
+               static_cast<double>(g_max_disagree), g_n_pos_ours_only);
 }
 
 void mouse_feed_frame() {
@@ -321,11 +321,17 @@ void mouse_feed_frame() {
     if (::ScreenToClient(hwnd, &client)) {
         const float ours_x = static_cast<float>(client.x);
         const float ours_y = static_cast<float>(client.y);
-        // 진단만: 백엔드가 이번 프레임에 이미 넣은 좌표와 견준다(기능 영향 없음).
+        // 백엔드가 이번 프레임에 이미 좌표를 넣었으면 우리는 **넣지 않는다**.
+        // 둘이 들어가면 최종 값을 큐 도착 순서가 정하고, 그 순서는 프레임마다
+        // 뒤바뀐다(filter.h should_inject_mouse_pos 참조).
         float bx = 0.0f;
         float by = 0.0f;
-        if (backend_queued_pos(&bx, &by)) {
+        const bool backend_has = backend_queued_pos(&bx, &by);
+        if (backend_has) {
             ++g_n_pos_both;
+            // 진단: 넣었더라면 얼마나 어긋났을지. 고친 뒤 이 수가 그대로면
+            // "백엔드와 우리가 다른 순간을 잰다" 는 사실이 계속 참이라는 뜻이고,
+            // 우리가 안 넣으므로 더는 화면에 영향이 없다.
             const float dx = bx - ours_x;
             const float dy = by - ours_y;
             const float dist = std::sqrt(dx * dx + dy * dy);
@@ -337,7 +343,9 @@ void mouse_feed_frame() {
         } else {
             ++g_n_pos_ours_only;
         }
-        io.AddMousePosEvent(ours_x, ours_y);
+        if (should_inject_mouse_pos(backend_has)) {
+            io.AddMousePosEvent(ours_x, ours_y);
+        }
     }
     if (!dead) return;   // 창 메시지가 살아 있으면 백엔드가 넣는다 - 답을 기다리는 raw 는 남는다
     feed_held(io);

@@ -177,3 +177,18 @@ TEST(decode_raw_mouse_buttons_and_wheel) {
     CHECK_EQ(d.hwheel, 0);
     CHECK_EQ(d.down, 0u);
 }
+
+// ------------------------------------------------- 좌표 주입은 백엔드에 양보한다
+// 실측(2026-09-16 전투): 백엔드가 **모든 프레임**에 좌표를 넣고 있었고, 우리가
+// 덧붙인 좌표와 2136 프레임 중 433 프레임이 어긋났다(최대 59.8px). 둘 다 커서를
+// 재지만 **잰 순간이 달라** 매 프레임 다른 값이 나오고, 어느 쪽이 최종값이 될지는
+// 큐 도착 순서가 정한다 - 그래서 떨림·굳음·의도치 않은 드래그가 함께 났다.
+TEST(pos_injection_yields_when_backend_already_queued) {
+    CHECK(!cdtb::input::should_inject_mouse_pos(true));
+}
+
+// 백엔드가 조용한 프레임(마우스룩에서 WM_MOUSEMOVE 가 끊긴 경우)에는 우리가
+// 넣어야 한다 - 그게 2026-09-12 에 고친 "좌표가 멎는다" 의 해결이다.
+TEST(pos_injection_covers_a_silent_backend) {
+    CHECK(cdtb::input::should_inject_mouse_pos(false));
+}

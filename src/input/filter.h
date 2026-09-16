@@ -60,4 +60,16 @@ struct RawMouseDecoded {
 };
 RawMouseDecoded decode_raw_mouse(unsigned button_flags, unsigned short button_data);
 
+// 이번 프레임에 우리가 커서 좌표를 ImGui 에 넣어야 하는가.
+//
+// 백엔드가 이미 넣었으면 **넣지 않는다.** 한 프레임에 좌표 이벤트가 둘이면 최종
+// 값을 큐 도착 순서가 정하는데, 그 순서는 렌더·펌프 스레드 타이밍이라 프레임마다
+// 뒤바뀐다. 둘 다 커서를 재지만 잰 순간이 달라 값이 다르다(실측 2026-09-16 전투:
+// 2136 프레임 중 433 프레임 어긋남, 최대 59.8px). 그러면 좌표가 두 자리를 오가고
+// (떨림), 뒤로 갔다 오고(굳음), MouseDelta 가 그만큼 튄다(의도치 않은 드래그).
+//
+// 백엔드가 조용한 프레임에는 우리가 넣는다 - 그것이 2026-09-12 에 고친 "마우스룩
+// 중에 ImGui 좌표가 멎는다" 의 해결이고, 그 경로는 그대로 남는다.
+bool should_inject_mouse_pos(bool backend_queued_this_frame);
+
 }  // namespace cdtb::input

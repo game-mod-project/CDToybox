@@ -88,6 +88,10 @@ bool raw_answered(unsigned long long raw_at_ms, unsigned long long last_legacy_m
     return last_legacy_ms != 0 && last_legacy_ms + slack_ms >= raw_at_ms;
 }
 
+bool should_inject_mouse_pos(bool backend_queued_this_frame) {
+    return !backend_queued_this_frame;
+}
+
 RawMouseDecoded decode_raw_mouse(unsigned button_flags, unsigned short button_data) {
     RawMouseDecoded d;
     // RI_MOUSE_*: 버튼 b(0 왼 1 오른 2 가운데 3 X1 4 X2)의 눌림 비트는 1<<(2b),
