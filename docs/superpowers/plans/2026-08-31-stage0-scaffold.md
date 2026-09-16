@@ -1,3 +1,7 @@
+> **[2026-09-16] 구현 완료.** 이 계획의 산출물(프록시 진입 · D3D12 훅 · ImGui
+> 오버레이 · 영역 스캐너 골대)은 전부 들어왔다. 지금 상태는 `docs/STATUS.md`
+> §1.1 · §1.2 를 본다. **아래 체크박스는 실행 당시 안 찍었다** — 미완으로 읽지 말 것.
+
 # CDToybox 0단계 구현 계획 — 오버레이 + 스캐너 골대
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
