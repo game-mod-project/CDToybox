@@ -230,3 +230,36 @@ TEST(escape_road_differs_copies_only_a_real_group) {
 }
 
 }  // namespace
+
+// ---------------------------------------- 같은 종에 레코드가 여럿일 때 (2026-09-16)
+//
+// 드래곤이 실제로 그랬다 - `Riding_Dragon_1` 레코드가 둘이고 휠에 올라가 있던
+// 쪽이 빈 껍데기(생명 1)였다. 여기서 고르기를 틀리면 소환은 되는데 스탯이 0 이라
+// 완결되지 않는다.
+
+TEST(wheel_fill_better_prefers_the_one_with_real_hp) {
+    // 실측값 그대로: 1000483(생명 1 · 성장치 1) vs 1000724(생명 2500 · 성장치 30)
+    CHECK(cdtb::game::wheel_fill_better(2500, 30, 1, 1));
+    CHECK(!cdtb::game::wheel_fill_better(1, 1, 2500, 30));
+}
+
+TEST(wheel_fill_better_breaks_ties_with_growth) {
+    CHECK(cdtb::game::wheel_fill_better(100, 30, 100, 5));
+    CHECK(!cdtb::game::wheel_fill_better(100, 5, 100, 30));
+}
+
+TEST(wheel_fill_better_keeps_the_first_when_equal) {
+    // 완전히 같으면 거짓 - 먼저 본 것을 유지해 순서가 흔들리지 않게 한다.
+    CHECK(!cdtb::game::wheel_fill_better(100, 5, 100, 5));
+    CHECK(!cdtb::game::wheel_fill_better(0, 0, 0, 0));
+}
+
+TEST(wheel_fill_better_treats_the_default_sentinel_as_healthy) {
+    // 와이번·A.T.A.G. 는 생명 칸에 **-1**(게임이 정한다)을 쓰는데 스탯이 정상으로
+    // 뜬다(실측). 부호 그대로 비교하면 -1 이 껍데기의 1 보다 낮게 깔려
+    // **껍데기를 고르게 된다.** 처음 구현이 그랬고 이 시험이 잡았다.
+    CHECK(cdtb::game::wheel_fill_better(-1, 30, 1, 1));
+    CHECK(!cdtb::game::wheel_fill_better(1, 1, -1, 30));
+    // 진짜 숫자끼리는 그대로 큰 쪽이 낫다.
+    CHECK(cdtb::game::wheel_fill_better(2500, 30, 450, 30));
+}

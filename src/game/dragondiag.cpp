@@ -354,6 +354,11 @@ void dump_category_list(std::uintptr_t owner, std::uint32_t cat) {
 
 // **지정한 종행의 항목만** 골라 휠 칸을 채운다. 조회가 바로 뒤에 일어나므로
 // 조회가 묻는 칸 번호(`want`)를 그대로 적는다.
+//
+// **종이 같은 항목이 여럿일 수 있다** - 드래곤이 그랬다(1000483 생명 1 ·
+// 1000724 생명 2500). 종만 보고 전부 올리면 조회가 **빈 껍데기를 집어** 소환이
+// 스탯 0 으로 끝난다. 그래서 종마다 **제일 멀쩡한 하나만** 올리고, 같은 종의
+// 나머지는 **내린다**(원래 값이 0xFFFF 였으므로 되돌리는 셈이다).
 void fill_category_slots(std::uintptr_t owner, std::uint32_t cat,
                          std::uint16_t want) {
     const std::uint16_t* fill_rows = nullptr;
@@ -363,19 +368,59 @@ void fill_category_slots(std::uintptr_t owner, std::uint32_t cat,
     std::uintptr_t rec = 0;
     std::uint32_t cnt = 0;
     if (!find_category_list(owner, cat, &arr, &cnt, &rec)) return;
-    for (std::uint32_t k = 0; k < cnt; ++k) {
-        std::uintptr_t ent = 0;
-        if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
-        std::uint16_t slot = 0xFFFF;
-        std::uint16_t sp = 0xFFFF;
-        if (!mem::safe_read_bytes(ent + kEntrySlot, &slot, sizeof slot)) continue;
-        if (!mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp)) continue;
-        if (!wheel_fill_wanted(slot, sp, fill_rows, n)) continue;
-        if (!mem::safe_write_bytes(ent + kEntrySlot, &want, sizeof want)) continue;
-        if (g_fill_log_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-            log::infof("휠 칸 등록: 종행 {} 를 카테고리 {} 의 칸 {} 에 올렸다"
-                       " (항목 0x{:X})",
-                       sp, cat, want, ent);
+
+    for (int r = 0; r < n; ++r) {
+        const std::uint16_t row = fill_rows[r];
+        // 1차: 이 종의 항목 중 제일 나은 것을 고른다. **쓰기가 없다.**
+        std::uintptr_t best = 0;
+        std::int32_t best_hp = 0;
+        std::int32_t best_grow = 0;
+        bool have = false;
+        for (std::uint32_t k = 0; k < cnt; ++k) {
+            std::uintptr_t ent = 0;
+            if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
+            std::uint16_t sp = 0xFFFF;
+            if (!mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp)) continue;
+            if (sp != row) continue;
+            std::int32_t hp = 0;
+            std::int32_t grow = 0;
+            mem::safe_read_bytes(ent + kEntryHp, &hp, sizeof hp);
+            mem::safe_read_bytes(ent + kEntryGrow, &grow, sizeof grow);
+            if (!have || wheel_fill_better(hp, grow, best_hp, best_grow)) {
+                best = ent;
+                best_hp = hp;
+                best_grow = grow;
+                have = true;
+            }
+        }
+        if (!have) continue;
+
+        // 2차: 고른 것만 올리고 같은 종의 나머지는 내린다.
+        const std::uint16_t none = 0xFFFF;
+        for (std::uint32_t k = 0; k < cnt; ++k) {
+            std::uintptr_t ent = 0;
+            if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
+            std::uint16_t sp = 0xFFFF;
+            std::uint16_t slot = 0xFFFF;
+            if (!mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp)) continue;
+            if (sp != row) continue;
+            if (!mem::safe_read_bytes(ent + kEntrySlot, &slot, sizeof slot)) continue;
+            const std::uint16_t put = (ent == best) ? want : none;
+            if (slot == put) continue;
+            // 사용자가 손수 올려 둔 **다른 종**은 안 건드린다(위 `sp != row`).
+            // 같은 종 안에서는 우리가 정리한다 - 안 그러면 껍데기가 남는다.
+            if (!mem::safe_write_bytes(ent + kEntrySlot, &put, sizeof put)) continue;
+            if (g_fill_log_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+                if (ent == best) {
+                    log::infof("휠 칸 등록: 종행 {} 항목 0x{:X} 를 칸 {} 에"
+                               " 올렸다 (생명 {} 성장치 {})",
+                               sp, ent, put, best_hp, best_grow);
+                } else {
+                    log::infof("휠 칸 등록: 종행 {} 항목 0x{:X} 를 내렸다"
+                               " (같은 종의 더 나은 것을 골랐다)",
+                               sp, ent);
+                }
+            }
         }
     }
 }
