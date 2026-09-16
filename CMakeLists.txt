@@ -81,6 +81,7 @@ add_library(cdtoybox SHARED
     src/render/gates.cpp
     src/render/layout_table.cpp
     src/render/ui_persist_state.cpp
+    src/render/ui_persist.cpp
     src/render/layout.cpp
     src/render/log_filter.cpp
     src/render/log_view.cpp

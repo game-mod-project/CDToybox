@@ -1,3 +1,4 @@
+#include "render/ui_persist.h"
 #include "render/grant_panel.h"
 
 #include <windows.h>  // GetTickCount64
@@ -106,7 +107,8 @@ void draw_sockets(const game::ItemCatalogEntry* item) {
     if (g_socket_open > cap) g_socket_open = cap;
     for (int i = cap; i < game::kGiveMaxSockets; ++i) g_socket_keys[i] = 0;
 
-    if (!ImGui::CollapsingHeader("소켓 (잠금 없이 열어서 줍니다)")) return;
+    if (!collapsing_header("grant.socket",
+                           "소켓 (잠금 없이 열어서 줍니다)")) return;
     ImGui::Indent();
 
     ImGui::TextUnformatted("열 칸 수");
@@ -239,7 +241,7 @@ void draw_extras(const game::ItemCatalogEntry* item) {
     if (g_temper > cap_t) g_temper = cap_t;
     if (g_sharpness > cap_s) g_sharpness = cap_s;
 
-    if (!ImGui::CollapsingHeader("담금질 · 장비 연마")) return;
+    if (!collapsing_header("grant.temper", "담금질 · 장비 연마")) return;
     ImGui::Indent();
 
     if (cap_t > 0) {
@@ -608,7 +610,7 @@ void draw_grant_panel(bool* open) {
     // --- 고급: 세션 고르기 ------------------------------------------
     // 자동 선택이 맞는 것을 실측으로 확인했으므로 접어 둔다. 틀릴
     // 때만 열면 된다.
-    if (ImGui::CollapsingHeader("고급")) {
+    if (collapsing_header("grant.advanced", "고급")) {
         const auto& msg = game::spawn_message();
         if (msg.handler != 0) {
             ImGui::TextDisabled("바닥 스폰 ID %u · 처리기 0x%llX", msg.id,

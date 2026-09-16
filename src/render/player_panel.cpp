@@ -1,3 +1,4 @@
+#include "render/ui_persist.h"
 #include "render/player_panel.h"
 
 #include <imgui.h>
@@ -29,7 +30,8 @@ namespace {
 
 // 스킬 포인트(어비스 결속). 기술 창의 우상단 넷째 카운터다.
 void draw_skill_bond(const mem::Reader& reader) {
-    if (!ImGui::CollapsingHeader("스킬 포인트 (어비스 결속)")) return;
+    if (!collapsing_header("player.skillpoint",
+                           "스킬 포인트 (어비스 결속)")) return;
 
     if (!game::knowledge_ready()) {
         ImGui::TextDisabled("월드에 들어가면 지식 컴포넌트를 잡습니다 (자동).");
@@ -125,7 +127,7 @@ namespace {
 // 선행 지식**이고, 판정은 `배운지식표[번호].레벨 >= 필요레벨` 한 줄이다(실측).
 // 여기서는 먼저 **읽기만** 해서 "무엇이 모자란가" 를 보여 주고, 배우기는 확인을 받는다.
 void draw_knowledge(const mem::Reader& reader) {
-    if (!ImGui::CollapsingHeader("지식 (선행 조건)")) return;
+    if (!collapsing_header("player.knowledge", "지식 (선행 조건)")) return;
 
     static game::KnowScan s_scan;
     static Notice s_note;
@@ -465,8 +467,8 @@ void draw_knowledge(const mem::Reader& reader) {
 // 이름이라, 캐릭터별 노드(Knowledge_Kliff_MpFire 등)를 써도 소용이 없다 -
 // 그것으로 여러 번 헛돌았다.
 void draw_elements(const mem::Reader& reader) {
-    if (!ImGui::CollapsingHeader("원소 (어비스 관문 없이 습득)",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!collapsing_header("player.element",
+                           "원소 (어비스 관문 없이 습득)")) {
         return;
     }
 
@@ -520,7 +522,7 @@ void draw_elements(const mem::Reader& reader) {
 // 스킬 강화 조건 관문. **게임 코드에 바이트를 쓴다** - 다른 치트들과 성격이 다르므로
 // 그 사실을 화면이 먼저 말한다.
 void draw_skill_gates() {
-    if (!ImGui::CollapsingHeader("스킬 강화 조건 무시")) return;
+    if (!collapsing_header("player.skillgate", "스킬 강화 조건 무시")) return;
 
     // **누르기 전에** 그 자리를 한 번 본다. 안 그러면 원본이 다른 빌드(게임 갱신)에서
     // 첫 클릭이 아무 반응 없이 먹히고, 빨간 줄은 다음 프레임에야 뜬다. 이미 확인한
@@ -581,7 +583,8 @@ void draw_skill_gates() {
 // 자기 전용 슬롯에만 들어간다. 그 전용 슬롯이 스토리로 채워지는 자리다.
 // 여기서는 메인 휠의 목록에 그 카테고리를 얹는다. 자세한 근거는 reserveslot.h.
 void draw_vehicle_wheel(const mem::Reader& reader) {
-    if (!ImGui::CollapsingHeader("탈것 휠 (드래곤·ATAG 슬롯 우회)")) return;
+    if (!collapsing_header("player.wheel",
+                           "탈것 휠 (드래곤·ATAG 슬롯 우회)")) return;
 
     static Notice s_note;
     const game::WheelState w = game::wheel_state(reader);

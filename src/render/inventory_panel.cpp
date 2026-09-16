@@ -1,3 +1,4 @@
+#include "render/ui_persist.h"
 #include "render/inventory_panel.h"
 
 #include <imgui.h>
@@ -334,7 +335,7 @@ std::vector<game::SocketCapRule> rules_from_ui() {
 // ① 기본 슬롯을 한 칸(+0x1A)만 보고 유도해 가방에서 240(정답 50)이 나왔고
 // ② 목표 기본값이 999 인데 하드 상한이 없었기 때문이다.
 void draw_bag_expand() {
-    if (!ImGui::CollapsingHeader("가방·보관함 용량")) return;
+    if (!collapsing_header("inv.capacity", "가방·보관함 용량")) return;
 
     // **종류마다 목표를 따로 둔다.** 예전에는 슬라이더 하나에 "보관함도 함께"
     // 체크였는데, 상한을 종류별로 빼 놓고 목표는 하나라 실제로는 종류별 조절이
@@ -551,7 +552,7 @@ void draw_bag_expand() {
 }
 
 void draw_socket_cap() {
-    if (!ImGui::CollapsingHeader("소켓 상한")) return;
+    if (!collapsing_header("inv.socketcap", "소켓 상한")) return;
     ImGui::Indent();
 
     if (g_parts.empty() || g_parts_cat_ptr != game::item_catalog().data()) {
