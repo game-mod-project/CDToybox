@@ -475,6 +475,24 @@ bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
 // 사용자가 직접 누른 것을 그대로 되풀이할 뿐이다 - 스스로 값을 정하지 않는다.
 void bag_auto_set(std::span<const int> targets, int branch);
 void bag_auto_clear();      // 되돌리기와 화면 체크 해제가 부른다
+
+// **설정에 남겨 게임을 껐다 켜도 살아남게 한다.** 자동 재적용은 프로세스
+// 메모리에만 살아서, 예전에는 게임을 다시 켜면 용량이 통째로 사라졌다 - 세이브에
+// 남는 칸(+0x16)은 새 산술이 안 읽어 더는 쓰지 않기 때문이다(사용자 보고
+// 2026-09-16). 지식(`know_auto_*`)과 같은 방식이다.
+struct BagWant {
+    int kind;     // 게임의 종류 번호(색인이 아니다 - 표 순서가 바뀌어도 안전)
+    int target;
+};
+std::vector<BagWant> bag_auto_list();
+
+// ini 에서 되살린다. `bag_auto_set` 과 달리 **지금 세대를 소모하지 않는다** -
+// 시작할 때는 아직 인벤토리가 없어서, 처음 잡히는 그것이 대상이어야 한다.
+void bag_auto_restore(std::span<const BagWant> want, int branch);
+
+// 목록이 바뀔 때마다 부른다(설정 파일에 남기라는 뜻). 되살린 뒤에 건다 -
+// 먼저 걸면 되살리는 동안 같은 내용을 파일에 몇 번씩 다시 쓴다.
+void bag_auto_persist_hook(void (*fn)());
 bool bag_auto_on();
 // **자동 복구는 없다.** 새 산술이 `+0x16` 을 안 읽으므로 낡은 합계는 더 이상
 // 아무것도 막지 않는다. 그 칸을 쓰는 것은 **세이브에 남는 유일한 쓰기**라, 기능적

@@ -7,6 +7,11 @@
 namespace cdtb::config {
 namespace {
 
+// 화면 상한. `inventory.h` 의 표와 같은 값인데 core 는 game 을 모르므로 여기
+// 적는다 - ini 를 손으로 고쳐 엔진 천장(732)을 넘기면 세이브가 깨진다.
+constexpr int kBagScreenCap = 700;
+
+
 std::string_view trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) {
         s.remove_prefix(1);
@@ -87,6 +92,28 @@ std::vector<Config::KnowKeep> parse_knowledge_keep(std::string_view v) {
     return out;
 }
 
+std::vector<Config::BagKeep> parse_bag_keep(std::string_view v) {
+    std::vector<Config::BagKeep> out;
+    while (!v.empty()) {
+        const std::size_t comma = v.find(',');
+        std::string_view item = trim(v.substr(0, comma));
+        v = (comma == std::string_view::npos) ? std::string_view{}
+                                              : v.substr(comma + 1);
+        if (item.empty()) continue;
+
+        const std::size_t colon = item.find(':');
+        if (colon == std::string_view::npos) continue;
+        const int kind = to_int(trim(item.substr(0, colon)), -1);
+        const int target = to_int(trim(item.substr(colon + 1)), -1);
+        if (kind < 0 || kind > 65535) continue;
+        // 0 은 "이 종류는 안 건드린다" 라 유효하다. 위쪽은 화면 상한을 넘지
+        // 않게 막는다 - ini 를 손으로 고쳐 엔진 천장을 넘기면 세이브가 깨진다.
+        if (target < 0 || target > kBagScreenCap) continue;
+        out.push_back(Config::BagKeep{kind, target});
+    }
+    return out;
+}
+
 Config load(const std::wstring& path) {
     Config c;
     std::ifstream in(path);
@@ -129,6 +156,8 @@ Config load(const std::wstring& path) {
             c.wheel_swap_slot = (to_int(val, 1) != 0);
         } else if (key == "knowledge_keep") {
             c.knowledge_keep = parse_knowledge_keep(val);
+        } else if (key == "bag_keep") {
+            c.bag_keep = parse_bag_keep(val);
         } else if (key == "equip_character_row") {
             // 캐릭터 행은 u16 이고 0xFFFF 는 "자동" 이다. 그 밖은 자동으로 본다.
             const int v = to_int(val, -1);
@@ -178,6 +207,16 @@ bool save(const std::wstring& path, const Config& c) {
         const auto& k = c.knowledge_keep[i];
         if (i != 0) out << ",";
         out << k.number << ":" << k.level;
+    }
+    out << "\n";
+    out << "; 다시 걸어 줄 가방·보관함 용량. `종류:목표` 를 쉼표로 잇는다.\n";
+    out << "; 자동 재적용은 프로세스 메모리에만 살아서, 이 줄이 있어야 게임을 다시\n";
+    out << "; 켤 때 사람이 또 누르지 않는다. 화면의 [되돌리기] 가 이 줄을 비운다.\n";
+    out << "bag_keep = ";
+    for (std::size_t i = 0; i < c.bag_keep.size(); ++i) {
+        const auto& b = c.bag_keep[i];
+        if (i != 0) out << ",";
+        out << b.kind << ":" << b.target;
     }
     out << "\n";
     out << "; 장비 창의 캐릭터 선택(캐릭터 행). -1 = 자동(착용 조각 최다). 클리프 0, 데미안 3, 웅카 5.\n";
