@@ -74,6 +74,7 @@ add_library(cdtoybox SHARED
     src/render/roster_panel.cpp
     src/render/equip_panel.cpp
     src/render/player_panel.cpp
+    src/render/vehicle_panel.cpp
     src/render/notice_state.cpp
     src/render/notice.cpp
     src/render/confirm_state.cpp
