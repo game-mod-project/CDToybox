@@ -255,6 +255,13 @@ CDTB_COMP_DETOUR(call_hyosi, "부르기/효시")
 //   0x29656C0 은 vtable 0x5A09A30 의 +0x10, 즉 vtable[2](역직렬화)이고
 //   그 vtable 의 RTTI 가 TrocTrFrameEventCallMercenaryReq 다.
 CDTB_COMP_DETOUR(call_frame, "부르기/프레임")
+// **예약 슬롯 사용 계통** (2026-09-16). 휠 클릭이 보내는 2742 는 소환 요청이
+// 아니라 `TrocTrChangeUseItemReserveSlotAck` - "슬롯을 썼다" 는 상태 알림이다
+// (실행 중 메시지 등록표에서 확인). 드래곤도 똑같이 보낸다. 모션을 시작하는
+// 것이 이 계통인지 보려고 받는 쪽을 건다.
+CDTB_COMP_DETOUR(slot_use_req, "슬롯사용/요청")
+CDTB_COMP_DETOUR(slot_change_ack, "슬롯사용/변경")
+CDTB_COMP_DETOUR(slot_clear_ack, "슬롯사용/해제")
 CDTB_COMP_DETOUR(call_mercenary, "부르기/용병")
 #undef CDTB_COMP_DETOUR
 
@@ -336,6 +343,11 @@ bool companion_capture_install(const mem::Rtti& rtti,
     CDTB_HOOK("TrocTrCallSpecialVehicleByQuickSlotReq", call_quick, "부르기");
     CDTB_HOOK("TrocTrCallHyosiByQuickSlotReq", call_hyosi, "부르기/효시");
     CDTB_HOOK("TrocTrFrameEventCallMercenaryReq", call_frame, "부르기/프레임");
+    CDTB_HOOK("TrocTrUseItemReserveSlotReq", slot_use_req, "슬롯사용/요청");
+    CDTB_HOOK("TrocTrChangeUseItemReserveSlotAck", slot_change_ack,
+              "슬롯사용/변경");
+    CDTB_HOOK("TrocTrClearUseItemReserveSlotAck", slot_clear_ack,
+              "슬롯사용/해제");
     CDTB_HOOK("TrocTrCallVehicleMercenaryAck", call_mercenary, "부르기/용병");
     CDTB_HOOK("TrocTrMercenaryDataListAck", data_list, "소유목록");
     CDTB_HOOK("TrocTrSummonMercenaryAfterRegistAck", after_regist, "등록후소환");
