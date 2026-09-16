@@ -80,6 +80,7 @@ add_library(cdtoybox SHARED
     src/render/confirm.cpp
     src/render/gates.cpp
     src/render/layout_table.cpp
+    src/render/ui_persist_state.cpp
     src/render/layout.cpp
     src/render/log_filter.cpp
     src/render/log_view.cpp
@@ -151,6 +152,7 @@ add_executable(cdtb_tests
     tests/actors_tests.cpp
     tests/image_dump_tests.cpp
     tests/ui_state_tests.cpp
+    tests/ui_persist_tests.cpp
     tests/layout_tests.cpp
     tests/log_ring_tests.cpp
     tests/log_view_tests.cpp
@@ -188,6 +190,7 @@ add_executable(cdtb_tests
     src/render/stash_queue.cpp
     src/render/confirm_state.cpp
     src/render/layout_table.cpp
+    src/render/ui_persist_state.cpp
     src/render/log_filter.cpp
     src/render/log_view.cpp
 )
