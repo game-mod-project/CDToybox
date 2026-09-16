@@ -106,6 +106,8 @@ constexpr std::uint64_t kErrFnRva = 0x20170E0;
 // 말은 휠에서 불러 **실제로 나온다**(사용자 실측 2026-09-16). 드래곤은 여기까지
 // 똑같이 오는데(코드=0) 안 나온다. 그러니 갈리는 자리는 이 함수 안이다.
 constexpr std::uint64_t kDispRva = 0x292B040;
+// 휠 소환이 이 함수를 부르고 **돌아오는** 자리. 다른 호출자는 안 찍는다.
+constexpr std::uintptr_t kDispWheelRet = 0x2A2319C;
 constexpr std::uint64_t kFindRva = 0x2096C30;
 constexpr std::uint64_t kEmptyRecRva = 0x6BB80C0;
 constexpr std::uintptr_t kMapOff = 0x18;
@@ -153,9 +155,18 @@ using FindFn = void*(__fastcall*)(void*, std::uint64_t, std::uint64_t,
                                   std::uint64_t);
 FindFn g_orig_find = nullptr;
 void* g_find_target = nullptr;
-// 소환 배달부. 스택 인자 둘은 호출자 프레임에 그대로 있으므로 레지스터 넷만
-// 받아 흘려보낸다(다른 디투어와 같은 방식).
-using DispFn = void*(__fastcall*)(void*, void*, void*, void*);
+// 소환 배달부. **인자가 여섯이다** - 넷으로 선언했다가 게임을 팅기게 했다
+// (2026-09-16, 로드 중 사망). 호출 자리가 분명히 여섯을 싣는다:
+//
+//   0x2A23176  [rsp+0x28] = rbp+0x4C0   6번째
+//   0x2A23180  [rsp+0x20] = rsp+0x30    5번째
+//   0x2A23185  r9 · r8 · rdx · rcx      1~4번째
+//
+// 넷짜리 디투어는 원본을 부를 때 **자기 프레임**을 새로 잡으므로, 원본이
+// `[rsp+0x20]`·`[rsp+0x28]` 에서 읽는 것은 우리 스택의 쓰레기가 된다.
+// "스택 인자는 호출자 프레임에 그대로 있다" 는 다른 훅의 주석을 그대로
+// 가져다 쓴 것이 잘못이었다 - 그 함수들은 스택 인자를 **안 읽는다**.
+using DispFn = void*(__fastcall*)(void*, void*, void*, void*, void*, void*);
 DispFn g_orig_disp = nullptr;
 void* g_disp_target = nullptr;
 std::atomic<int> g_disp_budget{60};
@@ -371,10 +382,15 @@ void fill_category_slots(std::uintptr_t owner, std::uint32_t cat,
 // 나란히 찍는다. 원본을 그대로 부르고 결과만 읽는다.
 // **소환 배달부**. 말과 드래곤을 같은 자로 재려고 인자와 반환을 그대로 찍는다.
 // 읽기만 한다.
-void* __fastcall det_disp(void* a1, void* a2, void* a3, void* a4) {
+void* __fastcall det_disp(void* a1, void* a2, void* a3, void* a4, void* a5,
+                          void* a6) {
     const void* ret = _ReturnAddress();
-    void* r = g_orig_disp(a1, a2, a3, a4);
-    if (g_disp_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+    void* r = g_orig_disp(a1, a2, a3, a4, a5, a6);
+    // **휠 경로만 찍는다.** 로드 중에 다른 호출자(+0x282B243)가 이 함수를
+    // 자주 불러 예산을 다 태운다 - 정작 보고 싶은 클릭이 안 찍힌다.
+    const bool from_wheel = (caller_rva(ret) == kDispWheelRet);
+    if (from_wheel &&
+        g_disp_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
         log::infof("소환배달(0x292B040): 호출자=+0x{:X} a1=0x{:X} a2=0x{:X}"
                    " a3=0x{:X} a4=0x{:X} -> 0x{:X}",
                    caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
