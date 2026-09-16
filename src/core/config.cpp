@@ -123,6 +123,10 @@ Config load(const std::wstring& path) {
             c.vehicle_wheel_extend = (to_int(val, 0) != 0);
         } else if (key == "summon_diag") {
             c.summon_diag = (to_int(val, 0) != 0);
+        } else if (key == "wheel_fill") {
+            c.wheel_fill = (to_int(val, 0) != 0);
+        } else if (key == "wheel_swap_slot") {
+            c.wheel_swap_slot = (to_int(val, 1) != 0);
         } else if (key == "knowledge_keep") {
             c.knowledge_keep = parse_knowledge_keep(val);
         } else if (key == "equip_character_row") {
@@ -151,6 +155,10 @@ bool save(const std::wstring& path, const Config& c) {
     out << "vehicle_wheel_extend = " << (c.vehicle_wheel_extend ? 1 : 0) << "\n";
     out << "; 소환 진단 훅. 조사할 때만 1. 기본 0 (기능이 아니라 조사용이다).\n";
     out << "summon_diag = " << (c.summon_diag ? 1 : 0) << "\n";
+    out << "; 휠 칸 등록 채우기. 얹기가 고른 종만 '올려 둔 칸' 을 채운다.\n";
+    out << "wheel_fill = " << (c.wheel_fill ? 1 : 0) << "\n";
+    out << "; 얹기가 동반자 칸까지 옮길지. 0 이면 장소 제한만 푼다.\n";
+    out << "wheel_swap_slot = " << (c.wheel_swap_slot ? 1 : 0) << "\n";
     out << "; 부위별 소켓 칸 수. `분류:장비타입=칸수` 를 쉼표로 잇는다.\n";
     out << "; 부위는 아이템표의 (+0xA3, +0x42) 쌍이다 - 갑옷 3:5, 망토 3:75,\n";
     out << "; 투구 24:4, 장갑 22:6, 신발 9:7, 귀걸이 15:8, 목걸이 34:9, 반지 49:10.\n";

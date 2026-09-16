@@ -8,6 +8,7 @@
 #include "core/log.h"
 #include "game/knowledge.h"
 #include "game/clan.h"
+#include "game/wheelfill.h"
 #include "game/roster.h"
 #include "mem/safe_read.h"
 
@@ -1212,9 +1213,26 @@ bool disguise_apply(const mem::Reader& reader, bool on) {
         disguise_teardown();
         return false;
     }
+    // **휠 칸 등록 채우기에 대상 종행을 알려 준다.** 종을 못 박지 않으면 빈
+    // 말 칸까지 채워 유령 동반자가 생긴다(가진 말을 다 올려놓진 않는다).
+    {
+        std::uint16_t rows[16];
+        int n = 0;
+        for (int i = 0; i < g_dis_bak_n && n < 16; ++i) {
+            if (g_dis_bak[i].rec != 0) rows[n++] = g_dis_bak[i].row;
+        }
+        wheel_fill_set_rows(rows, n);
+    }
     disguise_tick(reader);   // 지금 상태에 맞춰 타입을 정한다
     return true;
 }
+
+// 얹기가 동반자 칸까지 옮길지. 기본은 켬(예전 동작 그대로).
+bool g_dis_swap_slot = true;
+
+void disguise_set_swap_slot(bool on) { g_dis_swap_slot = on; }
+
+bool disguise_swap_slot() { return g_dis_swap_slot; }
 
 // 월드에 나와 있는 동안은 **제 타입으로 돌려 놓는다.**
 //
@@ -1240,7 +1258,9 @@ void disguise_tick(const mem::Reader& reader) {
         for (const auto& e : list) {
             if (e.row == b.row && e.handle != 0) ++out;
         }
-        const bool want = disguise_wants_swap(out);
+        // 칸 옮기기를 끄면 장소 제한만 풀고 타입은 제자리에 둔다. 등록을
+        // 채운 뒤에는 제 칸에서 그대로 불리므로 옮길 이유가 없다.
+        const bool want = g_dis_swap_slot && disguise_wants_swap(out);
         if (want == b.applied) continue;
         const std::uint16_t v = want ? b.donor : b.merc;
         if (!wr16(b.rec + kCiMercInfo, v)) continue;
@@ -1251,6 +1271,7 @@ void disguise_tick(const mem::Reader& reader) {
 }
 
 void disguise_teardown() {
+    wheel_fill_set_rows(nullptr, 0);   // 대상이 없으면 아무것도 안 채운다
     if (g_dis_bak_n == 0 && g_dis_vbak_n == 0 && g_dis_xbak_n == 0 &&
         g_dis_rbak_n == 0) {
         return;

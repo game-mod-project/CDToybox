@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "core/log.h"
+#include "game/wheelfill.h"
 #include "mem/hook.h"
 #include "mem/reader.h"
 #include "mem/safe_read.h"
@@ -144,6 +145,10 @@ FindFn g_orig_find = nullptr;
 void* g_find_target = nullptr;
 // 목록까지 통째로 찍으므로 예산을 작게 잡는다.
 std::atomic<int> g_find_budget{24};
+// 휠 칸 등록 채우기. 종행을 못 박지 않으면 빈 말 칸까지 채워 버린다.
+constexpr std::uintptr_t kEntrySpecies = 0x20;   // u16 종행
+constexpr std::uintptr_t kEntrySlot = 0x148;     // u16 올려 둔 휠 칸
+std::atomic<int> g_fill_log_budget{12};
 void* g_altfn_target = nullptr;
 std::atomic<int> g_altfn_budget{300};
 void* g_callfn_target = nullptr;
@@ -257,50 +262,92 @@ void* __fastcall det_errfn(void* a1, std::uint32_t* out_err, std::uint64_t a3,
     return r;
 }
 
-// 카테고리 하나의 목록을 그대로 걸어 찍는다. **읽기만** 한다.
-void dump_category_list(std::uintptr_t owner, std::uint32_t cat) {
+// 카테고리 하나의 항목 배열을 찾는다. 표 배치는 ReserveSlotInfoManager 와
+// 같다. 못 찾으면 false - 그건 정상이다(그 카테고리가 없을 수 있다).
+bool find_category_list(std::uintptr_t owner, std::uint32_t cat,
+                        std::uintptr_t* out_arr, std::uint32_t* out_cnt,
+                        std::uintptr_t* out_rec) {
     const std::uintptr_t map = owner + kMapOff;
     std::uint32_t buckets = 0;
     std::uint32_t live = 0;
-    if (!mem::safe_read_bytes(map + 0x30, &buckets, sizeof buckets)) return;
-    if (!mem::safe_read_bytes(map + 0x34, &live, sizeof live)) return;
-    if (buckets == 0 || live == 0) {
-        log::infof("  표가 비었다 (버킷 {} · 살아있음 {})", buckets, live);
-        return;
-    }
+    if (!mem::safe_read_bytes(map + 0x30, &buckets, sizeof buckets)) return false;
+    if (!mem::safe_read_bytes(map + 0x34, &live, sizeof live)) return false;
+    if (buckets == 0 || live == 0) return false;
     std::uintptr_t table = 0;
-    if (!mem::safe_read_bytes(map + 0x40, &table, sizeof table)) return;
+    if (!mem::safe_read_bytes(map + 0x40, &table, sizeof table)) return false;
     const std::uintptr_t bucket = table + (cat % buckets) * 0x100;
     std::uint32_t n = 0;
-    if (!mem::safe_read_bytes(bucket, &n, sizeof n)) return;
+    if (!mem::safe_read_bytes(bucket, &n, sizeof n)) return false;
     for (std::uint32_t i = 0; i < n && i < 64; ++i) {
         std::uint32_t key = 0;
-        if (!mem::safe_read_bytes(bucket + i * 8 + 8, &key, sizeof key)) return;
+        if (!mem::safe_read_bytes(bucket + i * 8 + 8, &key, sizeof key)) break;
         if (key != cat) continue;
         std::uint32_t idx = 0;
         std::uintptr_t recs = 0;
         std::uintptr_t rec = 0;
-        if (!mem::safe_read_bytes(bucket + i * 8 + 12, &idx, sizeof idx)) return;
-        if (!mem::safe_read_bytes(map + 0x48, &recs, sizeof recs)) return;
-        if (!mem::safe_read_bytes(recs + idx * 8, &rec, sizeof rec)) return;
+        if (!mem::safe_read_bytes(bucket + i * 8 + 12, &idx, sizeof idx)) break;
+        if (!mem::safe_read_bytes(map + 0x48, &recs, sizeof recs)) break;
+        if (!mem::safe_read_bytes(recs + idx * 8, &rec, sizeof rec)) break;
         std::uintptr_t arr = 0;
         std::uint32_t cnt = 0;
-        if (!mem::safe_read_bytes(rec + 8, &arr, sizeof arr)) return;
-        if (!mem::safe_read_bytes(rec + 0x10, &cnt, sizeof cnt)) return;
-        log::infof("  카테고리 {} 레코드 0x{:X} - 항목 {}개", cat, rec, cnt);
-        for (std::uint32_t k = 0; k < cnt && k < 32; ++k) {
-            std::uintptr_t ent = 0;
-            if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
-            std::uint16_t tag = 0xFFFF;
-            std::uint16_t merc = 0xFFFF;
-            mem::safe_read_bytes(ent + 0x148, &tag, sizeof tag);
-            mem::safe_read_bytes(ent + 0xBE, &merc, sizeof merc);
-            log::infof("    [{}] 0x{:X}  +0x148={}  +0xBE={}", k, ent, tag,
-                       merc);
-        }
+        if (!mem::safe_read_bytes(rec + 8, &arr, sizeof arr)) break;
+        if (!mem::safe_read_bytes(rec + 0x10, &cnt, sizeof cnt)) break;
+        if (arr == 0 || cnt > 4096) break;
+        *out_arr = arr;
+        *out_cnt = cnt;
+        *out_rec = rec;
+        return true;
+    }
+    return false;
+}
+
+// 카테고리 하나의 목록을 그대로 걸어 찍는다. **읽기만** 한다.
+void dump_category_list(std::uintptr_t owner, std::uint32_t cat) {
+    std::uintptr_t arr = 0;
+    std::uintptr_t rec = 0;
+    std::uint32_t cnt = 0;
+    if (!find_category_list(owner, cat, &arr, &cnt, &rec)) {
+        log::infof("  카테고리 {} 목록을 못 찾았다", cat);
         return;
     }
-    log::infof("  카테고리 {} 레코드가 표에 없다 (버킷 항목 {})", cat, n);
+    log::infof("  카테고리 {} 레코드 0x{:X} - 항목 {}개", cat, rec, cnt);
+    for (std::uint32_t k = 0; k < cnt && k < 32; ++k) {
+        std::uintptr_t ent = 0;
+        if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
+        std::uint16_t slot = 0xFFFF;
+        std::uint16_t sp = 0xFFFF;
+        mem::safe_read_bytes(ent + kEntrySlot, &slot, sizeof slot);
+        mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp);
+        log::infof("    [{}] 0x{:X}  종행={}  칸={}", k, ent, sp, slot);
+    }
+}
+
+// **지정한 종행의 항목만** 골라 휠 칸을 채운다. 조회가 바로 뒤에 일어나므로
+// 조회가 묻는 칸 번호(`want`)를 그대로 적는다.
+void fill_category_slots(std::uintptr_t owner, std::uint32_t cat,
+                         std::uint16_t want) {
+    const std::uint16_t* fill_rows = nullptr;
+    const int n = wheel_fill_rows(&fill_rows);
+    if (n <= 0 || want == 0xFFFF) return;
+    std::uintptr_t arr = 0;
+    std::uintptr_t rec = 0;
+    std::uint32_t cnt = 0;
+    if (!find_category_list(owner, cat, &arr, &cnt, &rec)) return;
+    for (std::uint32_t k = 0; k < cnt; ++k) {
+        std::uintptr_t ent = 0;
+        if (!mem::safe_read_bytes(arr + k * 8, &ent, sizeof ent)) break;
+        std::uint16_t slot = 0xFFFF;
+        std::uint16_t sp = 0xFFFF;
+        if (!mem::safe_read_bytes(ent + kEntrySlot, &slot, sizeof slot)) continue;
+        if (!mem::safe_read_bytes(ent + kEntrySpecies, &sp, sizeof sp)) continue;
+        if (!wheel_fill_wanted(slot, sp, fill_rows, n)) continue;
+        if (!mem::safe_write_bytes(ent + kEntrySlot, &want, sizeof want)) continue;
+        if (g_fill_log_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
+            log::infof("휠 칸 등록: 종행 {} 를 카테고리 {} 의 칸 {} 에 올렸다"
+                       " (항목 0x{:X})",
+                       sp, cat, want, ent);
+        }
+    }
 }
 
 // **마지막 관문의 조회**. 빈손이면 드래곤이 받는 4205559856 이 나온다.
@@ -308,6 +355,11 @@ void dump_category_list(std::uintptr_t owner, std::uint32_t cat) {
 // 나란히 찍는다. 원본을 그대로 부르고 결과만 읽는다.
 void* __fastcall det_find(void* owner, std::uint64_t cat, std::uint64_t row,
                           std::uint64_t a4) {
+    if (wheel_fill_enabled()) {
+        fill_category_slots(reinterpret_cast<std::uintptr_t>(owner),
+                            static_cast<std::uint32_t>(cat),
+                            static_cast<std::uint16_t>(row));
+    }
     void* r = g_orig_find(owner, cat, row, a4);
     if (g_find_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
         const std::uintptr_t got = reinterpret_cast<std::uintptr_t>(r);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // 스토리 탈것(드래곤·ATAG) 소환 진단.
 //
 // 종을 바꾼 드래곤·ATAG 를 부르기(2318)로 구동하면 슬롯은 채워지지만 실제
@@ -22,6 +24,10 @@ namespace game {
 
 // 첫 프레임에 설치(모듈 베이스만 필요). 성공하면 true, 이미 설치됐어도 true.
 bool dragondiag_install(const mem::Reader& reader);
+
+// 휠 칸 등록 채우기는 이 훅(`0x2096C30`)이 실제 쓰기를 맡는다. 켜고 끄는
+// 것과 대상 종행은 `game/wheelfill.h` 에 있다 - 표의 주인이 호출 인자로만
+// 오기 때문에 쓰기만 여기 있다.
 
 }  // namespace game
 }  // namespace cdtb

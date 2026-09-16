@@ -9,6 +9,7 @@
 // 카테고리를 얹는 것은 게임 검증에서 폐기됐다. reserveslot.h 의 주석 참조.)
 #include "game/clan.h"
 #include "game/reserveslot.h"
+#include "game/wheelfill.h"
 #include "harness.h"
 
 namespace {
@@ -182,6 +183,39 @@ TEST(disguise_wants_swap_only_while_out_of_world) {
     CHECK(!disguise_wants_swap(1));    // 나와 있다 - 제 타입으로
     CHECK(!disguise_wants_swap(2));    // 블랙스타처럼 명부에 둘이어도 마찬가지
     CHECK(disguise_wants_swap(-1));    // 말도 안 되는 값은 0 과 같이 본다
+}
+
+// **휠 칸 등록 채우기의 경계.** 동반자 항목의 "올려 둔 칸" 이 0xFFFF 면 소환
+// 판정의 마지막 관문이 빈손이 되어 거부된다(실측 2026-09-16: 드래곤 종행
+// 7008 이 그 상태였다). 그렇다고 빈 칸을 다 채우면 안 된다 - 가진 말을 다
+// 올려놓진 않으므로 말 칸에도 빈 항목이 여럿이고(실측: 종행 4073·4075·3643·
+// 3753·6679), 거기까지 채우면 유령 동반자가 생긴다.
+TEST(wheel_fill_only_touches_chosen_species) {
+    using cdtb::game::wheel_fill_wanted;
+    const std::uint16_t rows[] = {7008, 6818};   // 드래곤 · A.T.A.G.
+    // 고른 종이고 칸이 비었다 - 채운다
+    CHECK(wheel_fill_wanted(0xFFFF, 7008, rows, 2));
+    CHECK(wheel_fill_wanted(0xFFFF, 6818, rows, 2));
+    // 고르지 않은 종은 칸이 비었어도 안 건드린다(빈 말 칸)
+    CHECK(!wheel_fill_wanted(0xFFFF, 6679, rows, 2));
+    CHECK(!wheel_fill_wanted(0xFFFF, 4073, rows, 2));
+}
+
+TEST(wheel_fill_never_overwrites_an_occupied_slot) {
+    using cdtb::game::wheel_fill_wanted;
+    const std::uint16_t rows[] = {7008};
+    // 이미 어느 칸에 올라가 있으면 고른 종이라도 손대지 않는다 - 옮기면
+    // 사용자가 올려 둔 쪽이 사라진다.
+    CHECK(!wheel_fill_wanted(0, 7008, rows, 1));
+    CHECK(!wheel_fill_wanted(3, 7008, rows, 1));
+}
+
+TEST(wheel_fill_handles_an_empty_target_list) {
+    using cdtb::game::wheel_fill_wanted;
+    const std::uint16_t rows[] = {7008};
+    // 얹기를 끄면 대상이 없다 - 그때는 아무것도 채우면 안 된다.
+    CHECK(!wheel_fill_wanted(0xFFFF, 7008, rows, 0));
+    CHECK(!wheel_fill_wanted(0xFFFF, 7008, nullptr, 1));
 }
 
 // 탈출로 그룹. 장소 검사를 다 풀어도 드래곤만 "호출할 수 없는 위치" 가 남았고,
