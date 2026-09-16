@@ -162,6 +162,11 @@ struct KnowWrite {
 // 필요할 때 만들고, 읽는 쪽에 널 가드가 있다.
 KnowWrite know_learn(const mem::Reader& reader, int number, int level);
 
+// **되돌리기.** 레벨 0 · 플래그 0 · 습득 시각 0 으로 되돌린다(두 realm).
+// `know_learn` 은 레벨 1 미만을 거부하므로 짝이 따로 필요하다 - 세이브에 남는
+// 쓰기를 시험하면서 되돌릴 길이 없으면 안 된다.
+KnowWrite know_forget(const mem::Reader& reader, int number);
+
 // ------------------------------------------ 스킬 등록 (게임 함수 호출)
 //
 // **레벨 표만 쓰면 "배운 것처럼 보이기만" 한다.** 실제 기능은 서버 컴포넌트의 별도
@@ -341,6 +346,8 @@ int know_find_by_name(const mem::Reader& reader, const KnowMgr& mgr,
 // **번호를 코드에 안 박는다** - 게임이 갱신되면 밀리므로 이름으로 찾는다
 // (원소 넷에서 번호를 잘못 골라 여러 번 헛돌았다, STATUS §1.20).
 inline constexpr int kCallKnowCount = 3;
+// 화면이 **쓰기를 그리는 칸.** 대조군 둘에는 손대지 않는다.
+inline constexpr int kCallKnowDragon = 2;
 
 struct CallKnow {
     const char* label = "";

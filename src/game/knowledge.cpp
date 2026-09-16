@@ -955,6 +955,55 @@ bool know_skill_slots_at(const mem::Reader& reader, std::uintptr_t comp,
     return !out->empty();
 }
 
+KnowWrite know_forget(const mem::Reader& reader, int number) {
+    KnowWrite w;
+    if (number < 0) {
+        w.skip = 2;
+        w.last_skip = "번호가 말이 안 됩니다";
+        return w;
+    }
+    std::lock_guard<std::mutex> lk(g_op_mtx);
+    for (int realm = 0; realm < 2; ++realm) {
+        KnowTable t;
+        // `know_learn` 과 같은 이유로 **쓸 때마다 표를 다시 읽는다.**
+        if (!know_table(reader, realm, &t)) {
+            ++w.skip;
+            w.last_skip = "그쪽 컴포넌트를 아직 못 잡았습니다";
+            continue;
+        }
+        if (number >= t.count) {
+            ++w.skip;
+            w.last_skip = "그 번호는 이 표의 범위 밖입니다";
+            continue;
+        }
+        const std::uintptr_t rec = know_record(t.data, number);
+        const int now = rd32(reader, rec + kKnowRecLevel);
+        if (now <= 0) {
+            ++w.skip;
+            w.last_skip = "이미 미습득입니다";
+            continue;
+        }
+        log_write("지식 되돌리기", rec, "레벨 " + std::to_string(now), "레벨 0");
+        if (!wr32(rec + kKnowRecLevel, 0)) {
+            ++w.fail;
+            continue;
+        }
+        wr8(rec + kKnowRecFlag, 0);
+        // 습득 시각도 0 으로 - 0 이면 "이 지식 없음" 으로 보는 소비자가 있다.
+        wr64(rec + kKnowRecObj, 0);
+        if (rd32(reader, rec + kKnowRecLevel) != 0) {
+            ++w.fail;
+            continue;
+        }
+        ++w.changed;
+    }
+    if (w.changed > 0) {
+        log::infof("지식 {} 번을 레벨 0 으로 되돌렸다 - realm {}개", number,
+                   w.changed);
+    }
+    return w;
+}
+
 int know_data_key(const mem::Reader& reader, const KnowMgr& mgr, int number) {
     if (number < 0 || number >= mgr.count || mgr.array == 0) return 0;
     const std::uintptr_t info = static_cast<std::uintptr_t>(

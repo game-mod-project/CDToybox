@@ -214,6 +214,69 @@ void draw_knowledge(const mem::Reader& reader) {
             "서버 스킬 맵에 등록돼 있는지 로그에 적습니다. 읽기만 합니다.\n"
             "대조군은 있는데 드래곤만 없다면 그것이 호출 모션이 없던 이유입니다.");
     }
+    // ---- 호출 지식 (드래곤 소환 시험). **세이브에 남는 쓰기가 여기 있다.**
+    //
+    // 호출 모션은 스킬이고 그 스킬은 지식이 준다(게임 데이터 실측). 대조군인
+    // 말 호출 지식은 레벨 1 이고 잘 불리는데, 드래곤 쪽은 레벨 0 이다 -
+    // 확인된 차이가 그 한 칸뿐이라 여기서 그것만 눌러 본다.
+    {
+        game::CallKnow ck[game::kCallKnowCount];
+        if (game::call_knowledge(reader, ck)) {
+            ImGui::TextWrapped(
+                "호출 모션은 스킬이고 그 스킬은 지식이 줍니다. 아래 셋 중 앞의"
+                " 둘은 대조군이라 손대지 않습니다.");
+            for (int i = 0; i < game::kCallKnowCount; ++i) {
+                const game::CallKnow& e = ck[i];
+                ImGui::PushID(2000 + i);
+                if (e.number < 0) {
+                    ImGui::TextColored(col::kBad, "%s: 지식을 못 찾았습니다",
+                                       e.label);
+                    ImGui::PopID();
+                    continue;
+                }
+                ImGui::TextColored(e.level > 0 ? col::kOk : col::kWarn, "%s",
+                                   e.label);
+                ImGui::SameLine();
+                ImGui::TextDisabled("행 %d · 키 %d · 레벨 %d%s", e.number,
+                                    e.data_key, e.level,
+                                    e.in_skill_map ? " · 스킬맵 있음" : "");
+                if (i == game::kCallKnowDragon) {
+                    ImGui::SameLine();
+                    if (e.level == 0) {
+                        if (confirm_small_button("얻기")) {
+                            const game::KnowWrite w =
+                                game::know_learn(reader, e.number, 1);
+                            if (w.changed > 0) {
+                                notice_set(&s_note, NoticeLevel::Ok,
+                                           "드래곤 호출 지식 습득 - realm {}개",
+                                           w.changed);
+                            } else {
+                                notice_set(&s_note, NoticeLevel::Bad, "실패: {}",
+                                           w.last_skip[0] != 0 ? w.last_skip
+                                                               : "쓰기 실패");
+                            }
+                        }
+                    } else if (confirm_small_button("되돌리기")) {
+                        const game::KnowWrite w =
+                            game::know_forget(reader, e.number);
+                        if (w.changed > 0) {
+                            notice_set(&s_note, NoticeLevel::Ok,
+                                       "드래곤 호출 지식 되돌림 - realm {}개",
+                                       w.changed);
+                        } else {
+                            notice_set(&s_note, NoticeLevel::Bad, "실패: {}",
+                                       w.last_skip[0] != 0 ? w.last_skip
+                                                           : "쓰기 실패");
+                        }
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::TextDisabled(
+                "쓰면 게임 저장 때 세이브에 남습니다. 자동 재적용 목록에는"
+                " 안 넣습니다 - 시험이라 [되돌리기] 가 확실히 먹어야 합니다.");
+        }
+    }
     notice_draw(s_note);
 
     if (!s_scanned || !s_scan.ok) return;
