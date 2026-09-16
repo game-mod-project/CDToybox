@@ -391,13 +391,22 @@ void* __fastcall det_disp(void* a1, void* a2, void* a3, void* a4, void* a5,
     const bool from_wheel = (caller_rva(ret) == kDispWheelRet);
     if (from_wheel &&
         g_disp_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-        log::infof("소환배달(0x292B040): 호출자=+0x{:X} a1=0x{:X} a2=0x{:X}"
-                   " a3=0x{:X} a4=0x{:X} -> 0x{:X}",
-                   caller_rva(ret), reinterpret_cast<std::uintptr_t>(a1),
-                   reinterpret_cast<std::uintptr_t>(a2),
-                   reinterpret_cast<std::uintptr_t>(a3),
-                   reinterpret_cast<std::uintptr_t>(a4),
-                   reinterpret_cast<std::uintptr_t>(r));
+        // **출력 인자 둘을 읽는다.** 호출 자리가 둘 다 0 으로 초기화해서
+        // 넘긴다(0x2A2311B · 0x2A23122) - 함수가 결과를 거기 쓴다는 뜻이다.
+        // 반환값(0xF4240)은 말·A.T.A.G.·드래곤이 전부 같아서 뜻이 없었다.
+        std::uint64_t o5 = 0;
+        std::uint64_t o6 = 0;
+        std::uint32_t slot_key = 0;
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(a5), &o5,
+                             sizeof o5);
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(a6), &o6,
+                             sizeof o6);
+        mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(a3), &slot_key,
+                             sizeof slot_key);
+        log::infof("소환배달(0x292B040): 슬롯키={} a3=0x{:X}"
+                   " -> 반환=0x{:X} · [a5]=0x{:X} · [a6]=0x{:X}",
+                   slot_key, reinterpret_cast<std::uintptr_t>(a3),
+                   reinterpret_cast<std::uintptr_t>(r), o5, o6);
     }
     return r;
 }
