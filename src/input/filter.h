@@ -72,4 +72,17 @@ RawMouseDecoded decode_raw_mouse(unsigned button_flags, unsigned short button_da
 // 중에 ImGui 좌표가 멎는다" 의 해결이고, 그 경로는 그대로 남는다.
 bool should_inject_mouse_pos(bool backend_queued_this_frame);
 
+// 이 창 메시지를 ImGui 백엔드 핸들러에 넘길 것인가.
+//
+// **오버레이가 꺼져 있는 동안 입력을 넘기면 안 된다.** 백엔드는 그것을 ImGui
+// 이벤트 큐에 넣는데, 큐를 비우는 것은 `ImGui::NewFrame` 뿐이고 숨김 상태에서는
+// 그것이 안 돈다(overlay.cpp 가 `if (!g_visible) return;` 로 그 앞에서 돌아선다).
+// 그래서 꺼져 있는 내내 이동·클릭이 쌓이기만 하다가, 켜는 순간 첫 NewFrame 이
+// 그 밀린 것을 재생한다 - 포인터가 내 손이 아니라 **켜기 전의 손놀림**을 되짚고
+// 그때 눌렀던 클릭이 뒤늦게 터진다(사용자 보고·실측 2026-09-16, 전투에서 최악).
+//
+// 창 크기·포커스·DPI 같은 살림 메시지는 늘 넘긴다 - 안 넘기면 백엔드 상태가
+// 실제 창과 어긋난 채로 열린다.
+bool backend_should_see(unsigned msg, bool overlay_visible);
+
 }  // namespace cdtb::input

@@ -192,3 +192,37 @@ TEST(pos_injection_yields_when_backend_already_queued) {
 TEST(pos_injection_covers_a_silent_backend) {
     CHECK(cdtb::input::should_inject_mouse_pos(false));
 }
+
+// ---------------------------------------- 숨김 동안 백엔드에 입력을 주지 않는다
+// 오버레이가 꺼져 있어도 백엔드 핸들러를 부르면 ImGui 이벤트 큐에 **쌓이기만**
+// 한다 - NewFrame 이 안 돌아 아무도 안 비운다. 켜는 순간 그 밀린 것이 재생돼
+// 켜기 전의 손놀림과 클릭이 되풀이된다(사용자 보고 2026-09-16, 전투에서 최악).
+TEST(backend_is_denied_input_while_hidden) {
+    using cdtb::input::backend_should_see;
+    CHECK(!backend_should_see(0x0200, false));   // WM_MOUSEMOVE
+    CHECK(!backend_should_see(0x0201, false));   // WM_LBUTTONDOWN
+    CHECK(!backend_should_see(0x020A, false));   // WM_MOUSEWHEEL
+    CHECK(!backend_should_see(0x02A3, false));   // WM_MOUSELEAVE
+    CHECK(!backend_should_see(0x0100, false));   // WM_KEYDOWN
+    CHECK(!backend_should_see(0x0102, false));   // WM_CHAR
+    CHECK(!backend_should_see(0x010F, false));   // WM_IME_COMPOSITION
+    CHECK(!backend_should_see(0x0286, false));   // WM_IME_CHAR
+}
+
+// 창 살림 메시지는 숨김 동안에도 넘겨야 한다 - 안 넘기면 백엔드의 크기·포커스
+// 상태가 실제 창과 어긋난 채로 오버레이가 열린다.
+TEST(backend_still_sees_window_housekeeping_while_hidden) {
+    using cdtb::input::backend_should_see;
+    CHECK(backend_should_see(0x0005, false));   // WM_SIZE
+    CHECK(backend_should_see(0x0007, false));   // WM_SETFOCUS
+    CHECK(backend_should_see(0x0008, false));   // WM_KILLFOCUS
+    CHECK(backend_should_see(0x02E0, false));   // WM_DPICHANGED
+}
+
+// 켜져 있으면 전부 넘긴다 - 그때는 NewFrame 이 돌아 큐가 비워진다.
+TEST(backend_sees_everything_while_visible) {
+    using cdtb::input::backend_should_see;
+    CHECK(backend_should_see(0x0200, true));
+    CHECK(backend_should_see(0x0100, true));
+    CHECK(backend_should_see(0x0005, true));
+}

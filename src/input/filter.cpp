@@ -16,6 +16,7 @@ constexpr unsigned kWmImeComp = 0x010F;    // WM_IME_COMPOSITION
 constexpr unsigned kWmImeChar = 0x0286;
 constexpr unsigned kWmMouseFirst = 0x0200;  // WM_MOUSEMOVE..WM_MOUSEHWHEEL
 constexpr unsigned kWmMouseLast = 0x020E;
+constexpr unsigned kWmMouseLeave = 0x02A3;
 constexpr int kRawMouse = 0;
 constexpr int kRawKeyboard = 1;
 
@@ -86,6 +87,19 @@ bool legacy_gate_step(LegacyGateState& s, unsigned long long now_ms, bool os_mov
 bool raw_answered(unsigned long long raw_at_ms, unsigned long long last_legacy_ms,
                   unsigned long long slack_ms) {
     return last_legacy_ms != 0 && last_legacy_ms + slack_ms >= raw_at_ms;
+}
+
+bool backend_should_see(unsigned msg, bool overlay_visible) {
+    // 켜져 있으면 전부 넘긴다 - NewFrame 이 돌아 큐가 비워진다.
+    if (overlay_visible) return true;
+    // 꺼져 있으면 **입력만** 막는다. 쌓아 둘 곳이 없어서다(filter.h).
+    if (msg >= kWmMouseFirst && msg <= kWmMouseLast) return false;
+    if (msg == kWmMouseLeave) return false;
+    if (msg >= kWmKeyFirst && msg <= kWmKeyLast) return false;
+    if (msg >= kWmImeStart && msg <= kWmImeComp) return false;
+    if (msg == kWmImeChar) return false;
+    // 나머지(크기·포커스·DPI·장치 변경 …)는 살림이라 늘 넘긴다.
+    return true;
 }
 
 bool should_inject_mouse_pos(bool backend_queued_this_frame) {

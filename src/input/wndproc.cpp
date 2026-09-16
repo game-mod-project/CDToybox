@@ -23,7 +23,12 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (overlay::handle_hotkey(static_cast<int>(wp))) return 0;
     }
 
-    ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
+    // 오버레이가 꺼져 있는 동안 입력을 백엔드에 넘기면 ImGui 이벤트 큐에
+    // 쌓이기만 한다 - 비우는 것은 NewFrame 뿐인데 숨김 상태에서는 안 돈다.
+    // 켤 때 그 밀린 것이 재생돼 켜기 전의 손놀림·클릭이 되풀이됐다(filter.h).
+    if (backend_should_see(msg, overlay::is_visible())) {
+        ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
+    }
 
     // 창 마우스 메시지가 오는지 늘 적어 둔다(닫혀 있을 때도) - 열린 동안 끊기면
     // 렌더 스레드가 raw input 으로 버튼·휠을 합성한다(mouse.h).
