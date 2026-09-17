@@ -409,11 +409,16 @@ u16 _key · str _stringKey · u8 _isBlocked · {현지화} _displayRegionName
 | 6 | 재소환 대기 | `CharacterInfo._callMercenaryCoolTime`(3600초) | 60분 쿨다운 없어짐 |
 | — | ~~지역 허용~~ | ~~`_forbiddenMercenaryKeyList`(+0x80) → 0~~ | **빠졌다.** 그 목록은 어비스에만 있다(§5-1-1 다) |
 
-**1 은 실제로 걸어 봤다.** 플레이어가 서 있던 `Region_Node_Dem_DemenissCastle`
-한 행의 `_isTown` 을 1→0 으로 쓰자 `IsInTown()` 의 재료가 그 자리에서 사라졌다
-(6개 구역 전부 `_isTown=0`, 살아있는 칸도 0). 되돌리기는 같은 자리에 1 을 쓰면
-된다 — 표는 **세이브에 안 남고** 실행마다 다시 걸어야 한다(`vehicle_place_gated`
-계열과 같은 방식).
+**1 은 게임에서 확인됐다 (2026-09-17).** 먼저 플레이어가 서 있던
+`Region_Node_Dem_DemenissCastle` 한 행의 `_isTown` 을 1→0 으로 쓰자 `IsInTown()`
+의 재료가 그 자리에서 사라졌고(겹친 구역 6개 전부 `_isTown=0`, 살아있는 칸도 0),
+이어서 표 1007행 전부를 풀었다(`_isTown` 172 · `_limitVehicleRun` 15, 자국
+187개). **사용자 실측으로 마을에서 소환과 탑승이 됐다.** 되돌리기는 같은 자리에
+원래 값을 쓰면 된다 — 표는 **세이브에 안 남고** 실행마다 다시 걸어야 한다
+(`vehicle_place_gated` 계열과 같은 방식).
+
+모드에 토글로 얹었다 — `src/game/towngate.{h,cpp}`, 화면은 "드래곤 · A.T.A.G."
+창의 **마을 (소환 · 강제 하차)** 절이다.
 
 > ⚠️ **1·2 는 범위가 넓다.** `IsInTown()` 은 현상금·상점·NPC 일과 등 **다른
 > 계통이 같이 쓴다**(조건식에서 확인: `WantedLevel()>=1 && WantedState(Normal)
@@ -463,20 +468,19 @@ gamedata/characterinfo.pabgb (45건)
 
 ## 6. 다음 한 걸음
 
-§5-1-1 의 1~3번은 **끝났다**(매니저 확인 · 표 전수 조사 · 판정 함수 전문 ·
-`_isTown` 쓰기까지). 남은 것:
+**마을 쪽은 끝났다** — 판정 함수 전문, 표 전수 조사, 게임 확인, 모드 토글까지.
+남은 것:
 
-1. **게임에서 실제로 불러 본다.** `_isTown` 을 끈 상태에서 마을 한복판에서
-   드래곤·A.T.A.G. 를 불러 보고, 타고 있을 때 강제 하차가 안 오는지 본다.
-   이것이 마지막 확인이다 — 조건식(§1)과 판정 함수(§5-1-1)는 이미 맞췄다.
-2. **붉은 구역 레버를 다시 찾는다.** `_forbiddenMercenaryKeyList` 가 아니었다
+1. **붉은 구역 레버를 다시 찾는다.** `_forbiddenMercenaryKeyList` 가 아니었다
    (어비스 전용). `ConditionData_IsVehicleAllowedInEnteredRegion`
-   (vtable RVA 0x5856378) 의 판정 자리를 한 겹 더 따라간다.
-3. 되면 **모드에 토글로 얹는다.** 표 쓰기는 `RegionInfoManager`
-   (모듈 `+0x6C2E2F0`)에서 행을 돌며 `+0x75`/`+0x74` 한 바이트씩. 켤 때 원래
-   값을 들고 있다가 끌 때 되돌린다. 세이브에 안 남으니 실행마다 다시 건다.
-4. 시간 제한 둘(`_callMercenarySpawnDuration` · `_callMercenaryCoolTime`)은
-   지역과 무관하고 외부 선례가 확실하니 언제 해도 된다.
+   (vtable RVA 0x5856378, 생성 자리 RVA 0x217F689) 의 판정 자리를 한 겹 더
+   따라간다. vtable 슬롯 2(RVA 0x218AAA0)가 범용 디스패처다.
+2. **살아있는 칸(`+0x358`)이 0 이 아닌 자리를 찾는다.** 실측에선 마을
+   한복판에서도 0 이었다. 그 갈래가 언제 켜지는지 모르면 토글이 안 듣는
+   자리가 남는다 — 화면에 값을 같이 띄워 두었으니 0 이 아닌 자리를 만나면
+   그때 잡는다.
+3. 시간 제한 둘(`_callMercenarySpawnDuration` · `_callMercenaryCoolTime`)은
+   이미 "드래곤 · A.T.A.G." 창의 **시간** 절이 푼다(`mount_timer_free`).
 
 > `VehicleInfo._canCallSafeZone` 은 **우리 빌드에 없다**. 커뮤니티가 쓰는 칸이라
 > 1순위로 뒀었지만 리플렉션 이름 목록에 안 나온다 — 후보에서 뺐다.
