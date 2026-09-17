@@ -21,6 +21,11 @@ const char* category_name(std::uint8_t c);
 // 등급 Combo 의 라벨. 색인 0 이 "전체", 그 뒤가 등급 0..5 다.
 extern const char* const kGradeLabels;
 
+// 전용 Combo 의 라벨. 색인 0 이 "전체", 그 뒤가 game::EquipOwner 0..3 이다
+// (공용 · 클리프 · 데미안 · 웅카). 글자는 game::owner_label 과 같아야
+// 한다 - 고를 때와 표에 보일 때가 달라 보이면 안 된다.
+extern const char* const kOwnerLabels;
+
 float text_width(const char* s);
 
 // 다음 항목이 창 오른쪽을 넘지 않으면 같은 줄에 이어 붙인다.
