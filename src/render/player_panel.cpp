@@ -16,6 +16,7 @@
 #include "game/skillgate.h"
 #include "game/wheelfill.h"
 #include "game/skillpoint.h"
+#include "game/wanted.h"
 #include "render/colors.h"
 #include "render/confirm.h"
 #include "render/table_sort_imgui.h"
@@ -658,11 +659,66 @@ void draw_skill_gates() {
 // 게이지 없이도 그리는 절들. **스탯 게이지와 아무 상관이 없다** - 결속·지식은 지식
 // 컴포넌트만 있으면 되고, 관문은 코드 패치라, 휠은 정적 표라 아무것도 필요 없다.
 // 그래서 게이지를 못 잡은 상태에서도 그린다.
+// 수배(범죄수치). 게임 자신의 개발용 요청 메시지를 그대로 부른다 -
+// 새 경로를 만들지 않는다(game/wanted.h).
+//
+// 아직 확인 안 된 것이 둘이라 화면이 그것을 숨기지 않는다. 대상 핸들이
+// 정말 플레이어인지, 플래그가 무슨 뜻인지 모른다. 그래서 둘 다 고칠 수
+// 있게 두고, 보낸 값을 로그에 남긴다.
+void draw_wanted(const mem::Reader& reader) {
+    if (!collapsing_header("player.wanted", "범죄수치 (수배)")) return;
+
+    static Notice s_note;
+    static int s_handle = static_cast<int>(game::kAssumedPlayerHandle);
+    static int s_flag = 0;
+
+    if (!game::wanted_ready()) {
+        ImGui::TextDisabled("수배 메시지를 아직 못 잡았습니다 - 월드에"
+                            " 들어가면 저절로 잡습니다.");
+        notice_draw(s_note);
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "게임의 개발용 요청(TrocTrClearWantedReq)을 그대로 보냅니다."
+        " 지급과 같은 대기열을 타므로 게임 스레드에서 실행됩니다.");
+    ImGui::TextDisabled("메시지 ID %u", game::wanted_clear_message_id());
+
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::InputInt("대상 핸들", &s_handle, 0, 0,
+                    ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(기본 0x%08X = 플레이어로 추정)",
+                        game::kAssumedPlayerHandle);
+
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::InputInt("플래그", &s_flag);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(뜻 미확인 - 0 과 1 을 견줘 보십시오)");
+
+    if (ImGui::Button("수배 해제")) {
+        const bool ok = game::request_clear_wanted(
+            reader, static_cast<std::uint32_t>(s_handle),
+            static_cast<std::uint8_t>(s_flag));
+        // "걸었다" 와 "먹었다" 는 다르다. 여기서 아는 것은 대기열에
+        // 걸렸는지까지다 - 실제 결과는 화면과 로그로 본다.
+        if (ok) {
+            notice_set(&s_note, NoticeLevel::Ok,
+                       "요청을 걸었습니다 - 화면과 로그를 보십시오");
+        } else {
+            notice_set(&s_note, NoticeLevel::Bad,
+                       "요청을 걸지 못했습니다 (로그에 이유가 있습니다)");
+        }
+    }
+    notice_draw(s_note);
+}
+
 void draw_skill_sections(const mem::Reader& reader) {
     draw_skill_bond(reader);
     draw_skill_gates();
     draw_elements(reader);
     draw_knowledge(reader);
+    draw_wanted(reader);
 }
 
 }  // namespace

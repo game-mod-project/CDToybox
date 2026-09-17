@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "mem/reader.h"
+#include "mem/rtti.h"
+
 namespace cdtb::game {
 
 // 수배(범죄수치) 치트 메시지.
@@ -47,5 +50,33 @@ inline constexpr std::size_t kClearWantedWireLen = 10;
 bool build_clear_wanted_wire(std::uint32_t handle, std::uint8_t flag,
                              std::uint8_t* out, std::size_t cap,
                              std::size_t* len_out);
+
+// 플레이어 본인으로 **추정**하는 핸들. actors.h 가 용병의 고용주
+// 칸에서 이 값을 실측했다("플레이어 쪽은 0xA0100001"). 수배 메시지의
+// 대상으로도 맞는지는 아직 확인 못 했으므로 화면에서 고칠 수 있게
+// 둔다 - 박아 두면 틀렸을 때 왜 안 되는지 안 보인다.
+inline constexpr std::uint32_t kAssumedPlayerHandle = 0xA0100001u;
+
+// --- 아래는 게임에 붙는 배관이다 (단위 시험 없음) ----------------------
+//
+// wire 를 만드는 순수 부분만 시험이 덮는다. 여기는 resolve_message /
+// request_message 로 넘기는 얇은 접착이고, 이 레포의 다른 요청 경로
+// (companion 의 request_hire_target 등)와 같은 관례다 - 검증은
+// 게임에서 한다.
+
+// 메시지를 한 번 해석해 둔다. 이미 됐으면 아무것도 안 한다.
+bool wanted_resolve(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 해석이 끝났는가. 화면이 버튼을 가리는 데 쓴다.
+bool wanted_ready();
+
+// 해석된 메시지 ID. 0 이면 아직이다. 진단 표시용.
+std::uint32_t wanted_clear_message_id();
+
+// 수배 해제를 걸어 둔다. 지급과 같은 대기열(게임 스레드 실행 지점 ·
+// SEH · 쿨다운)을 탄다. 세션은 여기서 고른다 - 로드 직후 죽은 세션이
+// 뽑히던 일이 있어 pick_drive_session 한 곳으로 모아 둔 규칙이다.
+bool request_clear_wanted(const mem::Reader& reader, std::uint32_t handle,
+                          std::uint8_t flag);
 
 }  // namespace cdtb::game

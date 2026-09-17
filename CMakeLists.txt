@@ -224,6 +224,7 @@ add_executable(cdtb_probe
     src/game/items.cpp
     src/game/roster.cpp
     src/game/companion.cpp
+    src/game/wanted.cpp
     src/game/actors.cpp
     src/game/clan.cpp
     src/game/skillpoint.cpp
