@@ -1,8 +1,10 @@
 #include "input/mouse.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>   // 진단: 백엔드가 큐에 넣은 좌표를 본다
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <format>
 #include <mutex>
@@ -47,6 +49,16 @@ unsigned g_n_synth_wheel = 0;
 unsigned g_n_flip = 0;
 bool g_dead_logged = false;
 
+// ---- 진단(기능 없음): 좌표 원천이 둘인가 ----------------------------------
+// 우리는 프레임마다 OS 커서 좌표를 넣는데, 창 이동 메시지가 살아 있으면 백엔드도
+// 넣는다. 그러면 한 프레임에 좌표 이벤트가 둘이고 최종 좌표는 **큐 도착 순서**가
+// 정한다 - 순서가 프레임마다 뒤바뀌면 떨림·굳음·의도치 않은 드래그가 한꺼번에 난다.
+// 실제로 둘이 어긋나는지 세어 본다. 어긋남이 0 이면 이 가설은 폐기한다.
+unsigned g_n_pos_ours_only = 0;   // 백엔드가 이번 프레임에 안 넣었다(= 마우스룩)
+unsigned g_n_pos_both = 0;        // 둘 다 넣었다
+unsigned g_n_pos_disagree = 0;    // 그중 좌표가 다른 프레임
+float g_max_disagree = 0.0f;      // 가장 크게 어긋난 거리(픽셀)
+
 // 게임이 마우스 raw input 을 어떤 플래그로 등록해 뒀는지(RIDEV_NOLEGACY 0x30 이 섞이면 창
 // 메시지가 애초에 안 만들어진다) - 진단용. 조회 실패·등록이 하나도 없음은 "?" 로, 마우스 아닌
 // 등록만 있으면 "등록 없음" 으로 가른다(0 과 섞지 않는다, 리뷰 M-4). 첫 호출(버퍼 NULL)의
@@ -69,6 +81,23 @@ std::string raw_mouse_flags_text() {
         }
     }
     return found ? std::format("{:#x}", flags) : std::string("등록 없음");
+}
+
+// 이번 프레임에 **백엔드가 이미 큐에 넣은** 마지막 좌표. 이벤트는 ImGui::NewFrame
+// 이 처리하므로, 우리가 넣기 직전에 큐를 보면 백엔드가 이 프레임에 무엇을 넣었는지
+// 그대로 보인다. io.MousePos 를 보면 안 된다 - 그건 **지난** 프레임이 적용된 값이다.
+bool backend_queued_pos(float* x, float* y) {
+    const ImGuiContext* g = ImGui::GetCurrentContext();
+    if (g == nullptr) return false;
+    for (int i = g->InputEventsQueue.Size - 1; i >= 0; --i) {
+        const ImGuiInputEvent& e = g->InputEventsQueue[i];
+        if (e.Type == ImGuiInputEventType_MousePos) {
+            *x = e.MousePos.PosX;
+            *y = e.MousePos.PosY;
+            return true;
+        }
+    }
+    return false;
 }
 
 HWND overlay_hwnd() {
@@ -174,6 +203,10 @@ void mouse_sync(bool overlay_visible) {
         g_n_synth_wheel = 0;
         g_n_flip = 0;
         g_dead_logged = false;
+        g_n_pos_ours_only = 0;
+        g_n_pos_both = 0;
+        g_n_pos_disagree = 0;
+        g_max_disagree = 0.0f;
         g_n_legacy_move.store(0, std::memory_order_relaxed);
         g_n_legacy_button.store(0, std::memory_order_relaxed);
         g_n_legacy_wheel.store(0, std::memory_order_relaxed);
@@ -203,6 +236,12 @@ void mouse_sync(bool overlay_visible) {
                g_n_raw_dropped.load(std::memory_order_relaxed), g_n_synth_button,
                g_n_synth_wheel, g_gate.dead ? "끊김" : "끊김 판정 없음", g_n_flip,
                raw_mouse_flags_text());
+    // 진단(기능 없음): 좌표 원천이 둘인 프레임이 얼마나 되고 얼마나 어긋났는가.
+    // 어긋남이 0 이면 "원천 둘" 가설은 폐기한다.
+    log::infof("마우스 좌표: 백엔드가 넣은 프레임 {} (그중 우리 값과 달랐을 것 {}, "
+               "최대 {:.1f}px - 우리는 안 넣었다), 우리가 넣은 프레임 {}",
+               g_n_pos_both, g_n_pos_disagree,
+               static_cast<double>(g_max_disagree), g_n_pos_ours_only);
 }
 
 void mouse_feed_frame() {
@@ -280,7 +319,33 @@ void mouse_feed_frame() {
     }
     POINT client = os;
     if (::ScreenToClient(hwnd, &client)) {
-        io.AddMousePosEvent(static_cast<float>(client.x), static_cast<float>(client.y));
+        const float ours_x = static_cast<float>(client.x);
+        const float ours_y = static_cast<float>(client.y);
+        // 백엔드가 이번 프레임에 이미 좌표를 넣었으면 우리는 **넣지 않는다**.
+        // 둘이 들어가면 최종 값을 큐 도착 순서가 정하고, 그 순서는 프레임마다
+        // 뒤바뀐다(filter.h should_inject_mouse_pos 참조).
+        float bx = 0.0f;
+        float by = 0.0f;
+        const bool backend_has = backend_queued_pos(&bx, &by);
+        if (backend_has) {
+            ++g_n_pos_both;
+            // 진단: 넣었더라면 얼마나 어긋났을지. 고친 뒤 이 수가 그대로면
+            // "백엔드와 우리가 다른 순간을 잰다" 는 사실이 계속 참이라는 뜻이고,
+            // 우리가 안 넣으므로 더는 화면에 영향이 없다.
+            const float dx = bx - ours_x;
+            const float dy = by - ours_y;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > 0.5f) {
+                ++g_n_pos_disagree;
+                // windows.h 의 max 매크로를 피한다(NOMINMAX 가 없다).
+                if (dist > g_max_disagree) g_max_disagree = dist;
+            }
+        } else {
+            ++g_n_pos_ours_only;
+        }
+        if (should_inject_mouse_pos(backend_has)) {
+            io.AddMousePosEvent(ours_x, ours_y);
+        }
     }
     if (!dead) return;   // 창 메시지가 살아 있으면 백엔드가 넣는다 - 답을 기다리는 raw 는 남는다
     feed_held(io);
