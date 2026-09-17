@@ -410,3 +410,50 @@ TEST(bag_plan_holds_its_invariants_across_the_whole_range) {
         }
     }
 }
+
+// ------------------------------------------------------------------ 줄이기
+// 사용자가 700 -> 540 으로 낮췄는데 아무 일도 안 일어났다(실측 2026-09-17:
+// "가방 건너뜀: 이미 목표보다 크다"). 다음 로드에서 인벤토리가 새로 만들어진
+// 뒤에야 540 이 걸렸다.
+//
+// 줄이기를 막아 둔 것은 **용량 밖으로 밀려나는 아이템** 때문이다. 그런데
+// 안전 여부를 `used`(+0x12)로는 못 가른다 - 칸이 성기게 차 있어서 실측에서
+// used 144 인데 실제 레코드가 143개였다(inventory.h). 즉 아이템이 used 보다
+// **높은 칸**에 있을 수 있다.
+//
+// 그래서 기준은 **아이템이 들어 있는 가장 높은 칸 다음**(occupied_floor)이다.
+// 모르면(-1) 예전처럼 거부한다 - 모르는 채 깎지 않는다.
+constexpr int kBagSlotsAll = 1460;
+
+TEST(bag_shrink_is_allowed_above_the_occupied_floor) {
+    // 가방: 우리가 700 으로 키워 둔 상태(base 50 + A 650). 아이템은 100번 칸까지.
+    const BagPlan p = plan_bag_expand(700, 650, 0, kBagSlotsAll, 540,
+                                      kBagBranchA, kBagTargetMax, 50, 100);
+    CHECK(p.apply);
+    CHECK_EQ(p.capacity, 540);
+    CHECK_EQ(p.expand, 490);   // 540 - base 50 - other 0
+}
+
+TEST(bag_shrink_is_refused_below_the_occupied_floor) {
+    // 아이템이 600번 칸까지 있으면 540 으로 깎을 수 없다.
+    const BagPlan p = plan_bag_expand(700, 650, 0, kBagSlotsAll, 540,
+                                      kBagBranchA, kBagTargetMax, 50, 600);
+    CHECK(!p.apply);
+    CHECK(p.skip != nullptr);
+}
+
+TEST(bag_shrink_is_refused_when_the_floor_is_unknown) {
+    // 못 읽었으면 깎지 않는다 - 예전 동작 그대로다.
+    const BagPlan p = plan_bag_expand(700, 650, 0, kBagSlotsAll, 540,
+                                      kBagBranchA, kBagTargetMax, 50, -1);
+    CHECK(!p.apply);
+    CHECK(p.skip != nullptr);
+}
+
+// 늘리기는 바닥과 무관하다 - 아이템이 어디 있든 넓히는 것은 안전하다.
+TEST(bag_grow_ignores_the_occupied_floor) {
+    const BagPlan p = plan_bag_expand(240, 190, 0, kBagSlotsAll, 700,
+                                      kBagBranchA, kBagTargetMax, 50, 600);
+    CHECK(p.apply);
+    CHECK_EQ(p.capacity, 700);
+}

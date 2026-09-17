@@ -44,6 +44,7 @@
 #include "game/clan.h"
 #include "game/equip.h"
 #include "game/freecam.h"
+#include "game/inventory.h"
 #include "game/items.h"
 #include "game/nofall.h"
 #include "game/player.h"
@@ -563,6 +564,19 @@ void persist_knowledge_keep() {
     if (g_ini_path.empty()) return;
     cdtb::config::save(g_ini_path, g_cfg);
 }
+
+// 가방 확장도 같은 방식으로 남긴다. 자동 재적용은 프로세스 메모리에만 살아서,
+// 이것이 없으면 게임을 껐다 켤 때 용량이 통째로 사라진다(사용자 보고 2026-09-16).
+void persist_bag_keep() {
+    const std::vector<cdtb::game::BagWant> want = cdtb::game::bag_auto_list();
+    g_cfg.bag_keep.clear();
+    g_cfg.bag_keep.reserve(want.size());
+    for (const cdtb::game::BagWant& w : want) {
+        g_cfg.bag_keep.push_back(Config::BagKeep{w.kind, w.target});
+    }
+    if (g_ini_path.empty()) return;
+    cdtb::config::save(g_ini_path, g_cfg);
+}
 }  // namespace
 
 void set_config(const Config& cfg, const std::wstring& ini_path) {
@@ -578,6 +592,20 @@ void set_config(const Config& cfg, const std::wstring& ini_path) {
                    static_cast<int>(cfg.knowledge_keep.size()));
     }
     cdtb::game::know_auto_persist_hook(&persist_knowledge_keep);
+    // 지난 실행에 걸어 둔 가방 확장도 되살린다. 칸은 늘 **자동**으로 되살린다 -
+    // A/B 강제는 시험용이라 설정에 남기지 않는다(inventory.h).
+    if (!cfg.bag_keep.empty()) {
+        std::vector<cdtb::game::BagWant> want;
+        want.reserve(cfg.bag_keep.size());
+        for (const Config::BagKeep& b : cfg.bag_keep) {
+            want.push_back(cdtb::game::BagWant{b.kind, b.target});
+        }
+        cdtb::game::bag_auto_restore(want, cdtb::game::kBagBranchAuto);
+        log::infof("가방 자동 재적용 {}개를 설정에서 되살렸다",
+                   static_cast<int>(cfg.bag_keep.size()));
+    }
+    // **훅은 되살린 뒤에 건다** - 먼저 걸면 되살리는 동안 파일에 몇 번씩 다시 쓴다.
+    cdtb::game::bag_auto_persist_hook(&persist_bag_keep);
     // 장비 창의 캐릭터 선택을 되살린다. 발견은 분석 스레드가 한다.
     cdtb::game::equip_select_character(
         cfg.equip_character_row < 0

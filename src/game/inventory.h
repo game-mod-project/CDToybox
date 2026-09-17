@@ -306,10 +306,16 @@ struct BagPlan {
 // 없는 것으로 보지 않고 kBagTargetMax 를 쓴다 - 상한 없는 길을 만들지 않는다.
 // base_max 는 **이 종류의 실측 기본 슬롯**이다(bag_kind_base_max). 유도값이 그보다
 // 크면 갈래를 아직 안 채운 컨테이너를 본 것이므로 거부한다. 0 이면 검사하지 않는다.
+// `occupied_floor` = 아이템이 들어 있는 **가장 높은 칸 다음** 번호. 목표가 지금
+// 용량보다 작을 때(줄이기) 이것보다 아래로는 깎지 않는다 - 그 아래로 가면 용량
+// 밖으로 밀려나는 아이템이 생긴다. **`used`(+0x12)로는 못 가른다**: 칸이 성기게
+// 차 있어 아이템이 used 보다 높은 칸에 있을 수 있다(실측 used 144 / 레코드 143).
+// -1 이면 "모른다" 라 줄이기를 거부한다 - 모르는 채 깎지 않는다.
 BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
                         int branch = kBagBranchA,
                         int limit = kBagTargetMax,
-                        int base_max = 0);
+                        int base_max = 0,
+                        int occupied_floor = -1);
 
 // 우리가 아는 종류인가(= 표에 있는가). 작은 칸(용량 5·10·20·50)은 **절대**
 // 건드리지 않는다 - 그것까지 부풀린 것이 2026-09-05 "리로드 후 지급 손상" 의
@@ -462,6 +468,11 @@ const char* bag_restore_blocked(const BagBackup& s, int cap, int exp, int used);
 bool bag_restore_already_original(const BagBackup& s, int cap, int a, int b);
 
 // 지금 자동 재적용을 걸어야 하는가(순수).
+// "아직 한 번도 안 걸었다". 실제 세대는 0 부터 오르므로 어떤 세대와도 같지
+// 않다. 시작할 때 `g_inv_gen` 과 `g_auto_gen` 이 **둘 다 0** 이라, 이 구분이
+// 없으면 ini 에서 되살린 뒤 `gen == auto_gen` 으로 영영 건너뛴다(실측 2026-09-17).
+inline constexpr unsigned kAutoGenNever = 0xFFFFFFFFu;
+
 bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
                          bool both_ready);
 
@@ -475,6 +486,24 @@ bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
 // 사용자가 직접 누른 것을 그대로 되풀이할 뿐이다 - 스스로 값을 정하지 않는다.
 void bag_auto_set(std::span<const int> targets, int branch);
 void bag_auto_clear();      // 되돌리기와 화면 체크 해제가 부른다
+
+// **설정에 남겨 게임을 껐다 켜도 살아남게 한다.** 자동 재적용은 프로세스
+// 메모리에만 살아서, 예전에는 게임을 다시 켜면 용량이 통째로 사라졌다 - 세이브에
+// 남는 칸(+0x16)은 새 산술이 안 읽어 더는 쓰지 않기 때문이다(사용자 보고
+// 2026-09-16). 지식(`know_auto_*`)과 같은 방식이다.
+struct BagWant {
+    int kind;     // 게임의 종류 번호(색인이 아니다 - 표 순서가 바뀌어도 안전)
+    int target;
+};
+std::vector<BagWant> bag_auto_list();
+
+// ini 에서 되살린다. `bag_auto_set` 과 달리 **지금 세대를 소모하지 않는다** -
+// 시작할 때는 아직 인벤토리가 없어서, 처음 잡히는 그것이 대상이어야 한다.
+void bag_auto_restore(std::span<const BagWant> want, int branch);
+
+// 목록이 바뀔 때마다 부른다(설정 파일에 남기라는 뜻). 되살린 뒤에 건다 -
+// 먼저 걸면 되살리는 동안 같은 내용을 파일에 몇 번씩 다시 쓴다.
+void bag_auto_persist_hook(void (*fn)());
 bool bag_auto_on();
 // **자동 복구는 없다.** 새 산술이 `+0x16` 을 안 읽으므로 낡은 합계는 더 이상
 // 아무것도 막지 않는다. 그 칸을 쓰는 것은 **세이브에 남는 유일한 쓰기**라, 기능적
