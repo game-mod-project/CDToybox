@@ -185,7 +185,9 @@ id 는 `(레코드 _key << 32) | 순번` 이다(예: 1000002<<32 + 752). 현지�
 지도가 붉은 구역을 **그린다**는 것은 클라이언트가 그 지역 집합을 알고 있다는
 뜻이다. 아직 안 쫓은 단서다.
 
-### 5-1. `RegionInfoManager` 를 걸으려다 멈춘 자리 (기록)
+### 5-1. `RegionInfoManager` 를 걸으려다 멈춘 자리 (기록 · **§5-1-1 에서 풀렸다**)
+
+> 이 절은 **헛걸음의 기록**이다. 결론은 아래 §5-1-1 을 보라.
 
 어느 조건이 실제로 걸리는지부터 본다. 지금은 **셋 다 가능성**이고, 마을에서
 막히는 것이 `IsInTown()` 인지 `IsVehicleAllowedInEnteredRegion` 인지 모른다.
@@ -212,25 +214,119 @@ id 는 `(레코드 _key << 32) | 순번` 이다(예: 1000002<<32 + 752). 현지�
 - 커뮤니티 `regioninfo_parser.py` 는 **우리 빌드에서 안 돌았다**(1007개 중 0개
   파싱). 예약 슬롯 파서와 같은 문제다 - 버전이 다르다. 쓰지 말 것.
 
+### 5-1-1. **풀렸다 — 매니저 전역도, `IsInTown()` 의 실제 데이터도** (2026-09-17, 정적 실측)
+
+§5-1 에서 막혔던 것을 **실행 파일만 보고** 풀었다. 게임을 켤 필요도 없었다.
+
+#### (가) `RegionInfoManager` 전역 = **모듈 + 0x6C2E2F0**
+
+찾은 길: `regioninfo` 라는 **표 이름 문자열**(RVA 0x597B990)을 참조하는 코드를
+뒤졌다. 그중 RVA 0x49BBD2 가 진짜 조회 함수였다.
+
+```asm
+0x0049BB92  movzx edi, word ptr [rcx]        ; 인자 = RegionKey (u16)
+0x0049BB95  mov   rbx, [rip+...]             ; -> **RVA 0x6C2E2F0 = 매니저 전역**
+0x0049BB9C  cmp   edi, dword ptr [rbx + 8]   ; +0x08 = 개수
+0x0049BBA5  lea   rsi, [rdi*8]
+0x0049BBAD  mov   rax, qword ptr [rbx + 0x58]; +0x58 = RegionInfo* 배열
+0x0049BBB1  mov   rax, qword ptr [rsi + rax] ; 배열[키]
+```
+
+**지식 매니저와 배치가 똑같다**(`+0x08` 개수 / `+0x58` 배열). 게다가 주소가
+`0x6C2E2D8`(지식) 바로 **+0x18** 뒤다 — 매니저 전역들이 한 구역에 줄지어 있다.
+
+> 앞 절이 **찾지 못한 이유**가 이제 분명하다. 런타임 RTTI 로 집었던
+> vtable `0x14549B360` 은 남의 것이었다. 진짜 `RegionInfoManager` vtable 은
+> **RVA 0x597BBF0 (VA 0x14597BBF0)** 이다(`find_class.py` 가 TD→COL→vtable 로
+> 정확히 집어 준다). 런타임 `instances` 가 세 클래스를 한 vtable 로 묶어 낸 것을
+> 그대로 믿은 것이 헛걸음의 원인이었다.
+
+#### (나) `IsInTown()` 은 **정적 표를 안 읽는다 — 플레이어의 살아있는 칸을 읽는다**
+
+`AICondition_IsInTown`(vtable RVA 0x57A9508)의 판정 함수(slot 1, RVA 0x2232130)
+끝이 전부다:
+
+```asm
+0x0223218D  mov rax, [rsp+0x28]        ; 대상 액터
+0x02232192  mov rcx, [rax + 0x68]      ; 액터 컴포넌트 홀더 (우리가 늘 쓰는 그 칸)
+0x02232196  mov rax, [rcx + 0xB0]      ; +0xB0 컴포넌트
+0x0223219D  cmp dword ptr [rax + 0x358], 0
+0x022321AE  je  -> 결과 1              ; 0 이면 "마을 아님"
+0x022321B4      -> 결과 0              ; 0 이 아니면 "마을"
+```
+
+즉 **`IsInTown()` = `dword [[[액터+0x68]+0xB0]+0x358] != 0`**. `RegionInfo._isTown`
+을 그 자리에서 읽는 것이 아니라, **지금 들어와 있는 마을 구역 수**로 보이는
+정수 한 칸을 읽는다(0 이면 아님). `_isTown` 은 그 칸을 **올리는 쪽**의 재료다.
+
+레버가 둘로 갈린다:
+
+| 레버 | 어디 | 범위 | 언제 듣나 |
+|---|---|---|---|
+| **살아있는 칸** | `[[액터+0x68]+0xB0]+0x358` → 0 | 그 순간 · 그 액터만 | **즉시** |
+| 정적 표 | `RegionInfo._isTown`(+0x75) → 0 | 그 구역 전부 | 다음 구역 진입부터 |
+
+이미 마을 **안에 서 있는 상태**에서 부르려면 정적 표만으로는 안 된다 — 칸은
+이미 올라가 있다. **살아있는 칸이 1순위**다.
+
+#### (다) 아직 모르는 것
+
+- `[액터+0x68]+0xB0` 이 **어느 컴포넌트**인지 (런타임에 `whatis` 로 이름표를 본다).
+- `+0x358` 이 정말 "겹친 마을 구역 수" 인지, 아니면 구역 키/비트마스크인지.
+- `IsVehicleAllowedInEnteredRegion` 의 판정 함수 — `ConditionData_` 만 있고
+  `AICondition_` 이 없다(468 : 435, 33개가 짝이 없고 이것이 그중 하나다).
+  붉은 구역 쪽 레버는 여전히 `RegionInfo._forbiddenMercenaryKeyList`(+0x80) 다.
+
+#### (라) 곁가지로 확인한 표 배치 (앞 문서 정정)
+
+`regioninfo.staticinfoheader` 는 **행 1007개**인데 항목이 **6바이트**다:
+
+```
+헤더: u16 개수 · {u16 키, u32 본문오프셋} × 개수
+```
+
+정본이 적어 둔 `{u32 키, u32 오프셋}` 8바이트는 **표마다 다르다** — 키 폭이
+그 표의 키 타입을 따라간다(`StaticInfoManager2<RegionKey,RegionInfo,...,u16>`).
+커뮤니티 `regioninfo_parser.py` 가 1007개 중 0개를 뽑은 것도 이것 때문으로 보인다.
+
+레코드 앞머리(역어셈블로 확인한 **읽는 순서**, `RegionInfo::Deserialize`
+RVA 0x1485E50):
+
+```
+u16 _key · str _stringKey · u8 _isBlocked · {현지화} _displayRegionName
+· u32 _knowledgeInfo · 목록 _regionEnterknowledgeInfoList · u16(+0x50)
+· 목록 _childRegionInfoList · u8(+0x68) · u8 _bitmapColor
+· f32 _overriedMaxHeight · u8 _regionType · ? _fogClearCondition
+· u8 _limitVehicleRun · **u8 _isTown** · u8 _isWild · u8 _isUIMapDisable
+· u8 _isNonePlayZone · 목록 _forbiddenMercenaryKeyList · u8 _isWorldMapRoadPathFindable ...
+```
+
 ### 5-2. 손댈 자리 (제안)
 
 정적 표 쓰기라 **세이브에 안 남고** 실행마다 다시 걸어야 한다 — 우리가 이미
 `vehicle_place_gated` 계열에서 하는 방식과 같다.
 
-| 무엇 | 어디 | 기대 |
-|---|---|---|
-| **마을 소환** | **`VehicleInfo._canCallSafeZone` → 1** | **커뮤니티가 쓰는 칸(§5-4). 1순위** |
-| 고도 관문 | `VehicleInfo._maxAllowableHeight`(+0x9C) · `RegionInfo._overriedMaxHeight`(+0x6C) | `CheckVehicleAllowableHeight()` 통과 |
-| 마을 관문 | `RegionInfo._isTown`(+0x75) → 0 | `IsInTown()` 거짓 |
-| 지역 허용 | `RegionInfo._forbiddenMercenaryKeyList`(+0x80) 개수 → 0 | `IsVehicleAllowedInEnteredRegion` 참 |
-| 시간 제한 | `CharacterInfo._callMercenarySpawnDuration`(600초) | 10분 강제 하차 없어짐 |
-| 재소환 대기 | `CharacterInfo._callMercenaryCoolTime`(3600초) | 60분 쿨다운 없어짐 |
+| 순위 | 무엇 | 어디 | 기대 |
+|---|---|---|---|
+| **1** | **마을 판정** | **`[[액터+0x68]+0xB0]+0x358`(i32) → 0** | **`IsInTown()` 이 그 자리에서 거짓. 마을 안에 서 있어도 듣는다**(§5-1-1) |
+| 2 | 지역 허용 | `RegionInfo._forbiddenMercenaryKeyList`(+0x80) 개수 → 0 | `IsVehicleAllowedInEnteredRegion` 참 — 붉은 구역 풀림 |
+| 3 | 마을 관문(표) | `RegionInfo._isTown`(+0x75) → 0 | 다음 구역 진입부터 마을 칸이 안 오름 |
+| 4 | 고도 관문 | `VehicleInfo._maxAllowableHeight`(+0x9C) · `RegionInfo._overriedMaxHeight`(+0x6C) | `CheckVehicleAllowableHeight()` 통과 (화면상 안 걸린다 · §5-0-1) |
+| 5 | 시간 제한 | `CharacterInfo._callMercenarySpawnDuration`(600초) | 10분 강제 하차 없어짐 |
+| 6 | 재소환 대기 | `CharacterInfo._callMercenaryCoolTime`(3600초) | 60분 쿨다운 없어짐 |
 
-> ⚠️ **`_isTown` 을 0 으로 만드는 것은 범위가 넓다.** `IsInTown()` 은 현상금·
-> 상점·NPC 일과 등 **다른 계통이 같이 쓴다**(조건식에서 확인: `WantedLevel()>=1
-> && WantedState(Normal) && IsInTown()` 등). 탈것만 풀려는데 마을 전체를
-> "마을이 아님" 으로 만들면 무엇이 딸려 올지 모른다. **지역 허용 목록 쪽이 훨씬
-> 좁다** — 그쪽을 먼저 본다.
+`RegionInfo` 에 닿는 길은 이제 있다 — **매니저 전역 `모듈+0x6C2E2F0`**,
+`+0x08` 개수 / `+0x58` 배열(§5-1-1). 정적 표 쓰기는 **세이브에 안 남고** 실행마다
+다시 걸어야 한다 — `vehicle_place_gated` 계열에서 이미 하는 방식과 같다.
+
+> ⚠️ **1·3 은 범위가 넓다.** `IsInTown()` 은 현상금·상점·NPC 일과 등 **다른
+> 계통이 같이 쓴다**(조건식에서 확인: `WantedLevel()>=1 && WantedState(Normal)
+> && IsInTown()` 등). 그래서 **1 은 늘 켜 두는 것이 아니라 사용자가 켜고 끄는
+> 토글**로 둔다 — 부를 때만 내리고 곧바로 되돌린다. 3 은 표를 고치는 것이라
+> 세션 내내 남으므로 더 위험하다.
+>
+> ⚠️ **`VehicleInfo._canCallSafeZone` 은 우리 빌드에 없다**(커뮤니티 §5-4 가
+> 쓰는 칸. 리플렉션 이름 목록에 안 나온다). 1순위에서 내렸다.
 
 ### 5-3. 이미 우리가 푸는 것 (중복 주의)
 
@@ -271,19 +367,25 @@ gamedata/characterinfo.pabgb (45건)
 
 ## 6. 다음 한 걸음
 
-§5-4 로 **칸은 정해졌다.** 남은 것은 우리 방식(런타임 정적 표 쓰기)으로
-같은 칸을 거는 것이다. 순서는 **좁은 것부터**다.
+§5-1-1 로 **닿는 길이 둘 다 열렸다.** 남은 것은 런타임에서 재는 일이다.
+순서는 **싼 것부터**다.
 
-1. **`VehicleInfo._canCallSafeZone` 을 1 로** — 드래곤·A.T.A.G. 두 행만.
-   오프셋은 `fields.py` 로 뽑는다(아직 안 뽑았다). 범위가 제일 좁고 커뮤니티가
-   이 칸으로 마을 소환을 푼다.
-2. **시간 제한 둘** — `_callMercenarySpawnDuration` → `0x7FFFFFFF`,
-   `_callMercenaryCoolTime` → 0. 지역과 무관하고 외부 선례가 확실하다.
-3. 그래도 남으면 **지역 쪽**(`_isTown` · `_limitVehicleRun`). **마지막에 한다** —
-   `IsInTown()` 은 현상금·상점·NPC 일과가 같이 쓴다(§5-2 경고).
+1. **`[[액터+0x68]+0xB0]` 이 무슨 컴포넌트인지 이름표를 본다**(`whatis`).
+   같은 자리 `+0x358` 을 **마을 안 / 밖에서 각각 읽어** 정말 마을에서만 0 이
+   아닌지 확인한다. 이 한 번으로 §5-1-1 (나)가 참인지 거짓인지 끝난다.
+2. **매니저 전역을 확인한다** — `모듈+0x6C2E2F0` 을 떠서 `+0x08` 개수가 표
+   행수(1007)나 최대 키(45006) 중 어느 쪽인지 본다. 그래야 배열을 **행으로**
+   도는지 **키로** 도는지 정해진다.
+3. `RegionInfo` 를 전부 훑어 **`_isTown=1` 인 구역 목록**과
+   **`_forbiddenMercenaryKeyList` 가 비지 않은 구역 목록**을 낸다. 붉은 구역이
+   그 목록과 맞는지가 §5-0-1 스크린샷으로 대조된다.
+4. 그 다음에야 쓰기다. **1번 레버(살아있는 칸)를 토글로** 먼저 시험한다 —
+   되돌리기가 제일 쉽고 세이브에 안 남는다.
+5. 시간 제한 둘(`_callMercenarySpawnDuration` · `_callMercenaryCoolTime`)은
+   지역과 무관하고 외부 선례가 확실하니 언제 해도 된다.
 
-전부 정적 표라 **세이브에 안 남고** 실행마다 다시 건다 — `vehicle_place_gated`
-와 같은 배관에 얹으면 된다.
+> `VehicleInfo._canCallSafeZone` 은 **우리 빌드에 없다**. 커뮤니티가 쓰는 칸이라
+> 1순위로 뒀었지만 리플렉션 이름 목록에 안 나온다 — 후보에서 뺐다.
 
 ---
 
