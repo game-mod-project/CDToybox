@@ -306,10 +306,16 @@ struct BagPlan {
 // 없는 것으로 보지 않고 kBagTargetMax 를 쓴다 - 상한 없는 길을 만들지 않는다.
 // base_max 는 **이 종류의 실측 기본 슬롯**이다(bag_kind_base_max). 유도값이 그보다
 // 크면 갈래를 아직 안 채운 컨테이너를 본 것이므로 거부한다. 0 이면 검사하지 않는다.
+// `occupied_floor` = 아이템이 들어 있는 **가장 높은 칸 다음** 번호. 목표가 지금
+// 용량보다 작을 때(줄이기) 이것보다 아래로는 깎지 않는다 - 그 아래로 가면 용량
+// 밖으로 밀려나는 아이템이 생긴다. **`used`(+0x12)로는 못 가른다**: 칸이 성기게
+// 차 있어 아이템이 used 보다 높은 칸에 있을 수 있다(실측 used 144 / 레코드 143).
+// -1 이면 "모른다" 라 줄이기를 거부한다 - 모르는 채 깎지 않는다.
 BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
                         int branch = kBagBranchA,
                         int limit = kBagTargetMax,
-                        int base_max = 0);
+                        int base_max = 0,
+                        int occupied_floor = -1);
 
 // 우리가 아는 종류인가(= 표에 있는가). 작은 칸(용량 5·10·20·50)은 **절대**
 // 건드리지 않는다 - 그것까지 부풀린 것이 2026-09-05 "리로드 후 지급 손상" 의

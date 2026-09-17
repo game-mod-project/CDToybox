@@ -394,7 +394,8 @@ std::vector<std::string> inventory_scan_classes() {
 // ------------------------------------------------------ 가방·보관함 확장
 
 BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
-                        int branch, int limit, int base_max) {
+                        int branch, int limit, int base_max,
+                        int occupied_floor) {
     BagPlan p;
     p.branch = branch == kBagBranchB ? kBagBranchB : kBagBranchA;
     // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
@@ -441,14 +442,27 @@ BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
         p.skip = "목표가 기본 슬롯보다 작다";
         return p;
     }
-    // **줄이지 않는다.** 이미 목표보다 큰 칸을 목표까지 깎으면 용량 밖으로
-    // 밀려난 아이템이 어떻게 되는지 모른다 - 그건 확장 기능이 할 일이 아니다.
+    // **줄이기는 아이템이 밀려나지 않을 때만 한다.** 목표 밖으로 밀려난 아이템이
+    // 어떻게 되는지 모른다. 예전에는 줄이기를 통째로 거부했는데, 화면에서 값을
+    // 낮춰도 아무 일이 안 일어나고 다음 로드에서야 걸려 사용자가 고장으로 읽었다
+    // (2026-09-17). 이제는 **가장 높이 든 아이템 위**로만 깎는다.
+    //
+    // 기준은 `occupied_floor`(= 아이템이 든 가장 높은 칸 다음)다. **`used`(+0x12)는
+    // 쓸 수 없다** - 칸이 성기게 차 있어 아이템이 used 보다 높은 칸에 있을 수 있다
+    // (실측 used 144 / 레코드 143, inventory.h). 모르면(-1) 예전처럼 거부한다.
+    //
     // 칸을 고를 수 있게 되기 전에는 이 검사가 `want - base - a < 0` 에 우연히
     // 숨어 있었다. A 를 고르면 큰 값이 **우리가 덮어쓸 칸**에 있어 그 우연한
     // 방어가 사라진다(2026-09-13, 시험이 잡았다).
     if (cap > want) {
-        p.skip = "이미 목표보다 크다";
-        return p;
+        if (occupied_floor < 0) {
+            p.skip = "이미 목표보다 크다 - 든 칸을 못 읽어 줄이지 않는다";
+            return p;
+        }
+        if (want < occupied_floor) {
+            p.skip = "목표 밖에 아이템이 있다 - 먼저 정리하십시오";
+            return p;
+        }
     }
     // **고른 칸만** 조정하고 반대 칸은 그대로 둔다. 엔진이 합계를 sum 으로
     // 재계산하든 max 로 재계산하든 결과가 want 이하가 된다(max 면 오히려 작아진다).
@@ -673,11 +687,26 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
             ++r->fail;
             continue;
         }
+        // **줄일 때만** 레코드 배열을 훑는다 - 칸이 1460개라 값싸지 않다.
+        // 아이템이 든 가장 높은 칸 다음이 깎을 수 있는 바닥이다. 못 읽으면
+        // -1(모름)이라 plan 이 줄이기를 거부한다.
+        int floor_slot = -1;
+        if (target < static_cast<int>(cap)) {
+            std::vector<InventoryRecord> recs;
+            if (read_inventory_records(reader, c, &recs)) {
+                floor_slot = 0;
+                for (const InventoryRecord& rec : recs) {
+                    const int next = static_cast<int>(rec.slot) + 1;
+                    if (next > floor_slot) floor_slot = next;
+                }
+            }
+        }
         const BagPlan p = plan_bag_expand(cap, a, b,
                                           static_cast<int>(c.slots), target,
                                           bag_resolve_branch(branch, c.kind),
                                           bag_kind_cap(c.kind),
-                                          bag_kind_base_max(c.kind));
+                                          bag_kind_base_max(c.kind),
+                                          floor_slot);
         BagSeen seen;
         seen.realm = realm;
         seen.kind = c.kind;
