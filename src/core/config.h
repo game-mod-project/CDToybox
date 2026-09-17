@@ -44,6 +44,17 @@ struct Config {
     };
     std::vector<KnowKeep> knowledge_keep;
 
+    // 다시 걸어 줄 가방·보관함 용량. `종류:목표` 를 쉼표로 잇는다.
+    // 자동 재적용은 프로세스 메모리에만 살아서 게임을 껐다 켜면 사라졌다 -
+    // 세이브에 남는 칸(+0x16)은 새 산술이 안 읽어 더는 쓰지 않기 때문이다.
+    // 색인이 아니라 **게임의 종류 번호**를 적는다(표 순서가 바뀌어도 안전하다).
+    // ini 표기: `bag_keep = 1:240,7:440`
+    struct BagKeep {
+        int kind;
+        int target;
+    };
+    std::vector<BagKeep> bag_keep;
+
     // 장비 창에서 고른 캐릭터(캐릭터 행). -1 이면 자동(정신력 풀 + 착용 조각 최다).
     // 클리프·웅카·데미안을 번갈아 조종하므로 마지막 선택을 세션 너머로 남긴다.
     // ini 표기: `equip_character_row = 5` (클리프 0, 데미안 3, 웅카 5)
@@ -89,6 +100,9 @@ std::vector<Config::SocketCapPart> parse_socket_cap_parts(std::string_view v);
 
 // `4883:1,4884:1` 을 지식 목록으로. 위와 같은 규칙 - 어긋난 항목만 버린다.
 std::vector<Config::KnowKeep> parse_knowledge_keep(std::string_view v);
+
+// `bag_keep = <종류>:<목표>,...` 를 읽는다. 못 읽는 항목은 조용히 버린다.
+std::vector<Config::BagKeep> parse_bag_keep(std::string_view v);
 
 }  // namespace config
 }  // namespace cdtb

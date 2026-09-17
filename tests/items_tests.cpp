@@ -62,8 +62,30 @@ struct Fixture {
             mem.put_u8(rec + 0xA3, static_cast<std::uint8_t>(56 + i));
             // 최대 스택 +0x18. 지급 개수를 여기에 맞춰 자른다.
             mem.put_u32(rec + 0x18, static_cast<std::uint32_t>(10 * (i + 1)));
+            build_string_key(i, rec);
         }
         build_localization();
+    }
+
+    // --- 내부 이름(`_stringKey`) ---
+    //   레코드 +0x08 -> { char* +0x00, u32 길이 +0x08 }
+    // 장비의 캐릭터 전용 구분이 이 문자열의 접두사에서 나온다.
+    static constexpr std::size_t kStrObjs = 0x2400;
+    static constexpr std::size_t kStrChars = 0x2800;
+    static constexpr const char* kInternal[3] = {
+        "Demian_PlateArmor_Helm_IV",      // 데미안 전용
+        "Marni_Devotee_PlateArmor_Helm",  // 공용
+        "Oongka_PlateArmor_Helm_II",      // 웅카 전용
+    };
+
+    void build_string_key(int i, std::size_t rec) {
+        const std::size_t obj = kStrObjs + i * 0x40;
+        const std::size_t chars = kStrChars + i * 0x40;
+        mem.put_u64(rec + 0x08, mem.heap_addr(obj));
+        mem.put_u64(obj + 0x00, mem.heap_addr(chars));
+        mem.put_u32(obj + 0x08,
+                    static_cast<std::uint32_t>(std::strlen(kInternal[i])));
+        mem.put_str(chars, kInternal[i]);
     }
 
     std::uintptr_t manager() const { return mem.heap_addr(kMgr); }
@@ -587,4 +609,98 @@ TEST(item_by_key_without_catalog_is_null) {
     // 표가 안 올라온 테스트 프로세스에서는 늘 nullptr 이다
     CHECK(cdtb::game::item_by_key(50001) == nullptr);
     CHECK(cdtb::game::item_by_key(0) == nullptr);
+}
+
+// --- 장비의 캐릭터 전용 구분 -------------------------------------------
+//
+// 캐릭터는 **표시명이 아니라 내부 이름**(`_stringKey`)의 접두사로 갈린다.
+// 표시명은 현지화되므로 거기엔 없다 - 실제로 표시명에 캐릭터가 든 장비는
+// 3157개 중 2개뿐이다. 실측 분류(2026-09-17, exe 2850):
+//   공용 3072 · 데미안 60 · 웅카 16 · 클리프 9
+
+using cdtb::game::EquipOwner;
+using cdtb::game::equip_owner_of;
+
+TEST(equip_owner_reads_demian_prefix) {
+    // 사용자 화면에서 클리프에게 "착용불가" 로 뜬 것이 이 아이템이다
+    // (표시명 "황금 광휘 판금 투구").
+    CHECK(equip_owner_of("Demian_PlateArmor_Helm_IV") == EquipOwner::Demian);
+}
+
+TEST(equip_owner_accepts_both_demian_spellings) {
+    // 게임 데이터에 Demian(47개) 과 Damian(13개) 이 **둘 다** 있다.
+    CHECK(equip_owner_of("Damian_Leather_Armor_III") == EquipOwner::Demian);
+}
+
+TEST(equip_owner_reads_oongka_prefix) {
+    // 웅카는 Unka 가 아니라 Oongka 다.
+    CHECK(equip_owner_of("Oongka_PlateArmor_Helm_II") == EquipOwner::Oongka);
+}
+
+TEST(equip_owner_reads_kliff_prefix) {
+    // 클리프는 Cliff 가 아니라 Kliff 다.
+    CHECK(equip_owner_of("Kliff_PlateArmor_Helm") == EquipOwner::Kliff);
+}
+
+TEST(equip_owner_without_character_prefix_is_shared) {
+    CHECK(equip_owner_of("Marni_Devotee_PlateArmor_Helm") ==
+          EquipOwner::Shared);
+}
+
+TEST(equip_owner_needs_underscore_after_the_name) {
+    // 표에 Demeniss(23개) 가 있다. "Dem" 으로 시작한다고 데미안이 아니다.
+    CHECK(equip_owner_of("Demeniss_Ring") == EquipOwner::Shared);
+    CHECK(equip_owner_of("Kliffhanger_Rope") == EquipOwner::Shared);
+}
+
+TEST(equip_owner_of_empty_name_is_shared) {
+    CHECK(equip_owner_of("") == EquipOwner::Shared);
+}
+
+TEST(read_item_table_fills_owner_from_the_internal_name) {
+    Fixture f;
+    std::vector<ItemEntry> out;
+    CHECK(cdtb::game::read_item_table(f.mem, f.manager(), &out, 0));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK(out[0].owner == EquipOwner::Demian);
+        CHECK(out[1].owner == EquipOwner::Shared);
+        CHECK(out[2].owner == EquipOwner::Oongka);
+    }
+}
+
+TEST(read_item_table_owner_is_shared_when_the_string_key_is_missing) {
+    // 문자열 칸이 비어 있어도 읽기가 멈추면 안 된다 - 공용으로 둔다.
+    Fixture f;
+    f.mem.put_u64(Fixture::kRecords + 0x08, 0);
+    std::vector<ItemEntry> out;
+    CHECK(cdtb::game::read_item_table(f.mem, f.manager(), &out, 0));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) CHECK(out[0].owner == EquipOwner::Shared);
+}
+
+TEST(build_item_catalog_carries_the_owner_through) {
+    // 화면이 읽는 것은 ItemEntry 가 아니라 목록이다. 여기서 끊기면
+    // 컬럼이 늘 "공용" 으로 나온다.
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK(out[0].owner == EquipOwner::Demian);
+        CHECK(out[1].owner == EquipOwner::Shared);
+        CHECK(out[2].owner == EquipOwner::Oongka);
+    }
+}
+
+TEST(owner_label_names_every_bucket) {
+    // 빠진 갈래가 있으면 화면에 빈칸이 뜬다. 네 개를 다 못박는다.
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Shared), "공용") == 0);
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Kliff),
+                      "클리프") == 0);
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Demian),
+                      "데미안") == 0);
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Oongka),
+                      "웅카") == 0);
 }

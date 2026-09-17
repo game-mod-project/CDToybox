@@ -6,6 +6,7 @@
 
 namespace {
 
+using cdtb::game::EquipOwner;
 using cdtb::game::ItemCatalogEntry;
 using cdtb::game::ItemFilter;
 using cdtb::game::ItemSort;
@@ -228,7 +229,7 @@ TEST(passes_agrees_with_filter_items) {
                     if (o == &e) in = true;
                 }
                 const bool p = cdtb::game::passes(f, e.name, e.grade,
-                                                  e.category, e.key);
+                                                  e.category, e.key, e.owner);
                 CHECK_EQ(p, in);
                 if (p) ++n;
             }
@@ -242,16 +243,16 @@ TEST(passes_ignores_key_when_match_key_is_off) {
     ItemFilter f;
     f.query = "9500";
     f.match_key = false;
-    CHECK(!cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+    CHECK(!cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u, EquipOwner::Shared));
     f.match_key = true;
-    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u, EquipOwner::Shared));
 }
 
 TEST(passes_with_key_off_still_matches_name) {
     ItemFilter f;
     f.query = "도끼";
     f.match_key = false;
-    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u));
+    CHECK(cdtb::game::passes(f, "벌목용 도끼", 0, 0, 950002u, EquipOwner::Shared));
 }
 
 TEST(passes_with_key_off_drops_unnamed_even_if_key_matches) {
@@ -259,14 +260,14 @@ TEST(passes_with_key_off_drops_unnamed_even_if_key_matches) {
     ItemFilter f;
     f.query = "200997";
     f.match_key = false;
-    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u));
+    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u, EquipOwner::Shared));
 }
 
 // ------------------------------------------------- Combo 색인 -> 필터
 
 TEST(make_filter_index_zero_means_all) {
     const std::vector<std::uint8_t> cats = {56, 22};
-    const auto f = cdtb::game::make_filter("", 0, 0, false, cats);
+    const auto f = cdtb::game::make_filter("", 0, 0, false, cats, 0);
     CHECK_EQ(f.grade, -1);
     CHECK_EQ(f.category, -1);
     CHECK(f.query.empty());
@@ -277,28 +278,28 @@ TEST(make_filter_index_zero_means_all) {
 TEST(make_filter_grade_index_is_one_past_the_grade) {
     // Combo 는 0 이 "전체" 라 등급이 한 칸 밀려 있다. 1 이 등급 0(없음).
     const std::vector<std::uint8_t> cats;
-    CHECK_EQ(cdtb::game::make_filter("", 1, 0, false, cats).grade, 0);
-    CHECK_EQ(cdtb::game::make_filter("", 6, 0, false, cats).grade, 5);
+    CHECK_EQ(cdtb::game::make_filter("", 1, 0, false, cats, 0).grade, 0);
+    CHECK_EQ(cdtb::game::make_filter("", 6, 0, false, cats, 0).grade, 5);
 }
 
 TEST(make_filter_category_index_looks_up_the_table) {
     const std::vector<std::uint8_t> cats = {56, 22};
-    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, cats).category, 56);
-    CHECK_EQ(cdtb::game::make_filter("", 0, 2, false, cats).category, 22);
+    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, cats, 0).category, 56);
+    CHECK_EQ(cdtb::game::make_filter("", 0, 2, false, cats, 0).category, 22);
 }
 
 TEST(make_filter_category_index_past_the_table_means_all) {
     // 카탈로그가 새 판으로 갈리면 Combo 색인이 표 길이를 넘을 수 있다.
     // 그때 배열 밖을 읽지 말고 "전체" 로 떨어져야 한다.
     const std::vector<std::uint8_t> cats = {56, 22};
-    CHECK_EQ(cdtb::game::make_filter("", 0, 3, false, cats).category, -1);
+    CHECK_EQ(cdtb::game::make_filter("", 0, 3, false, cats, 0).category, -1);
     const std::vector<std::uint8_t> none;
-    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, none).category, -1);
+    CHECK_EQ(cdtb::game::make_filter("", 0, 1, false, none, 0).category, -1);
 }
 
 TEST(make_filter_copies_query_and_hide_unnamed) {
     const std::vector<std::uint8_t> cats;
-    const auto f = cdtb::game::make_filter("화살", 0, 0, true, cats);
+    const auto f = cdtb::game::make_filter("화살", 0, 0, true, cats, 0);
     CHECK_EQ(f.query, std::string("화살"));
     CHECK(f.hide_unnamed);
 }
@@ -311,7 +312,7 @@ TEST(passes_hides_unnamed_before_matching_its_key) {
     ItemFilter f;
     f.hide_unnamed = true;
     f.query = "200997";
-    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u));
+    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u, EquipOwner::Shared));
     const auto all = sample();
     const auto out = cdtb::game::filter_items(all, f);
     CHECK_EQ(out.size(), static_cast<std::size_t>(0));
@@ -320,13 +321,14 @@ TEST(passes_hides_unnamed_before_matching_its_key) {
 TEST(make_filter_negative_index_means_all) {
     // Combo 는 음수를 내지 않지만, 낸다 해도 전체로 떨어져야 한다.
     const std::vector<std::uint8_t> cats = {56, 22};
-    const auto f = cdtb::game::make_filter("", -1, -1, false, cats);
+    const auto f = cdtb::game::make_filter("", -1, -1, false, cats, 0);
     CHECK_EQ(f.grade, -1);
     CHECK_EQ(f.category, -1);
 }
 
 TEST(item_sort_from_specs_maps_columns) {
-    auto c = cdtb::game::item_sort_from_specs(1, 4, false);
+    // "전용" 열이 4 로 들어오면서 이름이 5 로 밀렸다.
+    auto c = cdtb::game::item_sort_from_specs(1, 5, false);
     CHECK(c.sort == ItemSort::Name);
     CHECK(!c.ascending);
     c = cdtb::game::item_sort_from_specs(1, 2, true);
@@ -343,4 +345,62 @@ TEST(item_sort_from_specs_cleared_returns_to_key_ascending) {
     const auto c = cdtb::game::item_sort_from_specs(0, 4, false);
     CHECK(c.sort == ItemSort::Key);
     CHECK(c.ascending);
+}
+
+// --- 캐릭터 전용 구분: 필터와 정렬 ------------------------------------
+//
+// 컬럼을 "분류" 뒤(색인 4)에 끼우므로 "이름" 이 5 로 밀린다. 열 색인은
+// 화면과 정렬 사이의 계약이라 시험으로 못박아 둔다.
+
+
+TEST(filter_owner_all_passes_everything) {
+    cdtb::game::ItemFilter f;
+    f.owner = -1;   // 전체
+    CHECK(cdtb::game::passes(f, "투구", 5, 3, 1, EquipOwner::Demian));
+    CHECK(cdtb::game::passes(f, "투구", 5, 3, 1, EquipOwner::Shared));
+}
+
+TEST(filter_owner_keeps_only_the_chosen_character) {
+    cdtb::game::ItemFilter f;
+    f.owner = static_cast<int>(EquipOwner::Demian);
+    CHECK(cdtb::game::passes(f, "황금 광휘 판금 투구", 5, 3, 1,
+                             EquipOwner::Demian));
+    CHECK(!cdtb::game::passes(f, "디스카오 판금 투구", 3, 3, 2,
+                              EquipOwner::Shared));
+    CHECK(!cdtb::game::passes(f, "벨칸드 판금 투구", 4, 3, 3,
+                              EquipOwner::Oongka));
+}
+
+TEST(filter_owner_can_select_shared_only) {
+    // "공용만" 은 전용 장비를 다 걷어낸다 - 셋 중 아무에게도 안 묶인 것.
+    cdtb::game::ItemFilter f;
+    f.owner = static_cast<int>(EquipOwner::Shared);
+    CHECK(cdtb::game::passes(f, "비지오네", 1, 3, 1, EquipOwner::Shared));
+    CHECK(!cdtb::game::passes(f, "카이로스 판금 투구", 5, 3, 2,
+                              EquipOwner::Kliff));
+}
+
+TEST(sort_items_by_owner_groups_characters) {
+    std::vector<cdtb::game::ItemCatalogEntry> v(4);
+    v[0].key = 1; v[0].owner = EquipOwner::Oongka;
+    v[1].key = 2; v[1].owner = EquipOwner::Shared;
+    v[2].key = 3; v[2].owner = EquipOwner::Demian;
+    v[3].key = 4; v[3].owner = EquipOwner::Kliff;
+    std::vector<const cdtb::game::ItemCatalogEntry*> p;
+    for (const auto& e : v) p.push_back(&e);
+    cdtb::game::sort_items(p, cdtb::game::ItemSort::Owner, true);
+    // Shared(0) < Kliff(1) < Demian(2) < Oongka(3)
+    CHECK_EQ(p[0]->key, 2u);
+    CHECK_EQ(p[1]->key, 4u);
+    CHECK_EQ(p[2]->key, 3u);
+    CHECK_EQ(p[3]->key, 1u);
+}
+
+TEST(item_sort_from_specs_maps_the_owner_column) {
+    auto c = cdtb::game::item_sort_from_specs(1, 4, true);
+    CHECK(c.sort == ItemSort::Owner);
+    // 이름이 5 로 밀렸다
+    c = cdtb::game::item_sort_from_specs(1, 5, false);
+    CHECK(c.sort == ItemSort::Name);
+    CHECK(!c.ascending);
 }

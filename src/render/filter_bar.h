@@ -17,6 +17,9 @@ struct FilterBar {
     char query[128] = "";
     int grade_idx = 0;        // 0 = 전체, 1 = 등급 없음, 2..6 = T1..T5
     int category_idx = 0;     // 0 = 전체, 그 뒤는 categories 의 색인-1
+    // 0 = 전체, 1..4 = 공용·클리프·데미안·웅카 (game::EquipOwner 차례).
+    // 장비가 아닌 것은 늘 공용이라 "공용" 을 골라도 같이 남는다.
+    int owner_idx = 0;
     // 기본값이 창마다 다르다. 아이템 목록은 켜져 있고 인벤은 이 칸이
     // 아예 없었다. 부르는 쪽이 초기화한다.
     bool hide_unnamed = false;

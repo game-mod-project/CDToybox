@@ -20,6 +20,13 @@ int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
         case ItemSort::Category:
             if (a.category < b.category) return -1;
             return (a.category > b.category) ? 1 : 0;
+        case ItemSort::Owner: {
+            // 열거 차례가 곧 정렬 차례다 - 공용 · 클리프 · 데미안 · 웅카.
+            const int ao = static_cast<int>(a.owner);
+            const int bo = static_cast<int>(b.owner);
+            if (ao < bo) return -1;
+            return (ao > bo) ? 1 : 0;
+        }
         case ItemSort::Key:
         default:
             if (a.key < b.key) return -1;
@@ -30,10 +37,11 @@ int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
 }  // namespace
 
 bool passes(const ItemFilter& f, std::string_view name, int grade,
-            int category, std::uint32_t key) {
+            int category, std::uint32_t key, EquipOwner owner) {
     if (f.hide_unnamed && name.empty()) return false;
     if (f.grade >= 0 && grade != f.grade) return false;
     if (f.category >= 0 && category != f.category) return false;
+    if (f.owner >= 0 && static_cast<int>(owner) != f.owner) return false;
     if (f.query.empty()) return true;
     if (!name.empty() && name.find(f.query) != std::string_view::npos) {
         return true;
@@ -47,11 +55,14 @@ bool passes(const ItemFilter& f, std::string_view name, int grade,
 
 ItemFilter make_filter(std::string_view query, int grade_idx,
                        int category_idx, bool hide_unnamed,
-                       const std::vector<std::uint8_t>& categories) {
+                       const std::vector<std::uint8_t>& categories,
+                       int owner_idx) {
     ItemFilter f;
     f.query.assign(query);
     f.hide_unnamed = hide_unnamed;
     f.grade = (grade_idx <= 0) ? -1 : grade_idx - 1;
+    // 색인 0 = 전체, 1..4 = Shared·Kliff·Demian·Oongka (EquipOwner 순서).
+    f.owner = (owner_idx <= 0) ? -1 : owner_idx - 1;
     const bool cat_ok = category_idx > 0 &&
                         category_idx <= static_cast<int>(categories.size());
     f.category = cat_ok
@@ -65,7 +76,9 @@ std::vector<const ItemCatalogEntry*> filter_items(
     std::vector<const ItemCatalogEntry*> out;
     out.reserve(all.size());
     for (const auto& e : all) {
-        if (!passes(filter, e.name, e.grade, e.category, e.key)) continue;
+        if (!passes(filter, e.name, e.grade, e.category, e.key, e.owner)) {
+            continue;
+        }
         out.push_back(&e);
     }
     return out;
@@ -93,10 +106,13 @@ void sort_items(std::vector<const ItemCatalogEntry*>& items, ItemSort by,
 ItemSortChoice item_sort_from_specs(int count, int column, bool ascending) {
     ItemSortChoice c;
     if (count <= 0) return c;
+    // 열 색인은 화면(item_panel 의 TableSetupColumn 차례)과의 계약이다.
+    // "전용" 을 분류 뒤에 끼우면서 이름이 4 -> 5 로 밀렸다.
     switch (column) {
         case 2: c.sort = ItemSort::Grade; break;
         case 3: c.sort = ItemSort::Category; break;
-        case 4: c.sort = ItemSort::Name; break;
+        case 4: c.sort = ItemSort::Owner; break;
+        case 5: c.sort = ItemSort::Name; break;
         default: c.sort = ItemSort::Key; break;
     }
     c.ascending = ascending;

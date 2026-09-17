@@ -107,3 +107,34 @@ TEST(config_ignores_garbage_lines) {
 TEST(guard_allows_modification_in_single_player) {
     CHECK_EQ(cdtb::guard::is_safe_to_modify(), true);
 }
+
+// ------------------------------------------------- 가방 확장을 설정에 남긴다
+// 게임을 껐다 켜면 가방 확장이 사라졌다. 자동 재적용(`bag_auto_*`)은 **프로세스
+// 메모리**에만 사는데, 세이브에 남는 칸(+0x16)은 새 산술이 안 읽어 더는 쓰지
+// 않기 때문이다. 그래서 `knowledge_keep` 과 같은 방식으로 ini 에 남긴다.
+// 표기: `bag_keep = <종류>:<목표>,...` - 종류는 게임의 u16 이라 표 순서가 바뀌어도
+// 안전하다(색인을 적으면 표를 고칠 때 조용히 엉뚱한 가방에 걸린다).
+TEST(bag_keep_parses_kind_and_target_pairs) {
+    const auto v = cdtb::config::parse_bag_keep("1:240, 7:440");
+    CHECK_EQ(v.size(), static_cast<std::size_t>(2));
+    if (v.size() != 2) return;   // 없는 것을 읽으면 시험이 죽는다
+    CHECK_EQ(v[0].kind, 1);
+    CHECK_EQ(v[0].target, 240);
+    CHECK_EQ(v[1].kind, 7);
+    CHECK_EQ(v[1].target, 440);
+}
+
+TEST(bag_keep_drops_garbage_quietly) {
+    // ini 는 사람이 고친다. 못 읽는 항목은 버리고 나머지는 살린다.
+    const auto v = cdtb::config::parse_bag_keep("nonsense, 1:240, 7:, :440, 9:-5, 3:99999, 2:0");
+    CHECK_EQ(v.size(), static_cast<std::size_t>(2));
+    if (v.size() != 2) return;
+    CHECK_EQ(v[0].kind, 1);
+    CHECK_EQ(v[1].kind, 2);   // 0 은 "안 건드린다" 라 유효한 값이다
+    CHECK_EQ(v[1].target, 0);
+}
+
+TEST(bag_keep_empty_is_empty) {
+    CHECK(cdtb::config::parse_bag_keep("").empty());
+    CHECK(cdtb::config::parse_bag_keep("   ").empty());
+}

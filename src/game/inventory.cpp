@@ -394,7 +394,8 @@ std::vector<std::string> inventory_scan_classes() {
 // ------------------------------------------------------ 가방·보관함 확장
 
 BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
-                        int branch, int limit, int base_max) {
+                        int branch, int limit, int base_max,
+                        int occupied_floor) {
     BagPlan p;
     p.branch = branch == kBagBranchB ? kBagBranchB : kBagBranchA;
     // 모르는 모양은 건드리지 않는다. 옛 사고는 한 칸만 보고 기본 슬롯을 잘못
@@ -441,14 +442,27 @@ BagPlan plan_bag_expand(int cap, int a, int b, int slots, int target,
         p.skip = "목표가 기본 슬롯보다 작다";
         return p;
     }
-    // **줄이지 않는다.** 이미 목표보다 큰 칸을 목표까지 깎으면 용량 밖으로
-    // 밀려난 아이템이 어떻게 되는지 모른다 - 그건 확장 기능이 할 일이 아니다.
+    // **줄이기는 아이템이 밀려나지 않을 때만 한다.** 목표 밖으로 밀려난 아이템이
+    // 어떻게 되는지 모른다. 예전에는 줄이기를 통째로 거부했는데, 화면에서 값을
+    // 낮춰도 아무 일이 안 일어나고 다음 로드에서야 걸려 사용자가 고장으로 읽었다
+    // (2026-09-17). 이제는 **가장 높이 든 아이템 위**로만 깎는다.
+    //
+    // 기준은 `occupied_floor`(= 아이템이 든 가장 높은 칸 다음)다. **`used`(+0x12)는
+    // 쓸 수 없다** - 칸이 성기게 차 있어 아이템이 used 보다 높은 칸에 있을 수 있다
+    // (실측 used 144 / 레코드 143, inventory.h). 모르면(-1) 예전처럼 거부한다.
+    //
     // 칸을 고를 수 있게 되기 전에는 이 검사가 `want - base - a < 0` 에 우연히
     // 숨어 있었다. A 를 고르면 큰 값이 **우리가 덮어쓸 칸**에 있어 그 우연한
     // 방어가 사라진다(2026-09-13, 시험이 잡았다).
     if (cap > want) {
-        p.skip = "이미 목표보다 크다";
-        return p;
+        if (occupied_floor < 0) {
+            p.skip = "이미 목표보다 크다 - 든 칸을 못 읽어 줄이지 않는다";
+            return p;
+        }
+        if (want < occupied_floor) {
+            p.skip = "목표 밖에 아이템이 있다 - 먼저 정리하십시오";
+            return p;
+        }
     }
     // **고른 칸만** 조정하고 반대 칸은 그대로 둔다. 엔진이 합계를 sum 으로
     // 재계산하든 max 로 재계산하든 결과가 want 이하가 된다(max 면 오히려 작아진다).
@@ -635,6 +649,7 @@ std::atomic<unsigned> g_auto_gen{0};       // 이 세대에는 이미 했다
 std::atomic<unsigned> g_auto_try_gen{0};   // 지금 어느 세대를 두고 재시도 중인가
 std::atomic<int> g_auto_tries{0};
 constexpr int kAutoGiveUp = 10;            // 이만큼 해 보고 그 세대는 포기한다
+void (*g_auto_persist)() = nullptr;        // 목록이 바뀌면 설정에 남기라는 훅
 
 // 인프로세스 직접 쓰기(주입 DLL 전용). SEH 로 감싼다.
 bool bag_wr16(std::uintptr_t a, std::uint16_t v) {
@@ -672,11 +687,26 @@ void apply_to(const mem::Reader& reader, std::uintptr_t comp,
             ++r->fail;
             continue;
         }
+        // **줄일 때만** 레코드 배열을 훑는다 - 칸이 1460개라 값싸지 않다.
+        // 아이템이 든 가장 높은 칸 다음이 깎을 수 있는 바닥이다. 못 읽으면
+        // -1(모름)이라 plan 이 줄이기를 거부한다.
+        int floor_slot = -1;
+        if (target < static_cast<int>(cap)) {
+            std::vector<InventoryRecord> recs;
+            if (read_inventory_records(reader, c, &recs)) {
+                floor_slot = 0;
+                for (const InventoryRecord& rec : recs) {
+                    const int next = static_cast<int>(rec.slot) + 1;
+                    if (next > floor_slot) floor_slot = next;
+                }
+            }
+        }
         const BagPlan p = plan_bag_expand(cap, a, b,
                                           static_cast<int>(c.slots), target,
                                           bag_resolve_branch(branch, c.kind),
                                           bag_kind_cap(c.kind),
-                                          bag_kind_base_max(c.kind));
+                                          bag_kind_base_max(c.kind),
+                                          floor_slot);
         BagSeen seen;
         seen.realm = realm;
         seen.kind = c.kind;
@@ -1089,17 +1119,80 @@ void bag_auto_set(std::span<const int> targets, int branch) {
     g_auto_gen.store(g_inv_gen.load(std::memory_order_acquire), std::memory_order_release);
     g_auto_tries.store(0, std::memory_order_release);
     g_auto_on.store(true, std::memory_order_release);
+    if (g_auto_persist != nullptr) g_auto_persist();
 }
 
-void bag_auto_clear() { g_auto_on.store(false, std::memory_order_release); }
+void bag_auto_clear() {
+    g_auto_on.store(false, std::memory_order_release);
+    if (g_auto_persist != nullptr) g_auto_persist();
+}
+
+std::vector<BagWant> bag_auto_list() {
+    std::vector<BagWant> out;
+    if (!g_auto_on.load(std::memory_order_acquire)) return out;
+    const auto rules = bag_kind_rules();
+    std::lock_guard<std::mutex> lk(g_auto_mtx);
+    for (std::size_t i = 0; i < kBagKindCount && i < rules.size(); ++i) {
+        out.push_back(BagWant{static_cast<int>(rules[i].kind), g_auto_targets[i]});
+    }
+    return out;
+}
+
+void bag_auto_restore(std::span<const BagWant> want, int branch) {
+    if (want.empty()) return;
+    const auto rules = bag_kind_rules();
+    {
+        std::lock_guard<std::mutex> lk(g_auto_mtx);
+        for (std::size_t i = 0; i < kBagKindCount; ++i) g_auto_targets[i] = 0;
+        for (const BagWant& w : want) {
+            for (std::size_t i = 0; i < kBagKindCount && i < rules.size(); ++i) {
+                if (static_cast<int>(rules[i].kind) == w.kind) {
+                    g_auto_targets[i] = w.target;
+                    break;
+                }
+            }
+        }
+    }
+    g_auto_branch.store(branch, std::memory_order_release);
+    // **세대를 소모하지 않는다.** 시작할 때는 인벤토리가 아직 없으므로, 처음
+    // 잡히는 그것이 대상이어야 한다(bag_auto_set 과 다른 점).
+    //
+    // 0 으로 두면 안 된다 - `g_inv_gen` 도 0 에서 시작하므로 `gen == auto_gen`
+    // 이 되어 **영영 건너뛴다.** 무장만 해 놓고 한 번도 안 걸리던 진짜 이유다
+    // (진단 실측 2026-09-17: "쉼: 이 세대에는 이미 했다 (세대 0 · 이미 한 세대 0)").
+    g_auto_gen.store(kAutoGenNever, std::memory_order_release);
+    g_auto_tries.store(0, std::memory_order_release);
+    g_auto_on.store(true, std::memory_order_release);
+}
+
+void bag_auto_persist_hook(void (*fn)()) { g_auto_persist = fn; }
 
 bool bag_auto_on() { return g_auto_on.load(std::memory_order_acquire); }
 
 void bag_auto_tick(const mem::Reader& reader) {
     const unsigned gen = g_inv_gen.load(std::memory_order_acquire);
-    if (!should_auto_reapply(g_auto_on.load(std::memory_order_acquire), gen,
-                             g_auto_gen.load(std::memory_order_acquire),
-                             inventory_both_ready())) {
+    const bool on = g_auto_on.load(std::memory_order_acquire);
+    const unsigned auto_gen = g_auto_gen.load(std::memory_order_acquire);
+    const bool both = inventory_both_ready();
+    if (!should_auto_reapply(on, gen, auto_gen, both)) {
+        // **진단(기능 없음).** 무장돼 있는데 안 도는 이유를 남긴다. 사용자 보고
+        // "켜 둔 채 세이브를 불러와도 용량이 사라진다" 인데 성공·포기 로그가
+        // 둘 다 안 남았다 - 여기서 조용히 돌아섰다는 뜻이다. 이유가 **바뀔 때만**
+        // 찍는다(매 바퀴 찍으면 로그가 묻힌다).
+        if (on) {
+            const int why = (gen == auto_gen) ? 1 : (!both ? 2 : 0);
+            static int s_last_why = -1;
+            static unsigned s_last_gen = 0xFFFFFFFFu;
+            if (why != s_last_why || gen != s_last_gen) {
+                s_last_why = why;
+                s_last_gen = gen;
+                log::infof("가방 자동 재적용 쉼: {} (세대 {} · 이미 한 세대 {} ·"
+                           " 두 realm 준비 {})",
+                           why == 1 ? "이 세대에는 이미 했다"
+                                    : (why == 2 ? "두 realm 이 아직" : "알 수 없음"),
+                           gen, auto_gen, both);
+            }
+        }
         return;
     }
     if (g_auto_try_gen.exchange(gen, std::memory_order_acq_rel) != gen) {
