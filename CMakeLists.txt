@@ -94,6 +94,7 @@ add_library(cdtoybox SHARED
     src/game/items.cpp
     src/game/roster.cpp
     src/game/companion.cpp
+    src/game/wanted.cpp
     src/game/actors.cpp
     src/game/clan.cpp
     src/game/skillpoint.cpp
@@ -169,6 +170,7 @@ add_executable(cdtb_tests
     tests/bag_capacity_tests.cpp
     tests/bag_backup_tests.cpp
     tests/wheel_tests.cpp
+    tests/wanted_tests.cpp
     src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
@@ -181,6 +183,7 @@ add_executable(cdtb_tests
     src/game/icon_map.cpp
     src/game/roster.cpp
     src/game/companion.cpp
+    src/game/wanted.cpp
     src/game/actors.cpp
     src/game/clan.cpp
     src/game/skillpoint.cpp
