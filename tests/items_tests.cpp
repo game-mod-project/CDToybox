@@ -693,3 +693,14 @@ TEST(build_item_catalog_carries_the_owner_through) {
         CHECK(out[2].owner == EquipOwner::Oongka);
     }
 }
+
+TEST(owner_label_names_every_bucket) {
+    // 빠진 갈래가 있으면 화면에 빈칸이 뜬다. 네 개를 다 못박는다.
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Shared), "공용") == 0);
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Kliff),
+                      "클리프") == 0);
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Demian),
+                      "데미안") == 0);
+    CHECK(std::strcmp(cdtb::game::owner_label(EquipOwner::Oongka),
+                      "웅카") == 0);
+}

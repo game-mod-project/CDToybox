@@ -35,6 +35,16 @@ EquipOwner equip_owner_of(std::string_view internal_name) {
     return EquipOwner::Shared;
 }
 
+const char* owner_label(EquipOwner owner) {
+    switch (owner) {
+        case EquipOwner::Kliff: return "클리프";
+        case EquipOwner::Demian: return "데미안";
+        case EquipOwner::Oongka: return "웅카";
+        case EquipOwner::Shared:
+        default: return "공용";
+    }
+}
+
 namespace {
 
 // --- 매니저 (`pa::ItemInfoManager`) ---

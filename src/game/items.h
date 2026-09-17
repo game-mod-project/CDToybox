@@ -25,6 +25,10 @@ enum class EquipOwner : std::uint8_t { Shared = 0, Kliff, Demian, Oongka };
 // 아니라 `Oongka` 이고, 데미안은 `Demian` 과 `Damian` 이 **둘 다** 쓰인다.
 EquipOwner equip_owner_of(std::string_view internal_name);
 
+// 화면에 낼 이름. 필터 Combo 와 표의 "전용" 열이 같은 글자를 쓰도록
+// 한 곳에서 낸다 - 갈리면 고를 때와 보일 때가 달라 보인다.
+const char* owner_label(EquipOwner owner);
+
 // 게임의 아이템 표(`pa::ItemInfoManager`)를 읽는다. 전부 읽기다.
 //
 // 실측 구조 (docs/superpowers/specs/2026-09-01-item-table.md):

@@ -78,7 +78,7 @@ void filter_bar_rebuild_categories(FilterBar* s) {
 game::ItemFilter to_filter(const FilterBar& s, const FilterBarOpts& o) {
     game::ItemFilter f = game::make_filter(s.query, s.grade_idx,
                                            s.category_idx, s.hide_unnamed,
-                                           s.categories);
+                                           s.categories, s.owner_idx);
     f.match_key = o.match_key;
     return f;
 }

@@ -41,6 +41,9 @@ struct Row {
     std::string name;
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
+    // 누구 전용인가. 아이템표에서 가져온다 - 대응표에 없는 줄은 공용으로
+    // 남는데, 그 줄은 이름도 키도 없어 어차피 가릴 것이 없다.
+    game::EquipOwner owner = game::EquipOwner::Shared;
     std::int64_t count = 0;
     std::uint32_t temper = 0;
     std::uint32_t sharpness = 0;
@@ -154,6 +157,7 @@ void refresh(const mem::Reader& reader) {
                 r.category = e->category;
                 r.max_endurance = e->max_endurance;
                 r.table_cap = e->max_sockets;
+                r.owner = e->owner;
             }
             if (r.name.empty()) {
                 char buf[48];
@@ -844,7 +848,8 @@ void draw_inventory_panel(bool* open) {
         std::size_t shown = 0;
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
-            if (!game::passes(filter, r.name, r.grade, r.category, r.key)) {
+            if (!game::passes(filter, r.name, r.grade, r.category, r.key,
+                              r.owner)) {
                 continue;
             }
             ++shown;
