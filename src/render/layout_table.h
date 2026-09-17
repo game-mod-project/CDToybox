@@ -2,7 +2,7 @@
 
 #include <span>
 
-// 창 10개의 제목·본창 라벨·기본 위치·크기·하한을 한 표에 둔다.
+// 창 11개의 제목·본창 라벨·기본 위치·크기·하한을 한 표에 둔다.
 //
 // 예전엔 창마다 SetNextWindowPos/Size 를 제각각 불렀고 셋(로스터·장비·
 // 플레이어)은 위치를 안 정해 ImGui 기본값 (60,60) - 본창 자리 - 에 포개졌다.
@@ -11,8 +11,8 @@
 namespace cdtb::render {
 
 enum class Win {
-    Main, Items, Grant, Stash, Inventory, Roster, Equip, Player, Camera, Log,
-    Count
+    Main, Items, Grant, Stash, Inventory, Roster, Equip, Player, Vehicle, Camera,
+    Log, Count
 };
 inline constexpr int kWinCount = static_cast<int>(Win::Count);
 
