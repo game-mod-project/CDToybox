@@ -462,6 +462,11 @@ const char* bag_restore_blocked(const BagBackup& s, int cap, int exp, int used);
 bool bag_restore_already_original(const BagBackup& s, int cap, int a, int b);
 
 // 지금 자동 재적용을 걸어야 하는가(순수).
+// "아직 한 번도 안 걸었다". 실제 세대는 0 부터 오르므로 어떤 세대와도 같지
+// 않다. 시작할 때 `g_inv_gen` 과 `g_auto_gen` 이 **둘 다 0** 이라, 이 구분이
+// 없으면 ini 에서 되살린 뒤 `gen == auto_gen` 으로 영영 건너뛴다(실측 2026-09-17).
+inline constexpr unsigned kAutoGenNever = 0xFFFFFFFFu;
+
 bool should_auto_reapply(bool on, unsigned gen, unsigned auto_gen,
                          bool both_ready);
 

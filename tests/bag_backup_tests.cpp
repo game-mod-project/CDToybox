@@ -308,3 +308,19 @@ TEST(auto_reapply_waits_for_a_new_generation_and_both_realms) {
     CHECK(!should_auto_reapply(true, 2, 1, false));
     CHECK(should_auto_reapply(true, 2, 1, true));
 }
+
+// ------------------------------- "아직 한 번도 안 했다" 와 "세대 0 에서 했다"
+// 시작할 때 `g_inv_gen` 도 0, `g_auto_gen` 도 0 이라 둘이 같다. 그래서 ini 에서
+// 되살려 무장까지 해 놓고도 `gen == auto_gen` 으로 **영영 건너뛰었다** - 게임을
+// 껐다 켜면 용량이 안 돌아오던 진짜 이유다(진단 실측 2026-09-17:
+// "쉼: 이 세대에는 이미 했다 (세대 0 · 이미 한 세대 0)").
+//
+// 그래서 "아직 안 했다" 는 어떤 실제 세대와도 같을 수 없는 값이어야 한다.
+TEST(auto_reapply_runs_when_never_applied_even_at_generation_zero) {
+    CHECK(should_auto_reapply(true, 0, cdtb::game::kAutoGenNever, true));
+}
+
+// 세대 0 에서 진짜로 걸었으면 다시 걸지 않는다 - 위와 구분돼야 한다.
+TEST(auto_reapply_still_skips_when_applied_at_generation_zero) {
+    CHECK(!should_auto_reapply(true, 0, 0, true));
+}

@@ -1127,6 +1127,11 @@ void bag_auto_restore(std::span<const BagWant> want, int branch) {
     g_auto_branch.store(branch, std::memory_order_release);
     // **세대를 소모하지 않는다.** 시작할 때는 인벤토리가 아직 없으므로, 처음
     // 잡히는 그것이 대상이어야 한다(bag_auto_set 과 다른 점).
+    //
+    // 0 으로 두면 안 된다 - `g_inv_gen` 도 0 에서 시작하므로 `gen == auto_gen`
+    // 이 되어 **영영 건너뛴다.** 무장만 해 놓고 한 번도 안 걸리던 진짜 이유다
+    // (진단 실측 2026-09-17: "쉼: 이 세대에는 이미 했다 (세대 0 · 이미 한 세대 0)").
+    g_auto_gen.store(kAutoGenNever, std::memory_order_release);
     g_auto_tries.store(0, std::memory_order_release);
     g_auto_on.store(true, std::memory_order_release);
 }
