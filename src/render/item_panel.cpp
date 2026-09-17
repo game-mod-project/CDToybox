@@ -174,7 +174,9 @@ void draw_item_panel(bool* open) {
         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Sortable |
         ImGuiTableFlags_SortTristate;
-    if (ImGui::BeginTable("items", 5, kFlags)) {
+    // 열 차례가 game::item_sort_from_specs 의 색인과 **같아야 한다**.
+    // 여기에 열을 끼우면 거기도 같이 밀어야 한다.
+    if (ImGui::BeginTable("items", 6, kFlags)) {
         // 별표는 첫 칸에 따로 둔다. 키 칸에 겹쳐 놓았더니 줄 전체를
         // 덮는 Selectable 이 클릭을 가져가 눌리지 않았다.
         ImGui::TableSetupColumn("★", ImGuiTableColumnFlags_WidthFixed |
@@ -186,6 +188,8 @@ void draw_item_panel(bool* open) {
         ImGui::TableSetupColumn("등급", ImGuiTableColumnFlags_WidthFixed, 55.0f);
         ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,
                                 120.0f);
+        ImGui::TableSetupColumn("전용", ImGuiTableColumnFlags_WidthFixed,
+                                64.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupScrollFreeze(0, 1);
         // 머리글을 직접 그린다 - ★ 칸에 툴팁을 달기 위해서다. 6,810줄에서 가장
@@ -260,6 +264,15 @@ void draw_item_panel(bool* open) {
             }
 
             ImGui::TableSetColumnIndex(4);
+            // 공용은 흐리게 둔다. 3157개 장비 중 3072개가 공용이라
+            // 가득 차 있으면 정작 전용이 안 보인다.
+            if (e.owner == game::EquipOwner::Shared) {
+                ImGui::TextDisabled("%s", game::owner_label(e.owner));
+            } else {
+                ImGui::TextUnformatted(game::owner_label(e.owner));
+            }
+
+            ImGui::TableSetColumnIndex(5);
             // 아이콘은 있으면 그리고 없으면 자리만 비운다. 줄 높이가
             // 들쭉날쭉하지 않도록 없을 때도 같은 크기를 차지시킨다.
             const IconRef ico = icon_for(e.key);

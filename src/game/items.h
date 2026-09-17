@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -10,6 +11,23 @@
 #include "mem/rtti.h"
 
 namespace cdtb::game {
+
+// 장비가 누구 전용인지. **내부 이름(`_stringKey`)의 접두사**로 갈린다 -
+// 표시명은 현지화되므로 거기엔 없다(표시명에 캐릭터가 든 장비는 3157개
+// 중 2개뿐이다).
+//
+// 실측 분류 (2026-09-17, exe 2850): 공용 3072 · 데미안 60 · 웅카 16 ·
+// 클리프 9. 캐릭터 축은 아이템 스칼라 칸에도 `EquipTypeInfo` 에도 없다 -
+// 전수로 배제했다(docs/TROUBLESHOOTING.md 참고).
+enum class EquipOwner : std::uint8_t { Shared = 0, Kliff, Demian, Oongka };
+
+// 철자가 게임 데이터 그대로다 - `Cliff` 가 아니라 `Kliff`, `Unka` 가
+// 아니라 `Oongka` 이고, 데미안은 `Demian` 과 `Damian` 이 **둘 다** 쓰인다.
+EquipOwner equip_owner_of(std::string_view internal_name);
+
+// 화면에 낼 이름. 필터 Combo 와 표의 "전용" 열이 같은 글자를 쓰도록
+// 한 곳에서 낸다 - 갈리면 고를 때와 보일 때가 달라 보인다.
+const char* owner_label(EquipOwner owner);
 
 // 게임의 아이템 표(`pa::ItemInfoManager`)를 읽는다. 전부 읽기다.
 //
@@ -31,6 +49,9 @@ struct ItemEntry {
     std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
     std::uint8_t category = 0;    // 74종. 이름은 render/item_style 의 category_name
     std::uint32_t max_stack = 0;  // 한 칸에 쌓이는 최대 개수
+    // 누구 전용인가. 레코드 +0x08 의 내부 이름 접두사에서 나온다.
+    // 비장비는 늘 Shared 다 - 접두사가 캐릭터가 아니기 때문이다.
+    EquipOwner owner = EquipOwner::Shared;
     // 담금질로 올릴 수 있는 최고 값. 0 이면 담금질이 없는 아이템이다.
     //
     // 레코드 +0x250 은 상한 자체가 아니라 그것보다 하나 큰 값이다 -
@@ -223,6 +244,7 @@ struct ItemCatalogEntry {
     std::uint32_t repair_entries = 0;      // ItemEntry 의 같은 칸
     std::int16_t max_sharpness = 0;        // ItemEntry 의 같은 칸
     std::uint16_t equip_type = 0xFFFF;     // ItemEntry 의 같은 칸
+    EquipOwner owner = EquipOwner::Shared;  // ItemEntry 의 같은 칸
 
     // 이 아이템의 `ItemInfo` 레코드 주소. 소켓 상한 올리기가 여기에
     // 쓴다(`socket_cap_raise`). 표를 다시 걷지 않으려고 들고 있는다.

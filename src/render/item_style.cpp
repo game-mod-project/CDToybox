@@ -124,6 +124,10 @@ const char* category_name(std::uint8_t c) {
 const char* const kGradeLabels = "전체\0" "등급 없음\0" "T1\0" "T2\0"
                                  "T3\0" "T4\0" "T5\0";
 
+// game::EquipOwner 차례 그대로다. 색인 0 만 "전체" 로 앞에 붙는다.
+const char* const kOwnerLabels = "전체\0" "공용\0" "클리프\0" "데미안\0"
+                                 "웅카\0";
+
 float text_width(const char* s) { return ImGui::CalcTextSize(s).x; }
 
 void flow_same_line(float next_width) {

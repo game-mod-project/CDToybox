@@ -41,6 +41,9 @@ struct Row {
     std::string name;
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
+    // 누구 전용인가. 아이템표에서 가져온다 - 대응표에 없는 줄은 공용으로
+    // 남는데, 그 줄은 이름도 키도 없어 어차피 가릴 것이 없다.
+    game::EquipOwner owner = game::EquipOwner::Shared;
     std::int64_t count = 0;
     std::uint32_t temper = 0;
     std::uint32_t sharpness = 0;
@@ -154,6 +157,7 @@ void refresh(const mem::Reader& reader) {
                 r.category = e->category;
                 r.max_endurance = e->max_endurance;
                 r.table_cap = e->max_sockets;
+                r.owner = e->owner;
             }
             if (r.name.empty()) {
                 char buf[48];
@@ -218,6 +222,9 @@ void apply_sort() {
     std::stable_sort(g_rows.begin(), g_rows.end(),
                      [&](const Row& a, const Row& b) {
                          int c = 0;
+                         // 색인은 아래 TableSetupColumn 차례 그대로다.
+                         // 이름 · 분류 · 전용 · 개수 · 담금질 · 내구도 ·
+                         // 연마 · 소켓. 열을 끼우면 여기도 같이 민다.
                          switch (col) {
                              case 0: c = a.name.compare(b.name); break;
                              case 1:
@@ -225,28 +232,34 @@ void apply_sort() {
                                      : (a.category > b.category) ? 1
                                                                  : 0;
                                  break;
-                             case 2:
+                             case 2: {
+                                 const int ao = static_cast<int>(a.owner);
+                                 const int bo = static_cast<int>(b.owner);
+                                 c = (ao < bo) ? -1 : (ao > bo) ? 1 : 0;
+                                 break;
+                             }
+                             case 3:
                                  c = (a.count < b.count)   ? -1
                                      : (a.count > b.count) ? 1
                                                            : 0;
                                  break;
-                             case 3:
+                             case 4:
                                  c = (a.temper < b.temper)   ? -1
                                      : (a.temper > b.temper) ? 1
                                                              : 0;
                                  break;
-                             case 4: {
+                             case 5: {
                                  const long long x = endu_key(a);
                                  const long long y = endu_key(b);
                                  c = (x < y) ? -1 : (x > y) ? 1 : 0;
                                  break;
                              }
-                             case 5:
+                             case 6:
                                  c = (a.sharpness < b.sharpness)   ? -1
                                      : (a.sharpness > b.sharpness) ? 1
                                                                    : 0;
                                  break;
-                             case 6:
+                             case 7:
                                  c = (a.socket_count < b.socket_count)   ? -1
                                      : (a.socket_count > b.socket_count) ? 1
                                                                          : 0;
@@ -816,7 +829,8 @@ void draw_inventory_panel(bool* open) {
     // 표를 그리는 중에 g_rows 를 재구축하면 r 이 죽은 원소를 가리킨다 -
     // 표를 닫은 뒤 읽는다.
     bool need_refresh = false;
-    if (ImGui::BeginTable("inv", 8,
+    // 열 차례가 apply_sort 의 색인과 **같아야 한다**.
+    if (ImGui::BeginTable("inv", 9,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Sortable,
@@ -825,6 +839,8 @@ void draw_inventory_panel(bool* open) {
                                 2.0f);
         ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,
                                 120.0f);
+        ImGui::TableSetupColumn("전용", ImGuiTableColumnFlags_WidthFixed,
+                                64.0f);
         ImGui::TableSetupColumn("개수", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableSetupColumn("담금질", ImGuiTableColumnFlags_WidthFixed,
                                 55.0f);
@@ -844,7 +860,8 @@ void draw_inventory_panel(bool* open) {
         std::size_t shown = 0;
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
-            if (!game::passes(filter, r.name, r.grade, r.category, r.key)) {
+            if (!game::passes(filter, r.name, r.grade, r.category, r.key,
+                              r.owner)) {
                 continue;
             }
             ++shown;
@@ -864,6 +881,13 @@ void draw_inventory_panel(bool* open) {
                 ImGui::TextUnformatted(nm);
             } else if (r.category != 0) {
                 ImGui::TextDisabled("%u", r.category);
+            }
+            ImGui::TableNextColumn();
+            // 공용은 흐리게. 대부분이 공용이라 진하게 두면 전용이 묻힌다.
+            if (r.owner == game::EquipOwner::Shared) {
+                ImGui::TextDisabled("%s", game::owner_label(r.owner));
+            } else {
+                ImGui::TextUnformatted(game::owner_label(r.owner));
             }
             ImGui::TableNextColumn();
             ImGui::Text("%lld", static_cast<long long>(r.count));
