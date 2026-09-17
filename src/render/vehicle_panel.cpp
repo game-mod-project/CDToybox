@@ -8,7 +8,9 @@
 
 #include "game/companion.h"
 #include "game/grant.h"
+#include "game/player.h"
 #include "game/reserveslot.h"
+#include "game/towngate.h"
 #include "game/wheelfill.h"
 #include "mem/reader.h"
 #include "render/colors.h"
@@ -55,9 +57,68 @@ void draw_vehicle_panel(bool* open) {
             " 지역' 이고 조건이 다릅니다.");
         ImGui::TextDisabled("드래곤은 마을이라도 '길 위 20 이상' 이면 예외입니다");
         ImGui::TextDisabled("A.T.A.G. 는 그 예외가 없어 더 빡빡합니다");
+        ImGui::TextDisabled(
+            "IsInTown() 은 지금 겹쳐 들어와 있는 구역 중 하나라도"
+            " RegionInfo._isTown 이 켜져 있으면 참입니다 - 아래에서 그것을 끕니다");
         ImGui::TextColored(col::kWarn,
-                           "아직 푸는 기능은 없습니다 - IsInTown 을 정하는 칸을"
-                           " 확정하지 못했습니다.");
+                           "붉은 구역(진입 불가)은 아직 푸는 기능이 없습니다.");
+    }
+
+    // ---------------------------------------------------------------- 마을
+    //
+    // `IsInTown()` 이 무엇을 읽는지 실행 파일에서 전부 떴다(2026-09-17,
+    // specs/2026-09-16-vehicle-place-and-dismount.md §5-1-1). 재료는 정적
+    // 표의 `RegionInfo._isTown` 이고, 그것을 0 으로 두면 조건이 그 자리에서
+    // 거짓이 된다 - 사용자 실측으로 마을에서 소환·탑승이 됐다.
+    if (collapsing_header("veh.town", "마을 (소환 · 강제 하차)")) {
+        const game::TownGateState tg =
+            game::town_gate_state(reader, game::player_char());
+        if (!tg.ready) {
+            ImGui::TextDisabled("%s", tg.note[0] != 0
+                                          ? tg.note
+                                          : "구역 표를 아직 못 잡았습니다.");
+        } else {
+            ImGui::TextDisabled("구역 표 %d행 · 마을 %d행 · 탈것 달리기 제한 %d행",
+                                tg.rows, tg.towns, tg.runlimits);
+            if (tg.here_rows > 0) {
+                if (tg.here_town) {
+                    ImGui::TextColored(col::kWarn, "지금 여기: 마을입니다%s%s",
+                                       tg.here_name[0] != 0 ? " - " : "",
+                                       tg.here_name);
+                } else {
+                    ImGui::TextDisabled("지금 여기: 마을 아닙니다 (겹친 구역 %d개)",
+                                        tg.here_rows);
+                }
+            }
+            bool town_on = tg.on;
+            if (ImGui::Checkbox("마을 제한 풀기", &town_on)) {
+                if (game::town_gate_free(reader, town_on)) {
+                    if (town_on) {
+                        notice_set(&s_note, NoticeLevel::Ok,
+                                   "마을 {}행을 풀었습니다", tg.towns);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Ok, "마을 판정을 되돌렸습니다");
+                    }
+                } else {
+                    notice_set(&s_note, NoticeLevel::Bad,
+                               "실패 - 표를 안 건드렸습니다");
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "RegionInfo 의 _isTown(+0x75)과 _limitVehicleRun(+0x74)을\n"
+                    "0 으로 둡니다. IsInTown() 이 읽는 바로 그 칸입니다.\n"
+                    "세이브에는 안 남고 실행할 때마다 다시 걸어야 합니다.\n\n"
+                    "**범위가 넓습니다.** 현상금·상점·NPC 일과도 같은 판정을\n"
+                    "씁니다. 부를 때만 켜고 곧바로 끄시는 편이 안전합니다.");
+            }
+            if (tg.town_counter > 0) {
+                ImGui::TextColored(col::kWarn,
+                                   "살아있는 마을 칸이 %d 입니다 - 표만으로는"
+                                   " 안 풀리는 자리입니다",
+                                   tg.town_counter);
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 소환
