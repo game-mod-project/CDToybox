@@ -14,6 +14,7 @@ bool draw_filter_bar(FilterBar* s, const FilterBarOpts& o) {
                           ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
     const float grade_w = text_width("등급") + st.ItemInnerSpacing.x + 120.0f;
     const float cat_w = text_width("분류") + st.ItemInnerSpacing.x + 230.0f;
+    const float owner_w = text_width("전용") + st.ItemInnerSpacing.x + 100.0f;
 
     ImGui::PushID(o.id);
 
@@ -65,6 +66,18 @@ bool draw_filter_bar(FilterBar* s, const FilterBarOpts& o) {
                          s->category_labels.c_str(), 20)) {
             changed = true;
         }
+    }
+
+    // 누구 전용인가. 장비만 갈리고 나머지는 전부 "공용" 으로 떨어진다 -
+    // 구분은 아이템 이름이 아니라 내부 이름(`_stringKey`)의 접두사에서
+    // 나온다(game::equip_owner_of).
+    flow_same_line(owner_w);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("전용");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    if (ImGui::Combo("##owner", &s->owner_idx, kOwnerLabels, 6)) {
+        changed = true;
     }
 
     ImGui::PopID();
