@@ -37,6 +37,7 @@
 #include "render/roster_panel.h"
 #include "render/equip_panel.h"
 #include "render/player_panel.h"
+#include "render/vehicle_panel.h"
 #include "render/notice.h"
 #include "render/stash_panel.h"
 #include "render/scan_panel.h"
@@ -415,6 +416,9 @@ void draw_windows() {
     if (shown(Win::Roster)) cdtb::render::draw_roster_panel(&shown(Win::Roster));
     if (shown(Win::Equip)) cdtb::render::draw_equip_panel(&shown(Win::Equip));
     if (shown(Win::Player)) cdtb::render::draw_player_panel(&shown(Win::Player));
+    if (shown(Win::Vehicle)) {
+        cdtb::render::draw_vehicle_panel(&shown(Win::Vehicle));
+    }
     if (shown(Win::Camera)) cdtb::render::draw_camera_panel(&shown(Win::Camera));
     if (shown(Win::Log)) cdtb::render::draw_log_panel(&shown(Win::Log));
 
@@ -459,6 +463,7 @@ void draw_ui() {
         const bool writes = s.id == cdtb::render::Win::Roster ||
                             s.id == cdtb::render::Win::Equip ||
                             s.id == cdtb::render::Win::Player ||
+                            s.id == cdtb::render::Win::Vehicle ||
                             s.id == cdtb::render::Win::Inventory;
         if (writes) {
             if (ImGui::IsItemHovered()) {

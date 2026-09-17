@@ -20,6 +20,17 @@ git submodule update --init --recursive   # imgui · minhook — 없으면 빌�
 `deploy.ps1` 은 **게임이 실행 중이면** 거부하고, **산출물이 `src/` 보다 오래
 됐으면**(= 빌드가 조용히 실패했을 수 있으면) 거부한다.
 
+처음 한 번은 **Defender 제외**를 넣는다. 서명 없는 DLL 이 API 를 후킹하고 힙을
+전수 탐색하므로 머신러닝 휴리스틱에 오탐으로 걸려 **배포한 DLL 이 조용히
+격리된다**(겪었다 — [TROUBLESHOOTING 6.25](docs/TROUBLESHOOTING.md#625-defender-가-배포한-dll-을-먹었다)).
+
+```powershell
+.\scripts\setup-defender-exclusions.ps1   # UAC 로 승격, 워크트리는 자동 수집
+.\scripts\setup-defender-exclusions.ps1 -DryRun   # 무엇이 등록될지만 본다
+```
+
+워크트리를 새로 만들면 다시 돌린다. 그 `build` 폴더가 더해진다.
+
 ## 문서
 
 | 문서 | 내용 |

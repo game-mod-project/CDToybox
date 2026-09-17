@@ -49,5 +49,22 @@ int wheel_fill_rows(const std::uint16_t** out) {
     return g_n.load(std::memory_order_relaxed);
 }
 
+// 같은 종에 레코드가 여럿일 때 **어느 것을 휠에 올릴지** 가른다.
+// 드래곤이 1000483(생명 1) · 1000724(생명 2500) 둘이었고, 빈 껍데기가 올라가
+// 있어서 소환이 완결되지 않았다(2026-09-16 실측).
+bool wheel_fill_better(std::int32_t hp_a, std::int32_t grow_a,
+                       std::int32_t hp_b, std::int32_t grow_b) {
+    // **-1 은 "게임이 정한다" 센티널이고 온전한 쪽이다.** 와이번·A.T.A.G. 가
+    // 그 값인데 스탯이 정상으로 뜬다(실측). 부호 그대로 비교하면 -1 이 껍데기의
+    // 1 보다 낮게 깔려 **껍데기를 고르게 된다** - 시험에서 걸렸다.
+    const auto rank = [](std::int32_t hp) {
+        return hp == kHpDefault ? kHpRankMax : hp;
+    };
+    const std::int32_t ra = rank(hp_a);
+    const std::int32_t rb = rank(hp_b);
+    if (ra != rb) return ra > rb;
+    return grow_a > grow_b;
+}
+
 }  // namespace game
 }  // namespace cdtb
