@@ -11,9 +11,30 @@
 
 #include "core/log.h"
 #include "core/write_log.h"
+#include "game/roster.h"   // read_engine_string - 엔진 문자열은 한 군데서만 읽는다
 #include "mem/scanner.h"
 
 namespace cdtb::game {
+
+EquipOwner equip_owner_of(std::string_view internal_name) {
+    struct Prefix {
+        std::string_view text;
+        EquipOwner who;
+    };
+    // 밑줄까지 맞춘다. 표에 `Demeniss`(23개) 가 있어서 "Dem 으로 시작"
+    // 으로 보면 엉뚱한 것이 딸려 온다.
+    static constexpr Prefix kPrefixes[] = {
+        {"Kliff_", EquipOwner::Kliff},
+        {"Demian_", EquipOwner::Demian},
+        {"Damian_", EquipOwner::Demian},
+        {"Oongka_", EquipOwner::Oongka},
+    };
+    for (const Prefix& p : kPrefixes) {
+        if (internal_name.starts_with(p.text)) return p.who;
+    }
+    return EquipOwner::Shared;
+}
+
 namespace {
 
 // --- 매니저 (`pa::ItemInfoManager`) ---
@@ -28,6 +49,10 @@ constexpr std::size_t kRecordsPtr = 0x58;   // 레코드 포인터 배열
 // 필드 이름과 오프셋을 짝지을 수 있다 - `tools/rtti/fields.py` 가
 // 그것을 뽑는다. 실측 109개.
 constexpr std::size_t kRecKey = 0x00;       // u32 키
+// _stringKey. 엔진 문자열 객체를 가리킨다 - { char* +0x00, u32 길이 +0x08 }.
+// 장비의 캐릭터 전용 구분이 이 **내부 이름**에서만 나온다(표시명은
+// 현지화되므로 거기엔 없다).
+constexpr std::size_t kRecStringKey = 0x08;
 constexpr std::size_t kRecMaxStack = 0x18;  // u32 _maxStackCount
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
 constexpr std::size_t kRecEquipType = 0x42;  // u16 _equipTypeInfo (FFFF=장비 아님)
@@ -141,6 +166,16 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         reader.read_value(e.record + kRecMaxStack, &e.max_stack);
         reader.read_value(e.record + kRecCategory, &e.category);
 
+        // 내부 이름에서 캐릭터 전용 구분을 굳힌다. 못 읽으면 공용으로
+        // 둔다 - 표 읽기를 여기서 멈출 일이 아니다.
+        std::uint64_t str_obj = 0;
+        if (reader.read_value(e.record + kRecStringKey, &str_obj) &&
+            str_obj != 0) {
+            e.owner = equip_owner_of(
+                read_engine_string(reader,
+                                   static_cast<std::uintptr_t>(str_obj)));
+        }
+
         // 게임은 담금질을 "상한 - 1" 까지만 받는다. 상한이 0 인
         // 아이템(재료 등)은 그대로 빼면 0xFFFFFFFF 가 되므로 0 으로
         // 둔다 - 담금질이 없는 것이다.
@@ -193,6 +228,7 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         entry.repair_entries = e.repair_entries;
         entry.max_sharpness = e.max_sharpness;
         entry.equip_type = e.equip_type;
+        entry.owner = e.owner;
         entry.record = e.record;
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
