@@ -25,6 +25,7 @@
 #include "game/spec_heal.h"
 #include "game/player.h"
 #include "game/roster.h"
+#include "game/wanted.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
 #include "mem/safe_read.h"
@@ -286,6 +287,8 @@ void auto_analysis_loop() {
     // 2976(아이템 사용) 구동 준비 + 명령 파일 감시(밖에서 실험을 건다).
     companion_use_item_resolve(rtti, reader);
     companion_resolve_messages(rtti, reader);
+    // 수배 해제(2646). 해석만 한다 - 보내는 것은 화면에서 누를 때다.
+    wanted_resolve(rtti, reader);
     companion_hire_trace_install(reader);
     companion_spawn_trace_install(reader);
     // 좌표는 카메라 쪽만 안다. 동반자 코드에 넣어 준다.
