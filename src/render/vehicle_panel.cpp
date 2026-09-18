@@ -3,12 +3,17 @@
 
 #include <imgui.h>
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <map>
+#include <string>
+#include <vector>
 
 #include "game/companion.h"
 #include "game/callgate.h"
 #include "game/grant.h"
+#include "game/mountvital.h"
 #include "game/player.h"
 #include "game/reserveslot.h"
 #include "game/towngate.h"
@@ -280,6 +285,93 @@ void draw_vehicle_panel(bool* open) {
                     "**사용은 가방에서 하십시오** - 우리가 사용 메시지를 구동해 봤지만\n"
                     "대기 시간이 자연 감소분 이상으로 안 줄었습니다(실측 2026-09-15).");
             }
+        }
+    }
+
+    // ------------------------------------------------------- 체력 · 스태미나
+    //
+    // 탈것도 플레이어와 **같은 게이지 사슬**이다(2026-09-18 실측). 다만 체력은
+    // 약 2초마다 권위 쪽이 덮어쓰고 스태미나는 안 덮는다 - 그래서 체력에는
+    // "고정" 이 필요하다. 자세한 근거는 `game/mountvital.h`.
+    if (collapsing_header("veh.vital", "체력 · 스태미나")) {
+        const std::vector<game::MountVital> mv = game::mount_vitals(reader);
+        if (mv.empty()) {
+            ImGui::TextDisabled("월드에 나와 있는 동반자가 없습니다."
+                                " 탈것을 부른 뒤 다시 보십시오.");
+        } else {
+            const game::MountPin pin = game::mount_pin_get();
+            ImGui::TextDisabled("값은 1000배 척도입니다 (2,500,000 = 생명 2500)");
+            for (const game::MountVital& m : mv) {
+                ImGui::PushID(static_cast<int>(m.handle));
+                if (!m.ok) {
+                    ImGui::TextDisabled("%s - 게이지를 못 잡았습니다",
+                                        m.name.c_str());
+                    ImGui::PopID();
+                    continue;
+                }
+                const bool pinned = (pin.handle == m.handle) &&
+                                    game::mount_pin_active(pin);
+                ImGui::Text("%s%s", m.name.c_str(), pinned ? "  [고정 중]" : "");
+                ImGui::SameLine();
+                ImGui::TextDisabled("체력 %lld / %lld · 스태미나 %lld / %lld",
+                                    static_cast<long long>(m.hp_cur),
+                                    static_cast<long long>(m.hp_max),
+                                    static_cast<long long>(m.sta_cur),
+                                    static_cast<long long>(m.sta_max));
+
+                // 입력값은 대상마다 따로 기억한다 - 창을 오가도 안 섞이게.
+                static std::map<std::uint32_t, std::array<int, 4>> s_edit;
+                auto& box = s_edit[m.handle];
+                if (box[0] == 0 && box[1] == 0 && box[2] == 0 && box[3] == 0) {
+                    box = {static_cast<int>(m.hp_cur), static_cast<int>(m.hp_max),
+                           static_cast<int>(m.sta_cur),
+                           static_cast<int>(m.sta_max)};
+                }
+                ImGui::SetNextItemWidth(320.0f);
+                ImGui::InputInt2("체력 현재/최대", box.data());
+                ImGui::SetNextItemWidth(320.0f);
+                ImGui::InputInt2("스태미나 현재/최대", box.data() + 2);
+
+                game::MountPin want;
+                want.handle = m.handle;
+                want.hp_cur = box[0];
+                want.hp_max = box[1];
+                want.sta_cur = box[2];
+                want.sta_max = box[3];
+
+                if (ImGui::Button("적용 (한 번)")) {
+                    if (game::mount_vital_write(reader, m.handle, want)) {
+                        notice_set(&s_note, NoticeLevel::Ok, "{} 에 썼습니다",
+                                   m.name);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Bad,
+                                   "실패 - 아무것도 안 썼습니다");
+                    }
+                }
+                ImGui::SameLine();
+                bool on = pinned;
+                if (ImGui::Checkbox("고정", &on)) {
+                    if (on) {
+                        game::mount_pin_set(want);
+                    } else {
+                        game::mount_pin_clear();
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "체력은 약 2초마다 게임이 원래 값으로 되돌립니다.\n"
+                        "고정을 켜면 매 프레임 다시 써서 그것을 이깁니다.\n"
+                        "스태미나는 되돌아오지 않아 [적용] 한 번으로 충분합니다.\n\n"
+                        "고정은 **한 마리만** 걸립니다 - 다른 것을 켜면 옮겨갑니다.\n"
+                        "대상은 주소가 아니라 핸들로 들고 있어서, 탈것이 사라지면\n"
+                        "그 프레임은 조용히 건너뜁니다.");
+                }
+                ImGui::Separator();
+                ImGui::PopID();
+            }
+            ImGui::TextColored(col::kWarn,
+                               "발열·자연발화·탈것 화염 게이지는 건드리지"
+                               " 않습니다 (핀 금지 타입)");
         }
     }
 
