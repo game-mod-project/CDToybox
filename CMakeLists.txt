@@ -117,6 +117,7 @@ add_library(cdtoybox SHARED
     src/game/dragondiag.cpp
     src/game/towngate.cpp
     src/game/callgate.cpp
+    src/game/mountvital.cpp
     src/input/wndproc.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
@@ -171,6 +172,7 @@ add_executable(cdtb_tests
     tests/nofall_tests.cpp
     tests/towngate_tests.cpp
     tests/callgate_tests.cpp
+    tests/mountvital_tests.cpp
     tests/bag_capacity_tests.cpp
     tests/bag_backup_tests.cpp
     tests/wheel_tests.cpp
@@ -197,6 +199,7 @@ add_executable(cdtb_tests
     src/game/wheelfill.cpp
     src/game/towngate.cpp
     src/game/callgate.cpp
+    src/game/mountvital.cpp
     src/render/notice_state.cpp
     src/render/stash_queue.cpp
     src/render/confirm_state.cpp

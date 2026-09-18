@@ -53,6 +53,7 @@
 #include "game/spawnguard.h"
 #include "game/callgate.h"
 #include "game/dragondiag.h"
+#include "game/mountvital.h"
 #include "game/towngate.h"
 #include "game/wheelfill.h"
 #include "mem/reader.h"
@@ -770,6 +771,10 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::nofall_refresh(reader);
         // 명령 파일 스레드가 부탁한 근처 액터 갱신은 여기(렌더 스레드)서 한다.
         cdtb::game::live_actors_tick(reader);
+        // 탈것 체력 고정. 체력은 약 2초마다 게임이 되돌리므로 매 프레임 다시
+        // 쓴다. 대상이 없으면 그 자리에서 돌아간다(살아있는 목록 뒤에 둔다 -
+        // 핸들로 액터를 다시 찾기 때문이다).
+        cdtb::game::mount_pin_tick(reader);
         // 특수아이템 크래시 가드를 첫 프레임에 설치(모듈 베이스만 필요).
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
