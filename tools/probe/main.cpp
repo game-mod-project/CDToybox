@@ -34,6 +34,7 @@
 #include "game/localization.h"
 #include "game/player.h"
 #include "game/reserveslot.h"
+#include "game/mountvital.h"
 #include "game/roster.h"
 #include "game/stash.h"
 
@@ -3040,6 +3041,77 @@ void cmd_wheel(const mem::Rtti& rt, const mem::Reader& reader) {
     }
 }
 
+// 탈것 체력·스태미나의 **권위 사본**(서버 realm) 확인·쓰기.
+//
+//   mountauth
+//       살아있는 동반자마다 거울 배열과 권위 배열을 나란히 낸다.
+//   mountauth <핸들16> <체력현재> <체력최대> <기력현재> <기력최대>
+//       써 보고 10초 동안 양쪽을 지켜본다. -1 은 "그 칸은 안 건드림".
+//
+// 배포 전에 여기서 확인한다 - 모드와 **같은 코드**(game/mountvital.cpp)를 쓴다.
+void cmd_mountauth(mem::Rtti& rt, const mem::Reader& reader, int argc,
+                   char** argv) {
+    if (!game::discover_actor_manager(rt, reader)) {
+        std::printf("액터 매니저를 못 찾았습니다 (월드 밖?).\n");
+        return;
+    }
+    game::discover_roster(rt, reader);
+    if (!game::refresh_live_actors(reader)) {
+        std::printf("액터 걷기 실패.\n");
+        return;
+    }
+    const int n = game::mount_authority_discover(rt, reader);
+    std::printf("권위 후보 %d개\n", n);
+
+    auto show = [&](const char* tag) {
+        for (const auto& m : game::mount_vitals(reader)) {
+            if (!m.ok) continue;
+            std::int64_t ac = -1, am = -1, sc = -1, sm = -1;
+            if (m.authority != 0) {
+                reader.read_value(m.authority + game::kGaugeCur, &ac);
+                reader.read_value(m.authority + game::kGaugeMax, &am);
+                const std::uintptr_t se =
+                    m.authority + game::gauge_offset(m.sta_idx);
+                if (m.sta_idx >= 0) {
+                    reader.read_value(se + game::kGaugeCur, &sc);
+                    reader.read_value(se + game::kGaugeMax, &sm);
+                }
+            }
+            std::printf("  %s%08X %-22s 거울 체력 %lld/%lld 기력 %lld/%lld",
+                        tag, m.handle, m.name.c_str(),
+                        (long long)m.hp_cur, (long long)m.hp_max,
+                        (long long)m.sta_cur, (long long)m.sta_max);
+            if (m.authority == 0) {
+                std::printf("   권위 **못 찾음**\n");
+            } else {
+                std::printf("   권위 0x%llX 체력 %lld/%lld 기력 %lld/%lld\n",
+                            (unsigned long long)m.authority, (long long)ac,
+                            (long long)am, (long long)sc, (long long)sm);
+            }
+        }
+    };
+    show("");
+
+    if (argc < 7) return;
+    game::MountPin p;
+    const auto h = static_cast<std::uint32_t>(
+        std::strtoul(argv[2], nullptr, 16));
+    p.hp_cur = std::strtoll(argv[3], nullptr, 0);
+    p.hp_max = std::strtoll(argv[4], nullptr, 0);
+    p.sta_cur = std::strtoll(argv[5], nullptr, 0);
+    p.sta_max = std::strtoll(argv[6], nullptr, 0);
+    std::printf("\n핸들 %08X 에 씁니다\n", h);
+    if (!game::mount_vital_write(reader, h, p)) {
+        std::printf("쓰기 실패\n");
+        return;
+    }
+    for (int i = 0; i < 10; ++i) {
+        ::Sleep(1000);
+        std::printf("[+%2ds]\n", i + 1);
+        show("   ");
+    }
+}
+
 void cmd_player(const mem::Rtti& rt, const mem::Reader& reader, const Remote& r,
                 int argc, char** argv) {
     // player find : 실제 discovery(스티키·조각최다) 를 돌려 결과를 본다.
@@ -4457,6 +4529,7 @@ int main(int argc, char** argv) {
     if (cmd == "nofall") { cmd_nofall(rt, reader); return 0; }
     if (cmd == "equipchars") { cmd_equipchars(rt, reader, argc, argv); return 0; }
     if (cmd == "player") { cmd_player(rt, reader, r, argc, argv); return 0; }
+    if (cmd == "mountauth") { cmd_mountauth(rt, reader, argc, argv); return 0; }
     if (cmd == "wheel") { cmd_wheel(rt, reader); return 0; }
     if (cmd == "clandiff") { cmd_clandiff(rt, reader, argc, argv); return 0; }
     if (cmd == "clanalive") { cmd_clanalive(rt, reader); return 0; }
