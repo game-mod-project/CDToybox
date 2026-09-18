@@ -131,6 +131,8 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
 
 bool bounty_ready(const mem::Reader& reader) { return region_of(reader) != 0; }
 
+bool wanted_component_ready() { return g_comp != 0 && g_comp_vtable != 0; }
+
 bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out) {
     const std::uintptr_t region = region_of(reader);
     if (region == 0 || raw_out == nullptr) return false;
