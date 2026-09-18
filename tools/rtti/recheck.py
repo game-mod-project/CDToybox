@@ -46,6 +46,8 @@ PAT_DECL = re.compile(
 PAT_ID = re.compile(
     r'//\s*@class\s+(\S+)[^\n]*\n\s*inline\s+constexpr\s+std::uint16_t\s+'
     r'(\w+)\s*=\s*(\d+)\s*;')
+# 이름 있는 상수와 같은 값이 숫자로 박힌 자리를 찾는 데 쓴다.
+PAT_LIT = re.compile(r'0[xX]([0-9A-Fa-f]{6,8})\b')
 PAT_RVA = re.compile(
     r'constexpr\s+std::uint(?:64_t|ptr_t)\s+(\w+)\s*=\s*(0[xX][0-9A-Fa-f]+)\s*;')
 
@@ -264,6 +266,36 @@ def main():
             kind = '코드  ' if is_code(val) else '데이터'
             what = '(런타임으로만 갈린다)' if kind == '데이터' else here_is(img, val)
             print('      %-26s 0x%08X  %s  %s' % (name, val, kind, what))
+
+    print()
+    print('=' * 72)
+    print('5. 같은 값이 숫자로 박힌 자리 - 상수를 고쳐도 안 따라온다')
+    named = {}
+    declared = set()
+    for p, body in text.items():
+        for m in PAT_RVA.finditer(body):
+            v = int(m.group(2), 16)
+            if v < 0x1000:
+                continue
+            named.setdefault(v, set()).add(m.group(1))
+            declared.add((p, body[:m.start()].count('\n') + 1))
+    dup = 0
+    for p, body in sorted(text.items()):
+        for i, line in enumerate(body.split('\n'), 1):
+            if (p, i) in declared or line.lstrip().startswith('//'):
+                continue      # 선언 자신과, 주석에 남긴 옛 값은 건너뛴다
+            for m in PAT_LIT.finditer(line):
+                v = int(m.group(1), 16)
+                if v not in named:
+                    continue
+                inlog = 'log::' in line
+                print('   %-4s %s:%d  0x%X = %s%s'
+                      % ('' if inlog else '**', rel(root, p), i, v,
+                         '/'.join(sorted(named[v])),
+                         '  (로그 문구 속 라벨)' if inlog else ''))
+                dup += 1
+    print('   (%d곳. ** 는 진짜 사용처라 상수로 바꿀 것. 로그 라벨은 문구만 낡는다)'
+          % dup)
 
     print()
     print('=' * 72)
