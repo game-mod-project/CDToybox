@@ -11,6 +11,10 @@ namespace {
 // 적는다 - ini 를 손으로 고쳐 엔진 천장(732)을 넘기면 세이브가 깨진다.
 constexpr int kBagScreenCap = 700;
 
+// 구동 자리는 많아야 몇 곳이다. 목록이 길어지는 것은 사람이 로그를 통째로
+// 붙여 넣은 것이므로 거기서 끊는다 - grant 쪽 저장 칸도 이 크기다.
+constexpr std::size_t kMaxDriveSites = 8;
+
 
 std::string_view trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) {
@@ -114,6 +118,27 @@ std::vector<Config::BagKeep> parse_bag_keep(std::string_view v) {
     return out;
 }
 
+// `0x2AD0A7D,0x2A2BBBF` 를 구동 자리 목록으로.
+//
+// 값은 **모듈 RVA** 다. 0 은 "모르는 자리" 를 뜻하는 내부 표식이라 받지 않고,
+// 모듈 크기를 넘는 값도 받지 않는다 - 오타로 엉뚱한 자리를 안전하다고 선언하면
+// 지급 처리기가 게임 코드 한복판에서 재진입해 게임이 멈춘다.
+std::vector<std::uint64_t> parse_drive_sites(std::string_view v) {
+    std::vector<std::uint64_t> out;
+    while (!v.empty()) {
+        const std::size_t comma = v.find(',');
+        std::string_view item = trim(v.substr(0, comma));
+        v = (comma == std::string_view::npos) ? std::string_view{}
+                                              : v.substr(comma + 1);
+        if (item.empty()) continue;
+        const int rva = to_int(item, -1);
+        if (rva <= 0) continue;   // 0 과 못 읽은 것은 버린다
+        if (out.size() >= kMaxDriveSites) break;
+        out.push_back(static_cast<std::uint64_t>(rva));
+    }
+    return out;
+}
+
 Config load(const std::wstring& path) {
     Config c;
     std::ifstream in(path);
@@ -158,6 +183,8 @@ Config load(const std::wstring& path) {
             c.knowledge_keep = parse_knowledge_keep(val);
         } else if (key == "bag_keep") {
             c.bag_keep = parse_bag_keep(val);
+        } else if (key == "drive_sites") {
+            c.drive_sites = parse_drive_sites(val);
         } else if (key == "equip_character_row") {
             // 캐릭터 행은 u16 이고 0xFFFF 는 "자동" 이다. 그 밖은 자동으로 본다.
             const int v = to_int(val, -1);
@@ -217,6 +244,16 @@ bool save(const std::wstring& path, const Config& c) {
         const auto& b = c.bag_keep[i];
         if (i != 0) out << ",";
         out << b.kind << ":" << b.target;
+    }
+    out << "\n";
+    out << "; 지급을 구동해도 되는 자리(모듈 RVA). 게임이 갱신되면 코드에 박힌\n";
+    out << "; 목록이 죽는다 - 그때 로그의 `구동 건너뜀: 확인되지 않은 자리 +<RVA>`\n";
+    out << "; 를 여기 적으면 다시 빌드하지 않고 살아난다. 멈춘 자리를 적으면\n";
+    out << "; 게임이 멈추니, 지급을 눌렀을 때 반복해 찍히는 자리만 적을 것.\n";
+    out << "drive_sites = ";
+    for (std::size_t i = 0; i < c.drive_sites.size(); ++i) {
+        if (i != 0) out << ",";
+        out << "0x" << std::hex << c.drive_sites[i] << std::dec;
     }
     out << "\n";
     out << "; 장비 창의 캐릭터 선택(캐릭터 행). -1 = 자동(착용 조각 최다). 클리프 0, 데미안 3, 웅카 5.\n";

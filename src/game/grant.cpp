@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <string>
 
@@ -293,6 +294,13 @@ std::uintptr_t g_normal_outer[kNormalTraces]{};
 // 틀리면 요청이 전부 건너뛰어지고 "구동 건너뜀: 확인되지 않은 자리 +RVA" 로그에
 // 실제 자리가 찍힌다("구동 자리 …" 줄은 성공 경로 전용). 2850 첫 실행(옛 값을
 // 가진 1차 빌드) 실측: 지급 때마다 `+2A03D7D` 가 남고 지급·획득이 전부 미뤄졌다.
+// 1.0.0.2944(2026-09-18): **옛 자리 0x2A03D7D 가 죽었다** - 새 exe 에서 그 자리는
+// `lea r13,[rip+..]` 이고 액터 조회를 부르는 반환 주소가 아니다. 액터 조회
+// (0x212A0F0) 호출이 681곳이라 그중 어느 것이 "안전한 구동 자리" 인지는 **정적으로
+// 못 가린다** - 2850 때도 런타임 로그로 잡았다. 그래서 값을 옛 것으로 두고,
+// 첫 실행에서 "구동 건너뜀: 확인되지 않은 자리 +RVA" 로 찍히는 자리를
+// `CDToybox.ini` 의 `drive_sites` 에 넣으면 **다시 빌드하지 않고** 살아난다
+// (아래 g_extra_drive_sites). specs/2026-09-18-game-update-2944.md.
 constexpr std::uint64_t kGoodDriveSites[] = {0x2A03D7D};
 
 // 부르는 자리(모듈 안 첫 프레임)를 낸다. 모르면 0.
@@ -309,10 +317,20 @@ std::uint64_t drive_site_rva() {
     return 0;
 }
 
+// ini 가 더해 준 자리. 디투어 안에서 읽으므로 할당도 잠금도 없는 고정 칸이다 -
+// 시작할 때 한 번 채우고 그 뒤로는 읽기만 한다.
+constexpr int kMaxExtraDriveSites = 8;
+std::uint64_t g_extra_drive_sites[kMaxExtraDriveSites]{};
+std::atomic<int> g_extra_drive_count{0};
+
 bool drive_site_is_good(std::uint64_t site) {
     if (site == 0) return false;
     for (const auto g : kGoodDriveSites) {
         if (g == site) return true;
+    }
+    const int n = g_extra_drive_count.load(std::memory_order_acquire);
+    for (int i = 0; i < n; ++i) {
+        if (g_extra_drive_sites[i] == site) return true;
     }
     return false;
 }
@@ -1356,6 +1374,36 @@ bool request_hire_species(std::uintptr_t session, std::uint16_t char_key) {
 
 std::uintptr_t drive_fault_session() {
     return g_drive_fault.load(std::memory_order_acquire);
+}
+
+void set_extra_drive_sites(const std::uint64_t* rvas, int n) {
+    if (rvas == nullptr || n <= 0) {
+        g_extra_drive_count.store(0, std::memory_order_release);
+        return;
+    }
+    if (n > kMaxExtraDriveSites) n = kMaxExtraDriveSites;
+    int k = 0;
+    for (int i = 0; i < n; ++i) {
+        if (rvas[i] == 0) continue;   // 0 은 "모르는 자리" 표식이라 받지 않는다
+        g_extra_drive_sites[k++] = rvas[i];
+    }
+    g_extra_drive_count.store(k, std::memory_order_release);
+    if (k > 0) {
+        std::string line;
+        char buf[24];
+        for (int i = 0; i < k; ++i) {
+            std::snprintf(buf, sizeof(buf), " +%llX",
+                          static_cast<unsigned long long>(
+                              g_extra_drive_sites[i]));
+            line += buf;
+        }
+        log::infof("구동 자리 ini 추가 {}곳:{}", k, line);
+    }
+}
+
+int drive_site_count() {
+    return static_cast<int>(std::size(kGoodDriveSites)) +
+           g_extra_drive_count.load(std::memory_order_acquire);
 }
 
 void clear_drive_fault() {

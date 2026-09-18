@@ -9,6 +9,7 @@
 #include "render/d3d12_hook.h"
 #include "game/camera.h"
 #include "game/clan.h"
+#include "game/grant.h"
 #include "render/overlay.h"
 #include "mem/watchpoint.h"
 
@@ -47,6 +48,14 @@ DWORD WINAPI init_thread(LPVOID) {
                      " socket_cap={}",
                      cfg.toggle_key, cfg.unload_key, cfg.show_diagnostics,
                      cfg.socket_cap);
+
+    // ini 가 적어 둔 구동 자리를 더한다. 코드에 박은 목록은 게임 갱신에
+    // 죽으므로(1.0.0.2944), 로그에 찍힌 자리를 사람이 적어 다시 빌드하지
+    // 않고 지급을 살릴 수 있게 한다. 훅이 걸리기 전에 세운다.
+    if (!cfg.drive_sites.empty()) {
+        cdtb::game::set_extra_drive_sites(
+            cfg.drive_sites.data(), static_cast<int>(cfg.drive_sites.size()));
+    }
 
     cdtb::overlay::set_config(cfg, ini);
 

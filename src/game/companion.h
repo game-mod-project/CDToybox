@@ -58,7 +58,7 @@ bool companion_capture_install(const mem::Rtti& rtti,
 //
 // 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
 // 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
-inline constexpr std::uint64_t kHireWorkRva = 0x2AE02C0;   // 2760 까지 0x2ADE280
+inline constexpr std::uint64_t kHireWorkRva = 0x2BADB80;   // 2850 까지 0x2AE02C0
 
 // 소환 작업 함수. 2894 처리기(RVA 0x29621E0; 2850 빌드는 역직렬화 0x2963920 →
 // 0x2B7B130 의 +0x155)가 관문을 통과한 뒤 이것을 부른다 - 정상 소환에서
@@ -75,7 +75,7 @@ inline constexpr std::uint64_t kHireWorkRva = 0x2AE02C0;   // 2760 까지 0x2ADE
 // 2894 를 아예 안 보낸다(실측 2026-09-06). 그래서 이 함수가 불리기는
 // 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
 // 알 수 있다. 읽고 찍기만 한다.
-inline constexpr std::uint64_t kSpawnWorkRva = 0x2AD1640;   // 2760 까지 0x2ACF600
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2B9EB50;   // 2850 까지 0x2AD1640
 // 마지막 소환 결과. 코드 0 이 성공이다.
 //
 // 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).
@@ -118,7 +118,7 @@ HireWorkResult last_hire_work();
 // 야생 액터 핸들**을 박아 둘다. 그 액터는 곳 사라지는데 값은 남아
 // 게임이 "이미 소환됨" 으로 오판하고, 그러면 그 개체는 소환도
 // 해제도 안 된다. 지금까지 지역 이동·세이브 로드로만 풀리던 그것이다.
-inline constexpr std::uint16_t kHireAckId = 2107;
+inline constexpr std::uint16_t kHireAckId = 3036;   // 2850 까지 2107
 
 struct HireAck {
     bool valid = false;
@@ -144,7 +144,7 @@ void mark_hire_ack_handled(std::uint64_t merc_no);
 // A 는 아이템(ItemInfo) 키로 추정, C 는 0x0D 를 검사한다, B·D 는 미상
 // (0 으로 시작). 컨테이너 핸들을 쓰지 않아 소켓을 막았던 핸들 월드
 // 문제가 없다. 지급한 부적을 이것으로 사용시켜 등록 경로를 캡처한다.
-inline constexpr std::uint16_t kUseItemByInfoId = 2976;
+inline constexpr std::uint16_t kUseItemByInfoId = 2269;   // 2850 까지 2976
 inline constexpr std::uint8_t kUseItemByInfoKindC = 0x0D;
 inline constexpr std::size_t kUseItemWireLen = 5 + 13;
 
@@ -171,7 +171,7 @@ bool companion_use_item_ready();
 //
 // 주의: 작업 함수가 0 이 아닌 코드를 돌려주면 게임이 오류 1013 을
 // 만들어 로그아웃한다. 번호가 유효할 때만 부를 것.
-inline constexpr std::uint16_t kCompleteSummonId = 2962;
+inline constexpr std::uint16_t kCompleteSummonId = 2244;   // 2850 까지 2962
 // 좌표를 어디서 얻을지는 밖에서 준다. 카메라 코드는 시험 대상에
 // 링크되지 않으므로 이쪽이 그것을 직접 부르면 안 된다.
 using PositionFn = bool (*)(float out[3]);
@@ -208,7 +208,7 @@ bool parse_hex_bytes(const std::string& text, std::uint8_t* out, std::size_t cap
 // 조용히 코드만 남기고 게임 상태를 바꾸지 않는다.
 //
 // 대상 핸들은 game/actors 의 근처 목록에서 얻는다.
-inline constexpr std::uint16_t kHireToTargetId = 2338;
+inline constexpr std::uint16_t kHireToTargetId = 2959;   // 2850 까지 2338
 inline constexpr std::size_t kHireWireLen = 5 + 5;
 
 // 머리 5바이트 + 본문 5바이트(u32 핸들, u8 플래그)를 조립한다.
@@ -277,7 +277,7 @@ std::uintptr_t companion_pick_session();
 //   역직렬화 0x2965510 -> 작업 0x2AD1FC0
 //   rcx = [[세션액터+0x68]+0x110]  MercenaryClanActorComponent
 //   rdx = &결과 u32 (0 이면 성공)   r8w = A   r9w = B
-inline constexpr std::uint16_t kHireFromInvId = 2454;
+inline constexpr std::uint16_t kHireFromInvId = 3021;   // 2850 까지 2454
 inline constexpr std::size_t kHireInvWireLen = 5 + 4;
 
 // 머리 5바이트 + 본문 4바이트(u16 A, u16 B)를 조립한다.
@@ -291,7 +291,7 @@ bool request_hire_from_inventory(std::uintptr_t session, std::uint16_t a,
                                  std::uint16_t b);
 bool hire_from_inventory_ready();
 
-inline constexpr std::uint16_t kCatchBySummonId = 2386;
+inline constexpr std::uint16_t kCatchBySummonId = 2592;   // 2850 까지 2386
 inline constexpr std::size_t kCatchWireLen = 5 + 8;
 // 표본 네 개가 전부 이 값이었다. 세션마다 달라질 수 있으니 캡처에서
 // 본 값이 있으면 그것을 먼저 쓴다.

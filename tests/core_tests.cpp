@@ -138,3 +138,37 @@ TEST(bag_keep_empty_is_empty) {
     CHECK(cdtb::config::parse_bag_keep("").empty());
     CHECK(cdtb::config::parse_bag_keep("   ").empty());
 }
+
+// ---- 구동 자리 (drive_sites) -------------------------------------------
+// 코드에 박은 구동 자리는 게임 갱신에 죽는다(1.0.0.2944 에서 실제로 죽었다).
+// 그때 로그에 찍힌 자리를 사람이 ini 에 적어 다시 빌드하지 않고 살린다.
+
+TEST(drive_sites_parses_hex_and_decimal) {
+    const auto v = cdtb::config::parse_drive_sites("0x2AD0A7D, 44219839, 0x1");
+    CHECK_EQ(v.size(), static_cast<std::size_t>(3));
+    if (v.size() != 3) return;
+    CHECK_EQ(v[0], static_cast<std::uint64_t>(0x2AD0A7D));
+    CHECK_EQ(v[1], static_cast<std::uint64_t>(44219839));
+    CHECK_EQ(v[2], static_cast<std::uint64_t>(1));
+}
+
+TEST(drive_sites_drops_zero_and_garbage) {
+    // 0 은 drive_site_rva() 가 "모르는 자리" 에 쓰는 표식이다. 그것을 안전
+    // 목록에 넣으면 모든 자리가 안전해져 게임이 멈출 수 있다 - 반드시 버린다.
+    const auto v = cdtb::config::parse_drive_sites("0, 0x0, nonsense, -5, 0x2AD0A7D, ");
+    CHECK_EQ(v.size(), static_cast<std::size_t>(1));
+    if (v.size() != 1) return;
+    CHECK_EQ(v[0], static_cast<std::uint64_t>(0x2AD0A7D));
+}
+
+TEST(drive_sites_empty_is_empty) {
+    CHECK(cdtb::config::parse_drive_sites("").empty());
+    CHECK(cdtb::config::parse_drive_sites("   ").empty());
+}
+
+TEST(drive_sites_caps_the_list) {
+    // 사람이 로그를 통째로 붙여 넣어도 고정 칸(8)을 넘지 않는다.
+    const auto v = cdtb::config::parse_drive_sites(
+        "0x1,0x2,0x3,0x4,0x5,0x6,0x7,0x8,0x9,0xA");
+    CHECK_EQ(v.size(), static_cast<std::size_t>(8));
+}
