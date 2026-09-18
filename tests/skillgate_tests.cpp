@@ -3,9 +3,12 @@
 // 태울 수 있다.
 //
 // 실측 자리(2026-09-13, 실행 파일에서 직접 확인 - 검토가 독립으로 재확인):
-//   RVA 0x0E0AB860  48 89 5C 24 18 66 89 54   함수 진입점 -> B0 01 C3 (mov al,1; ret)
-//   RVA 0x0208B639  0F 9D 44 24 40            setge byte [rsp+0x40] -> C6 44 24 40 01
-//                   (창은 0x0208B638, 앞 바이트 6A 는 앞 명령의 변위)
+//   RVA 0x0E808870  48 89 5C 24 18 66 89 54   함수 진입점 -> B0 01 C3 (mov al,1; ret)
+//   RVA 0x02140CF9  0F 9D 44 24 40            setge byte [rsp+0x40] -> C6 44 24 40 01
+//                   (창은 0x02140CF8, 앞 바이트 6A 는 앞 명령의 변위)
+//
+// 위는 **exe 1.0.0.2944** 자리다(2026-09-18 재도출). 2850 은 0x0E0AB860 ·
+// 0x0208B639 였고 **창 8바이트는 둘 다 그대로**다 - 코드가 아니라 자리만 밀렸다.
 #include <cstdint>
 #include <cstring>
 
@@ -332,9 +335,11 @@ TEST(gate_probe_looks_without_writing) {
 TEST(the_shipped_gate_table_matches_what_the_executable_had) {
     // 표가 바뀌면 여기서 걸린다. 이 숫자들은 실행 파일을 직접 읽어 확인한 것이고
     // (2026-09-13), 검토가 독립으로 한 번 더 확인했다.
+    // **exe 1.0.0.2944 로 다시 짚었다**(2026-09-18) - 자리만 밀렸고 창 8바이트는
+    // 둘 다 그대로다. 2850 자리는 관문0 0x0E0AB860 · 관문1 0x0208B639 였다.
     const GateDef* g0 = gate_def(cdtb::game::kGateFromType);
     CHECK(g0 != nullptr);
-    CHECK(g0->rva == 0x0E0AB860);
+    CHECK(g0->rva == 0x0E808870);
     CHECK(g0->len == 3);
     const std::uint8_t w0[8] = {0x48, 0x89, 0x5C, 0x24, 0x18, 0x66, 0x89, 0x54};
     CHECK(std::memcmp(g0->want, w0, 8) == 0);
@@ -347,7 +352,7 @@ TEST(the_shipped_gate_table_matches_what_the_executable_had) {
 
     const GateDef* g1 = gate_def(cdtb::game::kGateCost);
     CHECK(g1 != nullptr);
-    CHECK(g1->rva == 0x0208B639);
+    CHECK(g1->rva == 0x02140CF9);
     CHECK(g1->len == 5);
     // **창 8바이트 전체**여야 한다 - 앞 바이트 0x6A 는 앞 명령의 변위다.
     const std::uint8_t w1[8] = {0x6A, 0x0F, 0x9D, 0x44, 0x24, 0x40, 0x41, 0x8B};

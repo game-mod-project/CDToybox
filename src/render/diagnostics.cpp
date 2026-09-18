@@ -16,10 +16,12 @@ volatile const std::uint8_t kMarker[16] = {
     0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xED,
 };
 
+// @aob any - 진단용 표식. 게임 exe 에 있을 이유가 없다
 constexpr const char* kMarkerPattern =
     "C0 DE 70 0B 0C AF E1 23 45 67 89 AB CD EF FE ED";
 
 // x64 MSVC의 흔한 함수 프롤로그.
+// @aob any - 흔한 MSVC 프롤로그. 함수 시작을 되짚는 용도라 여러 곳이 정상이다
 constexpr const char* kProloguePattern = "48 89 5C 24 08 57 48 83 EC 20";
 
 Diagnostics compute() {

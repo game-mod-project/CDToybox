@@ -55,11 +55,23 @@ namespace cdtb::game {
 
 // ------------------------------------------------------- 실측 오프셋 (2026-09-17)
 
-// 매니저 전역. 조회 함수 RVA 0x49BB80 이 그대로 보여 준다. **RVA 는 갱신마다
-// 밀리므로**(game-update-rva-drift) 이것만 믿지 않는다 - 읽은 객체의 클래스
-// 이름을 RTTI 로 대조하고, 표 배치(색인 첫 키 == 첫 레코드 키)까지 맞아야
-// 쓴다. 안 맞으면 RTTI 인스턴스 탐색으로 넘어간다.
-inline constexpr std::uintptr_t kRegionMgrGlobalRva = 0x06C2E2F0;
+// 매니저 전역. **RVA 는 갱신마다 밀리므로**(game-update-rva-drift) 이것만 믿지
+// 않는다 - 읽은 객체의 클래스 이름을 RTTI 로 대조하고, 표 배치(색인 첫 키 ==
+// 첫 레코드 키)까지 맞아야 쓴다. 안 맞으면 RTTI 인스턴스 탐색으로 넘어간다.
+// 그래서 이 값이 낡아도 기능은 살아 있고, 다만 힙 전수 탐색 한 번을 더 한다.
+//
+// 다시 짚는 길은 **표 이름 문자열**이다(밀림과 무관하다). `"regioninfo"` 를
+// 참조하는 조회 함수가 전역을 그대로 보여 준다:
+//
+//   0x0050D712  movzx edi, word ptr [rcx]        ; 행 번호
+//   0x0050D715  mov   rbx, [rip+...]             ; <- **전역**
+//   0x0050D71C  cmp   edi, dword ptr [rbx + 8]   ; 개수
+//   0x0050D72D  mov   rax, qword ptr [rbx + 0x58]; 배열
+//
+// 스크립트: 스크래치패드 `mgrglobals.py` (인자는 exe + 표 이름들).
+//
+// 2850: 0x06C2E2F0 (조회 0x49BB80) -> 2944: 0x06D69AD0 (조회 0x50D700). +0x13B7E0.
+inline constexpr std::uintptr_t kRegionMgrGlobalRva = 0x06D69AD0;
 inline constexpr const char* kRegionMgrClass = "RegionInfoManager";
 
 // RegionInfo 레코드(192바이트). `tools/rtti/fields.py` 로 20개를 짝지었다.

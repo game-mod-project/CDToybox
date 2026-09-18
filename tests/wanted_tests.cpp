@@ -14,7 +14,7 @@
 // 확인, 2026-09-17). 그래서 길이를 틀리면 조용히 아무 일도 안 난다.
 //
 // 본문 폭도 같은 자리에서 읽었다 - 읽기 함수를 부르기 직전의 `r8d` 다.
-//   ClearWantedReq      (ID 2646) : u32 · u8   -> 본문 5, 전체 10
+//   ClearWantedReq      (ID 2837) : u32 · u8   -> 본문 5, 전체 10   (2850 까지 2646)
 //   SetWantedForDevReq  (ID 2328) : u32 · u16  -> 본문 6, 전체 11
 
 using cdtb::game::build_clear_wanted_wire;
@@ -42,7 +42,7 @@ TEST(clear_wanted_wire_has_the_shared_five_byte_header) {
     std::size_t len = 0;
     CHECK(build_clear_wanted_wire(0xA0100001u, 0, wire, sizeof(wire), &len));
     CHECK_EQ(len, kClearWantedWireLen);
-    CHECK_EQ(u16_at(wire, 0), kClearWantedId);   // ID 2646
+    CHECK_EQ(u16_at(wire, 0), kClearWantedId);   // ID 2837
     CHECK_EQ(wire[2], static_cast<std::uint8_t>(0));
     CHECK_EQ(u16_at(wire, 3), static_cast<std::uint16_t>(5));   // 본문 5
 }
@@ -142,7 +142,7 @@ TEST(bounty_refuses_negative) {
 //
 // 게임이 그 일을 하는 메시지를 따로 들고 있다.
 //
-//   TrocTrChangeWantedStateReq  ID 2848  처리기 RVA 0x2B7F020
+//   TrocTrChangeWantedStateReq  ID 2983  처리기 RVA 0x2B7F020 (2850 기준; 2850 까지 ID 2848)
 //
 // 역직렬화기(RVA 0x29A6AA0)가 읽는 폭: u32 다음 u8, 다시 u8.
 // 본문 6, 전체 11 이다.
@@ -157,7 +157,7 @@ TEST(change_wanted_state_wire_header_and_body) {
     CHECK(build_change_wanted_state_wire(0xA0100001u, 0, 0, wire, sizeof(wire),
                                          &len));
     CHECK_EQ(len, kChangeWantedStateWireLen);
-    CHECK_EQ(u16_at(wire, 0), kChangeWantedStateId);   // 2848
+    CHECK_EQ(u16_at(wire, 0), kChangeWantedStateId);   // 2983
     CHECK_EQ(wire[2], static_cast<std::uint8_t>(0));
     CHECK_EQ(u16_at(wire, 3), static_cast<std::uint16_t>(6));   // 본문 6
 }

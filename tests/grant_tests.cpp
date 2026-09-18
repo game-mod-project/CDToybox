@@ -991,14 +991,37 @@ TEST(outcome_is_mine_compares_serial) {
     CHECK_EQ(cdtb::game::last_outcome().serial, 0u);
 }
 
-// 종 등록 검사 자리는 본체로 가는 jmp 썽크다. 2850 실측 바이트로 판정 함수를 본다.
+// ini 가 더해 주는 구동 자리. 코드 목록이 게임 갱신에 죽었을 때(1.0.0.2944)
+// 다시 빌드하지 않고 살리는 길이라, 고정 칸을 넘치지 않는지 못박는다.
+TEST(extra_drive_sites_are_counted_and_capped) {
+    const int base = cdtb::game::drive_site_count();   // 코드에 박힌 것만
+    const std::uint64_t one[] = {0x2AD0A7Dull};
+    cdtb::game::set_extra_drive_sites(one, 1);
+    CHECK_EQ(cdtb::game::drive_site_count(), base + 1);
+
+    // 0 은 "모르는 자리" 표식이라 받지 않는다.
+    const std::uint64_t zeros[] = {0ull, 0x1234ull, 0ull};
+    cdtb::game::set_extra_drive_sites(zeros, 3);
+    CHECK_EQ(cdtb::game::drive_site_count(), base + 1);
+
+    // 칸(8)을 넘겨도 넘치지 않는다.
+    const std::uint64_t many[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    cdtb::game::set_extra_drive_sites(many, 10);
+    CHECK_EQ(cdtb::game::drive_site_count(), base + 8);
+
+    // 뒷정리 - 다른 시험이 이 전역을 본다.
+    cdtb::game::set_extra_drive_sites(nullptr, 0);
+    CHECK_EQ(cdtb::game::drive_site_count(), base);
+}
+
+// 종 등록 검사 자리는 본체로 가는 jmp 썽크다. 2944 실측 바이트로 판정 함수를 본다.
 TEST(hire_check_jmp_target_follows_rel32) {
-    // 0x20991F0: E9 FB B2 03 0C -> 0x20991F5 + 0x0C03B2FB = 0xE0D44F0
-    const std::uint8_t thunk[] = {0xE9, 0xFB, 0xB2, 0x03, 0x0C};
+    // 0x214E8B0: E9 3B 5D 6E 0C -> 0x214E8B5 + 0x0C6E5D3B = 0xE8345F0
+    const std::uint8_t thunk[] = {0xE9, 0x3B, 0x5D, 0x6E, 0x0C};
     const std::uintptr_t base = 0x140000000ull;
     CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, sizeof(thunk),
-                                               base + 0x20991F0),
-             base + 0xE0D44F0);
+                                               base + 0x214E8B0),
+             base + 0xE8345F0);
 }
 
 TEST(hire_check_jmp_target_rejects_non_jmp_or_short) {

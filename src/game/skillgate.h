@@ -9,8 +9,12 @@ namespace cdtb::game {
 
 // 스킬 강화 조건 관문 우회.
 //
-// 관문 본체는 `KnowledgeActorComponent::CheckLearnOrLevelUp`(RVA 0x0208B070, 약 4.3KB)
-// 이고, 그 안에 관문이 여덟 단계 순서대로 있다(2026-09-13 조사). 여기서 푸는 것은 둘이다.
+// 관문 본체는 `KnowledgeActorComponent::CheckLearnOrLevelUp`(약 4.3KB)이고, 그 안에
+// 관문이 여덟 단계 순서대로 있다(2026-09-13 조사). 여기서 푸는 것은 둘이다.
+//
+// **아래 RVA 는 exe 1.0.0.2850 기준 서술이다.** 지금 쓰는 자리(2944)는
+// `skillgate.cpp` 의 `kGates` 표에 있고, 거기 재도출 경로를 적어 뒀다.
+// 2944: 함수 0x2140730~0x2141885 · 관문0 0x0E808870 · 관문1 0x02140CF9.
 //
 //   1. **습득 경로**(`eErrNoCannotLearnKnowledgeByFromType`) - 화면의
 //      "특정 조건을 통해 배울 수 있습니다".

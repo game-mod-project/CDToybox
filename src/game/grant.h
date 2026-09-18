@@ -291,6 +291,18 @@ bool drive_point_dead();
 // 죽은 세션 잠금을 푼다. 새 세션을 잡았을 때만 쓴다.
 void clear_drive_fault();
 
+// **ini 에서 읽은 구동 자리를 더한다.** 코드에 박아 둔 `kGoodDriveSites` 는
+// 게임이 갱신되면 죽으므로(1.0.0.2944 에서 실제로 죽었다), 로그에 찍힌 자리를
+// 사람이 ini 에 적어 다시 빌드하지 않고 살릴 수 있게 한다.
+//
+// **시작할 때 한 번만 부른다.** 구동 판정은 게임 디투어 안에서 돌아 할당도
+// 잠금도 하면 안 되므로, 고정 칸에 복사해 두고 원자 개수로만 읽는다.
+// n 이 칸 수를 넘으면 앞에서부터 칸 수만큼만 받는다.
+void set_extra_drive_sites(const std::uint64_t* rvas, int n);
+
+// 지금 안전 목록에 있는 자리 수(코드 + ini). 화면·시험용.
+int drive_site_count();
+
 // 역직렬화 함수 본문에서 처리기 호출 자리를 찾는다. 파싱을 마치고
 // 성공했을 때만 부르므로 "call rel32" 뒤에 "mov dword ptr [rbx],0"
 // 이 온다. 딱 한 곳에서 맞아야 한다.
@@ -534,7 +546,7 @@ bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
 // 영역이 다르다). 고용 작업 +0x3F3 의 call 대상이고 2454 작업 +0x36A 도 같은
 // 자리를 부른다. 본체로 가는 jmp 썽크(E9)다 - run_hire_species 가 부르기 전에
 // 썽크를 따라가 본체 프롤로그까지 확인한다(아래 두 함수).
-inline constexpr std::uint64_t kHireCheckRva = 0x20991F0;
+inline constexpr std::uint64_t kHireCheckRva = 0x214E8B0;   // 2850 까지 0x20991F0
 
 // 썽크 n바이트가 `jmp rel32`(E9) 면 그 대상 절대 주소, 아니면 0. thunk_addr 는
 // 썽크의 절대 주소다(rel32 는 다음 명령 기준). 읽기는 호출자가 한다.

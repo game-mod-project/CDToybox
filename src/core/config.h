@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -81,6 +82,22 @@ struct Config {
     // 얹기가 고른 종행에 한해 그 자리를 채운다. ini 표기: `wheel_fill = 1`
     bool wheel_fill = false;
 
+    // **지급을 구동해도 되는 자리**(모듈 RVA). 지급 처리기는 게임 코드 한복판에서
+    // 불리는데, 그 자리가 이미 락을 쥐고 있으면 게임 함수를 부르는 순간 교착해
+    // 게임 로직 스레드가 통째로 멈춘다(저장도 정상 종료도 안 된다). 그래서
+    // 확인된 자리에서만 구동하고, 모르는 자리면 이번 프레임은 건너뛴다.
+    //
+    // 코드에 박아 둔 목록(`grant.cpp` 의 `kGoodDriveSites`)은 **게임이 갱신되면
+    // 죽는다** - 1.0.0.2944 에서 실제로 죽었고, 2850 때도 같은 일로 지급·획득이
+    // 전부 미뤄졌다. 그때마다 다시 빌드하지 않아도 되게 이 줄을 둔다: 첫 실행
+    // 로그의 `구동 건너뜀: 확인되지 않은 자리 +<RVA>` 에 찍힌 값을 그대로 적으면
+    // 그 자리가 안전 목록에 더해진다.
+    //
+    // **아무 자리나 적으면 안 된다.** 멈춘 자리를 적으면 게임이 멈춘다. 로그에서
+    // 지급을 눌렀을 때 반복해 찍히는 자리만 적는다.
+    // ini 표기: `drive_sites = 0x2AD0A7D,0x2A2BBBF`
+    std::vector<std::uint64_t> drive_sites;
+
     // 얹기가 **동반자 칸까지** 옮길지. 끄면 장소 제한만 풀고 칸은 제자리에
     // 둔다 - 등록을 채운 뒤에는 제 칸(7시 드래곤)에서 그대로 불린다.
     // ini 표기: `wheel_swap_slot = 1`
@@ -103,6 +120,11 @@ std::vector<Config::KnowKeep> parse_knowledge_keep(std::string_view v);
 
 // `bag_keep = <종류>:<목표>,...` 를 읽는다. 못 읽는 항목은 조용히 버린다.
 std::vector<Config::BagKeep> parse_bag_keep(std::string_view v);
+
+// `0x2AD0A7D,0x2A2BBBF` 를 구동 자리 목록으로. 16진(0x)과 10진을 둘 다 받는다.
+// 0 과 모듈 크기를 넘는 값(> 0x8000'0000)은 버린다 - 오타로 엉뚱한 자리를
+// 안전하다고 선언하면 게임이 멈춘다.
+std::vector<std::uint64_t> parse_drive_sites(std::string_view v);
 
 }  // namespace config
 }  // namespace cdtb

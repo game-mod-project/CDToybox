@@ -15,9 +15,16 @@ namespace {
 // `call X ; lea reg,[빈 레코드]` 짝 37곳으로, 자리는 옛 자리 +0x2040(형제 자리
 // 0x2ABD8EB → 0x2ABF92B 도 같은 폭), 빈 레코드는 데이터 +0x4150. 2760 까지는
 // 0x2AD51F8 / 0x208F5C0 / 0x6BB3F70 (실측 2026-09-09). specs/2026-09-11-game-update-2850.md.
-constexpr std::uint64_t kCallSiteRva = 0x2AD7238;   // call 0x2090A50
-constexpr std::uint64_t kLookupRva = 0x2090A50;     // 번호 -> 레코드 조회
-constexpr std::uint64_t kEmptyRecordRva = 0x6BB80C0;
+// **1.0.0.2944(2026-09-18): 이 자리는 재도출하지 못했다 - 옛 값을 그대로 둔다.**
+// 옛 자리 0x2AD7238 은 새 exe 에서 `je`(0x0F) 라 install 이 "call 이 아니다" 로
+// 안전하게 거부한다. 2850 의 지문(`mov rcx,rax ; call 조회 ; mov edi,0xC`)은 새
+// exe 에 **0곳**이고, 조회 함수를 부르는 272곳 중 소환 작업 함수(0x2B9EB50) 안의
+// 유일한 호출(+0x1E7)은 **게임이 스스로** `lea rdi,[빈 레코드] ; test rax,rax ;
+// cmovne` 로 가드하고 있다 - 2944 에서는 이 가드가 필요 없어졌을 수 있다(정적으로
+// 단정 못 한다). 필요하다고 판명되면 크래시 자리를 라이브로 잡아 넣을 것.
+constexpr std::uint64_t kCallSiteRva = 0x2AD7238;   // 2850 값, 2944 미도출
+constexpr std::uint64_t kLookupRva = 0x2146110;     // 번호 -> 레코드 조회
+constexpr std::uint64_t kEmptyRecordRva = 0x6CF2F70;
 
 // 빈 레코드의 표식. 게임이 "없음"을 이 두 값으로 나타낸다.
 constexpr std::size_t kRecNoOff = 0x28;    // u64, 없으면 -1

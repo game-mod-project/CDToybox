@@ -83,7 +83,8 @@ bool bounty_write(const mem::Reader& reader, std::uint64_t raw);
 // **길이가 어긋나면 게임이 메시지를 통째로 버린다.** 화면에는
 // "아무 일도 안 남" 으로만 보이므로, 이 불변식은 시험으로 건다.
 
-inline constexpr std::uint16_t kClearWantedId = 2646;
+// @class TrocTrClearWantedReq
+inline constexpr std::uint16_t kClearWantedId = 2837;   // 2850 까지 2646
 
 // 머리 5 + 본문 5(u32 핸들 + u8 플래그). 본문 폭은 역직렬화기가
 // 읽기 함수를 부르기 직전의 `r8d` 에서 읽었다 - 4 다음에 1 이다.
@@ -107,7 +108,8 @@ bool build_clear_wanted_wire(std::uint32_t handle, std::uint8_t flag,
 // "데메니스 왕국 / 벌금 / 0"). 액수와 **상태는 다른 것**이고, 상태는
 // `WantedRegionData` 안에 없다 - 두 상태를 바이트로 견주면 `+0x30` 말고는
 // 한 바이트도 안 다르다. 게임이 그 일을 하는 메시지를 따로 들고 있다.
-inline constexpr std::uint16_t kChangeWantedStateId = 2848;
+// @class TrocTrChangeWantedStateReq
+inline constexpr std::uint16_t kChangeWantedStateId = 2983;   // 2850 까지 2848
 
 // 머리 5 + 본문 6(u32 핸들 + u8 상태 + u8). 폭은 역직렬화기
 // (RVA 0x29A6AA0)가 읽기 함수를 부르기 직전의 `r8d` 에서 읽었다 -
