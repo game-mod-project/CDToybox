@@ -397,6 +397,7 @@ constexpr std::size_t kRecItemKey = 0x04;  // u32 아이템 키
 //   74 0E                 jz    없음
 //   0F B7 00              movzx eax,word ptr [rax]  레코드의 첫 u16
 //   66 89 03              mov   [rbx],ax            그것이 짧은 식별자
+// @aob 0 - 2026-09-04 부터 힙 스캔(find_item_key_map_by_scan)이 대신한다
 constexpr const char* kConvertBodyPattern =
     "8B 44 24 30 48 8D 54 24 40 48 8B 0D ?? ?? ?? ?? 48 83 C1 68 "
     "89 44 24 40 E8 ?? ?? ?? ?? 48 85 C0 74 0E 0F B7 00 66 89 03";

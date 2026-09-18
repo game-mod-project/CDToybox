@@ -25,6 +25,7 @@ namespace {
 //   mov       [rdi+0x368], eax      ; Z 저장
 //
 // 실행 섹션 전체에서 한 곳만 일치한다.
+// @aob 0 - 프리카메라는 보류(kDeferred)라 이 사이트가 없어도 정상이다
 constexpr const char* kStorePattern =
     "C5 F0 14 C4 C5 FB 11 87 60 03 00 00 8B 44 24 28 89 87 68 03 00 00";
 

@@ -35,7 +35,7 @@ namespace cdtb::game {
 
 // 두 매니저는 배치가 같다.
 inline constexpr std::uintptr_t kSlotMgrGlobalRva = 0x06C2E300;
-inline constexpr std::uintptr_t kCondMgrGlobalRva = 0x06C2F260;
+inline constexpr std::uintptr_t kCondMgrGlobalRva = 0x06D6AA38;   // 2850 까지 0x06C2F260
 inline constexpr std::size_t kMgrCount = 0x08;
 inline constexpr std::size_t kMgrArray = 0x58;
 inline constexpr std::size_t kMgrWellKnown = 0xA0;   // u16 여덟

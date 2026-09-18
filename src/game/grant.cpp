@@ -34,6 +34,7 @@ constexpr const char* kItemValueCtorPattern =
 constexpr const char* kTaskDispatcherPattern =
     "48 83 EC 28 48 8B 41 78 48 8B 50 08";
 
+// @aob 0 - 프로덕션 호출자가 없다(시험 전용). 2760 부터 0곳
 constexpr const char* kSpawnGroundPattern =
     "4C 8B DC 49 89 5B 08 49 89 6B 10 56 57 41 54 41 56 41 57 48 81 EC 50 01";
 
@@ -44,6 +45,7 @@ constexpr const char* kSpawnGroundPattern =
 //   sub rsp,0x50 / mov r15,r9 / mov r12,r8 / mov r13,rdx
 //
 // 인자는 다섯이다: rcx, rdx, r8(큐), r9, [rsp+0x28](TLS+0x4300 컨텍스트).
+// @aob 0 - 조사 훅(기본 꺼짐). 필요할 때 재도출한다. 2850 부터 0곳
 constexpr const char* kMessagePumpPattern =
     "48 8B C4 48 89 58 10 48 89 68 18 48 89 70 20 48 89 48 08 57 41 54 41 "
     "55 41 56 41 57 48 83 EC 50 4D 8B F9 4D 8B E0 4C 8B";
