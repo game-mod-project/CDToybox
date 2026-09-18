@@ -182,6 +182,43 @@ TEST(change_wanted_state_wire_body_length_matches_total_minus_header) {
     CHECK_EQ(u16_at(wire, 3), static_cast<std::uint16_t>(len - 5));
 }
 
+// --- 메시지 ID 갈림 -----------------------------------------------------
+// 1.0.0.2944 가 `TrocTr*` 1115개를 재번호하고 **옛 번호를 다른 메시지에
+// 재사용**했다. 이 모듈은 클래스 이름으로 서술자를 찾고 있었는데(이름은
+// 갱신을 안 탄다) 와이어는 상수를 써서, 갱신 뒤 로그는 맞고 전송은 틀린
+// 상태가 될 수 있었다. 아래가 그 규칙을 못박는다.
+
+TEST(message_id_drift_prefers_the_resolved_value) {
+    std::uint16_t use = 0;
+    CHECK(cdtb::game::message_id_drifted(2646, 2837, &use));
+    CHECK_EQ(use, static_cast<std::uint16_t>(2837));   // 게임 값을 쓴다
+}
+
+TEST(message_id_drift_is_false_when_they_agree) {
+    std::uint16_t use = 0;
+    CHECK(!cdtb::game::message_id_drifted(2837, 2837, &use));
+    CHECK_EQ(use, static_cast<std::uint16_t>(2837));
+}
+
+TEST(message_id_drift_keeps_the_baked_value_before_resolve) {
+    // 0 은 "아직 못 풀었다" 다. 그때 0 을 전송에 쓰면 엉뚱한 메시지가 된다.
+    std::uint16_t use = 0;
+    CHECK(!cdtb::game::message_id_drifted(2837, 0, &use));
+    CHECK_EQ(use, static_cast<std::uint16_t>(2837));
+}
+
+TEST(message_id_drift_tolerates_a_null_out) {
+    CHECK(cdtb::game::message_id_drifted(1, 2, nullptr));
+    CHECK(!cdtb::game::message_id_drifted(1, 1, nullptr));
+}
+
+TEST(effective_ids_default_to_the_baked_constants) {
+    // 게임에 안 붙은 시험에서는 해석이 안 일어나므로 상수가 그대로 쓰인다 -
+    // 위 와이어 시험들이 상수로 대조할 수 있는 근거다.
+    CHECK_EQ(cdtb::game::wanted_effective_clear_id(), kClearWantedId);
+    CHECK_EQ(cdtb::game::wanted_effective_state_id(), kChangeWantedStateId);
+}
+
 TEST(change_wanted_state_wire_refuses_bad_input) {
     std::uint8_t small[10]{};   // 11 이 필요하다
     std::size_t len = 0;

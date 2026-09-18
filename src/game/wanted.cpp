@@ -2,6 +2,7 @@
 
 #include <windows.h>   // GetTickCount64 - 재탐색 간격을 막는 데 쓴다
 
+#include <atomic>
 #include <cstring>
 #include <string>
 
@@ -17,6 +18,11 @@ constexpr const char* kStateClass = "TrocTrChangeWantedStateReq";
 
 MessageDesc g_clear_msg;
 MessageDesc g_state_msg;
+
+// 전송에 실제로 쓰는 ID. 해석 전에는 박아 둔 상수이고, 게임에서 클래스
+// 이름으로 해석되면 그 값으로 갈린다. 렌더·명령 스레드가 같이 읽는다.
+std::atomic<std::uint16_t> g_clear_id{kClearWantedId};
+std::atomic<std::uint16_t> g_state_id{kChangeWantedStateId};
 
 // --- 벌금 사슬 ---
 constexpr const char* kCompClass = ".?AVClientSelfWantedActorComponent@pa@@";
@@ -156,7 +162,7 @@ bool build_clear_wanted_wire(std::uint32_t handle, std::uint8_t flag,
 
     // 본문 길이는 전체에서 머리 5 를 뺀 값이어야 한다. 상수로 박지
     // 않고 빼서 구한다 - 둘이 갈리면 게임이 메시지를 조용히 버린다.
-    const std::uint16_t id = kClearWantedId;
+    const std::uint16_t id = g_clear_id.load(std::memory_order_acquire);
     const std::uint16_t body =
         static_cast<std::uint16_t>(kClearWantedWireLen - 5);
     std::memcpy(out + 0, &id, 2);
@@ -174,7 +180,7 @@ bool build_change_wanted_state_wire(std::uint32_t handle, std::uint8_t state,
     if (out == nullptr || cap < kChangeWantedStateWireLen) return false;
     if (handle == 0) return false;   // 대상 없음
 
-    const std::uint16_t id = kChangeWantedStateId;
+    const std::uint16_t id = g_state_id.load(std::memory_order_acquire);
     const std::uint16_t body =
         static_cast<std::uint16_t>(kChangeWantedStateWireLen - 5);
     std::memcpy(out + 0, &id, 2);
@@ -189,10 +195,44 @@ bool build_change_wanted_state_wire(std::uint32_t handle, std::uint8_t state,
 
 // --- 게임에 붙는 배관 --------------------------------------------------
 
+bool message_id_drifted(std::uint16_t baked, std::uint16_t resolved,
+                        std::uint16_t* use) {
+    // 0 은 "아직 못 풀었다" 다. 그때는 박아 둔 값을 그대로 쓴다.
+    const std::uint16_t pick = (resolved != 0) ? resolved : baked;
+    if (use != nullptr) *use = pick;
+    return resolved != 0 && resolved != baked;
+}
+
+std::uint16_t wanted_effective_clear_id() {
+    return g_clear_id.load(std::memory_order_acquire);
+}
+
+std::uint16_t wanted_effective_state_id() {
+    return g_state_id.load(std::memory_order_acquire);
+}
+
+// 해석값을 전송용으로 채택하고, 박아 둔 상수와 갈리면 크게 남긴다.
+static void adopt_message_id(const char* cls, std::uint16_t baked,
+                      std::uint16_t resolved,
+                      std::atomic<std::uint16_t>* slot) {
+    std::uint16_t use = baked;
+    const bool drift = message_id_drifted(baked, resolved, &use);
+    slot->store(use, std::memory_order_release);
+    if (drift) {
+        log::warnf("메시지 ID 가 갈렸다: {} 은 코드에 {} 로 박혀 있는데 게임은 "
+                   "{} 이다 - 전송에는 게임 값을 쓴다. 소스 상수를 고칠 것 "
+                   "(tools/rtti/recheck.py 가 이 대조를 한 번에 한다)",
+                   cls, baked, resolved);
+    }
+}
+
 bool wanted_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (g_state_msg.descriptor == 0 &&
         resolve_message(rtti, reader, kStateClass, &g_state_msg)) {
         log::infof("수배 상태 준비: {} ID {}", kStateClass, g_state_msg.id);
+        adopt_message_id(kStateClass, kChangeWantedStateId,
+                         static_cast<std::uint16_t>(g_state_msg.id),
+                         &g_state_id);
     }
     if (g_clear_msg.descriptor != 0) return true;
     if (!resolve_message(rtti, reader, kClearClass, &g_clear_msg)) {
@@ -203,6 +243,8 @@ bool wanted_resolve(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 값이 바뀐 것을 로그로 알 수 있어야 한다(실측 2026-09-17: 2646).
     log::infof("수배 해제 준비: {} ID {} 서술자 0x{:X}", kClearClass,
                g_clear_msg.id, g_clear_msg.descriptor);
+    adopt_message_id(kClearClass, kClearWantedId,
+                     static_cast<std::uint16_t>(g_clear_msg.id), &g_clear_id);
     return true;
 }
 
