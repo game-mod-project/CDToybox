@@ -281,7 +281,7 @@ void auto_analysis_loop() {
     // 두되 설치하지 않는다.
     //   pump_hook_install(rtti, reader);
     //   taskrun_hook_install(rtti, reader);
-    spawn_resolve_message(rtti, reader);
+    grant_resolve_messages(rtti, reader);
     entity_hook_install(rtti, reader);
     // 동반자 획득 경로 메시지 캡처(Phase 1, 진단). 길들이기 때 뜬다.
     companion_capture_install(rtti, reader);

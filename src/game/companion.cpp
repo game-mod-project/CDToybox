@@ -1157,7 +1157,7 @@ bool companion_run_command(const std::string& line, std::string* reply) {
                                      nullptr);
             }
         } else {
-            // 바닥 스폰이 쓰는 것과 같은 자리 - 카메라 초점이다.
+            // 카메라 초점 좌표다(`camera.h` 의 kWorldPosition).
             if (g_position_fn == nullptr || !g_position_fn(pos)) {
                 say("좌표를 못 읽었다 - 월드에 들어가 있어야 한다");
                 return false;

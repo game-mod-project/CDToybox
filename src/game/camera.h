@@ -37,8 +37,8 @@ namespace component_offset {
 //   +0x37C    449.40 ->   432.37
 //   +0x380  -5757.85 -> -5574.07
 //
-// 이 상수는 프리카메라(읽기·쓰기)와 바닥 스폰도 쓴다. 셋 다 옛
-// 자리를 보고 있었으므로 같이 고쳐진다.
+// 이 상수는 프리카메라(읽기·쓰기)와 동반자 소환 위치도 쓴다. 셋 다 옛
+// 자리를 보고 있었으므로 같이 고쳐졌다.
 constexpr int kWorldPosition = 0x378;
 }  // namespace component_offset
 

@@ -1590,7 +1590,6 @@ scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 | 기능 | 방법 |
 |------|------|
 | 인벤토리에 지급 | `CreateItemFromTrItemValueCheatReq` (ID 2944) |
-| 조준한 곳에 떨구기 | `SpawnItemToGroundByCheatReq` (ID 3013) |
 | 아이템 목록 | 6810개, 이름·등급·분류·아이콘·검색·정렬·페이징 |
 | 보관함 | 즐겨찾기·세트, `cdtoybox_stash.txt` 에 변경 1초 뒤 자동 저장. 일괄 지급 큐는 창을 닫아도 돌고 세션이 없으면 남는다(본창 진행 줄) |
 | 창 위치·크기 기억 | `cdtoybox_ui.ini` |
