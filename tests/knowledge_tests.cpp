@@ -104,9 +104,14 @@ TEST(know_need_sort_is_a_total_order) {
 
 TEST(the_measured_offsets_are_pinned) {
     // 실행 파일에서 직접 읽어 확인한 값들이다. 바뀌면 여기서 걸린다.
-    //   매니저 전역 RVA 0x06C2E2D8 (조회 함수 RVA 0x003C1C70 이 쓰는 그 전역)
+    //   매니저 전역 RVA 0x06D69AB8 (1.0.0.2944. 2850 까지는 0x06C2E2D8)
     //   판정 한 줄: RVA 0x0208BC20  cmp dword [r10+rcx*8], eax  (41 39 04 CA)
-    CHECK(cdtb::game::kKnowMgrGlobalRva == 0x06C2E2D8);
+    //
+    // **RVA 는 게임 갱신마다 바뀐다.** 이 줄이 걸리면 그것을 알려 주는 것이
+    // 목적이다 - 값을 고치기 전에 새 exe 에서 다시 짚었는지 확인할 것
+    // (2944 는 게임을 켠 채 cdtb_probe 로 인스턴스를 잡아 확정했다).
+    // 오프셋(+0x08 개수 · +0x58 배열 …)은 2944 에서도 그대로다.
+    CHECK(cdtb::game::kKnowMgrGlobalRva == 0x06D69AB8);
     CHECK(cdtb::game::kKnowMgrCount == 0x08);
     CHECK(cdtb::game::kKnowMgrArray == 0x58);
     CHECK(cdtb::game::kKnowCompData == 0x18);

@@ -1,6 +1,6 @@
-// @build 1.0.0.2850  **kCondNameTableRva · kEmptyStrRva · kGpvMgrGlobalRva
-//   셋 다 2944 미도출.** read_mgr 의 정합성 검사가 걸러 "표를 아직 못
-//   잡았습니다" 로 안전하게 끝난다.
+// @build 1.0.0.2944  kGpvMgrGlobalRva 를 라이브 프로브로 확정했다.
+// @build 1.0.0.2850  **kCondNameTableRva · kEmptyStrRva 는 아직 미도출.**
+//   원소 조건 이름 표시에만 쓰이고, 못 읽으면 번호로 떨어진다.
 
 #include "game/reserveslot.h"
 
@@ -245,7 +245,7 @@ namespace {
 inline constexpr std::uintptr_t kCondNameTableRva = 0x0584FA10;   // char* x466
 inline constexpr int kCondNameCount = 466;
 inline constexpr std::uintptr_t kEmptyStrRva = 0x0692E4C0;
-inline constexpr std::uintptr_t kGpvMgrGlobalRva = 0x06C32880;
+inline constexpr std::uintptr_t kGpvMgrGlobalRva = 0x06D6E418;   // 2850 까지 0x06C32880
 inline constexpr std::size_t kGpvComp = 0x168;   // [액터+0x68] + 0x168
 
 // 문자열 객체 하나를 읽는다. `p` 는 **객체 포인터가 든 자리**가 아니라 객체 자체다.

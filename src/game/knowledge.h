@@ -1,9 +1,10 @@
 #pragma once
 
-// @build 1.0.0.2850  **매니저 전역 셋을 2944 에서 재도출하지 못했다.**
-//   포인터 은행 안이라 정적으로 안 갈린다 - cdtb_probe 로 확정할 것.
-//   낡은 값이면 know_mgr_sane 이 걸러 "표를 아직 못 잡았습니다" 로 끝난다.
-//   근거: specs/2026-09-18-game-update-2944.md §6
+// @build 1.0.0.2944  매니저 전역을 **라이브 프로브로 확정**했다(정적으로는
+//   끝까지 안 갈렸다 - 네 갈래가 다 막혔다). 게임을 켠 채
+//   `cdtb_probe instances .?AVKnowledgeInfoManager@pa@@` 로 인스턴스를 잡고,
+//   그 포인터를 담은 은행 칸을 바이트로 찾았다. 근거: 2944 스펙 §6.
+//   낡으면 know_mgr_sane 이 걸러 "표를 아직 못 잡았습니다" 로 끝난다.
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -39,7 +40,7 @@ namespace cdtb::game {
 // **RVA 를 박아 두는 것이라 게임이 갱신되면 밀린다**(game-update-rva-drift).
 // 그래서 읽은 값이 말이 되는지, 그리고 컴포넌트의 레코드 수와 같은지 반드시 대조한다
 // (`Initialize` 가 매니저의 개수로 표를 잡으므로 두 값은 같아야 한다).
-inline constexpr std::uintptr_t kKnowMgrGlobalRva = 0x06C2E2D8;
+inline constexpr std::uintptr_t kKnowMgrGlobalRva = 0x06D69AB8;   // 2850 까지 0x06C2E2D8
 inline constexpr std::size_t kKnowMgrCount = 0x08;   // i32 전체 지식 수
 inline constexpr std::size_t kKnowMgrArray = 0x58;   // KnowledgeInfo* 배열(stride 8)
 
