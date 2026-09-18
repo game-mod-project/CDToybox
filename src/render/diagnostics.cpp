@@ -1,6 +1,7 @@
 #include "render/diagnostics.h"
 
 #include <chrono>
+#include <mutex>
 
 #include "core/log.h"
 #include "mem/module.h"
@@ -54,30 +55,54 @@ Diagnostics compute() {
     d.game_base = reinterpret_cast<std::uintptr_t>(game->base);
     d.game_size = game->size;
 
-    const auto ranges = executable_ranges(*game);
-    for (const auto& r : ranges) {
+    // 섹션 헤더만 읽는다 - 값싸다. **여기서 프롤로그를 세지 않는다**
+    // (`diagnostics.h` 의 PrologueProbe 주석).
+    for (const auto& r : executable_ranges(*game)) {
         d.game_exec.push_back(
             ExecRange{reinterpret_cast<std::uintptr_t>(r.begin), r.size});
     }
 
-    const auto t0 = std::chrono::steady_clock::now();
-    for (const auto& r : ranges) {
-        d.prologue_hits += find_all(r, *prologue_pat, 100000).size();
-    }
-    const auto t1 = std::chrono::steady_clock::now();
-    d.prologue_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-    log::infof("진단: 실행 섹션 {}개, 프롤로그 {}회, {:.1f}ms, 마커 {}",
-               d.game_exec.size(), d.prologue_hits, d.prologue_ms,
+    log::infof("진단: 실행 섹션 {}개, 마커 {}", d.game_exec.size(),
                d.self_marker_found ? "발견" : "미발견");
     return d;
 }
+
+std::mutex g_pro_mtx;
+PrologueProbe g_pro;
 
 }  // namespace
 
 const Diagnostics& diagnostics() {
     static const Diagnostics d = compute();
     return d;
+}
+
+PrologueProbe prologue_probe() {
+    std::lock_guard<std::mutex> lk(g_pro_mtx);
+    return g_pro;
+}
+
+void prologue_probe_run() {
+    using namespace cdtb::mem;
+    const auto game = find_module(nullptr);
+    const auto pat = parse_pattern(kProloguePattern);
+    if (!game.has_value() || !pat.has_value()) {
+        log::warnf("프롤로그 재기: 게임 모듈 또는 패턴을 준비하지 못했다");
+        return;
+    }
+    PrologueProbe p;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (const auto& r : executable_ranges(*game)) {
+        p.hits += find_all(r, *pat, 100000).size();
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    p.ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    p.done = true;
+    {
+        std::lock_guard<std::mutex> lk(g_pro_mtx);
+        g_pro = p;
+    }
+    log::infof("프롤로그 재기: {}회, {:.1f}ms", p.hits, p.ms);
 }
 
 }  // namespace cdtb::render

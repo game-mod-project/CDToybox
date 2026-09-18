@@ -546,8 +546,25 @@ void draw_ui() {
         ImGui::Text("  기대 0x%llX / 발견 0x%llX",
                     static_cast<unsigned long long>(d.self_marker_expected),
                     static_cast<unsigned long long>(d.self_marker_found_at));
-        ImGui::Text("게임 프롤로그: %zu회 / %.1f ms", d.prologue_hits,
-                    d.prologue_ms);
+        // **누를 때만 잰다.** 예전에는 이 숫자를 미리 구하느라 창을 처음 그릴
+        // 때 383MB 를 훑어 3.4초를 멈췄다 - 헤더를 접어 둬도 그랬다
+        // (`render/diagnostics.h` 의 PrologueProbe).
+        const auto p = cdtb::render::prologue_probe();
+        if (p.done) {
+            ImGui::Text("게임 프롤로그: %zu회 / %.1f ms", p.hits, p.ms);
+        } else {
+            ImGui::TextDisabled("게임 프롤로그: 아직 안 쟀습니다");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(p.done ? "다시 재기" : "재 보기")) {
+            cdtb::render::prologue_probe_run();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "게임 실행 섹션 383MB 를 통째로 훑습니다.\n"
+                "**3초쯤 화면이 멈춥니다** - 스캐너가 규모에서도 도는지 보는\n"
+                "자체 시험이라, 평소에 켤 이유는 없습니다.");
+        }
     }
 
     ImGui::End();
