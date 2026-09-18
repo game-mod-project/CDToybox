@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "mem/reader.h"
+
 namespace cdtb::game {
 
 // 스킬 강화 조건 관문 우회.
@@ -143,5 +145,17 @@ GateStep gate_probe(const GateDef& d, GateSlot* s, std::uintptr_t module_base,
 
 const GateDef* gate_def(int gate);
 const char* gate_step_text(GateStep step);
+
+// **실제 게임 메모리에 붙는 `GateIo`.** 보호 해제 · 정렬 8바이트 원자 교환 ·
+// 보호 복원 · 명령 캐시 무효화 · 쓰기 로그가 전부 이 뒤에 있다.
+//
+// 코드에 쓰는 기법은 하나여야 한다 - 관문이 늘 때마다 `VirtualProtect` 와
+// `_InterlockedExchange64` 를 베껴 쓰면, 한 곳을 고칠 때 나머지가 조용히 남는다.
+// 그래서 `callgate` 같은 다른 관문 모듈도 이것을 받아 쓴다.
+//
+// **모드(주입 DLL) 전용이다** - 자기 주소공간에 쓴다.
+// `reader` 와 `what` 은 돌려받은 `GateIo` 를 쓰는 동안 살아 있어야 한다.
+// 문맥은 스레드마다 하나씩 들고 있으므로 스레드 사이에 섞이지 않는다.
+GateIo gate_local_io(const mem::Reader& reader, const char* what);
 
 }  // namespace cdtb::game

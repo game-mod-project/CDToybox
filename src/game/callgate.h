@@ -1,0 +1,72 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace cdtb::game {
+
+// 호출 **위치** 관문 우회 — "지붕 위에서는 호출할 수 없습니다" 계열.
+//
+// `failmessageinfo` 조건(§1, `IsInTown()` 등)과 **다른 층**이다. 그쪽은 부르기
+// 전에 조건식을 보고, 이쪽은 호출 처리기가 **지금 서 있는 자리**를 보고
+// `eErrNo*` 를 돌려준다. 사용자가 A.T.A.G. 에서 본 문구가 이쪽이다.
+//
+// 오류 이름 문자열 **바로 뒤에 한국어 설명이 붙어 있다**(2026-09-18 실측).
+// 등록 루프(RVA 0x2150380~)가 오류마다 {값 전역 슬롯, 설명, 이름} 을 넘기므로,
+// 값 슬롯을 역참조하면 **그 오류를 내는 코드가 한 곳**으로 좁혀진다:
+//
+//   실내  모듈+0x6BBCBC0 -> RVA 0x9635FE  "실내에서는 호출할 수 없습니다."
+//   지붕  모듈+0x6BBCBC4 -> RVA 0x96365B  "지붕 위에서는 호출할 수 없습니다."
+//   지역  모듈+0x6BBCBC8 -> RVA 0x9626BB  "호출할 수 없는 지역입니다."
+//
+// 실내·지붕은 한 함수(0x963420~0x963698) 안의 연속된 두 검사이고 **월드 질의**다
+// (지붕은 `call 0x7479E0(월드, 위치, 반경)`). 표 값이 아니라서 데이터로는 못
+// 끈다. 지역은 다르다 — `[[액터+0x68]+0x1A0]+0x38`(겹쳐 있는 구역 목록)을 들고
+// RVA 0x16E4380 을 부르는데, 그 함수가 `RegionInfo._forbiddenMercenaryKeyList`
+// 를 읽는다(`towngate.h` 의 전수 조사에서 그 목록이 채워진 구역은
+// `Region_Abyss` 하나뿐이었다).
+//
+// 셋 다 거부로 가는 분기가 `je`(0x74) 하나이고, **정렬된 8바이트 창 안**에
+// 들어간다. 그래서 `skillgate` 의 원자 교환을 그대로 쓴다 — `je` 를 `jmp`(0xEB)
+// 로 바꾸면 오류 대입을 건너뛴다. 확인 폭은 쓰기 폭(1바이트)이 아니라 **창
+// 8바이트 전체**다(game-update-rva-drift: 갱신마다 영역별로 다르게 밀린다).
+//
+// ⚠️ **위치가 진짜로 안 되는 자리면** 소환 뒤에 탈것이 지형에 박히거나 곧바로
+// 사라질 수 있다. 상시가 아니라 사용자가 켜고 끄는 토글이다.
+
+enum CallGate : int {
+    kCallGateIndoor = 0,  // 실내에서는 호출할 수 없습니다
+    kCallGateRoof = 1,    // 지붕 위에서는 호출할 수 없습니다
+    kCallGateRegion = 2,  // 호출할 수 없는 지역입니다
+    kCallGateCount = 3,
+};
+
+struct CallGateInfo {
+    const char* name = "";
+    const char* what = "";
+    bool on = false;           // 지금 걸려 있나
+    bool unsupported = false;  // 원본 바이트가 달라 설치를 거부했다(게임 갱신)
+    bool probed = false;       // 한 번이라도 그 자리를 확인해 봤나
+    std::uintptr_t site = 0;   // 실제 주소(0 이면 아직 안 봤다)
+};
+
+CallGateInfo callgate_info(int gate);
+
+// 켜면 분기를 덮고, 끄면 원본을 되돌린다. 성공하면 참.
+// 실패하면 `why` 에 사유 한 줄이 담긴다(널 가능).
+//
+// **모드(주입 DLL) 전용이다** — 자기 주소공간에 쓴다.
+bool callgate_set(int gate, bool on, const char** why = nullptr);
+
+// 창을 열 때 한 번 훑어 "이 빌드에서 쓸 수 있나" 를 미리 정한다. 안 그러면
+// 원본이 다른 빌드에서 첫 클릭이 조용히 먹히고 빨간 줄은 다음 프레임에야 뜬다.
+void callgate_probe();
+
+// 사용자가 모드를 내릴 때 전부 되돌린다. **해상도 변경 경로에서 부르면 안 된다.**
+void callgate_remove_all();
+
+// 관문 하나의 정의(시험용). 없으면 널.
+struct GateDef;
+const GateDef* callgate_def(int gate);
+
+}  // namespace cdtb::game

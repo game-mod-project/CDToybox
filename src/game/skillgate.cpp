@@ -91,6 +91,19 @@ GateIo bind(const RealIo& c) {
     return io;
 }
 
+}  // namespace
+
+// 다른 관문 모듈(callgate 등)이 같은 쓰기 기법을 쓰도록 내놓는다. 문맥은
+// **스레드마다 하나**라 한 스레드가 두 관문을 연달아 걸어도 섞이지 않는다.
+GateIo gate_local_io(const mem::Reader& reader, const char* what) {
+    static thread_local RealIo c;
+    c.reader = &reader;
+    c.what = (what != nullptr) ? what : "관문";
+    return bind(c);
+}
+
+namespace {
+
 // 실패 사유를 화면에도 그대로 쓸 수 있게 한 곳에서 만든다. g_mtx 안에서 부른다.
 bool finish(int gate, GateStep st, bool on, const char** why) {
     GateSlot& s = g_slot[gate];
