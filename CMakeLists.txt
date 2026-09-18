@@ -250,6 +250,7 @@ add_executable(cdtb_probe
     src/game/stash.cpp
     src/game/equip.cpp
     src/game/player.cpp
+    src/game/mountvital.cpp
     src/game/nofall.cpp
     src/game/nofall_cave.cpp
     src/game/specguard.cpp

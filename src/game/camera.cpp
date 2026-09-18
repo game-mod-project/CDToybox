@@ -20,6 +20,7 @@
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/items.h"
+#include "game/mountvital.h"
 #include "game/nofall.h"
 #include "game/specguard.h"
 #include "game/spec_heal.h"
@@ -493,6 +494,13 @@ void auto_analysis_loop() {
         // 플레이어 치트(B-1). **힙 스캔 없음** - equip 이 고른 플레이어 comp 에서
         // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
         player_discover(reader);
+
+        // 탈것 체력·스태미나의 **권위 사본**(서버 realm) 찾기. 힙 전수라 값싸지
+        // 않아 **부탁할 때만** 돈다 - 창에서 체력 절을 펴거나 아직 못 짝지은
+        // 탈것이 보일 때 부탁이 선다(`vehicle_panel.cpp`).
+        if (mount_authority_take_refresh()) {
+            mount_authority_discover(rtti, reader);
+        }
 
         // 낙사 방지 훅은 위(분석 스레드 머리)에서 이미 걸었다. 여기 남긴 것은
         // **재시도**다 - alloc_near 가 한 번 실패하면 그때는 미지원으로 갈리지

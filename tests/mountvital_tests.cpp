@@ -5,9 +5,12 @@
 //   와이번            체력   600,000  스태미나 150,000   게이지 [0]·[12]
 //   무역 마차         체력 5,000,000
 //
-// 그리고 쓰기 실측 - 체력은 약 2초마다 권위 쪽이 덮고, 스태미나는 안 덮는다.
-// 그래서 체력은 매 틱 고정이 필요하다. 그 갈림이 `mount_pin_active` 에 있다.
+// 쓰기 실측은 **두 번** 했다. 처음 것("체력은 2초마다 덮이고 스태미나는 안
+// 덮인다")은 틀렸다 - 사용자가 "바로 복구된다" 고 해 다시 파 보니, 우리가 쓰던
+// 배열이 **거울**이고 진짜 값은 서버 realm 사본에 있었다(mountvital.h 머리).
+// 그래서 여기 상수에는 권위 사본으로 가는 길과 기준최대 칸이 함께 못박힌다.
 #include <cstdint>
+#include <string>
 
 #include "game/mountvital.h"
 #include "harness.h"
@@ -15,14 +18,21 @@
 namespace {
 
 using cdtb::game::gauge_offset;
+using cdtb::game::kGaugeBaseMax;
 using cdtb::game::kGaugeCur;
 using cdtb::game::kGaugeMax;
 using cdtb::game::kGaugeStride;
 using cdtb::game::kGaugeType;
 using cdtb::game::kMountVitalMax;
+using cdtb::game::kMvActorHandle;
+using cdtb::game::kMvArray;
+using cdtb::game::kMvRoot;
+using cdtb::game::kMvServerStatusClass;
+using cdtb::game::kMvStatusActor;
 using cdtb::game::kTypeHealth;
 using cdtb::game::kTypeStamina;
 using cdtb::game::mount_clamp;
+using cdtb::game::mount_handle_plausible;
 using cdtb::game::mount_pin_active;
 using cdtb::game::mount_pin_wants;
 using cdtb::game::mount_type_safe;
@@ -99,6 +109,50 @@ TEST(mount_pin_active_accepts_zero_as_a_real_value) {
     p.handle = 0xB0100004;
     p.hp_cur = 0;
     CHECK(mount_pin_active(p));
+}
+
+// ------------------------------------------------------- 권위 사본으로 가는 길
+
+TEST(authority_path_offsets_match_the_measured_chain) {
+    // 실측(2026-09-18): A.T.A.G. 의 서버 상태 컴포넌트에서
+    //   +0x08 -> 서버 액터 0x2BD880E0400 (+0x60 = 핸들 0xB0100003, 클라와 같다)
+    //   +0x18 -> root -> +0x58 = 권위 게이지 배열 0x2BDA4029000
+    // 한 칸만 어긋나면 엉뚱한 객체에 쓴다.
+    CHECK_EQ(static_cast<long long>(kMvStatusActor), 0x08LL);
+    CHECK_EQ(static_cast<long long>(kMvActorHandle), 0x60LL);
+    CHECK_EQ(static_cast<long long>(kMvRoot), 0x18LL);
+    CHECK_EQ(static_cast<long long>(kMvArray), 0x58LL);
+}
+
+TEST(authority_class_is_the_server_status_component) {
+    // 클래스 이름은 RVA 와 달리 게임 갱신에 안 흔들린다 - 그래서 이 길을 골랐다.
+    // 이름이 바뀌면 여기서 먼저 걸린다.
+    CHECK(std::string(kMvServerStatusClass) ==
+          ".?AVServerStatusActorComponent@pa@@");
+}
+
+TEST(base_max_is_a_separate_slot_from_max) {
+    // 최대는 두 칸이다. 같은 칸으로 적으면 기준값이 안 써져 언젠가 되돌아간다.
+    CHECK_EQ(static_cast<long long>(kGaugeBaseMax), 0x58LL);
+    CHECK(kGaugeBaseMax != kGaugeMax);
+    CHECK(kGaugeBaseMax < kGaugeStride);   // 같은 항목 안에 있다
+}
+
+TEST(mount_handle_plausible_accepts_the_three_namespaces) {
+    // 실측에서 본 것: 일반 0xB010, 사용자 0xA010(고용주), 0x9010(사용자 액터).
+    CHECK(mount_handle_plausible(0xB0100003));
+    CHECK(mount_handle_plausible(0xA0100001));
+    CHECK(mount_handle_plausible(0x90100001));
+}
+
+TEST(mount_handle_plausible_rejects_junk) {
+    // 서버 컴포넌트 후보에는 vtable 값을 우연히 담은 메모리가 섞인다. 그것을
+    // 걸러내는 것이 이 판정의 일이다 - 통과시키면 남의 객체에 쓴다.
+    CHECK(!mount_handle_plausible(0));
+    CHECK(!mount_handle_plausible(0xFFFFFFFF));
+    CHECK(!mount_handle_plausible(0x00000003));
+    CHECK(!mount_handle_plausible(0xB0110003));   // 한 자리 다르다
+    CHECK(!mount_handle_plausible(0xC0100003));
 }
 
 }  // namespace

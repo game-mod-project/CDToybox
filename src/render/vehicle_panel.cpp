@@ -405,10 +405,17 @@ void draw_vehicle_panel(bool* open) {
 
     // ------------------------------------------------------- 체력 · 스태미나
     //
-    // 탈것도 플레이어와 **같은 게이지 사슬**이다(2026-09-18 실측). 다만 체력은
-    // 약 2초마다 권위 쪽이 덮어쓰고 스태미나는 안 덮는다 - 그래서 체력에는
-    // "고정" 이 필요하다. 자세한 근거는 `game/mountvital.h`.
+    // 탈것도 플레이어와 **같은 게이지 사슬**이다(2026-09-18 실측). 다만 액터에서
+    // 곧장 닿는 배열은 **거울**이고, 진짜 값은 서버 realm 사본에 있다 - 거기까지
+    // 써야 먹는다. 자세한 근거는 `game/mountvital.h`.
     if (collapsing_header("veh.vital", "체력 · 스태미나")) {
+        // 권위 사본 찾기는 힙 전수라 분석 스레드가 **부탁받을 때만** 돈다.
+        // 절을 펴면 한 번 부탁한다 - 안 부탁하면 거울에만 써서 곧 되돌아간다.
+        static bool s_asked_auth = false;
+        if (!s_asked_auth) {
+            s_asked_auth = true;
+            game::mount_authority_request_refresh();
+        }
         // **살아있는 액터 목록은 부탁해야 걷는다**(`live_actors_tick` 은 요청
         // 플래그가 섰을 때만 돈다). 부탁하지 않으면 탈것이 눈앞에 서 있어도
         // 목록이 비어 "없습니다" 가 뜬다 - 실제로 그렇게 나왔다(2026-09-18).
@@ -445,6 +452,13 @@ void draw_vehicle_panel(bool* open) {
                                     static_cast<long long>(m.hp_max),
                                     static_cast<long long>(m.sta_cur),
                                     static_cast<long long>(m.sta_max));
+                // **권위 사본을 못 찾았으면 미리 말한다.** 예전에는 "썼습니다"
+                // 가 뜨고 1초 뒤 숫자가 되돌아가, 사용자가 왜인지 알 길이 없었다.
+                if (m.authority == 0) {
+                    ImGui::TextDisabled(
+                        "  ⚠ 진짜 값을 든 사본을 아직 못 찾았습니다 - 지금 쓰면"
+                        " 곧 되돌아갑니다");
+                }
 
                 // 입력값은 대상마다 따로 기억한다 - 창을 오가도 안 섞이게.
                 static std::map<std::uint32_t, std::array<int, 4>> s_edit;
@@ -486,12 +500,16 @@ void draw_vehicle_panel(bool* open) {
                 }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "체력은 약 2초마다 게임이 원래 값으로 되돌립니다.\n"
-                        "고정을 켜면 매 프레임 다시 써서 그것을 이깁니다.\n"
-                        "스태미나는 되돌아오지 않아 [적용] 한 번으로 충분합니다.\n\n"
-                        "고정은 **한 마리만** 걸립니다 - 다른 것을 켜면 옮겨갑니다.\n"
-                        "대상은 주소가 아니라 핸들로 들고 있어서, 탈것이 사라지면\n"
-                        "그 프레임은 조용히 건너뜁니다.");
+                        "게임은 이 값을 두 벌 들고 있고, 눈에 보이는 쪽은"
+                        " 거울입니다.\n"
+                        "거울에만 쓰면 회복 틱(1~2초)에 곧바로 되돌아갑니다 -"
+                        " 그래서\n"
+                        "진짜 값을 든 사본까지 함께 씁니다.\n\n"
+                        "고정은 그 위에 얹는 보험입니다(피해를 받는 동안 유지).\n"
+                        "한 마리만 걸리고, 다른 것을 켜면 옮겨갑니다. 대상은"
+                        " 주소가\n"
+                        "아니라 핸들로 들고 있어서 탈것이 사라지면 조용히"
+                        " 건너뜁니다.");
                 }
                 ImGui::Separator();
                 ImGui::PopID();
@@ -502,6 +520,20 @@ void draw_vehicle_panel(bool* open) {
             if (ImGui::SmallButton("목록 새로 고침")) {
                 game::live_actors_request_refresh();
             }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("진짜 값 사본 다시 찾기")) {
+                game::mount_authority_request_refresh();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "탈것을 새로 부르면 사본도 새로 생깁니다. 위에 ⚠ 가 뜨면"
+                    " 눌러 주십시오.\n"
+                    "힙을 통째로 훑어 **십수 초** 걸리고, 분석 스레드에서 도므로"
+                    " 게임은 안 멈춥니다.");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(짝지은 것 %zu)",
+                                game::mount_authority_count());
         }
     }
 
