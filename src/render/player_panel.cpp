@@ -54,7 +54,13 @@ void draw_skill_bond(const mem::Reader& reader) {
         if (sv.address == 0 && cl.address == 0) continue;
         ++readable;
         const game::BondState& s = sv.address != 0 ? sv : cl;
+        // 라벨이 비면 세 라디오가 **같은 ID** 를 갖는다 - ImGui 가 화면에
+        // "3 visible items with conflicting ID" 를 띄우고, 하나를 누르면
+        // 엉뚱한 것이 눌린 것처럼 보인다(사용자 보고 2026-09-18). 칸 번호로
+        // ID 를 갈라 준다. 라벨은 그대로 비워 두고 옆의 Text 가 이름을 낸다.
+        ImGui::PushID(i);
         ImGui::RadioButton("", &s_slot, i);
+        ImGui::PopID();
         ImGui::SameLine();
         ImGui::Text("%s: 보유 %d · 총합 %d", game::bond_name(i), s.have,
                     s.total);
