@@ -369,9 +369,8 @@ void draw_vehicle_panel(bool* open) {
                 ImGui::Separator();
                 ImGui::PopID();
             }
-            ImGui::TextColored(col::kWarn,
-                               "발열·자연발화·탈것 화염 게이지는 건드리지"
-                               " 않습니다 (핀 금지 타입)");
+            ImGui::TextDisabled("체력·스태미나만 건드립니다. 나머지 게이지는"
+                                " 뜻을 확인하지 않아 그대로 둡니다.");
         }
     }
 
