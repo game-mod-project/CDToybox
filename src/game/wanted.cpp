@@ -98,7 +98,9 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     //
     // 그래서 **가리키는 것의 클래스 이름을 대조한다.** 주소 범위로
     // 추측하지 않는다.
-    for (const auto addr : rtti.instances_of_class(kCompClass, 16)) {
+    const auto insts = rtti.instances_of_class(kCompClass, 64);
+    const std::size_t n_seen = insts.size();
+    for (const auto addr : insts) {
         std::uint64_t vt = 0;
         if (!reader.read_value(addr, &vt) || vt == 0) continue;
         std::uint64_t region = 0;
@@ -125,7 +127,10 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
                    cls);
         return true;
     }
-    log::warnf("수배 컴포넌트를 못 찾았다 (월드 안입니까?)");
+    const auto st = mem::Rtti::scan_stats();
+    log::warnf("수배 컴포넌트를 못 찾았다 (월드 안입니까?) - 후보 {}개, "
+               "힙 훑기 누적: 창 {} · 쪼갠 창 {} · 끝내 못 읽음 {}KB",
+               n_seen, st.windows, st.retried, st.lost_kb);
     return false;
 }
 

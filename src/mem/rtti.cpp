@@ -1,6 +1,7 @@
 #include "mem/rtti.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 namespace cdtb::mem {
@@ -206,6 +207,41 @@ std::string Rtti::class_of_object(std::uintptr_t object) const {
 // 정렬 격자가 창 경계에서 어긋나지 않는다.
 constexpr std::size_t kScanWindow = 32u << 20;
 
+// 창 하나를 채운다. 통째로 읽어 보고 **실패하면 64KB 조각으로 나눠** 읽는다.
+//
+// `safe_read_bytes` 는 SEH 로 감싼 `memcpy` **한 번**이라, 창 안의 페이지
+// 하나만 나빠도 **창 전체가 실패**한다. 살아 있는 게임의 힙은 훑는 도중에도
+// 풀리고 바뀌므로 창이 클수록 자주 실패했고, 그러면 그 32MB 가 통째로 안
+// 보인다. 2026-09-18 실측: **같은 순간**에 외부 탐침은 인스턴스 9개를 찾는데
+// 주입된 DLL 은 2~4개만 찾았다 - 영역 상한을 없앤 뒤에도 그랬다.
+//
+// 못 읽은 조각은 0 으로 남긴다. 찾는 것은 vtable 주소라 0 과는 절대 안 맞으니
+// 가짜를 만들지 않는다.
+std::atomic<std::uint64_t> g_scan_windows{0};      // 본 창
+std::atomic<std::uint64_t> g_scan_window_retry{0};  // 통째로 못 읽어 쪼갠 창
+std::atomic<std::uint64_t> g_scan_lost_kb{0};       // 끝내 못 읽은 양(KB)
+
+void fill_window(const Reader& r, std::uintptr_t base, std::uint8_t* out,
+                 std::size_t n) {
+    g_scan_windows.fetch_add(1, std::memory_order_relaxed);
+    if (r.read(base, out, n)) return;
+    g_scan_window_retry.fetch_add(1, std::memory_order_relaxed);
+    constexpr std::size_t kPiece = 64u << 10;
+    for (std::size_t o = 0; o < n; o += kPiece) {
+        const std::size_t m = (n - o < kPiece) ? (n - o) : kPiece;
+        if (!r.read(base + o, out + o, m)) {
+            std::memset(out + o, 0, m);
+            g_scan_lost_kb.fetch_add(m >> 10, std::memory_order_relaxed);
+        }
+    }
+}
+
+Rtti::ScanStats Rtti::scan_stats() {
+    return ScanStats{g_scan_windows.load(std::memory_order_relaxed),
+                     g_scan_window_retry.load(std::memory_order_relaxed),
+                     g_scan_lost_kb.load(std::memory_order_relaxed)};
+}
+
 std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
                                                       std::size_t max) const {
     std::vector<std::uintptr_t> out;
@@ -220,7 +256,7 @@ std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
                                       ? (reg.size - done)
                                       : kScanWindow;
             buf.resize(n);
-            if (!r_.read(base + done, buf.data(), n)) continue;
+            fill_window(r_, base + done, buf.data(), n);
             for (std::size_t i = 0; i + 8 <= n; i += 8) {
                 std::uint64_t v;
                 std::memcpy(&v, buf.data() + i, 8);
@@ -334,7 +370,7 @@ std::vector<Rtti::Found> Rtti::scan_heap(
                                    ? (reg.size - done)
                                    : kScanWindow;
         buf.resize(wn);
-        if (!r_.read(base + done, buf.data(), wn)) continue;
+        fill_window(r_, base + done, buf.data(), wn);
 
         for (std::size_t i = 0; i + 8 <= wn; i += 8) {
             std::uint64_t v;

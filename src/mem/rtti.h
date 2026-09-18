@@ -111,6 +111,16 @@ public:
     };
     PrefetchStats prefetch_stats() const;
 
+    // 힙 훑기 통계. **왜 같은 순간에 주입된 DLL 과 외부 탐침의 결과가
+    // 다른지**를 짐작으로 못 갈라서 숫자를 남긴다(2026-09-18). 창을 통째로
+    // 못 읽으면 64KB 로 쪼개 다시 읽는데, 그러고도 못 읽은 양이 `lost_kb` 다.
+    struct ScanStats {
+        std::uint64_t windows = 0;
+        std::uint64_t retried = 0;
+        std::uint64_t lost_kb = 0;
+    };
+    static ScanStats scan_stats();
+
     // 모듈 이미지에서 8바이트 값이 저장된 위치. 전역 포인터 탐색용.
     std::vector<std::uintptr_t> find_qword(std::uint64_t value,
                                            std::size_t max) const;
