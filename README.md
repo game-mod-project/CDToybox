@@ -1,6 +1,6 @@
 # CDToybox
 
-Crimson Desert Enhanced (Steam AppID 3321460, exe 1.0.0.2850) 용 **개인 모드**.
+Crimson Desert Enhanced (Steam AppID 3321460, exe 1.0.0.2944) 용 **개인 모드**.
 네이티브 C++20 / D3D12 ImGui 오버레이. 싱글플레이 전용.
 
 - **진입:** `xinput1_4.dll` 프록시 — `dinput8.dll` 은 이 게임의 임포트 테이블에
