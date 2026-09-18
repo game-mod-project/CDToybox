@@ -72,6 +72,20 @@ py -3.14 tools/rtti/recheck.py "E:\SteamLibrary\steamapps\common\Crimson Desert\
   그 한 줄이 재도출의 전부가 된다.
 - 유일하지 않아도 되는 AOB 위에 `// @aob <n|any> - 이유`.
 
+### 0.5 로그를 읽을 때는 `.prev` 를 기준선으로 쓴다 (2026-09-18 추가)
+
+갱신 뒤 로그에 warn 이 보이면 **그것이 새 것인지부터 본다.** `.prev` 는 갱신
+**전** 실행이라 그대로 기준선이다. 기준선 없이 읽으면 오래된 warn 을 이번
+갱신의 회귀로 오판한다 — 2944 에서 실제로 그럴 뻔한 것이 둘 있었다
+(`엔티티 조회 함수를 못 찾았다` 는 2760 부터 있던 것, `문: 사슬이 끊겼다` 는
+갱신 전 137건 → 지금 16건으로 **줄었다**).
+
+```bash
+for f in CDToybox.log CDToybox.log.prev CDToybox.log.prev2; do
+  echo "$f"; grep -oE 'WARN  [^0-9]{6,40}' "$f" | sort | uniq -c | sort -rn | head
+done
+```
+
 ### 그다음 (도구가 못 하는 것)
 
 순서가 곧 절차다. 앞의 것이 깨지면 뒤는 볼 것도 없다.
