@@ -302,6 +302,12 @@ void skillgate_probe() {
         const RealIo c{&reader, kGates[g].name};
         const GateStep st = gate_probe(kGates[g], &s, mb, ms, bind(c));
         if (st == kStepOk) continue;
+        // **못 읽은 것은 판정이 아니라 재시도다** - `gate_probe` 가 그때만
+        // `probed` 를 안 세우므로 다음 프레임에 다시 온다. 그 갈래에서 warn 을
+        // 내면 **매 프레임 같은 줄**이 찍혀 로그를 삼킨다(2026-09-18 실측:
+        // dragondiag 의 같은 모양이 38,225줄 · 로그의 99.9% 를 먹었다).
+        // 결론이 난 것만 남긴다.
+        if (st == kStepReadFailed) continue;
         if (st == kStepOutOfImage || st == kStepBadWindow ||
             st == kStepForeignOriginal) {
             s.unsupported = true;

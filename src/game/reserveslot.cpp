@@ -380,7 +380,7 @@ void element_diagnose(const mem::Reader& reader, std::uintptr_t player_actor) {
     // 들고 있었으므로 `KnowledgeInfo` 도 같은 배치일 것으로 본다. **가정이므로**
     // 못 찾으면 앞쪽 몇 개를 그대로 찍어 무엇이 들어 있는지 보이게 한다.
     {
-        const Mgr kn = read_mgr(reader, 0x06C2E2D8, "지식 매니저");
+        const Mgr kn = read_mgr(reader, kKnowMgrGlobalRva, "지식 매니저");
         int found = 0, sampled = 0;
         for (int k = 0; kn.object != 0 && k < kn.count; ++k) {
             const std::uintptr_t info = info_at(reader, kn, k);
@@ -452,7 +452,7 @@ bool element_knowledge(const mem::Reader& reader,
         out[i] = ElementKnow{kLabel[i], kName[i], -1, 0};
     }
     const std::uintptr_t image = reader.module_base();
-    const Mgr kn = read_mgr(reader, 0x06C2E2D8, "지식 매니저", true);
+    const Mgr kn = read_mgr(reader, kKnowMgrGlobalRva, "지식 매니저", true);
     if (kn.object == 0) {
         g_elem_mgr = 0;
         return false;

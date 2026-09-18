@@ -631,13 +631,30 @@ bool dragondiag_install(const mem::Reader& reader) {
 
     // **모르는 빌드에서는 아무것도 안 건다.** 이 파일의 자리는 라이브 추적으로
     // 얻은 것이라 갱신되면 다시 짚기 전까지 맞는다는 근거가 없다.
-    const std::string build = running_build();
-    if (build != kDerivedForBuild) {
-        log::warnf("소환 진단: 이 빌드({})에서는 안 건다 - 주소는 {} 기준이다."
-                   " 다시 짚은 뒤 kDerivedForBuild 를 같이 고칠 것",
-                   build.empty() ? "알 수 없음" : build, kDerivedForBuild);
-        return false;
+    // 이 자리는 **설치에 실패하면 매 프레임 다시 불린다.** 빌드가 다르면
+    // 영원히 실패하므로 한 번만 재고 한 번만 남긴다 - 안 그러면 로그가
+    // 초당 60줄로 불어나 나머지가 전부 묻힌다(실측 2026-09-18: 한 세션에
+    // 38,225줄, 로그 6.2MB 의 99.9%). `running_build()` 도 매 프레임
+    // `GetModuleFileNameW` + 버전 읽기를 하던 것을 같이 막는다.
+    static std::atomic<int> s_build_state{0};   // 0 안 쟀음, 1 맞음, 2 다름
+    int state = s_build_state.load(std::memory_order_acquire);
+    if (state == 0) {
+        const std::string build = running_build();
+        state = (build == kDerivedForBuild) ? 1 : 2;
+        // 먼저 도착한 스레드만 남긴다.
+        int expected = 0;
+        if (s_build_state.compare_exchange_strong(expected, state,
+                                                  std::memory_order_acq_rel) &&
+            state == 2) {
+            log::warnf("소환 진단: 이 빌드({})에서는 안 건다 - 주소는 {} 기준이다."
+                       " 다시 짚은 뒤 kDerivedForBuild 를 같이 고칠 것"
+                       " (이 줄은 한 번만 남긴다)",
+                       build.empty() ? "알 수 없음" : build, kDerivedForBuild);
+        } else {
+            state = s_build_state.load(std::memory_order_acquire);
+        }
     }
+    if (state != 1) return false;
     if (!mem::hook_init()) return false;
 
     g_errfn_target = reinterpret_cast<void*>(g_base + kErrFnRva);
