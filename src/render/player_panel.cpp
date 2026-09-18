@@ -723,6 +723,21 @@ void draw_wanted(const mem::Reader& reader) {
         // 여기서 "월드에 들어가면" 을 띄우면 영원히 안 바뀌는 것처럼 보인다.
         ImGui::TextDisabled("지금 범죄 기록이 없습니다 - 죄를 지으면 지역이"
                             " 생기고 그때 벌금이 읽힙니다.");
+    } else if (game::wanted_find_gave_up()) {
+        // **그만 찾은 상태다.** 한 번이 ~45초짜리 힙 전수라 못 찾는 동안 계속
+        // 돌면 배경이 무거워진다(`game/wanted.h`). 다시 볼지는 사람이 정한다.
+        ImGui::TextDisabled("벌금 칸을 못 찾아 **찾기를 멈췄습니다.**");
+        if (ImGui::Button("다시 찾기")) {
+            game::wanted_find_rearm();
+            notice_set(&s_note, NoticeLevel::Ok,
+                       "다시 찾습니다 - 한 번에 1분쯤 걸립니다");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "힙을 통째로 훑습니다 - 한 번에 1분쯤 걸리고 그동안 배경이"
+                " 무겁습니다.\n"
+                "죄를 지어 수배가 붙은 뒤에 누르시면 찾을 가능성이 높습니다.");
+        }
     } else {
         ImGui::TextDisabled("벌금을 아직 못 읽었습니다 - 월드에 들어가면"
                             " 저절로 잡습니다.");

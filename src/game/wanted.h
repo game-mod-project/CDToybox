@@ -62,6 +62,15 @@ bool bounty_ready(const mem::Reader& reader);
 // (실측 2026-09-18: 힙에 살아 있는 WantedRegionData 가 0개였다).
 bool wanted_component_ready();
 
+// **더 안 찾고 있는가.** 못 찾으면 예전에는 영원히 다시 훑었다 - 한 번이
+// ~45초짜리 힙 전수라 15초를 쉬어도 실질은 쉬지 않고 도는 것이었고, 로그가
+// 경고로 도배되고 배경이 계속 무거웠다(실측 2026-09-18). 지금은 월드 안에서
+// 몇 번 해 보고 그만둔다. 화면이 이 상태를 보이고 눌러서 다시 시킨다.
+bool wanted_find_gave_up();
+
+// 다시 찾게 한다(화면 버튼). 세는 수를 0 으로 되돌릴 뿐이라 값싸다.
+void wanted_find_rearm();
+
 // 현재 지역의 벌금(저장 값). 못 읽으면 false.
 bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out);
 
