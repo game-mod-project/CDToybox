@@ -1,12 +1,17 @@
 // 호출 위치 관문(실내·지붕·지역)의 **정의 자체**를 태운다.
 //
-// 여기서 한 칸만 어긋나면 게임의 남의 명령을 부순다. 그래서 세 관문의 창·오프셋·
-// 끼워 넣기 결과를 전부 못박아 둔다 - 실행 파일에서 뜬 값 그대로다(2026-09-18):
+// 여기서 한 칸만 어긋나면 게임의 남의 명령을 부순다. 그래서 네 관문의 창·오프셋·
+// 끼워 넣기 결과를 전부 못박아 둔다 - 실행 파일에서 뜬 값 그대로다
+// (**exe 1.0.0.2944**, 2026-09-18):
 //
-//   실내 RVA 0x009635FC  창 0x009635F8 +4   FC 02 84 C0 **74** 0E 8B 05
-//   지붕 RVA 0x00963659  창 0x00963658 +1   C0 **74** 0A 8B 05 63 95 25
-//   지역 RVA 0x009626B9  창 0x009626B8 +1   C0 **74** 75 8B 05 07 A5 25
-//   위치 RVA 0x009624E4  창 0x009624E0 +4   06 00 84 C0 **75** 0A 8B 05
+//   실내 RVA 0x009DE7DC  창 0x009DE7D8 +4   03 03 84 C0 **74** 0E 8B 05
+//   지붕 RVA 0x009DE839  창 0x009DE838 +1   C0 **74** 0A 8B 05 DB 92 31
+//   지역 RVA 0x009DD899  창 0x009DD898 +1   C0 **74** 75 8B 05 7F A2 31
+//   위치 RVA 0x009DD6C4  창 0x009DD6C0 +4   06 00 84 C0 **75** 0A 8B 05
+//
+// 2850 자리는 실내 0x9635FC · 지붕 0x963659 · 지역 0x9626B9 · 위치 0x9624E4
+// 였다(넷 다 +0x7B1E0 밀렸다). 갱신 때 이 시험이 먼저 빨개져야 한다 - 그것이
+// 이 파일의 일이다.
 //
 // 넷 다 바꾸는 것은 **조건 점프 한 바이트** -> `EB`(jmp) 다. 거부로 가는 분기를
 // 무조건 건너뛰게 만들어 오류 대입을 지나친다. 위치 관문만 `75`(jne)인데,
@@ -59,13 +64,26 @@ TEST(callgate_table_has_all_four_gates) {
 
 TEST(callgate_sites_match_the_measured_rvas) {
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateIndoor)->rva),
-             0x009635FCLL);
+             0x009DE7DCLL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateRoof)->rva),
-             0x00963659LL);
+             0x009DE839LL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateRegion)->rva),
-             0x009626B9LL);
+             0x009DD899LL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGatePosition)->rva),
-             0x009624E4LL);
+             0x009DD6C4LL);
+}
+
+TEST(callgate_gates_all_moved_by_one_delta_in_2944) {
+    // 2850 -> 2944 에서 넷이 **같은 폭**으로 밀렸다. 하나만 폭이 다르면 그
+    // 관문을 잘못 짚었다는 신호다 - 다음 갱신 때 이 대조가 그것을 잡는다.
+    // (영역이 다르면 폭도 달라진다. 같은 영역 안에서만 성립한다.)
+    const long long kDelta = 0x7B1E0LL;
+    const long long old_rva[kCallGateCount] = {0x009635FCLL, 0x00963659LL,
+                                               0x009626B9LL, 0x009624E4LL};
+    for (int g = 0; g < kCallGateCount; ++g) {
+        CHECK_EQ(static_cast<long long>(callgate_def(g)->rva) - old_rva[g],
+                 kDelta);
+    }
 }
 
 TEST(callgate_patches_exactly_one_byte_and_it_is_a_conditional_jump) {
@@ -104,12 +122,12 @@ TEST(callgate_position_uses_jne_not_je) {
 }
 
 TEST(callgate_windows_are_the_measured_bytes) {
-    const std::uint8_t indoor[8] = {0xFC, 0x02, 0x84, 0xC0, 0x74, 0x0E, 0x8B,
+    const std::uint8_t indoor[8] = {0x03, 0x03, 0x84, 0xC0, 0x74, 0x0E, 0x8B,
                                     0x05};
-    const std::uint8_t roof[8] = {0xC0, 0x74, 0x0A, 0x8B, 0x05, 0x63, 0x95,
-                                  0x25};
-    const std::uint8_t region[8] = {0xC0, 0x74, 0x75, 0x8B, 0x05, 0x07, 0xA5,
-                                    0x25};
+    const std::uint8_t roof[8] = {0xC0, 0x74, 0x0A, 0x8B, 0x05, 0xDB, 0x92,
+                                  0x31};
+    const std::uint8_t region[8] = {0xC0, 0x74, 0x75, 0x8B, 0x05, 0x7F, 0xA2,
+                                    0x31};
     const std::uint8_t position[8] = {0x06, 0x00, 0x84, 0xC0, 0x75, 0x0A, 0x8B,
                                       0x05};
     CHECK(std::memcmp(callgate_def(kCallGateIndoor)->want, indoor, 8) == 0);
