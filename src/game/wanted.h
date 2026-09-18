@@ -8,6 +8,31 @@
 
 namespace cdtb::game {
 
+// --- 벌금(범죄수치) 값 ---------------------------------------------------
+//
+// 화면의 "데메니스 왕국 / 벌금 N.NN" 은 `pa::WantedRegionData` 의
+// **`+0x30`(u64)** 이고 **2자리 고정소수**다.
+//
+//   10000 = 100.00   ·   9200 = 92.00   ·   0 = 0
+//
+// 두 번 독립으로 확인했다(2026-09-18). 10000 -> 5000 을 써 넣으니 화면이
+// 따라 줄었고, 그 뒤 범죄를 저지르니 게임이 스스로 9200 으로 올렸다 -
+// 게임이 그 칸을 읽고 **쓴다**.
+//
+// 액수가 0 이 되면 화면 라벨이 "현상 수배" 에서 "벌금" 으로 바뀐다.
+// 상태는 이 레코드에 없다 - 100.00/현상수배 때와 0/벌금 때를 바이트로
+// 견주면 `+0x30` 말고는 한 바이트도 안 다르다.
+
+// 관측된 상한. 사용자 실측으로 화면이 100.00 에서 더 안 올라간다.
+// 넘겨 쓰면 화면과 게임 판정이 어긋날 수 있으므로 자른다.
+inline constexpr std::uint64_t kBountyMaxRaw = 10000;
+
+// 화면 값(원 단위) -> 저장 값. 음수는 0 으로 떨어뜨리고 상한에서 자른다.
+std::uint64_t bounty_to_raw(double shown);
+
+// 저장 값 -> 화면 값.
+double bounty_from_raw(std::uint64_t raw);
+
 // 수배(범죄수치) 치트 메시지.
 //
 // 게임이 개발용 요청 메시지를 그대로 들고 있다. 우리는 새 경로를
@@ -51,6 +76,26 @@ bool build_clear_wanted_wire(std::uint32_t handle, std::uint8_t flag,
                              std::uint8_t* out, std::size_t cap,
                              std::size_t* len_out);
 
+// --- 수배 상태 바꾸기 --------------------------------------------------
+//
+// 벌금을 0 으로 써도 지도에 지역 항목이 남는다(실측 2026-09-18:
+// "데메니스 왕국 / 벌금 / 0"). 액수와 **상태는 다른 것**이고, 상태는
+// `WantedRegionData` 안에 없다 - 두 상태를 바이트로 견주면 `+0x30` 말고는
+// 한 바이트도 안 다르다. 게임이 그 일을 하는 메시지를 따로 들고 있다.
+inline constexpr std::uint16_t kChangeWantedStateId = 2848;
+
+// 머리 5 + 본문 6(u32 핸들 + u8 상태 + u8). 폭은 역직렬화기
+// (RVA 0x29A6AA0)가 읽기 함수를 부르기 직전의 `r8d` 에서 읽었다 -
+// 4 다음에 1, 다시 1 이다.
+inline constexpr std::size_t kChangeWantedStateWireLen = 11;
+
+// `state` 와 `extra` 의 뜻은 **아직 모른다.** 게임의 `WantedState` 열거형이
+// 있다는 것과, 역직렬화기가 u8 을 둘 읽는다는 것까지만 확인했다. 그래서
+// 화면에서 값을 쓸어 볼 수 있게 그대로 흘려보낸다.
+bool build_change_wanted_state_wire(std::uint32_t handle, std::uint8_t state,
+                                    std::uint8_t extra, std::uint8_t* out,
+                                    std::size_t cap, std::size_t* len_out);
+
 // 플레이어 본인으로 **추정**하는 핸들. actors.h 가 용병의 고용주
 // 칸에서 이 값을 실측했다("플레이어 쪽은 0xA0100001"). 수배 메시지의
 // 대상으로도 맞는지는 아직 확인 못 했으므로 화면에서 고칠 수 있게
@@ -78,5 +123,11 @@ std::uint32_t wanted_clear_message_id();
 // 뽑히던 일이 있어 pick_drive_session 한 곳으로 모아 둔 규칙이다.
 bool request_clear_wanted(const mem::Reader& reader, std::uint32_t handle,
                           std::uint8_t flag);
+
+// 수배 상태를 바꿔 건다. state/extra 의 뜻을 모르므로 그대로 흘려보내고
+// 보낸 값을 로그에 남긴다 - 화면에서 쓸어 보며 찾는 것이 목적이다.
+bool request_change_wanted_state(const mem::Reader& reader,
+                                 std::uint32_t handle, std::uint8_t state,
+                                 std::uint8_t extra);
 
 }  // namespace cdtb::game

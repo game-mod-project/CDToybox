@@ -680,8 +680,13 @@ void draw_wanted(const mem::Reader& reader) {
     }
 
     ImGui::TextWrapped(
-        "게임의 개발용 요청(TrocTrClearWantedReq)을 그대로 보냅니다."
-        " 지급과 같은 대기열을 타므로 게임 스레드에서 실행됩니다.");
+        "게임의 개발용 요청을 그대로 보냅니다. 지급과 같은 대기열을 타므로"
+        " 게임 스레드에서 실행됩니다.");
+    // 이름을 사실에 맞춘다. 처음엔 "수배 해제" 로 불렀는데, 눌러 보니
+    // 지우는 것은 목격자·범죄 기록뿐이고 **벌금은 그대로였다**(사용자
+    // 화면 확인 2026-09-18). 쫓기는 중에 추격을 끊는 용도다.
+    ImGui::TextDisabled("아래 '목격 상태 지우기' 는 벌금을 안 줄입니다 -"
+                        " 목격자와 범죄 기록만 비웁니다.");
     ImGui::TextDisabled("메시지 ID %u", game::wanted_clear_message_id());
 
     ImGui::SetNextItemWidth(140.0f);
@@ -696,7 +701,35 @@ void draw_wanted(const mem::Reader& reader) {
     ImGui::SameLine();
     ImGui::TextDisabled("(뜻 미확인 - 0 과 1 을 견줘 보십시오)");
 
-    if (ImGui::Button("수배 해제")) {
+    // 벌금을 0 으로 만들어도 지도에 지역 항목이 남는다(실측 2026-09-18).
+    // 액수와 상태는 다른 것이고, 상태 쪽 뜻은 아직 모른다 - 그래서
+    // 값을 쓸어 볼 수 있게 그대로 열어 둔다.
+    static int s_state = 0;
+    static int s_extra = 0;
+    ImGui::SeparatorText("상태 바꾸기 (뜻 미확인 - 쓸어 보는 중)");
+    ImGui::SetNextItemWidth(90.0f);
+    ImGui::InputInt("상태", &s_state);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90.0f);
+    ImGui::InputInt("extra", &s_extra);
+    ImGui::SameLine();
+    if (ImGui::Button("상태 보내기")) {
+        const bool ok = game::request_change_wanted_state(
+            reader, static_cast<std::uint32_t>(s_handle),
+            static_cast<std::uint8_t>(s_state),
+            static_cast<std::uint8_t>(s_extra));
+        if (ok) {
+            notice_set(&s_note, NoticeLevel::Ok,
+                       "상태 {}·{} 를 걸었습니다 - 지도를 다시 여십시오",
+                       s_state, s_extra);
+        } else {
+            notice_set(&s_note, NoticeLevel::Bad,
+                       "상태 요청을 걸지 못했습니다 (로그 참조)");
+        }
+    }
+    ImGui::Separator();
+
+    if (ImGui::Button("목격 상태 지우기")) {
         const bool ok = game::request_clear_wanted(
             reader, static_cast<std::uint32_t>(s_handle),
             static_cast<std::uint8_t>(s_flag));
