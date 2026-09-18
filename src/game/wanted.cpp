@@ -31,6 +31,11 @@ constexpr std::size_t kRegionFine = 0x30;   // u64 벌금 (2자리 고정소수)
 
 std::uintptr_t g_comp = 0;
 std::uintptr_t g_comp_vtable = 0;    // 처음 찾을 때 적어 두고 대조에 쓴다
+
+// 월드 안에서 몇 번까지 스스로 훑어 볼 것인가. 다 쓰면 그만두고, 화면에서
+// 눌러야 다시 본다. 한 번에 ~45초짜리 힙 전수라 이 수를 늘리면 비싸진다.
+constexpr int kFindTries = 3;
+int g_find_tries = 0;
 // 지역 객체의 vtable. 찾을 때 RTTI 이름으로 확인해 둔 것이라, 그 뒤에는
 // 이름 조회 없이 이 값만 대조하면 된다(매 프레임 도는 자리다).
 std::uintptr_t g_region_vtable = 0;
@@ -84,10 +89,23 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 그래서 여기서 스스로 다시 본다. 다만 힙 전수 탐색이라 비싸므로
     // **월드 안일 때만, 15초에 한 번만** 돈다(clan.cpp 와 같은 규칙).
     if (pick_drive_session(reader) == 0) return false;
+
+    // ---- 그런데 못 찾으면 **영원히** 다시 돌았다 (2026-09-18 실측)
+    //
+    // 한 번 훑는 데 ~45초가 걸린다. 15초를 쉬어도 실질은 쉬지 않고 도는 것이라,
+    // 로그가 이 경고로 도배되고 배경이 계속 무거웠다:
+    //
+    //   수배 컴포넌트를 못 찾았다 - 후보 8개, … 끝내 못 읽음 19,305,328KB
+    //
+    // 그래서 **몇 번 해 보고 그만둔다.** 다시 보려면 화면에서 눌러야 한다
+    // (`wanted_find_rearm`). 한 번만 해 보고 그만두지 않는 이유는 위 문단이다 -
+    // 월드에 막 들어온 순간에는 아직 없을 수 있다.
+    if (g_find_tries >= kFindTries) return false;
     static std::uint64_t s_last_ms = 0;
     const std::uint64_t now = ::GetTickCount64();
     if (s_last_ms != 0 && now - s_last_ms < 15000) return false;
     s_last_ms = now;
+    ++g_find_tries;
 
     // 힙 전수 탐색이라 비싸다. 죽었을 때만 다시 돈다.
     //
@@ -128,15 +146,27 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
         return true;
     }
     const auto st = mem::Rtti::scan_stats();
-    log::warnf("수배 컴포넌트를 못 찾았다 (월드 안입니까?) - 후보 {}개, "
+    const bool last = g_find_tries >= kFindTries;
+    log::warnf("수배 컴포넌트를 못 찾았다 ({}/{}회{}) - 후보 {}개, "
                "힙 훑기 누적: 창 {} · 쪼갠 창 {} · 끝내 못 읽음 {}KB",
-               n_seen, st.windows, st.retried, st.lost_kb);
+               g_find_tries, kFindTries,
+               last ? ", **그만 찾는다 - 창에서 [다시 찾기]**" : "", n_seen,
+               st.windows, st.retried, st.lost_kb);
     return false;
 }
 
 bool bounty_ready(const mem::Reader& reader) { return region_of(reader) != 0; }
 
 bool wanted_component_ready() { return g_comp != 0 && g_comp_vtable != 0; }
+
+bool wanted_find_gave_up() {
+    return g_comp == 0 && g_find_tries >= kFindTries;
+}
+
+void wanted_find_rearm() {
+    g_find_tries = 0;
+    log::infof("수배 컴포넌트: 다시 찾는다 ({}회까지)", kFindTries);
+}
 
 bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out) {
     const std::uintptr_t region = region_of(reader);

@@ -229,3 +229,26 @@ TEST(change_wanted_state_wire_refuses_bad_input) {
     CHECK(!build_change_wanted_state_wire(0xA0100001u, 0, 0, nullptr, 16,
                                           &len));
 }
+
+// ----------------------------------------------------- 찾기를 멈추는 규칙
+//
+// 못 찾을 때 영원히 다시 훑던 것을 멈췄다(2026-09-18). 한 번이 ~45초짜리 힙
+// 전수라, 15초를 쉬어도 실질은 쉬지 않고 도는 것이었다.
+namespace {
+
+TEST(wanted_find_starts_out_not_given_up) {
+    // 아직 한 번도 안 해 봤으면 "멈춤" 이 아니다 - 화면이 [다시 찾기] 를
+    // 처음부터 띄우면 사용자가 저절로 잡는 길을 못 기다린다.
+    cdtb::game::wanted_find_rearm();
+    CHECK(!cdtb::game::wanted_find_gave_up());
+}
+
+TEST(wanted_find_rearm_clears_given_up) {
+    // 버튼이 하는 일은 이것뿐이다. 되돌릴 수 있어야 사람이 다시 시킬 수 있다.
+    cdtb::game::wanted_find_rearm();
+    CHECK(!cdtb::game::wanted_find_gave_up());
+    cdtb::game::wanted_find_rearm();
+    CHECK(!cdtb::game::wanted_find_gave_up());
+}
+
+}  // namespace
