@@ -1,8 +1,7 @@
 #pragma once
 
-// @build 1.0.0.2944  kCondMgrGlobalRva 재도출(표 이름 `conditioninfo`)
-// @build 1.0.0.2850  **kSlotMgrGlobalRva 는 미도출** - 표 이름 `reserveslot`
-//   을 조회 함수가 안 만져 정적으로 안 닿는다. cdtb_probe 로 확정할 것.
+// @build 1.0.0.2944  kCondMgrGlobalRva 는 표 이름 `conditioninfo` 로,
+//   kSlotMgrGlobalRva 는 **라이브 프로브로** 확정했다(정적으로는 안 닿았다).
 #include <cstddef>
 #include <cstdint>
 
@@ -37,7 +36,7 @@ namespace cdtb::game {
 // 함수를 불러 죽었던 전례가 있다(TROUBLESHOOTING 1.8/1.13).
 
 // 두 매니저는 배치가 같다.
-inline constexpr std::uintptr_t kSlotMgrGlobalRva = 0x06C2E300;
+inline constexpr std::uintptr_t kSlotMgrGlobalRva = 0x06D69AE0;   // 2850 까지 0x06C2E300
 inline constexpr std::uintptr_t kCondMgrGlobalRva = 0x06D6AA38;   // 2850 까지 0x06C2F260
 inline constexpr std::size_t kMgrCount = 0x08;
 inline constexpr std::size_t kMgrArray = 0x58;

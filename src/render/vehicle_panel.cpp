@@ -34,6 +34,11 @@ void draw_vehicle_panel(bool* open) {
         ImGui::TextDisabled("%s", w.note[0] != 0
                                       ? w.note
                                       : "월드에 들어가면 예약 슬롯 표를 잡습니다.");
+        // **End() 를 빼먹으면 ImGui 가 "Missing End()" 를 화면에 띄운다.**
+        // 이 갈래는 예약 슬롯 표를 못 잡았을 때만 도는데, 2944 에서 매니저
+        // 전역이 낡으면서 처음으로 돌았다 - 갱신이 잠자던 버그를 깨웠다
+        // (사용자 보고 2026-09-18).
+        ImGui::End();
         return;
     }
 
