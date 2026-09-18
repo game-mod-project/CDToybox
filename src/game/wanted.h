@@ -55,6 +55,13 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader);
 // 쓸 준비가 됐는가. 화면이 칸을 가리는 데 쓴다.
 bool bounty_ready(const mem::Reader& reader);
 
+// **컴포넌트를 잡았는가.** `bounty_ready` 와 갈라 둔다 - 그것은 "잡았고 + 지금
+// 지역에 범죄 기록이 있다" 라서, 둘을 뭉치면 화면이 "월드에 들어가면 저절로
+// 잡습니다" 를 영원히 띄운다(사용자 보고 2026-09-18: 월드 안인데 안 바뀐다).
+// 실제로는 컴포넌트를 잡고도 `+0x30` 이 널일 수 있다 - 범죄 기록이 없는 상태다
+// (실측 2026-09-18: 힙에 살아 있는 WantedRegionData 가 0개였다).
+bool wanted_component_ready();
+
 // 현재 지역의 벌금(저장 값). 못 읽으면 false.
 bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out);
 

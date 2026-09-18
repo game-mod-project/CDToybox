@@ -718,6 +718,11 @@ void draw_wanted(const mem::Reader& reader) {
         }
         ImGui::TextDisabled("상한 %.2f (게임이 그 위로 안 올라갑니다)",
                             game::bounty_from_raw(game::kBountyMaxRaw));
+    } else if (game::wanted_component_ready()) {
+        // 컴포넌트는 잡았는데 지역 데이터가 없다 = 지금 범죄 기록이 없다.
+        // 여기서 "월드에 들어가면" 을 띄우면 영원히 안 바뀌는 것처럼 보인다.
+        ImGui::TextDisabled("지금 범죄 기록이 없습니다 - 죄를 지으면 지역이"
+                            " 생기고 그때 벌금이 읽힙니다.");
     } else {
         ImGui::TextDisabled("벌금을 아직 못 읽었습니다 - 월드에 들어가면"
                             " 저절로 잡습니다.");
