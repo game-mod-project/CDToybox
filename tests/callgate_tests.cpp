@@ -6,9 +6,11 @@
 //   실내 RVA 0x009635FC  창 0x009635F8 +4   FC 02 84 C0 **74** 0E 8B 05
 //   지붕 RVA 0x00963659  창 0x00963658 +1   C0 **74** 0A 8B 05 63 95 25
 //   지역 RVA 0x009626B9  창 0x009626B8 +1   C0 **74** 75 8B 05 07 A5 25
+//   위치 RVA 0x009624E4  창 0x009624E0 +4   06 00 84 C0 **75** 0A 8B 05
 //
-// 셋 다 바꾸는 것은 `74`(je) 한 바이트 -> `EB`(jmp) 다. 거부로 가는 분기를
-// 무조건 건너뛰게 만들어 오류 대입을 지나친다.
+// 넷 다 바꾸는 것은 **조건 점프 한 바이트** -> `EB`(jmp) 다. 거부로 가는 분기를
+// 무조건 건너뛰게 만들어 오류 대입을 지나친다. 위치 관문만 `75`(jne)인데,
+// 거기서는 통과 쪽이 아래로 붙어 있어서다.
 #include <cstdint>
 #include <cstring>
 
@@ -25,6 +27,7 @@ using cdtb::game::GateIo;
 using cdtb::game::GateSlot;
 using cdtb::game::kCallGateCount;
 using cdtb::game::kCallGateIndoor;
+using cdtb::game::kCallGatePosition;
 using cdtb::game::kCallGateRegion;
 using cdtb::game::kCallGateRoof;
 using cdtb::game::kStepOk;
@@ -32,6 +35,7 @@ using cdtb::game::patch_splice;
 using cdtb::game::patch_window;
 
 constexpr std::uint8_t kJe = 0x74;
+constexpr std::uint8_t kJne = 0x75;
 constexpr std::uint8_t kJmp = 0xEB;
 
 // 창 8바이트를 리틀엔디언 qword 로. 실제 읽기가 그렇게 들어온다.
@@ -41,8 +45,8 @@ std::uint64_t as_qword(const std::uint8_t b[8]) {
     return v;
 }
 
-TEST(callgate_table_has_all_three_gates) {
-    CHECK_EQ(kCallGateCount, 3);
+TEST(callgate_table_has_all_four_gates) {
+    CHECK_EQ(kCallGateCount, 4);
     for (int g = 0; g < kCallGateCount; ++g) {
         const GateDef* d = callgate_def(g);
         CHECK(d != nullptr);
@@ -60,6 +64,8 @@ TEST(callgate_sites_match_the_measured_rvas) {
              0x00963659LL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateRegion)->rva),
              0x009626B9LL);
+    CHECK_EQ(static_cast<long long>(callgate_def(kCallGatePosition)->rva),
+             0x009624E4LL);
 }
 
 TEST(callgate_patches_exactly_one_byte_and_it_is_a_conditional_jump) {
@@ -76,10 +82,25 @@ TEST(callgate_patches_exactly_one_byte_and_it_is_a_conditional_jump) {
         CHECK_EQ(static_cast<long long>(base),
                  static_cast<long long>(0x140000000ULL + (d->rva & ~7ULL)));
         CHECK(off + d->len <= 8);
-        // **덮는 자리가 정말 `je` 여야 한다.** 여기가 어긋나면 엉뚱한 바이트를
-        // jmp 로 만든다 - 확인 창이 통과해도 이 검사는 따로 필요하다.
-        CHECK_EQ(static_cast<int>(d->want[off]), static_cast<int>(kJe));
+        // **덮는 자리가 정말 조건 점프여야 한다.** 여기가 어긋나면 엉뚱한
+        // 바이트를 jmp 로 만든다 - 확인 창이 통과해도 이 검사는 따로 필요하다.
+        // 오류로 떨어지는 쪽이 어디 붙었느냐에 따라 je(74)·jne(75) 둘 다 나온다.
+        const int op = static_cast<int>(d->want[off]);
+        CHECK(op == static_cast<int>(kJe) || op == static_cast<int>(kJne));
     }
+}
+
+TEST(callgate_position_uses_jne_not_je) {
+    // 실내 창과 모양이 닮아서(…84 C0 7x 0x 8B 05) 한 번 헷갈릴 자리다.
+    // 위치 관문은 통과 쪽이 아래로 붙어 있어 **jne** 다.
+    const GateDef* d = callgate_def(kCallGatePosition);
+    CHECK_EQ(static_cast<int>(d->want[d->rva & 7ULL]),
+             static_cast<int>(kJne));
+    const GateDef* indoor = callgate_def(kCallGateIndoor);
+    CHECK_EQ(static_cast<int>(indoor->want[indoor->rva & 7ULL]),
+             static_cast<int>(kJe));
+    // 두 창이 실제로 구분된다(앞 두 바이트가 다르다).
+    CHECK(std::memcmp(d->want, indoor->want, 2) != 0);
 }
 
 TEST(callgate_windows_are_the_measured_bytes) {
@@ -89,9 +110,12 @@ TEST(callgate_windows_are_the_measured_bytes) {
                                   0x25};
     const std::uint8_t region[8] = {0xC0, 0x74, 0x75, 0x8B, 0x05, 0x07, 0xA5,
                                     0x25};
+    const std::uint8_t position[8] = {0x06, 0x00, 0x84, 0xC0, 0x75, 0x0A, 0x8B,
+                                      0x05};
     CHECK(std::memcmp(callgate_def(kCallGateIndoor)->want, indoor, 8) == 0);
     CHECK(std::memcmp(callgate_def(kCallGateRoof)->want, roof, 8) == 0);
     CHECK(std::memcmp(callgate_def(kCallGateRegion)->want, region, 8) == 0);
+    CHECK(std::memcmp(callgate_def(kCallGatePosition)->want, position, 8) == 0);
 }
 
 TEST(callgate_splice_turns_je_into_jmp_and_touches_nothing_else) {
