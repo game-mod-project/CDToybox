@@ -41,10 +41,6 @@ constexpr const char* kItemValueCtorPattern =
 constexpr const char* kTaskDispatcherPattern =
     "48 83 EC 28 48 8B 41 78 48 8B 50 08";
 
-// @aob 0 - 프로덕션 호출자가 없다(시험 전용). 2760 부터 0곳
-constexpr const char* kSpawnGroundPattern =
-    "4C 8B DC 49 89 5B 08 49 89 6B 10 56 57 41 54 41 56 41 57 48 81 EC 50 01";
-
 // 메시지 펌프 (RVA 0x2369170, 2.00.01). 앞머리 40바이트. 24바이트는
 // 10곳, 32바이트는 2곳이 겹친다 - 이 프롤로그 모양이 흔하다.
 //
@@ -103,7 +99,6 @@ using HandlerFn = void(__fastcall*)(void*, void*, const std::uint32_t*,
 //   rcx 서술자  rdx 패킷  r8 &캐릭터키u32  r9 &Bu32  [+0x20] &위치float3
 //   [+0x28] &플래그u8
 // 처리기는 캐릭터키가 0이면 거부한다(아이템 스폰의 키 검사와 같다).
-CheatMessage g_spawn_msg;
 CheatMessage g_give_msg;
 CheatMessage g_stat_msg;
 CheatMessage g_endur_msg;
@@ -131,15 +126,13 @@ const mem::Reader* g_reader = nullptr;
 
 // 걸어 둔 요청. 렌더 스레드가 채우고, TLS 가 준비된 게임 스레드가
 // 집어 간다.
-enum class Kind { Ground, Inventory, Endurance, Message, HireSpecies };
+enum class Kind { Inventory, Endurance, Message, HireSpecies };
 
 struct Pending {
     Kind kind = Kind::Inventory;
-    bool to_inventory = false;   // true 면 바닥이 아니라 인벤토리
     std::uintptr_t session = 0;
     std::uint32_t key = 0;
     std::int64_t count = 0;
-    float pos[3]{};
     GiveExtras extras;           // 담금질·소켓 (TrItemValue 칸들)
     std::uint16_t a = 0;         // 내구도 인자
     std::uint16_t b = 0;
@@ -150,8 +143,6 @@ struct Pending {
     std::uint32_t serial = 0;   // 요청 번호(stamp_request)
 };
 // 아래에서 정의한다. 후킹이 먼저 나온다.
-void run_spawn(std::uintptr_t session, std::uint32_t item_key,
-               std::int64_t count, const float pos[3], SpawnOutcome* out);
 void run_hire_species(std::uintptr_t session, std::uint16_t key,
                       SpawnOutcome* out);
 void run_give(std::uintptr_t session, std::uint32_t item_key,
@@ -553,9 +544,6 @@ bool run_one_picked() {
             case Kind::Endurance:
                 run_endurance(req.session, req.a, req.b, &local);
                 break;
-            case Kind::Ground:
-                run_spawn(req.session, req.key, req.count, req.pos, &local);
-                break;
             case Kind::HireSpecies:
                 run_hire_species(req.session,
                                  static_cast<std::uint16_t>(req.key),
@@ -937,11 +925,6 @@ bool find_one(const std::vector<std::uint8_t>& image, const char* pattern,
 bool find_actor_getter_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out) {
     return find_one(image, kActorGetterPattern, rva_out);
-}
-
-bool find_spawn_ground_rva(const std::vector<std::uint8_t>& image,
-                           std::uint64_t* rva_out) {
-    return find_one(image, kSpawnGroundPattern, rva_out);
 }
 
 bool find_entity_lookup(const std::uint8_t* body, std::size_t n,
@@ -1697,7 +1680,7 @@ bool resolve_cheat_message(const mem::Rtti& rtti, const mem::Reader& reader,
     return true;
 }
 
-bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
+bool grant_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader) {
     g_reader = &reader;
 
     // 인벤토리 직행도 같이 해석한다.
@@ -1721,13 +1704,8 @@ bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader) {
         resolve_cheat_message(rtti, reader, "VaryEnduranceItemByCheatReq",
                               &g_endur_msg);
     }
-
-    if (g_spawn_msg.handler != 0) return true;
-    return resolve_cheat_message(rtti, reader, "SpawnItemToGroundByCheatReq",
-                                 &g_spawn_msg);
+    return true;
 }
-
-const CheatMessage& spawn_message() { return g_spawn_msg; }
 
 bool thread_ready_for_spawn() {
     // gs:[0x58] 는 TEB 의 ThreadLocalStoragePointer 다. 작업 함수는
@@ -1742,70 +1720,7 @@ bool thread_ready_for_spawn() {
     return true;
 }
 
-
-bool spawn_ready() {
-    return g_spawn_msg.handler != 0 && g_orig_actor_getter != nullptr;
-}
-
 namespace {
-
-// TLS 가 준비된 스레드에서만 부른다.
-void run_spawn(std::uintptr_t session, std::uint32_t item_key,
-               std::int64_t count, const float pos[3],
-               SpawnOutcome* out) {
-    SpawnOutcome o;
-    if (out != nullptr) *out = o;
-
-    std::uint32_t key = item_key;
-    std::int64_t n = count;
-    std::uint16_t field3 = 0;      // 뜻을 아직 모른다. 0 으로 둔다
-    float where[3] = {pos[0], pos[1], pos[2]};
-
-    // 무엇을 넣고 불렀는지 먼저 남긴다. 죽으면 이 줄이 마지막 단서다.
-    log::infof("바닥 스폰: 세션 0x{:X} 키 {} 개수 {} 위치 {:.1f},{:.1f},{:.1f}",
-               session, item_key, count, where[0], where[1], where[2]);
-
-    // 처리기를 그대로 부른다. 앞단의 문(vtable +0x140)은 `mov al,1;
-    // ret` 이라 늘 열려 있다 - 막고 있던 것은 권한이 아니라 세션이었다.
-    // 클라이언트 세션은 [[[세션+0xA0]+0x68]+0x130] 이 비어 처리기가
-    // 조용히 되돌아간다. 서버 세션이어야 한다.
-    //
-    // 작업 함수를 직접 부르는 것도 해 봤지만 올바른 서버 액터로도
-    // 죽었다. 처리기가 하는 준비를 우리가 못 맞춘 것이다 - 그냥
-    // 처리기에 맡긴다.
-    std::uintptr_t gate = 0;
-    if (!gate_object(*g_reader, session, &gate)) {
-        o.no_actor = true;
-        log::warnf("바닥 스폰: 세션 0x{:X} 는 사슬이 끊겼다 (클라이언트 세션)",
-                   session);
-        if (out != nullptr) *out = o;
-        return;
-    }
-    o.actor = g_orig_actor_getter(reinterpret_cast<void*>(session));
-    std::uintptr_t avt = 0;
-    g_reader->read(o.actor, &avt, sizeof(avt));
-    log::infof("바닥 스폰: 문 0x{:X} 액터 0x{:X} (vtable 0x{:X})", gate, o.actor,
-               avt);
-
-    // 처리기는 패킷에서 세션만 꺼낸다 ([패킷+0]). 나머지는 건드리지
-    // 않지만 넉넉히 0으로 채워 둔다.
-    std::uint64_t packet[8]{};
-    packet[0] = static_cast<std::uint64_t>(session);
-
-    o.called = true;
-    o.crashed = !call_handler_guarded(
-        reinterpret_cast<HandlerFn>(g_spawn_msg.handler),
-        reinterpret_cast<void*>(g_spawn_msg.descriptor), packet, &key, &n,
-        &field3, where, &o.seh, &o.fault);
-    if (o.crashed) {
-        log::errorf("바닥 스폰이 게임 안에서 죽었다: 0x{:X} at 0x{:X} (RVA 0x{:X})",
-                    o.seh, o.fault,
-                    o.fault - g_reader->module_base());
-    } else {
-        log::infof("바닥 스폰 끝 (처리기 경로)");
-    }
-    if (out != nullptr) *out = o;
-}
 
 // 처리기(0x278B860)가 실제로 하는 판정을 그대로 재현해 어디서 빠지는지
 // 잡는다. 처리기는 조용히 실패하므로(개체가 안 생김) 이 재현이 유일한
@@ -2201,7 +2116,6 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
 
     lane.req = Pending{};
     lane.req.kind = Kind::Inventory;
-    lane.req.to_inventory = true;
     lane.req.session = session;
     lane.req.key = item_key;
     lane.req.count = count;
@@ -2227,38 +2141,6 @@ bool request_give(std::uintptr_t session, std::uint32_t item_key,
                static_cast<int>(extras.socket_count));
     return true;
 }
-
-bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
-                   std::int64_t count, const float pos[3]) {
-    std::lock_guard<std::mutex> produce(g_produce_mutex);
-    if (!spawn_ready() || pos == nullptr || g_reader == nullptr) {
-        return false;
-    }
-    if (!spawn_args_ok(item_key, count) || session == 0) return false;
-    drop_stale_pending();
-    LaneSlot& lane = lane_of(DriveLane::Item);
-    if (lane.has.load(std::memory_order_acquire)) return false;
-    if (g_running.load(std::memory_order_acquire)) return false;
-    if (GetTickCount64() - lane_done_ms(lane) < kCooldownMs) {
-        return false;
-    }
-
-    lane.req = Pending{};
-    lane.req.kind = Kind::Ground;
-    lane.req.session = session;
-    lane.req.key = item_key;
-    lane.req.count = count;
-    lane.req.pos[0] = pos[0];
-    lane.req.pos[1] = pos[1];
-    lane.req.pos[2] = pos[2];
-    stamp_request(lane);
-    lane.at.store(GetTickCount64(), std::memory_order_release);
-    lane.has.store(true, std::memory_order_release);
-    log::infof("바닥 스폰 요청을 걸었다 key={} count={} - 게임 스레드를 기다린다",
-               item_key, count);
-    return true;
-}
-
 
 bool drive_point_dead() {
     return g_drive_dead.load(std::memory_order_acquire);

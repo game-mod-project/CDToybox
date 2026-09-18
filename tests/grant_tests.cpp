@@ -9,17 +9,11 @@
 namespace {
 
 using cdtb::game::find_actor_getter_rva;
-using cdtb::game::find_spawn_ground_rva;
 
 // 실제 실행 파일에서 뽑은 앞머리들. 둘 다 이미지 안에서 유일했다.
 const std::uint8_t kActorGetter[] = {
     0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x41, 0x68,
     0x48, 0x8B, 0xD9, 0x48, 0x8B, 0x48, 0x20, 0x0F, 0xB7, 0x41};
-
-const std::uint8_t kSpawnGround[] = {
-    0x4C, 0x8B, 0xDC, 0x49, 0x89, 0x5B, 0x08, 0x49, 0x89, 0x6B,
-    0x10, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48,
-    0x81, 0xEC, 0x50, 0x01};
 
 std::vector<std::uint8_t> image_with(const std::uint8_t* body, std::size_t n,
                                      std::size_t at, std::size_t total = 4096) {
@@ -50,19 +44,6 @@ TEST(find_actor_getter_fails_when_ambiguous) {
     }
     std::uint64_t rva = 0;
     CHECK(!find_actor_getter_rva(img, &rva));
-}
-
-TEST(find_spawn_ground_returns_its_offset) {
-    const auto img = image_with(kSpawnGround, sizeof(kSpawnGround), 0x120);
-    std::uint64_t rva = 0;
-    CHECK(find_spawn_ground_rva(img, &rva));
-    CHECK_EQ(rva, 0x120u);
-}
-
-TEST(find_spawn_ground_fails_when_absent) {
-    const std::vector<std::uint8_t> img(4096, 0xCC);
-    std::uint64_t rva = 0;
-    CHECK(!find_spawn_ground_rva(img, &rva));
 }
 
 // 조회 함수는 타입에 따라 다른 것을 돌려준다 - 클라이언트 쪽과
@@ -644,8 +625,7 @@ TEST(find_entity_lookup_fails_without_the_anchor) {
 
 // 세션이 없으면 요청 자체를 걸지 않는다.
 TEST(request_refuses_without_a_session) {
-    const float pos[3] = {0.0f, 0.0f, 0.0f};
-    CHECK(!cdtb::game::request_spawn(0, 50001, 1, pos));
+    CHECK(!cdtb::game::request_give(0, 50001, 1));
     CHECK(!cdtb::game::spawn_pending(cdtb::game::DriveLane::Item));
 }
 

@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "game/camera.h"
 #include "game/grant.h"
 #include "game/specguard.h"
 #include "game/items.h"
@@ -32,15 +31,9 @@ int g_pick = -1;
 std::uintptr_t g_hand_session = 0;
 int g_item_key = 50001;      // 화살
 int g_count = 1;
-// 카메라 좌표를 넘기면 시선 쪽에 생겨 발밑이 아니다. 게임이 위치를
-// 스스로 정하는지 시험할 수 있게 둔다 - 역직렬화가 위치 필드를
-// 기본값으로 초기화하는 코드가 있었다.
-bool g_let_game_pick_pos = false;
-
 bool g_called = false;
 bool g_call_ok = false;
 std::uint32_t g_my_serial = 0;   // 이 창이 마지막으로 건 요청 번호
-bool g_last_to_inventory = true;
 Notice g_notice;            // 결과 줄. 문구가 바뀔 때만 시각을 찍는다
 
 // 담금질과 장비 연마. 아이템을 바꾸면 상한에 맞춰 잘린다.
@@ -59,16 +52,6 @@ int g_gem_slot = -1;        // 팝업이 고른 보석을 넣을 칸
 game::SpawnOutcome g_outcome;
 
 constexpr float kIconSize = 24.0f;
-
-// 게임이 위치를 페이로드로 받는다. PlayerCameraComponent 의 +0x360
-// 을 읽는데, 실측에서 아이템이 화면 정중앙에 생겼다 - 카메라의
-// 초점 좌표다(그 점이 크로스헤어에 투영된다). 캐릭터 발밑 좌표는
-// 아직 못 찾았다. 인벤토리 지급은 위치가 필요 없으므로 그쪽이 낫다.
-bool camera_position(float out[3]) {
-    const auto& set = game::cameras();
-    if (set.player_component == 0) return false;
-    return game::read_world_position(set.player_component, out);
-}
 
 // 키로 아이템을 찾는다. 없으면 nullptr.
 const game::ItemCatalogEntry* entry_of(std::uint32_t key) {
@@ -459,27 +442,16 @@ void draw_grant_panel(bool* open) {
                                     g_count)) {
         blocked = "키는 0이 아니어야 하고 개수는 1 이상이어야 합니다";
     }
-    // 훅이 안 선 것도 이유다. 예전엔 '넣기' 가 이유 없이 회색이었고 '떨구기' 는
-    // 눌린 뒤 "2초" 라는 거짓 진단을 냈다.
+    // 훅이 안 선 것도 이유다. 예전엔 '넣기' 가 이유 없이 회색이었다.
     const char* blocked_give =
         game::give_ready() ? nullptr : "지급 경로(후킹)가 아직 준비되지 않았습니다";
-    const char* blocked_spawn =
-        game::spawn_ready() ? nullptr : "바닥 스폰 경로가 아직 준비되지 않았습니다";
     if (blocked != nullptr) {
         ImGui::TextColored(col::kWarn, "%s", blocked);
-    } else {
-        if (blocked_give != nullptr) {
-            ImGui::TextColored(col::kWarn, "%s", blocked_give);
-        }
-        if (blocked_spawn != nullptr) {
-            ImGui::TextColored(col::kWarn, "%s", blocked_spawn);
-        }
+    } else if (blocked_give != nullptr) {
+        ImGui::TextColored(col::kWarn, "%s", blocked_give);
     }
 
     // --- 버튼 -------------------------------------------------------
-    float pos[3]{};
-    const bool have_pos = camera_position(pos);
-
     ImGui::BeginDisabled(blocked != nullptr || blocked_give != nullptr);
     if (ImGui::Button("인벤토리에 넣기", ImVec2(150.0f, 0.0f))) {
         const auto key = static_cast<std::uint32_t>(g_item_key);
@@ -519,41 +491,8 @@ void draw_grant_panel(bool* open) {
         g_called = true;
         // 누르면 이전 결과를 지운다 - 같은 문구가 반복돼도 시각이 다시 찍히게
         notice_clear(&g_notice);
-        g_last_to_inventory = true;
     }
     ImGui::EndDisabled();
-    flow_same_line(150.0f);
-
-    ImGui::BeginDisabled(blocked != nullptr || blocked_spawn != nullptr ||
-                         (!have_pos && !g_let_game_pick_pos));
-    if (ImGui::Button("조준한 곳에 떨구기", ImVec2(150.0f, 0.0f))) {
-        if (g_let_game_pick_pos) {
-            pos[0] = 0.0f;
-            pos[1] = 0.0f;
-            pos[2] = 0.0f;
-        }
-        // 렌더 스레드에서 직접 부르면 죽는다. 요청만 걸고 TLS 가 선
-        // 게임 스레드가 집어 간다.
-        g_call_ok = game::request_spawn(
-            seen[g_pick], static_cast<std::uint32_t>(g_item_key), g_count, pos);
-        if (g_call_ok) g_my_serial = game::last_request_serial();
-        g_called = true;
-        notice_clear(&g_notice);
-        g_last_to_inventory = false;
-    }
-    ImGui::EndDisabled();
-    flow_same_line(text_width("위치를 게임에 맡기기") + ImGui::GetFrameHeight() +
-                   ImGui::GetStyle().ItemInnerSpacing.x);
-    ImGui::Checkbox("위치를 게임에 맡기기", &g_let_game_pick_pos);
-    if (g_let_game_pick_pos) {
-        ImGui::TextDisabled("(0,0,0) 을 넘깁니다 - 게임이 발밑을 잡아 주는지 시험");
-    } else if (!have_pos) {
-        ImGui::TextDisabled("좌표 대기 중");
-    } else {
-        // 읽는 값은 카메라의 초점 좌표다 - 그래서 화면 정중앙,
-        // 크로스헤어 자리에 생긴다. 캐릭터 발밑 좌표는 아직 못 찾았다.
-        ImGui::TextDisabled("화면 중앙(크로스헤어) 자리에 생깁니다");
-    }
 
     // 게이트는 눌렀든 안 눌렀든 낸다. 물려 있으면 다음에 눌러도 거부된다.
     const bool gate_held = draw_drive_gate();
@@ -592,12 +531,9 @@ void draw_grant_panel(bool* open) {
             std::snprintf(buf, sizeof(buf), "게임 안에서 죽었습니다 0x%X",
                           g_outcome.seh);
             text = buf;
-        } else if (g_last_to_inventory) {
-            lv = NoticeLevel::Ok;
-            text = "인벤토리에 넣었습니다";
         } else {
             lv = NoticeLevel::Ok;
-            text = "조준한 곳에 떨궜습니다";
+            text = "인벤토리에 넣었습니다";
         }
         if (std::strcmp(text, g_notice.text) != 0) {
             notice_set(&g_notice, lv, "{}", text);
@@ -611,11 +547,6 @@ void draw_grant_panel(bool* open) {
     // 자동 선택이 맞는 것을 실측으로 확인했으므로 접어 둔다. 틀릴
     // 때만 열면 된다.
     if (collapsing_header("grant.advanced", "고급")) {
-        const auto& msg = game::spawn_message();
-        if (msg.handler != 0) {
-            ImGui::TextDisabled("바닥 스폰 ID %u · 처리기 0x%llX", msg.id,
-                                static_cast<unsigned long long>(msg.handler));
-        }
         if (g_hand_session != 0 && ImGui::SmallButton("자동으로 다시 고르기")) {
             g_hand_session = 0;
         }
@@ -678,10 +609,6 @@ void draw_grant_panel(bool* open) {
                 }
             }
             ImGui::EndTable();
-        }
-        if (have_pos) {
-            ImGui::TextDisabled("카메라 좌표 %.1f, %.1f, %.1f", pos[0], pos[1],
-                                pos[2]);
         }
     }
     ImGui::End();

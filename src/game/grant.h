@@ -22,12 +22,6 @@ namespace cdtb::game {
 bool find_actor_getter_rva(const std::vector<std::uint8_t>& image,
                            std::uint64_t* rva_out);
 
-// 바닥에 아이템을 떨구는 실제 작업 함수를 찾는다. 프로덕션 호출자는 없다 -
-// 바닥 떨구기 추적을 지운 뒤(2026-09-10) tests/grant_tests.cpp 만 패턴 탐색
-// 검증에 쓴다. 참조 수 스캔이 죽은 코드로 집어도 지우지 말 것.
-bool find_spawn_ground_rva(const std::vector<std::uint8_t>& image,
-                           std::uint64_t* rva_out);
-
 // 스레드의 작업 디스패처. 여기 진입점이 안전한 실행 지점이다.
 //
 // 호출 스택을 떠서 찾았다 - 스레드 본체가 이 함수를 부르고, 이
@@ -260,7 +254,7 @@ std::uintptr_t drive_fault_session();
 // 실행 자체는 여전히 한 번에 하나다(게임 스레드 실행 지점·쿨다운).
 // 나누는 것은 **걸어 두는 칸**과 그 상태 표시다.
 enum class DriveLane {
-    Item = 0,       // 아이템 지급·바닥 스폰·내구도
+    Item = 0,       // 아이템 지급·내구도
     Companion = 1,  // 동반자 구동(획득·거두기·부적 사용·메시지)
 };
 inline constexpr int kDriveLaneCount = 2;
@@ -352,15 +346,7 @@ struct SpawnOutcome {
     std::uint32_t serial = 0;   // 어느 요청의 결과인가. request_* 가 매긴다
 };
 
-// 아이템을 발밑 바닥에 떨군다. 인벤토리에서 버리기와 같은 루틴이라
-// 게임이 평소에도 도는 경로다.
-//
-// **반드시 게임 스레드에서 불러야 한다.** 렌더 훅이 그 스레드다.
-//
-// 잘못된 대상으로 부르면 게임 안에서 죽는다 - 실측에서 0xC0000005
-// 가 났고 오버레이가 통째로 내려갔다. 예외를 안에서 막고 결과로
-// 돌려준다. 돌려주는 값은 "부를 조건이 됐는가" 다.
-// 지금 이 스레드가 그 작업을 할 수 있는가.
+// 지금 이 스레드가 게임의 작업 함수를 부를 수 있는가.
 //
 // 작업 함수 안쪽이 TLS 를 쓴다 - gs:[0x58] 의 배열에서 슬롯을 꺼내
 // 거기에 쓴다. 렌더 스레드에는 그 블록이 없어서 널을 참조하고 죽는다.
@@ -513,11 +499,6 @@ bool request_endurance(std::uintptr_t session, std::uint16_t a,
                        std::uint16_t b);
 bool endurance_ready();
 
-// 요청을 걸어 둔다. 실제 호출은 TLS 가 준비된 게임 스레드에서 한다.
-// 렌더 스레드에서 부르면 죽는다.
-bool request_spawn(std::uintptr_t session, std::uint32_t item_key,
-                   std::int64_t count, const float pos[3]);
-
 // ----------------------------------------------------------------------
 // 동반자 등록 가능 여부 검사 (등록 자체가 아니다)
 //
@@ -601,11 +582,9 @@ inline bool outcome_is_mine(const SpawnOutcome& o, std::uint32_t my_serial) {
 // 비어 있거나 널이면 "(확인 중)". out 은 늘 종료된다(n 은 1 이상).
 void short_class_name(const char* mangled, char* out, std::size_t n);
 
-// 바닥 스폰 메시지를 해석해 둔다.
-bool spawn_resolve_message(const mem::Rtti& rtti, const mem::Reader& reader);
-const CheatMessage& spawn_message();
-
-// 부를 준비가 됐는가.
-bool spawn_ready();
+// 지급 경로가 쓰는 것들을 해석해 둔다 - TrItemValue 생성자와 내구도 메시지.
+// (예전 이름은 `spawn_resolve_message` 였다. 바닥 떨구기를 걷어낸 뒤
+//  이름만 남아 오해를 샀다 - 2026-09-18.)
+bool grant_resolve_messages(const mem::Rtti& rtti, const mem::Reader& reader);
 
 }  // namespace cdtb::game
