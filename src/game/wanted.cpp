@@ -1,5 +1,7 @@
 #include "game/wanted.h"
 
+#include <windows.h>   // GetTickCount64 - 재탐색 간격을 막는 데 쓴다
+
 #include <cstring>
 #include <string>
 
@@ -68,6 +70,19 @@ double bounty_from_raw(std::uint64_t raw) {
 
 bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (comp_alive(reader)) return true;
+
+    // 월드 밖에서는 아직 없다. 설치 지점에서 한 번만 부르고 끝냈더니
+    // 시작 때 등록표 둘만 보고 포기했고, 그 뒤로 영영 못 찾았다 -
+    // 화면에 벌금 칸이 통째로 안 그려졌다(2026-09-18).
+    //
+    // 그래서 여기서 스스로 다시 본다. 다만 힙 전수 탐색이라 비싸므로
+    // **월드 안일 때만, 15초에 한 번만** 돈다(clan.cpp 와 같은 규칙).
+    if (pick_drive_session(reader) == 0) return false;
+    static std::uint64_t s_last_ms = 0;
+    const std::uint64_t now = ::GetTickCount64();
+    if (s_last_ms != 0 && now - s_last_ms < 15000) return false;
+    s_last_ms = now;
+
     // 힙 전수 탐색이라 비싸다. 죽었을 때만 다시 돈다.
     //
     // **"+0x30 이 0 이 아니다" 로는 못 가른다.** 등록표 쪽 객체에도

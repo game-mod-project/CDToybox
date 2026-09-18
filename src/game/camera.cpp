@@ -322,6 +322,11 @@ void auto_analysis_loop() {
         const PrefetchScope prefetch_scope(rtti, "통과");
         t = step("힙 훑기", t);
 
+        // 벌금 사슬의 컴포넌트. 월드 밖에서는 아직 없으므로 통과마다
+        // 다시 본다 - 안에서 스스로 15초에 한 번으로 막는다.
+        wanted_component_find(rtti, reader);
+        t = step("수배 컴포넌트", t);
+
         // 아이템 표도 여기서 읽는다. 350MB 이미지와 힙 전수 조사를
         // 두 번 할 이유가 없어 이미 그것을 한 이 루프에 얹는다.
         // 준비되면 스스로 즉시 빠진다.
