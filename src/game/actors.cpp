@@ -71,9 +71,17 @@ bool find_actor_manager(const mem::Reader& reader, const mem::Rtti& rtti,
     // 목록이 계속 비어 보인다 - 실측 2026-09-07: 월드 진입 전에 잡은
     // 매니저를 그대로 물고 있어 액터가 1개로 나왔다(직전 세션 1703).
     // 액터를 가장 많이 들고 있는 것을 고른다.
+    //
+    // **상한을 넉넉히 둔다.** 예전에는 8이었는데, 컴퓨터를 다시 켠 뒤 힙이
+    // 위쪽(0x5F5...)으로 올라가자 vtable 값을 우연히 담은 **낮은 주소의 가짜
+    // 후보 10개**가 앞을 다 차지해 진짜 매니저(11번째)를 영영 못 봤다 - 월드
+    // 안인데도 "매니저를 못 찾았습니다" 가 떴다(실측 2026-09-18).
+    // 후보 목록은 **주소 순**이라 힙이 어디에 잡히느냐로 순위가 바뀐다.
+    // 검사(looks_like + walk)는 값싸므로 상한을 늘려도 가짜는 그냥 걸러진다.
     std::uintptr_t best = 0;
     std::size_t best_n = 0;
-    for (const auto addr : rtti.instances_of_class(kActorManagerClass, 8)) {
+    for (const auto addr :
+         rtti.instances_of_class(kActorManagerClass, kActorManagerCandidates)) {
         if (!looks_like_actor_manager(reader, addr)) continue;
         std::vector<std::uintptr_t> ptrs;
         if (!walk_actor_pointers(reader, addr, &ptrs)) continue;

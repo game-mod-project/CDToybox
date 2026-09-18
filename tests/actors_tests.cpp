@@ -163,3 +163,11 @@ TEST(actors_snapshot_fills_handles) {
         CHECK(la.handle == 0xB0100001u || la.handle == 0xB0100002u);
     }
 }
+
+TEST(actor_manager_candidate_cap_leaves_room_for_junk) {
+    // 후보는 **주소 순**이라, 힙이 위쪽에 잡히는 실행에서는 vtable 값을 우연히
+    // 담은 낮은 주소의 가짜가 앞자리를 다 차지한다. 2026-09-18 실측에서 진짜
+    // 매니저가 11번째였고, 그때 상한이 8이라 월드 안인데도 못 찾았다.
+    // 이 상수를 다시 줄이면 그 증상이 그대로 돌아온다.
+    CHECK(cdtb::game::kActorManagerCandidates >= 64);
+}

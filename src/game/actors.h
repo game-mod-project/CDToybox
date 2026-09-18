@@ -53,6 +53,11 @@ inline constexpr std::size_t kActorBucketLast = 0x338;   // 포함
 inline constexpr std::size_t kActorBucketStride = 0x10;
 inline constexpr std::uint32_t kActorBucketMaxCap = 8192;
 
+// 매니저 후보를 몇 개까지 받아 볼 것인가. **8이면 안 된다** - 후보는 주소
+// 순이고, 힙이 위쪽에 잡히는 실행에서는 vtable 값을 우연히 담은 낮은 주소의
+// 가짜가 앞자리를 다 차지한다(2026-09-18 실측: 진짜가 11번째였다).
+inline constexpr std::size_t kActorManagerCandidates = 256;
+
 
 // --- 액터 핸들 ---------------------------------------------------------
 //
