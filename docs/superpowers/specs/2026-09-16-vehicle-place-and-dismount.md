@@ -322,10 +322,15 @@ IsInTown(액터) = (지금 들어와 있는 구역 중 하나라도 RegionInfo._
 | `_isAccompanyAllowed == 0` | **1** | `Region_Abyss`(행 728) |
 | `_forbiddenMercenaryKeyList` 비지 않음 | **1** | `Region_Abyss`, 6개 |
 
-**여기서 §2 의 추정 하나가 깨진다.** `IsVehicleAllowedInEnteredRegion` 의 재료가
-`_forbiddenMercenaryKeyList` 라고 적었는데, 그 목록은 **어비스에만** 있다.
-지도의 붉은 구역이 그 목록에서 오는 것이 **아니다.** 붉은 구역 레버는 다시
-찾아야 한다.
+**여기서 §2 의 추정 하나가 깨진다 — 절반만.** `_forbiddenMercenaryKeyList` 가
+비어 있지 않은 구역은 **어비스 하나뿐**이다. 그러니 지도의 붉은 구역이 이
+목록에서 오는 것은 **아니다.**
+
+> **2026-09-18 정정:** "그 칸은 아무것도 안 정한다" 까지 간 것은 지나쳤다.
+> 호출 시점 오류 **`eErrNoCallVehicleMercenaryRegion`("호출할 수 없는
+> 지역입니다")** 이 정확히 그 목록을 읽는다(§5-1-2). 칸은 맞았고, 다만 그
+> 목록을 채운 구역이 하나뿐이라 **화면에서 자주 보이는 붉은 구역은 다른
+> 관문**이라는 뜻이다.
 
 새로 나온 칸 하나: **`_isAccompanyAllowed`(+0x91)**. 구역 진입 처리
 (RVA 0x2B02205 부근)가 이것을 보고 0이면 동반자를 **강제 해산**시킨다 —
@@ -393,6 +398,113 @@ u16 _key · str _stringKey · u8 _isBlocked · {현지화} _displayRegionName
 · u8 _limitVehicleRun · **u8 _isTown** · u8 _isWild · u8 _isUIMapDisable
 · u8 _isNonePlayZone · 목록 _forbiddenMercenaryKeyList · u8 _isWorldMapRoadPathFindable ...
 ```
+
+### 5-1-2. 호출 시점 거부 셋 — 지붕 · 실내 · 지역 (2026-09-18, 정적 실측)
+
+§1 의 `failmessageinfo` 조건과 **다른 층**이다. 그쪽은 "부를 수 있나" 를 조건식
+으로 보고, 이쪽은 호출 처리기가 위치를 보고 `eErrNo*` 를 돌려준다. 사용자가
+A.T.A.G. 에서 본 **"지붕 위에서는 호출할 수 없습니다"** 가 이쪽이다.
+
+#### 오류 이름 뒤에 **한국어 설명이 붙어 있다**
+
+이것이 이 층을 푸는 열쇠였다. 등록 루프(RVA 0x2150380~)가 오류마다 이렇게 부른다:
+
+```asm
+lea rcx, [rip+...]   ; 그 오류의 u32 **값이 담기는 전역 슬롯**
+lea r8,  [rip+...]   ; 사람이 읽는 설명 (한국어)
+lea rdx, [rip+...]   ; "eErrNo..." 이름
+```
+
+그래서 이름 문자열 **바로 뒤**가 설명이고, 값 슬롯을 `xref_data.py` 로 역참조
+하면 **그 오류를 내는 코드가 한 곳**으로 좁혀진다.
+
+| 오류 | 화면 문구 | 값 슬롯 | 내는 곳 |
+|---|---|---|---|
+| `eErrNoCallVehicleMercenaryIndoor` | 실내에서는 호출할 수 없습니다. | 모듈 `+0x6BBCBC0` | RVA `0x9635FE` |
+| `eErrNoCallVehicleMercenaryOnRoof` | **지붕 위에서는 호출할 수 없습니다.** | 모듈 `+0x6BBCBC4` | RVA `0x96365B` |
+| `eErrNoCallVehicleMercenaryRegion` | 호출할 수 없는 지역입니다. | 모듈 `+0x6BBCBC8` | RVA `0x9626BB` |
+
+#### 무엇을 보고 판정하나
+
+**실내·지붕**은 한 함수(RVA 0x963420 ~ 0x963698) 안의 연속된 두 검사다.
+
+```asm
+; 실내
+0x009635D2  mov rax, [rip -> 0x6C2D9F0]      ; 월드 매니저 전역
+0x009635D9  mov rcx, [rax + 0xD8]
+0x009635F1  mov rcx, [rcx + 0x10]
+0x009635F5  call 0x39309A0                   ; 실내인가
+0x009635FA  test al, al
+0x009635FC  je   계속                         ; <- 여기
+; 지붕
+0x0096362F  mov rcx, rdi
+0x00963632  call 0x1755F10                   ; 대상의 반경/높이(float)
+0x0096364F  mov rcx, rbx                     ; 월드 매니저
+0x0096364C  mov rdx, r15                     ; 위치 float3
+0x00963652  call 0x7479E0                    ; **지붕 위인가**
+0x00963657  test al, al
+0x00963659  je   0x963665                    ; <- 여기
+```
+
+둘 다 **표 값이 아니라 월드 질의**다. 데이터로는 못 끈다.
+
+**지역**은 다르다 — 어제 찾은 구역 목록을 그대로 쓴다:
+
+```asm
+0x009626A3  mov rcx, [홀더 + 0x1A0]          ; 구역 상태 컴포넌트
+0x009626AE  mov rcx, [rcx + 0x38]            ; 겹쳐 있는 구역 목록
+0x009626B2  call 0x16E4380                   ; _forbiddenMercenaryKeyList 를 읽는다
+0x009626B7  test al, al
+0x009626B9  je   0x962730                    ; <- 여기
+```
+
+`0x16E4380` 은 `regfield.py` 전수 조사에서 `_forbiddenMercenaryKeyList` ·
+`.cnt` · `_knowledgeInfo` 를 읽는 것으로 이미 잡혀 있던 함수다. 그래서 §5-1-1
+(다)의 "그 칸은 아무것도 안 정한다" 는 정정한다 — **이 오류의 재료가 맞다.**
+
+#### 우회는 분기 한 바이트
+
+셋 다 `je`(`74`)를 `jmp`(`EB`)로 바꾸면 오류를 건너뛴다. 전부 **정렬된 8바이트
+창 안**에 들어가므로 `skillgate` 의 원자 교환 방식을 그대로 쓴다(원본 8바이트
+대조 포함 — 갱신마다 RVA 가 밀리므로 확인 폭은 창 전체로).
+
+| 무엇 | 자리 | 바꿀 것 | 창 8바이트(원본) |
+|---|---|---|---|
+| 실내 | RVA `0x9635FC` | `74` → `EB` | `FC 02 84 C0 74 0E 8B 05` (창 `0x9635F8`, +4) |
+| 지붕 | RVA `0x963659` | `74` → `EB` | `C0 74 0A 8B 05 63 95 25` (창 `0x963658`, +1) |
+| 지역 | RVA `0x9626B9` | `74` → `EB` | `C0 74 75 8B 05 07 A5 25` (창 `0x9626B8`, +1) |
+
+> ⚠️ 아직 **게임에서 시험 안 했다.** 위치가 진짜로 안 되는 자리면 소환 뒤에
+> 탈것이 지형에 박히거나 곧바로 사라질 수 있다. 토글로 두고 사용자가 켤 때만
+> 건다.
+
+### 5-1-3. A.T.A.G. 는 **지식 기반이 아니다** (2026-09-18, 게임 데이터 전수)
+
+드래곤은 `Knowledge_CallDragon` → `Skill_CallDragon` 이 있어야 호출 모션이
+나갔다(§`2026-09-16-dragon-external-research.md`). A.T.A.G. 도 같은지 물었고,
+표를 전수로 뒤졌다.
+
+| 표 | `Call` 계열 |
+|---|---|
+| `knowledgeinfo` (6,713행) | `Knowledge_CallVehicle` · `Knowledge_CallDragon` — **둘뿐** |
+| `skill` (2,061행) | `Skill_CallVehicle` · `Skill_CallDragon` — **둘뿐** |
+
+`skill` 의 WarMachine 계열 12개는 `Skill_WarMachine_Dash/Gatling/Cannon/EMP/
+Laser/FlameThrower/…` 로 **전부 전투기**다. **A.T.A.G. 를 부르는 지식도 스킬도
+없다.**
+
+그래서 A.T.A.G. 는 호출 스킬 없이 **명부 레코드 + 휠 슬롯**으로 돈다 — 스토리로
+명부에 들어온 동반자(번호 1000602 · 종행 6818)의 휠 칸이 이미 채워져 있었고,
+막던 것은 **동반자 카테고리 한 칸**뿐이었다(정본 §2-1). 라이브 확인:
+
+```
+슬롯[24] key 1000006 (메인)      허용 {1,5}
+슬롯[25] key 1000019 (A.T.A.G.)  허용 {3,4}
+슬롯[26] key 1000020 (드래곤)    허용 {2}
+```
+
+**드래곤식 지식 조작은 A.T.A.G. 에 적용할 것이 없다.** "얻어걸린 것" 이 아니라
+경로가 애초에 다르다.
 
 ### 5-2. 손댈 자리 (제안)
 
