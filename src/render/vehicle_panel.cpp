@@ -10,9 +10,12 @@
 #include <string>
 #include <vector>
 
+#include "game/actors.h"
 #include "game/companion.h"
 #include "game/callgate.h"
 #include "game/grant.h"
+#include "game/knowledge.h"
+#include "game/mountslot.h"
 #include "game/mountvital.h"
 #include "game/player.h"
 #include "game/reserveslot.h"
@@ -288,16 +291,140 @@ void draw_vehicle_panel(bool* open) {
         }
     }
 
+    // ------------------------------------------------- 휠 슬롯 등록 · 호출 지식
+    //
+    // 등록 표의 주인을 **직접** 잡는다(`[[플레이어+0x68]+0x110]`). 예전에는 조회
+    // 함수를 후킹해 인자로 받았는데, 홀더에 그대로 달려 있다 - 그래서 게임이
+    // 갱신돼 `dragondiag` 가 통째로 꺼져 있어도(2944 가 그 상태다) 여기는 산다.
+    if (collapsing_header("veh.slot", "휠 슬롯 등록 · 호출 지식")) {
+        // 드래곤 호출은 **지식 한 칸**이 준다(Knowledge_CallDragon 행 5025 ->
+        // Skill_CallDragon). 소환이 막히던 진짜 관문 중 하나다.
+        // **번호를 박지 않는다** - `call_knowledge` 가 이름으로 찾아 준다.
+        // 원소 휠에서 번호를 잘못 골라 여러 번 헛돈 전례가 있다(STATUS §1.20).
+        game::CallKnow ck[game::kCallKnowCount];
+        if (game::call_knowledge(reader, ck)) {
+            const game::CallKnow& kd = ck[game::kCallKnowDragon];
+            if (kd.number >= 0) {
+                ImGui::Text("%s (행 %d)", kd.label, kd.number);
+                ImGui::SameLine();
+                if (kd.level >= 1) {
+                    ImGui::TextColored(col::kOk, "배움 (레벨 %d)", kd.level);
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("되돌리기##know")) {
+                        const game::KnowWrite w =
+                            game::know_forget(reader, kd.number);
+                        notice_set(&s_note, w.changed > 0 ? NoticeLevel::Ok
+                                                          : NoticeLevel::Bad,
+                                   "되돌림 realm {}개", w.changed);
+                    }
+                } else {
+                    ImGui::TextColored(col::kWarn,
+                                       "안 배움 - 호출 모션이 안 나갑니다");
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("배우기##know")) {
+                        const game::KnowWrite w =
+                            game::know_learn(reader, kd.number, 1);
+                        notice_set(&s_note, w.changed > 0 ? NoticeLevel::Ok
+                                                          : NoticeLevel::Bad,
+                                   "배움 realm {}개", w.changed);
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s -> 붙을 스킬 %d.\n"
+                                      "이 지식이 없으면 휠에서 눌러도 호출 모션\n"
+                                      "자체가 안 나갑니다. 세이브에 남습니다.",
+                                      kd.internal, kd.apply_skill);
+                }
+                ImGui::Separator();
+            }
+        }
+
+        const std::uintptr_t pch = game::player_char();
+        const game::SlotTable st = game::mount_slots(reader, pch);
+        if (!st.ready) {
+            ImGui::TextDisabled("%s", st.note);
+        } else {
+            ImGui::TextDisabled("칸 65535 는 '휠에 안 올라감' 입니다."
+                                " 생명 -1 은 '게임이 정함' 이고 껍데기(1)보다 낫습니다.");
+            for (const game::SlotCategory& c : st.cats) {
+                const std::string title = game::slot_category_name(c.cat);
+                if (!ImGui::TreeNode(title.c_str())) continue;
+                for (const game::SlotEntry& e : c.entries) {
+                    ImGui::PushID(static_cast<int>(c.cat) * 1000 + e.nth);
+                    ImGui::Text("[%d] 종행 %-5u %-28s 칸 %-6u 생명 %-8d 성장 %d",
+                                e.nth, e.species,
+                                e.name.empty() ? "-" : e.name.c_str(),
+                                e.slot, e.hp, e.grow);
+                    ImGui::SameLine();
+                    if (game::slot_registered(e.slot)) {
+                        if (ImGui::SmallButton("해제")) {
+                            if (game::mount_slot_set(reader, pch, c.cat, e.nth,
+                                                     game::kSlotNone)) {
+                                notice_set(&s_note, NoticeLevel::Ok, "해제했습니다");
+                            } else {
+                                notice_set(&s_note, NoticeLevel::Bad, "실패");
+                            }
+                        }
+                    } else {
+                        static int s_slot = 0;
+                        ImGui::SetNextItemWidth(70.0f);
+                        ImGui::InputInt("칸##set", &s_slot);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("등록")) {
+                            if (s_slot < 0) s_slot = 0;
+                            if (game::mount_slot_set(
+                                    reader, pch, c.cat, e.nth,
+                                    static_cast<std::uint16_t>(s_slot))) {
+                                notice_set(&s_note, NoticeLevel::Ok,
+                                           "칸 {} 에 올렸습니다", s_slot);
+                            } else {
+                                notice_set(&s_note, NoticeLevel::Bad, "실패");
+                            }
+                        }
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::PushID(static_cast<int>(c.cat));
+                if (ImGui::SmallButton("추천대로 정리")) {
+                    const int n = game::mount_slot_autofix(reader, pch, c.cat);
+                    notice_set(&s_note, NoticeLevel::Ok, "{}개를 바꿨습니다", n);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "종마다 **하나만** 올리고 같은 종의 나머지는 내립니다.\n"
+                        "올릴 칸은 그 종이 지금 쓰는 칸을 그대로 씁니다 -\n"
+                        "아무도 안 올라가 있으면 건드리지 않습니다.\n\n"
+                        "\"어느 쪽이 나은가\" 판정은 믿을 것이 못 됩니다.\n"
+                        "값을 보고 직접 고르시는 편이 확실합니다.");
+                }
+                ImGui::PopID();
+                ImGui::TreePop();
+            }
+        }
+    }
+
     // ------------------------------------------------------- 체력 · 스태미나
     //
     // 탈것도 플레이어와 **같은 게이지 사슬**이다(2026-09-18 실측). 다만 체력은
     // 약 2초마다 권위 쪽이 덮어쓰고 스태미나는 안 덮는다 - 그래서 체력에는
     // "고정" 이 필요하다. 자세한 근거는 `game/mountvital.h`.
     if (collapsing_header("veh.vital", "체력 · 스태미나")) {
+        // **살아있는 액터 목록은 부탁해야 걷는다**(`live_actors_tick` 은 요청
+        // 플래그가 섰을 때만 돈다). 부탁하지 않으면 탈것이 눈앞에 서 있어도
+        // 목록이 비어 "없습니다" 가 뜬다 - 실제로 그렇게 나왔다(2026-09-18).
+        //
+        // 걷기는 힙 전수라 비싸므로 **매 프레임 부탁하지 않는다.** 목록이 비어
+        // 있고 세대가 우리가 마지막으로 부탁한 뒤로 바뀌었을 때만 다시 부탁한다.
         const std::vector<game::MountVital> mv = game::mount_vitals(reader);
         if (mv.empty()) {
-            ImGui::TextDisabled("월드에 나와 있는 동반자가 없습니다."
-                                " 탈것을 부른 뒤 다시 보십시오.");
+            static std::uint64_t s_asked_gen = ~0ULL;
+            const std::uint64_t gen = game::live_actors_generation();
+            if (s_asked_gen != gen) {
+                s_asked_gen = gen;
+                game::live_actors_request_refresh();
+            }
+            ImGui::TextDisabled("살아있는 목록을 받아오는 중입니다…"
+                                " (탈것을 부른 직후면 잠시 걸립니다)");
         } else {
             const game::MountPin pin = game::mount_pin_get();
             ImGui::TextDisabled("값은 1000배 척도입니다 (2,500,000 = 생명 2500)");
@@ -371,6 +498,10 @@ void draw_vehicle_panel(bool* open) {
             }
             ImGui::TextDisabled("체력·스태미나만 건드립니다. 나머지 게이지는"
                                 " 뜻을 확인하지 않아 그대로 둡니다.");
+            // 탈것을 새로 부르거나 돌려보낸 뒤 목록을 맞추는 길.
+            if (ImGui::SmallButton("목록 새로 고침")) {
+                game::live_actors_request_refresh();
+            }
         }
     }
 
