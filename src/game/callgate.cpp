@@ -1,3 +1,6 @@
+// @build 1.0.0.2944  관문 넷 전부 재도출(오류 문구 -> 값 슬롯 -> 내는 곳)
+//   근거: specs/2026-09-18-game-update-2944.md §8
+
 #include "game/callgate.h"
 
 #include <mutex>

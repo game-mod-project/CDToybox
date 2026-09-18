@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2944  kRegionMgrGlobalRva 를 표 이름 `regioninfo` 에서 재도출
+//   RegionInfo 필드 오프셋(+0x74 +0x75 +0x08)은 2944 에서 그대로다
 #include <cstddef>
 #include <cstdint>
 

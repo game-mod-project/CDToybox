@@ -1,5 +1,9 @@
 #pragma once
 
+// @build 1.0.0.2850  **매니저 전역 셋을 2944 에서 재도출하지 못했다.**
+//   포인터 은행 안이라 정적으로 안 갈린다 - cdtb_probe 로 확정할 것.
+//   낡은 값이면 know_mgr_sane 이 걸러 "표를 아직 못 잡았습니다" 로 끝난다.
+//   근거: specs/2026-09-18-game-update-2944.md §6
 #include <cstddef>
 #include <cstdint>
 #include <string>
