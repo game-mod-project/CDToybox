@@ -192,6 +192,20 @@ std::string Rtti::class_of_object(std::uintptr_t object) const {
     return class_of_vtable(static_cast<std::uintptr_t>(vt));
 }
 
+// 힙을 읽는 창. 예전에는 영역을 **통째로** 버퍼에 담았고, 그래서
+// `reg.size > 256MB` 인 영역을 아예 건너뛰었다 - 버퍼가 그만큼 커지기 때문이다.
+//
+// **그 상한이 이 게임에서는 치명적이었다.** 힙이 29GB 이고 큰 영역이 흔한데,
+// 거기 든 객체는 RTTI 탐색에 영영 안 보였다. 2026-09-18 실측: 수배 컴포넌트가
+// 0x466ADF717A0 에 vtable·`+0x30` 까지 멀쩡한 채 있는데 `instances_of_class` 는
+// 0곳을 돌려줬고, 화면은 "월드에 들어가면 저절로 잡습니다" 를 영원히 띄웠다.
+// 같은 상한이 걸린 `heapfind`(29GB 중 11.4GB 만 훑었다)와 비교해 갈랐다.
+//
+// 창으로 자르면 메모리는 창 하나만 쓰고, 한 창이 읽기에 실패해도 **그 창만**
+// 잃는다(예전에는 영역 하나가 통째로 날아갔다). 창 크기는 8의 배수라 8바이트
+// 정렬 격자가 창 경계에서 어긋나지 않는다.
+constexpr std::size_t kScanWindow = 32u << 20;
+
 std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
                                                       std::size_t max) const {
     std::vector<std::uintptr_t> out;
@@ -199,18 +213,21 @@ std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
 
     std::vector<std::uint8_t> buf;
     for (const auto& reg : r_.heap_regions()) {
-        if (reg.size == 0 || reg.size > (256u << 20)) continue;
-
-        buf.assign(reg.size, 0);
+        if (reg.size == 0) continue;
         const auto base = reinterpret_cast<std::uintptr_t>(reg.begin);
-        if (!r_.read(base, buf.data(), buf.size())) continue;
-
-        for (std::size_t i = 0; i + 8 <= buf.size(); i += 8) {
-            std::uint64_t v;
-            std::memcpy(&v, buf.data() + i, 8);
-            if (v != vtable) continue;
-            out.push_back(base + i);
-            if (out.size() >= max) return out;
+        for (std::size_t done = 0; done < reg.size; done += kScanWindow) {
+            const std::size_t n = (reg.size - done < kScanWindow)
+                                      ? (reg.size - done)
+                                      : kScanWindow;
+            buf.resize(n);
+            if (!r_.read(base + done, buf.data(), n)) continue;
+            for (std::size_t i = 0; i + 8 <= n; i += 8) {
+                std::uint64_t v;
+                std::memcpy(&v, buf.data() + i, 8);
+                if (v != vtable) continue;
+                out.push_back(base + done + i);
+                if (out.size() >= max) return out;
+            }
         }
     }
     return out;
@@ -310,13 +327,16 @@ std::vector<Rtti::Found> Rtti::scan_heap(
 
     std::vector<std::uint8_t> buf;
     for (const auto& reg : r_.heap_regions()) {
-        if (reg.size == 0 || reg.size > (256u << 20)) continue;
+        if (reg.size == 0) continue;
         const auto base = reinterpret_cast<std::uintptr_t>(reg.begin);
+        for (std::size_t done = 0; done < reg.size; done += kScanWindow) {
+        const std::size_t wn = (reg.size - done < kScanWindow)
+                                   ? (reg.size - done)
+                                   : kScanWindow;
+        buf.resize(wn);
+        if (!r_.read(base + done, buf.data(), wn)) continue;
 
-        buf.assign(reg.size, 0);
-        if (!r_.read(base, buf.data(), buf.size())) continue;
-
-        for (std::size_t i = 0; i + 8 <= buf.size(); i += 8) {
+        for (std::size_t i = 0; i + 8 <= wn; i += 8) {
             std::uint64_t v;
             std::memcpy(&v, buf.data() + i, 8);
             if (v < mb || v >= me) continue;
@@ -333,9 +353,10 @@ std::vector<Rtti::Found> Rtti::scan_heap(
                     if (capped_out != nullptr) *capped_out = capped;
                 }
             }
-            out.push_back(Found{base + i, *it->second});
+            out.push_back(Found{base + done + i, *it->second});
             if (out.size() >= max) return out;
             if (per_class_max != 0 && capped == classes) return out;
+        }
         }
     }
     return out;
