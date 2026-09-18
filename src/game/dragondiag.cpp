@@ -8,6 +8,9 @@
 #include <cstdint>
 #include <cstring>
 
+#include <string>
+
+#include "core/file_version.h"
 #include "core/log.h"
 #include "game/wheelfill.h"
 #include "mem/hook.h"
@@ -16,6 +19,29 @@
 
 namespace cdtb::game {
 namespace {
+
+// ============================================================ 갱신 안전망
+//
+// **이 파일의 RVA 는 갱신을 못 넘긴다.** 다른 사이트 패처(callgate·skillgate·
+// specguard·spawnguard)는 원본 바이트를 확인한 뒤 걸지만, 여기는 확인 없이
+// 바로 후킹했다. 밀린 주소에 디투어를 걸면 게임이 **그 자리에서 죽는다.**
+//
+// 그런데 여기 자리들은 문자열·패턴 앵커가 없다 - 전부 **라이브 추적**으로
+// 얻었다(훅을 걸고 호출자 로그를 떠서 함수 시작을 되짚었다). 그래서 갱신마다
+// 자동으로 다시 짚을 길이 없다. 남은 답은 하나다: **모르는 빌드에서는 아예
+// 걸지 않는다.**
+//
+// 확인은 둘로 한다.
+//   1. **빌드 대조** - 아래 상수를 뽑은 그 빌드가 아니면 전부 건너뛴다.
+//      다시 짚은 사람이 이 문자열을 같이 고치면 그때 다시 켜진다.
+//   2. **함수 시작 대조**(`.pdata`) - 빌드 문자열만 고치고 RVA 하나를 빠뜨린
+//      경우의 그물이다. 그 RVA 가 예외 디렉터리의 함수 시작이 아니면 그 훅만
+//      건너뛴다. MinHook 은 함수 중간에도 걸리므로 이 검사가 필요하다.
+//
+// 2026-09-18: 게임이 2944 로 올라가 이 모듈은 **전부 건너뛰는 상태**다. 조사는
+// 끝났고(드래곤 해결) 남은 실사용은 `wheel_fill` 의 쓰기 훅(`kFindRva`) 하나라,
+// 열 자리를 다 되짚는 대신 그 하나가 필요해질 때 라이브로 짚기로 했다.
+inline constexpr const char* kDerivedForBuild = "1.0.0.2850";
 
 // 1.0.0.2850 확정 RVA (2026-09-14~15 재확인, disasm.py).
 //
@@ -541,15 +567,83 @@ void* __fastcall det_spawn(void* rcx, void* out, std::uint32_t r8, void* r9,
 
 }  // namespace
 
+namespace {
+
+// 지금 돌고 있는 exe 의 버전 문자열. 못 읽으면 빈 문자열.
+std::string running_build() {
+    wchar_t path[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, path, MAX_PATH) == 0) return {};
+    std::string out;
+    return file_version_string(path, &out) ? out : std::string();
+}
+
+// 이 RVA 가 PE 예외 디렉터리(.pdata)에 **함수 시작**으로 들어 있는가.
+//
+// MinHook 은 함수 중간에도 걸린다 - 밀린 주소가 우연히 코드 한복판을 가리키면
+// 조용히 설치되고 그 함수를 실행할 때 죽는다. 표는 BeginAddress 오름차순이라
+// 이진 탐색으로 본다. 자기 프로세스의 로드된 이미지라 직접 읽어도 된다.
+bool is_function_start(std::uintptr_t base, std::uint64_t rva) {
+    if (base == 0) return false;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    const auto* nt =
+        reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    const auto& dir =
+        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    if (dir.VirtualAddress == 0 || dir.Size < sizeof(RUNTIME_FUNCTION)) {
+        return false;
+    }
+    const auto* fns =
+        reinterpret_cast<const RUNTIME_FUNCTION*>(base + dir.VirtualAddress);
+    const std::size_t n = dir.Size / sizeof(RUNTIME_FUNCTION);
+    const auto want = static_cast<DWORD>(rva);
+    std::size_t lo = 0, hi = n;
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        if (fns[mid].BeginAddress < want) {
+            lo = mid + 1;
+        } else if (fns[mid].BeginAddress > want) {
+            hi = mid;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 걸기 전에 한 자리를 확인한다. 통과하면 참.
+bool site_ok(std::uintptr_t base, std::uint64_t rva, const char* what) {
+    if (is_function_start(base, rva)) return true;
+    log::warnf("소환 진단 '{}' 건너뜀 - RVA 0x{:X} 가 이 빌드에서 함수 시작이"
+               " 아니다(.pdata)",
+               what, rva);
+    return false;
+}
+
+}  // namespace
+
 bool dragondiag_install(const mem::Reader& reader) {
     if (g_installed.load(std::memory_order_acquire)) return true;
 
     g_base = reader.module_base();
     if (g_base == 0) return false;
+
+    // **모르는 빌드에서는 아무것도 안 건다.** 이 파일의 자리는 라이브 추적으로
+    // 얻은 것이라 갱신되면 다시 짚기 전까지 맞는다는 근거가 없다.
+    const std::string build = running_build();
+    if (build != kDerivedForBuild) {
+        log::warnf("소환 진단: 이 빌드({})에서는 안 건다 - 주소는 {} 기준이다."
+                   " 다시 짚은 뒤 kDerivedForBuild 를 같이 고칠 것",
+                   build.empty() ? "알 수 없음" : build, kDerivedForBuild);
+        return false;
+    }
     if (!mem::hook_init()) return false;
 
     g_errfn_target = reinterpret_cast<void*>(g_base + kErrFnRva);
-    const bool errfn_ok = mem::hook_install(
+    const bool errfn_ok =
+        site_ok(g_base, kErrFnRva, "거부코드") &&
+        mem::hook_install(
         g_errfn_target, &det_errfn, reinterpret_cast<void**>(&g_orig_errfn));
     if (!errfn_ok) {
         log::errorf("거부코드 후킹 실패 (RVA 0x{:X})", kErrFnRva);
@@ -557,7 +651,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_disp_target = reinterpret_cast<void*>(g_base + kDispRva);
-    const bool disp_ok = mem::hook_install(
+    const bool disp_ok =
+        site_ok(g_base, kDispRva, "소환배달") &&
+        mem::hook_install(
         g_disp_target, &det_disp, reinterpret_cast<void**>(&g_orig_disp));
     if (!disp_ok) {
         log::errorf("소환배달 후킹 실패 (RVA 0x{:X})", kDispRva);
@@ -565,7 +661,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_find_target = reinterpret_cast<void*>(g_base + kFindRva);
-    const bool find_ok = mem::hook_install(
+    const bool find_ok =
+        site_ok(g_base, kFindRva, "등록조회") &&
+        mem::hook_install(
         g_find_target, &det_find, reinterpret_cast<void**>(&g_orig_find));
     if (!find_ok) {
         log::errorf("등록조회 후킹 실패 (RVA 0x{:X})", kFindRva);
@@ -573,7 +671,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_altfn_target = reinterpret_cast<void*>(g_base + kAltFnRva);
-    const bool altfn_ok = mem::hook_install(
+    const bool altfn_ok =
+        site_ok(g_base, kAltFnRva, "다른경로") &&
+        mem::hook_install(
         g_altfn_target, &det_altfn, reinterpret_cast<void**>(&g_orig_altfn));
     if (!altfn_ok) {
         log::errorf("다른경로 후킹 실패 (RVA 0x{:X})", kAltFnRva);
@@ -581,7 +681,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_wheelfn_target = reinterpret_cast<void*>(g_base + kWheelFnRva);
-    const bool wheelfn_ok = mem::hook_install(
+    const bool wheelfn_ok =
+        site_ok(g_base, kWheelFnRva, "휠함수") &&
+        mem::hook_install(
         g_wheelfn_target, &det_wheelfn,
         reinterpret_cast<void**>(&g_orig_wheelfn));
     if (!wheelfn_ok) {
@@ -590,7 +692,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_callfn_target = reinterpret_cast<void*>(g_base + kCallFnRva);
-    const bool callfn_ok = mem::hook_install(
+    const bool callfn_ok =
+        site_ok(g_base, kCallFnRva, "호출함수") &&
+        mem::hook_install(
         g_callfn_target, &det_callfn,
         reinterpret_cast<void**>(&g_orig_callfn));
     if (!callfn_ok) {
@@ -599,7 +703,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_gate_target = reinterpret_cast<void*>(g_base + kGateRva);
-    const bool gate_ok = mem::hook_install(
+    const bool gate_ok =
+        site_ok(g_base, kGateRva, "소환게이트") &&
+        mem::hook_install(
         g_gate_target, &det_gate, reinterpret_cast<void**>(&g_orig_gate));
     if (!gate_ok) {
         log::errorf("소환게이트 후킹 실패 (RVA 0x{:X})", kGateRva);
@@ -607,7 +713,9 @@ bool dragondiag_install(const mem::Reader& reader) {
     }
 
     g_spawn_target = reinterpret_cast<void*>(g_base + kSpawnRva);
-    const bool spawn_ok = mem::hook_install(
+    const bool spawn_ok =
+        site_ok(g_base, kSpawnRva, "스폰") &&
+        mem::hook_install(
         g_spawn_target, &det_spawn, reinterpret_cast<void**>(&g_orig_spawn));
     if (!spawn_ok) {
         log::errorf("스폰 후킹 실패 (RVA 0x{:X})", kSpawnRva);
