@@ -33,6 +33,31 @@ std::uint64_t bounty_to_raw(double shown);
 // 저장 값 -> 화면 값.
 double bounty_from_raw(std::uint64_t raw);
 
+// --- 벌금 읽기·쓰기 ------------------------------------------------------
+//
+// 사슬은 둘뿐이다. 컴포넌트를 한 번 찾아 두면 그 뒤는 공짜다.
+//
+//   ClientSelfWantedActorComponent  -> +0x30 -> WantedRegionData -> +0x30
+//
+// RTTI 로 컴포넌트를 찾는 것은 힙 전수 탐색이라 5분씩 걸린다. 그래서
+// 시작에 한 번만 하고(인벤토리 컴포넌트와 같은 방식) 주소를 들고 있는다.
+//
+// **주소는 세이브를 다시 부르면 죽는다.** 읽기·쓰기 전에 `+0x00` vtable 을
+// 대조해 죽은 주소를 거른다 - 실제로 한 번 죽은 주소를 읽어 좌표 뭉치를
+// 볼 뻔했다. 죽었으면 스스로 다시 찾는다.
+
+// 컴포넌트를 찾는다. 이미 찾았고 아직 살아 있으면 아무것도 안 한다.
+bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 쓸 준비가 됐는가. 화면이 칸을 가리는 데 쓴다.
+bool bounty_ready(const mem::Reader& reader);
+
+// 현재 지역의 벌금(저장 값). 못 읽으면 false.
+bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out);
+
+// 현재 지역의 벌금을 쓴다. 0 이면 지우는 것이다.
+bool bounty_write(const mem::Reader& reader, std::uint64_t raw);
+
 // 수배(범죄수치) 치트 메시지.
 //
 // 게임이 개발용 요청 메시지를 그대로 들고 있다. 우리는 새 경로를

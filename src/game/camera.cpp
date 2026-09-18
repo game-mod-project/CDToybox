@@ -289,6 +289,9 @@ void auto_analysis_loop() {
     companion_resolve_messages(rtti, reader);
     // 수배 해제(2646). 해석만 한다 - 보내는 것은 화면에서 누를 때다.
     wanted_resolve(rtti, reader);
+    // 벌금 사슬의 컴포넌트. 힙 전수 탐색이라 여기서 한 번만 한다
+    // (세이브를 다시 부르면 죽고, 그때는 화면 쪽에서 다시 찾는다).
+    wanted_component_find(rtti, reader);
     companion_hire_trace_install(reader);
     companion_spawn_trace_install(reader);
     // 좌표는 카메라 쪽만 안다. 동반자 코드에 넣어 준다.

@@ -672,21 +672,63 @@ void draw_wanted(const mem::Reader& reader) {
     static int s_handle = static_cast<int>(game::kAssumedPlayerHandle);
     static int s_flag = 0;
 
-    if (!game::wanted_ready()) {
-        ImGui::TextDisabled("수배 메시지를 아직 못 잡았습니다 - 월드에"
-                            " 들어가면 저절로 잡습니다.");
+    // 메시지를 못 잡았어도 벌금 칸은 그려야 한다. 요청하신 기능은
+    // 벌금 쪽이고, 그것은 메시지가 아니라 제자리 쓰기라 메시지 해석에
+    // 매달릴 이유가 없다.
+    const bool msg_ok = game::wanted_ready();
+
+    // --- 벌금 (요청하신 기능) ---
+    //
+    // 화면의 "데메니스 왕국 / 벌금 N.NN" 을 그대로 읽고 쓴다. 제자리
+    // 쓰기이고, 쓰면 화면이 바로 따라온다(실측 2026-09-18).
+    std::uint64_t raw = 0;
+    if (game::bounty_read(reader, &raw)) {
+        static double s_want = -1.0;
+        const double now = game::bounty_from_raw(raw);
+        if (s_want < 0.0) s_want = now;   // 처음엔 현재 값으로 맞춰 둔다
+
+        ImGui::Text("현재 벌금  %.2f", now);
+        ImGui::SetNextItemWidth(120.0f);
+        ImGui::InputDouble("설정값", &s_want, 1.0, 10.0, "%.2f");
+        ImGui::SameLine();
+        if (ImGui::Button("적용")) {
+            // notice_set 의 형식 문자열은 컴파일 타임 상수여야 한다 -
+            // 삼항으로 고르면 std::format_string 이 안 받는다.
+            if (game::bounty_write(reader, game::bounty_to_raw(s_want))) {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "벌금을 {:.2f} 로 썼습니다", s_want);
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("0 으로 지우기")) {
+            if (game::bounty_write(reader, 0)) {
+                s_want = 0.0;
+                notice_set(&s_note, NoticeLevel::Ok, "벌금을 지웠습니다");
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
+            }
+        }
+        ImGui::TextDisabled("상한 %.2f (게임이 그 위로 안 올라갑니다)",
+                            game::bounty_from_raw(game::kBountyMaxRaw));
+    } else {
+        ImGui::TextDisabled("벌금을 아직 못 읽었습니다 - 월드에 들어가면"
+                            " 저절로 잡습니다.");
+    }
+
+    ImGui::Separator();
+    if (!msg_ok) {
+        // 메시지 쪽은 부수 기능이다. 못 잡아도 벌금은 위에서 이미 된다.
+        ImGui::TextDisabled("추격 끊기 메시지는 아직 못 잡았습니다.");
         notice_draw(s_note);
         return;
     }
-
-    ImGui::TextWrapped(
-        "게임의 개발용 요청을 그대로 보냅니다. 지급과 같은 대기열을 타므로"
-        " 게임 스레드에서 실행됩니다.");
     // 이름을 사실에 맞춘다. 처음엔 "수배 해제" 로 불렀는데, 눌러 보니
     // 지우는 것은 목격자·범죄 기록뿐이고 **벌금은 그대로였다**(사용자
     // 화면 확인 2026-09-18). 쫓기는 중에 추격을 끊는 용도다.
-    ImGui::TextDisabled("아래 '목격 상태 지우기' 는 벌금을 안 줄입니다 -"
-                        " 목격자와 범죄 기록만 비웁니다.");
+    ImGui::TextDisabled("아래는 벌금과 다른 것입니다 - 목격자와 범죄"
+                        " 기록만 비웁니다.");
     ImGui::TextDisabled("메시지 ID %u", game::wanted_clear_message_id());
 
     ImGui::SetNextItemWidth(140.0f);
