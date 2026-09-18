@@ -135,10 +135,18 @@ bool callgate_set(int gate, bool on, const char** why) {
 }
 
 void callgate_probe() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    // 패널이 열려 있는 동안 **매 프레임** 불린다. 볼 것이 없으면 모듈 조회도
+    // 안 한다(skillgate_probe 와 같은 모양).
+    bool any = false;
+    for (int g = 0; g < kCallGateCount; ++g) {
+        if (!g_slot[g].probed) any = true;
+    }
+    if (!any) return;
+
     const mem::LocalReader reader;
     const std::uintptr_t mb = reader.module_base();
     const std::size_t ms = reader.module_size();
-    std::lock_guard<std::mutex> lk(g_mtx);
     for (int g = 0; g < kCallGateCount; ++g) {
         if (g_slot[g].probed) continue;   // 이미 결론이 난 것은 다시 안 본다
         const GateIo io = gate_local_io(reader, kGates[g].name);
