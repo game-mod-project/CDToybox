@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "game/companion.h"
+#include "game/callgate.h"
 #include "game/grant.h"
 #include "game/player.h"
 #include "game/reserveslot.h"
@@ -148,6 +149,42 @@ void draw_vehicle_panel(bool* open) {
                     "\"호출할 수 없는 장소입니다\" 로 막히던 자리입니다.");
             }
         }
+
+        // 서 있는 자리를 보고 거부하는 층. 위 항목(표 값)과 달리 **게임 코드**를
+        // 건드린다 - 판정이 월드 질의라 데이터로는 못 끈다(2026-09-18,
+        // specs/2026-09-16-vehicle-place-and-dismount.md §5-1-2).
+        ImGui::Separator();
+        ImGui::TextDisabled("서 있는 자리로 막히는 것 (게임 코드에 씁니다)");
+        game::callgate_probe();
+        for (int g = 0; g < game::kCallGateCount; ++g) {
+            const game::CallGateInfo ci = game::callgate_info(g);
+            if (ci.unsupported) {
+                ImGui::TextColored(col::kBad, "%s - 이 게임 빌드에서는 못 씁니다",
+                                   ci.name);
+                continue;
+            }
+            bool on = ci.on;
+            ImGui::PushID(g);
+            if (ImGui::Checkbox(ci.name, &on)) {
+                const char* why = "";
+                if (game::callgate_set(g, on, &why)) {
+                    notice_set(&s_note, NoticeLevel::Ok, "{} {}", ci.name,
+                               on ? "켰습니다" : "껐습니다");
+                } else {
+                    notice_set(&s_note, NoticeLevel::Bad, "{} 실패 - {}", ci.name,
+                               why);
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s\n\n거부로 가는 분기 한 바이트를 건너뛰게"
+                                  " 합니다(je -> jmp).\n모드를 내리면 되돌립니다.",
+                                  ci.what);
+            }
+            ImGui::PopID();
+        }
+        ImGui::TextColored(col::kWarn,
+                           "정말 못 서는 자리에서 부르면 탈것이 지형에 박히거나"
+                           " 곧 사라질 수 있습니다");
     }
 
     // ---------------------------------------------------------------- 시간

@@ -51,6 +51,7 @@
 #include "game/player.h"
 #include "game/specguard.h"
 #include "game/spawnguard.h"
+#include "game/callgate.h"
 #include "game/dragondiag.h"
 #include "game/towngate.h"
 #include "game/wheelfill.h"
@@ -718,6 +719,7 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::wheel_teardown();
         cdtb::game::mount_timer_teardown();
         cdtb::game::call_place_teardown();
+        cdtb::game::callgate_remove_all();
         cdtb::game::town_gate_teardown();
         cdtb::game::disguise_teardown();
         input::cursor_guard_sync(false);
