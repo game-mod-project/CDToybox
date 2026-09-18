@@ -1,6 +1,7 @@
 #include "game/wanted.h"
 
 #include <cstring>
+#include <string>
 
 #include "core/log.h"
 #include "game/grant.h"
@@ -21,7 +22,10 @@ constexpr std::size_t kCompRegion = 0x30;   // -> WantedRegionData
 constexpr std::size_t kRegionFine = 0x30;   // u64 벌금 (2자리 고정소수)
 
 std::uintptr_t g_comp = 0;
-std::uintptr_t g_comp_vtable = 0;   // 처음 찾을 때 적어 두고 대조에 쓴다
+std::uintptr_t g_comp_vtable = 0;    // 처음 찾을 때 적어 두고 대조에 쓴다
+// 지역 객체의 vtable. 찾을 때 RTTI 이름으로 확인해 둔 것이라, 그 뒤에는
+// 이름 조회 없이 이 값만 대조하면 된다(매 프레임 도는 자리다).
+std::uintptr_t g_region_vtable = 0;
 
 // 살아 있는가. 세이브를 다시 부르면 그 자리에 다른 객체가 들어앉는다 -
 // 실제로 좌표·쿼터니언 뭉치를 읽을 뻔했다. vtable 로 거른다.
@@ -34,9 +38,14 @@ bool comp_alive(const mem::Reader& reader) {
 
 // 컴포넌트 -> 현재 지역의 WantedRegionData. 0 이면 못 얻은 것이다.
 std::uintptr_t region_of(const mem::Reader& reader) {
-    if (!comp_alive(reader)) return 0;
+    if (!comp_alive(reader) || g_region_vtable == 0) return 0;
     std::uint64_t r = 0;
-    if (!reader.read_value(g_comp + kCompRegion, &r)) return 0;
+    if (!reader.read_value(g_comp + kCompRegion, &r) || r == 0) return 0;
+    // 지역 객체도 대조한다. 지역을 옮기면 이 포인터가 갈리는데, 그때
+    // 엉뚱한 자리에 쓰면 게임을 팅긴다.
+    std::uint64_t vt = 0;
+    if (!reader.read_value(static_cast<std::uintptr_t>(r), &vt)) return 0;
+    if (static_cast<std::uintptr_t>(vt) != g_region_vtable) return 0;
     return static_cast<std::uintptr_t>(r);
 }
 
@@ -60,18 +69,39 @@ double bounty_from_raw(std::uint64_t raw) {
 bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (comp_alive(reader)) return true;
     // 힙 전수 탐색이라 비싸다. 죽었을 때만 다시 돈다.
-    for (const auto addr : rtti.instances_of_class(kCompClass, 8)) {
+    //
+    // **"+0x30 이 0 이 아니다" 로는 못 가른다.** 등록표 쪽 객체에도
+    // vtable 이 들어 있고 그 자리에 무엇이든 들어 있어서, 첫 후보를
+    // 집었더니 0x1804F8C0(지역 0x1574128)이 나왔다 - 실제 힙 객체는
+    // 0x22D5AC7A100 꼴이다. 벌금 칸이 통째로 안 그려졌다(2026-09-18).
+    //
+    // 그래서 **가리키는 것의 클래스 이름을 대조한다.** 주소 범위로
+    // 추측하지 않는다.
+    for (const auto addr : rtti.instances_of_class(kCompClass, 16)) {
         std::uint64_t vt = 0;
         if (!reader.read_value(addr, &vt) || vt == 0) continue;
-        // 지역 사슬이 실제로 걸리는 것만 고른다. 등록표에도 vtable 이
-        // 들어 있어 배치만 보면 그것이 따라온다.
         std::uint64_t region = 0;
         if (!reader.read_value(addr + kCompRegion, &region) || region == 0) {
             continue;
         }
+        const std::string cls =
+            rtti.class_of_object(static_cast<std::uintptr_t>(region));
+        if (cls.find("WantedRegionData") == std::string::npos) {
+            log::infof("수배 컴포넌트 후보 0x{:X} 는 건너뛴다 - +0x30 이 "
+                       "{} 다",
+                       addr, cls.empty() ? "이름 없음" : cls);
+            continue;
+        }
+        std::uint64_t rvt = 0;
+        if (!reader.read_value(static_cast<std::uintptr_t>(region), &rvt) ||
+            rvt == 0) {
+            continue;
+        }
         g_comp = addr;
         g_comp_vtable = static_cast<std::uintptr_t>(vt);
-        log::infof("수배 컴포넌트: 0x{:X} (지역 0x{:X})", g_comp, region);
+        g_region_vtable = static_cast<std::uintptr_t>(rvt);
+        log::infof("수배 컴포넌트: 0x{:X} (지역 0x{:X} {})", g_comp, region,
+                   cls);
         return true;
     }
     log::warnf("수배 컴포넌트를 못 찾았다 (월드 안입니까?)");
