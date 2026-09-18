@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2944  kHireCheckRva 재도출(고용 작업 +0x3F3, 교차검증 통과)
+//   근거: specs/2026-09-18-game-update-2944.md §3
 #include <cstddef>
 #include <cstdint>
 #include <vector>

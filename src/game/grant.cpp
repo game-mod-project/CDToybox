@@ -1,3 +1,8 @@
+// @build 1.0.0.2850  **kGoodDriveSites 는 2944 에서 죽었다** - 옛 자리가
+//   lea 이고, 액터 조회 호출이 681곳이라 정적으로 못 가린다. 로그의
+//   `구동 건너뜀: 확인되지 않은 자리 +<RVA>` 를 ini `drive_sites` 에
+//   적으면 다시 빌드 없이 산다. AOB 패턴들은 자가 치유한다.
+
 #include "game/grant.h"
 
 #include <windows.h>

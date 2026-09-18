@@ -1,3 +1,8 @@
+// @build 1.0.0.2944  kLookupRva · kEmptyRecordRva 재도출(짝 97곳 만장일치)
+// @build 1.0.0.2850  **kCallSiteRva 는 재도출 못 했다** - 옛 자리가 je 라
+//   install 이 안전하게 거부한다. 2944 에서는 게임이 스스로 가드하는 것으로
+//   보인다. 근거: specs/2026-09-18-game-update-2944.md §5
+
 #include "game/spawnguard.h"
 
 #include <windows.h>

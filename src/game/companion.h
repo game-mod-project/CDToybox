@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2944  작업 함수 둘 · 메시지 ID 다섯 전부 이 빌드에서 재도출
+//   근거: specs/2026-09-18-game-update-2944.md §2 §3
 #include <cstddef>
 #include <cstdint>
 #include <string>

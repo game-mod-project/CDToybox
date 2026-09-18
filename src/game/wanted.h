@@ -1,5 +1,8 @@
 #pragma once
 
+// @build 1.0.0.2944  메시지 ID 둘 재도출 + 런타임 해석값을 쓰도록 고쳤다
+// @build 1.0.0.2850  **런타임 구조 오프셋(+0x30 사슬)은 아직 2850 실측이다**
+//   근거: specs/2026-09-18-game-update-2944.md §2 §10
 #include <cstddef>
 #include <cstdint>
 

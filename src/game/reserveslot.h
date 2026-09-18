@@ -1,5 +1,8 @@
 #pragma once
 
+// @build 1.0.0.2944  kCondMgrGlobalRva 재도출(표 이름 `conditioninfo`)
+// @build 1.0.0.2850  **kSlotMgrGlobalRva 는 미도출** - 표 이름 `reserveslot`
+//   을 조회 함수가 안 만져 정적으로 안 닿는다. cdtb_probe 로 확정할 것.
 #include <cstddef>
 #include <cstdint>
 

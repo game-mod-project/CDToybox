@@ -71,6 +71,20 @@ py -3.14 tools/rtti/recheck.py "E:\SteamLibrary\steamapps\common\Crimson Desert\
 - 메시지 ID 상수 위에 `// @class <RTTI 이름>` 한 줄. 이름은 갱신을 안 타므로
   그 한 줄이 재도출의 전부가 된다.
 - 유일하지 않아도 되는 AOB 위에 `// @aob <n|any> - 이유`.
+- **고정 RVA 를 든 파일 머리에 `// @build <버전>`.** 그 파일의 상수가 **어느
+  exe 를 보고 정한 것인지**를 적는다. 한 파일에 섞여 있으면 두 줄을 다 적는다
+  (도구가 둘 다 모아 보여 주고, 하나라도 실행 중인 exe 와 다르면 `**` 로 뜬다).
+  2944 대응에서 제일 비쌌던 것이 "무엇을 다시 짚어야 하는지" 를 알아내는
+  시간이었다 - 이 한 줄이 그것을 없앤다.
+
+도구의 6번 절이 그 도장을 모아 **출처 지도**를 낸다. 도장이 없는 파일은
+"출처 기록이 없다" 로 따로 뜬다. 지금(2944) 상태:
+
+```
+OK  callgate.cpp · companion.h · grant.h · skillgate.cpp · towngate.h
+**  dragondiag.cpp · grant.cpp · knowledge.h · reserveslot.{h,cpp} · roster.h
+**  spawnguard.cpp · specguard.cpp · wanted.h        (2850·2944 섞임)
+```
 
 ### 0.5 로그를 읽을 때는 `.prev` 를 기준선으로 쓴다 (2026-09-18 추가)
 

@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2850  **세션 전역 A/B 는 2850 에서도 미확정이다.**
+//   행 검증에 걸려 0xFFFF 로 닫히므로 영향은 "(주인공)" 표시뿐.
 #include <cstdint>
 #include <string>
 #include <vector>

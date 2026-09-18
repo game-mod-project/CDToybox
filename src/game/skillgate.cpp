@@ -1,3 +1,6 @@
+// @build 1.0.0.2944  관문 둘 재도출. 창 8바이트는 2850 과 동일(자리만 밀렸다)
+//   근거: specs/2026-09-18-game-update-2944.md §8
+
 #include "game/skillgate.h"
 
 #include <windows.h>

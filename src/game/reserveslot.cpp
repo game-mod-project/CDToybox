@@ -1,3 +1,7 @@
+// @build 1.0.0.2850  **kCondNameTableRva · kEmptyStrRva · kGpvMgrGlobalRva
+//   셋 다 2944 미도출.** read_mgr 의 정합성 검사가 걸러 "표를 아직 못
+//   잡았습니다" 로 안전하게 끝난다.
+
 #include "game/reserveslot.h"
 
 #include <cstdio>

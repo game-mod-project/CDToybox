@@ -19,6 +19,10 @@
 4. **고정 RVA** - `k*Rva` 를 뽑아 그 자리에 지금 무엇이 있는지 디스어셈블해
    보여 준다. 판정은 사람이 한다(자동 판정은 거짓 안심을 만든다).
 
+5. **상수 중복** - 이름 있는 상수와 같은 값이 숫자로 박힌 자리. 상수를 고쳐도 안 따라온다.
+6. **빌드 도장** - `// @build <버전>` 으로 그 파일의 상수가 어느 exe 를 보고
+   정한 것인지 적어 둔다. 도장이 없는 파일은 출처가 없다는 뜻이다.
+
 무엇을 안 보는가
 ----------------
 데이터 전역(매니저 포인터 은행)은 정적으로 확정되지 않는다. 2850·2944 두 번
@@ -46,6 +50,12 @@ PAT_DECL = re.compile(
 PAT_ID = re.compile(
     r'//\s*@class\s+(\S+)[^\n]*\n\s*inline\s+constexpr\s+std::uint16_t\s+'
     r'(\w+)\s*=\s*(\d+)\s*;')
+# 파일이 어느 빌드 기준인지 적어 둔 도장. 둘 다 받는다:
+#   // @build 1.0.0.2944            (주석)
+#   kDerivedForBuild = "1.0.0.2850" (런타임에도 쓰는 상수)
+PAT_BUILD = re.compile(
+    r'//\s*@build\s+([0-9.]+)|kDerivedForBuild\s*=\s*"([0-9.]+)"')
+
 # 이름 있는 상수와 같은 값이 숫자로 박힌 자리를 찾는 데 쓴다.
 PAT_LIT = re.compile(r'0[xX]([0-9A-Fa-f]{6,8})\b')
 PAT_RVA = re.compile(
@@ -297,6 +307,34 @@ def main():
     print('   (%d곳. ** 는 진짜 사용처라 상수로 바꿀 것. 로그 라벨은 문구만 낡는다)'
           % dup)
 
+    print()
+    print('=' * 72)
+    print('6. 빌드 도장 - 이 상수들은 어느 exe 를 보고 정한 것인가')
+    stamped = {}
+    has_rva = set()
+    for p, body in text.items():
+        for m in PAT_RVA.finditer(body):
+            if int(m.group(2), 16) >= 0x1000:
+                has_rva.add(p)
+                break
+        vs = set()
+        for m in PAT_BUILD.finditer(body):
+            vs.add(m.group(1) or m.group(2))
+        if vs:
+            stamped[p] = sorted(vs)
+    cur = file_version(exe)
+    for p in sorted(stamped):
+        vs = stamped[p]
+        ok = (len(vs) == 1 and vs[0] == cur)
+        print('   %s%-34s %s' % ('OK  ' if ok else '**  ',
+                                 rel(root, p), ' · '.join(vs)))
+    naked = sorted(has_rva - set(stamped))
+    if naked:
+        print('   -- 도장이 없는 파일 (고정 RVA 를 들고 있는데 출처 기록이 없다)')
+        for p in naked:
+            print('        %s' % rel(root, p))
+    print('   (실행 중인 exe %s. ** 는 그 빌드를 안 보고 정한 상수라는 뜻이니'
+          ' 4번 표를 그 파일부터 볼 것)' % cur)
     print()
     print('=' * 72)
     print('다음 단계')

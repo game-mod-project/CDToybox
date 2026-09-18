@@ -1,3 +1,8 @@
+// @build 1.0.0.2944  div 사이트 넷 재도출(kDivMem[3] · kDivReg 셋)
+// @build 1.0.0.2850  **가방 렌더 셋(kDivMem[0..2])은 재도출 못 했다** -
+//   그 div 형태가 새 exe 에 없다. opcode 검사가 걸러 4/7 설치로 끝난다.
+//   근거: specs/2026-09-18-game-update-2944.md §4
+
 #include "game/specguard.h"
 #include "game/specguard_tail.h"
 
