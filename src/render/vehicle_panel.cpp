@@ -483,7 +483,7 @@ void draw_vehicle_panel(bool* open) {
                         case game::MountAuthPhase::Scanning:
                             ImGui::TextColored(
                                 col::kWarn,
-                                "  진짜 값을 든 사본을 찾는 중입니다… %.0f초",
+                                "  진짜 값을 든 사본을 찾는 중입니다… %.0f초 (1분쯤 걸립니다)",
                                 game::mount_authority_elapsed_sec());
                             break;
                         case game::MountAuthPhase::Done:
@@ -578,8 +578,8 @@ void draw_vehicle_panel(bool* open) {
                 ImGui::SetTooltip(
                     "탈것을 새로 부르면 사본도 새로 생깁니다. 위 버튼이"
                     " 회색으로 잠기면 눌러 주십시오.\n"
-                    "힙을 통째로 훑지만 **몇 초**면 끝나고, 분석 스레드에서"
-                    " 도므로 게임은 안 멈춥니다.");
+                    "힙을 통째로 훑어 **1분쯤** 걸리고(실측 67.5초), 분석"
+                    " 스레드에서 도므로 게임은 안 멈춥니다.");
             }
             ImGui::SameLine();
             ImGui::TextDisabled("(짝지은 것 %zu)",
