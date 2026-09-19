@@ -264,6 +264,12 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader);
 
 // 탈것·캐릭터가 준비됐는가. 용병 표는 있으면 좋고 없어도 준비로 친다.
 bool roster_ready();
+// 표시명(현지화) 재시도를 **그만뒀는가.** 현지화는 카탈로그보다 늦게 올라와서
+// 붙을 때까지 다시 만드는데(6.24), 끝내 안 올라오면 그 재빌드가 영원히
+// 돈다(2.10.1). 그만두면 목록은 **내부 이름으로** 그대로 보인다.
+bool roster_labels_gave_up();
+// 다시 만들어 보게 한다(창의 [이름 다시 읽기]).
+void roster_labels_rearm();
 
 // 카탈로그를 만들 때 RTTI 로 찾은 `CharacterInfoManager` 인스턴스. 아직 못 찾았으면
 // 0. **고정 전역을 쓰지 말고 이것을 쓴다** - 데이터 전역은 갱신마다 고르지 않게

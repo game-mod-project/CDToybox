@@ -711,8 +711,17 @@ void draw_species_popup() {
 void draw_my_companions_tab() {
     log::Slow slow_tab("내 동반자 탭", 8.0);
     if (!game::clan_ready()) {
-        ImGui::TextDisabled("용병단 컴포넌트를 아직 못 찾았습니다. 월드에 들어간 뒤 잠시 "
-                            "기다리십시오 (배경에서 다시 찾습니다).");
+        // 그만뒀으면 **그렇게 말한다.** 한 번이 47~60초짜리 힙 훑기라 끝이 있고
+        // (TROUBLESHOOTING 2.10.1), 그 뒤에도 "배경에서 다시 찾습니다" 를 띄우면
+        // 영영 기다리게 된다.
+        if (game::clan_find_gave_up()) {
+            ImGui::TextColored(col::kWarn,
+                               "용병단 컴포넌트를 연속으로 못 찾아 그만 찾았습니다.\n"
+                               "월드 안이라면 아래를 눌러 다시 찾아 주십시오.");
+        } else {
+            ImGui::TextDisabled("용병단 컴포넌트를 아직 못 찾았습니다. 월드에 들어간 뒤 잠시 "
+                                "기다리십시오 (배경에서 다시 찾습니다).");
+        }
         if (ImGui::SmallButton("다시 찾기")) {
             if (!game::clan_request_discovery(g_near_reader)) {
                 log::warnf("명부 다시 찾기: 분석이 아직 RTTI 를 넘기지 않아 못 한다");
@@ -1341,8 +1350,20 @@ void draw_roster_panel(bool* open) {
         ImGui::End();
         return;
     }
-    ImGui::TextDisabled(
-        "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
+    // 표시명 재시도를 그만뒀으면 그렇게 말한다(TROUBLESHOOTING 2.10.1) - 안
+    // 그러면 "표시명입니다" 를 띄운 채 이름이 영영 내부 이름인 이유를 알 길이 없다.
+    if (game::roster_labels_gave_up()) {
+        ImGui::TextColored(col::kWarn,
+                           "표시명(현지화)이 끝내 안 올라와 그만 만들었습니다 - "
+                           "이름이 내부 이름으로 보입니다.");
+        if (ImGui::SmallButton("이름 다시 읽기")) game::roster_labels_rearm();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("카탈로그를 다시 만들어 표시명을 붙여 봅니다.");
+        }
+    } else {
+        ImGui::TextDisabled(
+            "이름은 인게임 표시명입니다. 표에 없는 행은 내부 이름만 나옵니다.");
+    }
     ImGui::TextDisabled("키=캐릭터 키 · 행=표 행 · 번호=명부 번호 · 핸들=액터");
 
     if (ImGui::BeginTabBar("roster_tabs")) {

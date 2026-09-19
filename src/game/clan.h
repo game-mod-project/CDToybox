@@ -183,6 +183,11 @@ bool clan_ready();
 // reader 는 재탐색이 끝날 때까지 살아 있어야 한다(정적 리더). 분석 스레드가 아직
 // RTTI 를 넘겨 준 적이 없으면 false.
 bool clan_request_discovery(const mem::Reader& reader);
+// 연속으로 못 찾아 **그만뒀는가.** 한 번이 47~60초짜리 힙 훑기라 끝이 있어야
+// 하고(TROUBLESHOOTING 2.10.1), 멈췄다는 것을 화면이 말해야 한다 - 안 그러면
+// "배경에서 다시 찾습니다" 를 영원히 띄운다. 다시 켜는 것은
+// `clan_request_discovery`(= 창의 [다시 찾기])다.
+bool clan_find_gave_up();
 
 // 캐시가 상했을 때 **배경 스레드**에서 다시 찾게 한다. 모드(DLL)만
 // 켠다 - 그리는 스레드가 10초 넘게 멈추면 안 되기 때문이다. probe 는

@@ -8,6 +8,7 @@
 #include "game/actors.h"
 #include "game/grant.h"
 #include "game/companion.h"
+#include "core/findlimit.h"
 #include "core/log.h"
 #include "core/write_log.h"
 #include "mem/safe_read.h"
@@ -106,6 +107,15 @@ std::atomic<std::uintptr_t> g_clan{0};
 // 화면은 옛 목록을 그대로 쓴다 - 멈추는 것보다 낫다.
 std::atomic<bool> g_bg_rescan{false};      // DLL 만 켠다(probe 는 그냥 훑는다)
 std::atomic<bool> g_rescan_busy{false};
+// 못 찾는 탐색의 끝(TROUBLESHOOTING 2.10.1). 여기에는 **간격조차 없었다** -
+// g_rescan_busy 하나뿐이라, 실패가 이어지면 55초짜리 훑기가 끝나자마자 다시
+// 돌았다. 실측 2026-09-19: 성공하는 판도 한 번에 47.9~60.2초다.
+//
+// **연속 실패만 센다.** 명부 컴포넌트는 동반자가 늘 때마다 게임이 새로
+// 만들므로 성공한 재탐색까지 세면 정당한 재탐색이 막힌다 - 그래서 성공을
+// 갈무리하는 store_component 에서 0 으로 돌린다.
+constexpr int kClanFindTries = 3;
+cdtb::FindLimit g_find{kClanFindTries};
 // 워커는 자기 리더를 쓴다. 호출자의 리더(렌더 프레임의 스택 지역)를 들고 있으면
 // 프레임이 끝난 뒤 사라진 스택으로 가상 호출을 한다(재리뷰 N4). LocalReader 는
 // 상태가 없어 어느 스레드에서 써도 같다.
@@ -121,6 +131,9 @@ std::atomic<const mem::Rtti*> g_discovery_rtti{nullptr};
 // 찾은 컴포넌트를 **한 자리에서** 갈무리한다. 캐시와 g_clan 이
 // 따로 갱신되던 것이 이번 멈춤의 뿌리였다.
 void store_component(bool client, std::uintptr_t found) {
+    // 찾았으면 **연속 실패를 잊는다.** 여기가 두 경로(분석 루프·배경 워커)가
+    // 모두 지나는 한 자리라 여기서 돌린다.
+    g_find.note_success();
     if (client) {
         g_cached_client.store(found, std::memory_order_release);
     } else {
@@ -148,8 +161,12 @@ DWORD WINAPI rescan_worker(LPVOID) {
                        k == 1 ? "클라이언트" : "서버", found,
                        GetTickCount64() - t0);
         } else {
-            log::warnf("명부 컴포넌트 재탐색({}) 실패 - {}ms",
-                       k == 1 ? "클라이언트" : "서버", GetTickCount64() - t0);
+            const bool last = g_find.note_failure();
+            log::warnf("명부 컴포넌트 재탐색({}) 실패 ({}/{}회{}) - {}ms",
+                       k == 1 ? "클라이언트" : "서버", g_find.fails(),
+                       g_find.cap(),
+                       last ? ", **그만 찾는다 - 창에서 [다시 찾기]**" : "",
+                       GetTickCount64() - t0);
         }
     }
     g_rescan_busy.store(false, std::memory_order_release);
@@ -159,6 +176,9 @@ DWORD WINAPI rescan_worker(LPVOID) {
 void request_rescan(const mem::Reader& reader, const mem::Rtti& rtti,
                     bool client) {
     (void)reader;   // 워커는 g_worker_reader 를 쓴다 - 호출자 리더의 수명을 믿지 않는다
+    // 연속으로 못 찾았으면 그만둔다. 캐시가 상한 채로 있으면 부르는 쪽은 매
+    // 프레임 여기로 오므로, 끝이 없으면 55초짜리가 쉬지 않고 이어진다.
+    if (g_find.gave_up()) return;
     g_rescan_rtti = &rtti;
     g_rescan_want[client ? 1 : 0].store(true, std::memory_order_release);
     bool expected = false;
@@ -369,12 +389,18 @@ bool discover_clan(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 2) RTTI 스캔(10~17초)은 월드 안(세션 이름표까지 붙은 뒤)에서만, 30초에 한 번.
     //    월드 밖이면 헛수고고, 안인데 사슬이 비었으면 잠시 뒤 다시 보는 편이 낫다.
     if (pick_drive_session(reader) == 0) return false;
+    // 30초 간격만으로는 부족하다 - 한 번이 **47~60초**라(실측 2026-09-19) 간격이
+    // 비용보다 짧으면 쉬는 것이 아니다. 끝을 둔다(TROUBLESHOOTING 2.10.1).
+    if (!g_find.may_try()) return false;
     static std::uint64_t s_last_scan_ms = 0;
     const std::uint64_t now = ::GetTickCount64();
     if (s_last_scan_ms != 0 && now - s_last_scan_ms < 30000) return false;
     s_last_scan_ms = now;
     if (!find_clan_component(reader, rtti, &c)) {
-        log::infof("동반자 명부: 월드 안인데 RTTI 스캔으로도 못 찾았다 - 30초 뒤 다시");
+        const bool last = g_find.note_failure();
+        log::infof("동반자 명부: 월드 안인데 RTTI 스캔으로도 못 찾았다 ({}/{}회) - {}",
+                   g_find.fails(), g_find.cap(),
+                   last ? "**그만 찾는다 - 창에서 [다시 찾기]**" : "30초 뒤 다시");
         return false;
     }
     g_rtti.store(&rtti, std::memory_order_release);   // g_clan 보다 먼저(R3)
@@ -395,6 +421,11 @@ bool clan_ready() { return g_clan.load(std::memory_order_acquire) != 0; }
 
 bool clan_request_discovery(const mem::Reader& reader) {
     if (clan_ready()) return true;
+    // 이 함수가 곧 **[다시 찾기]** 다 - 사람이 눌렀으니 끝을 다시 연다.
+    if (g_find.gave_up()) {
+        log::infof("동반자 명부: 다시 찾는다 ({}회까지)", g_find.cap());
+    }
+    g_find.rearm();
     // 분석이 아직 RTTI 를 넘기지 않았으면 아무것도 하지 않는다 - 값싼 길도 서버/클라를
     // 가르려면 RTTI 가 필요하고, RTTI 없이 g_clan 만 채우면 복구가 없다(재리뷰 N1·N2).
     const mem::Rtti* t = g_discovery_rtti.load(std::memory_order_acquire);
@@ -413,6 +444,8 @@ bool clan_request_discovery(const mem::Reader& reader) {
     request_rescan(reader, *t, false);   // RTTI 스캔은 배경 워커에서
     return true;
 }
+
+bool clan_find_gave_up() { return !clan_ready() && g_find.gave_up(); }
 
 void enable_background_clan_rescan() {
     g_bg_rescan.store(true, std::memory_order_release);
