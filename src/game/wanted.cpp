@@ -116,34 +116,51 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     //
     // 그래서 **가리키는 것의 클래스 이름을 대조한다.** 주소 범위로
     // 추측하지 않는다.
-    const auto insts = rtti.instances_of_class(kCompClass, 64);
-    const std::size_t n_seen = insts.size();
-    for (const auto addr : insts) {
-        std::uint64_t vt = 0;
-        if (!reader.read_value(addr, &vt) || vt == 0) continue;
-        std::uint64_t region = 0;
-        if (!reader.read_value(addr + kCompRegion, &region) || region == 0) {
-            continue;
+    // 판정을 스캔에 넘겨 **첫 합격에서 멈춘다.** 훑은 수로 64 를 두면 낮은
+    // 주소의 가짜가 앞자리를 다 차지해 진짜가 잘린다(TROUBLESHOOTING 4.33) -
+    // 여기는 위에서 보듯 가짜 후보가 실제로 여럿 걸리는 자리라 특히 그렇다.
+    std::size_t n_seen = 0;
+    const auto hit = rtti.instances_of_class(
+        kCompClass, 1, [&](std::uintptr_t addr) {
+            ++n_seen;
+            std::uint64_t vt = 0;
+            if (!reader.read_value(addr, &vt) || vt == 0) return false;
+            std::uint64_t region = 0;
+            if (!reader.read_value(addr + kCompRegion, &region) ||
+                region == 0) {
+                return false;
+            }
+            const std::string cls =
+                rtti.class_of_object(static_cast<std::uintptr_t>(region));
+            if (cls.find("WantedRegionData") == std::string::npos) {
+                log::infof("수배 컴포넌트 후보 0x{:X} 는 건너뛴다 - +0x30 이 "
+                           "{} 다",
+                           addr, cls.empty() ? "이름 없음" : cls);
+                return false;
+            }
+            std::uint64_t rvt = 0;
+            if (!reader.read_value(static_cast<std::uintptr_t>(region), &rvt) ||
+                rvt == 0) {
+                return false;
+            }
+            return true;
+        });
+    if (!hit.empty()) {
+        const std::uintptr_t addr = hit.front();
+        std::uint64_t vt = 0, region = 0, rvt = 0;
+        // 판정을 통과한 자리라 이 셋은 다시 읽힌다. 그래도 값이 사라졌으면
+        // 잡지 않는다 - 힙은 스캔 도중에도 바뀐다.
+        if (reader.read_value(addr, &vt) && vt != 0 &&
+            reader.read_value(addr + kCompRegion, &region) && region != 0 &&
+            reader.read_value(static_cast<std::uintptr_t>(region), &rvt) &&
+            rvt != 0) {
+            g_comp = addr;
+            g_comp_vtable = static_cast<std::uintptr_t>(vt);
+            g_region_vtable = static_cast<std::uintptr_t>(rvt);
+            log::infof("수배 컴포넌트: 0x{:X} (지역 0x{:X} {})", g_comp, region,
+                       rtti.class_of_object(static_cast<std::uintptr_t>(region)));
+            return true;
         }
-        const std::string cls =
-            rtti.class_of_object(static_cast<std::uintptr_t>(region));
-        if (cls.find("WantedRegionData") == std::string::npos) {
-            log::infof("수배 컴포넌트 후보 0x{:X} 는 건너뛴다 - +0x30 이 "
-                       "{} 다",
-                       addr, cls.empty() ? "이름 없음" : cls);
-            continue;
-        }
-        std::uint64_t rvt = 0;
-        if (!reader.read_value(static_cast<std::uintptr_t>(region), &rvt) ||
-            rvt == 0) {
-            continue;
-        }
-        g_comp = addr;
-        g_comp_vtable = static_cast<std::uintptr_t>(vt);
-        g_region_vtable = static_cast<std::uintptr_t>(rvt);
-        log::infof("수배 컴포넌트: 0x{:X} (지역 0x{:X} {})", g_comp, region,
-                   cls);
-        return true;
     }
     const auto st = mem::Rtti::scan_stats();
     const bool last = g_find_tries >= kFindTries;

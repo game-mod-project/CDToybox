@@ -60,10 +60,20 @@ namespace {
 
 bool find_clan_of_class(const mem::Reader& reader, const mem::Rtti& rtti,
                         const char* cls, std::uintptr_t* out) {
+    // **최다 레코드**를 골라야 하므로 첫 합격에서 멈출 수 없다. 대신 상한이
+    // **합격한 수**를 세게 해서 가짜가 예산을 먹지 않게 한다 - 훑은 수로 16 을
+    // 두면 낮은 주소의 가짜가 앞자리를 다 차지해 진짜가 잘린다(4.33, 액터
+    // 매니저에서 실제로 그렇게 실패했다). 진짜 후보는 realm 당 한 줌이라
+    // 합격 16 이면 넉넉하다.
+    const auto cands = rtti.instances_of_class(cls, 16, [&](std::uintptr_t a) {
+        if (!looks_like_clan_component(reader, a)) return false;
+        std::uintptr_t arr = 0;
+        std::uint32_t count = 0;
+        return read_records_header(reader, a, &arr, &count);
+    });
     std::uintptr_t best = 0;
     std::uint32_t best_n = 0;
-    for (const auto addr : rtti.instances_of_class(cls, 16)) {
-        if (!looks_like_clan_component(reader, addr)) continue;
+    for (const auto addr : cands) {
         std::uintptr_t arr = 0;
         std::uint32_t count = 0;
         if (!read_records_header(reader, addr, &arr, &count)) continue;

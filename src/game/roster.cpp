@@ -130,13 +130,13 @@ bool looks_like_mercenary_manager(const mem::Reader& reader,
 bool find_static_manager(const mem::Reader& reader, const mem::Rtti& rtti,
                          const char* manager_class, std::uintptr_t* out) {
     if (out == nullptr || manager_class == nullptr) return false;
-    for (const auto addr : rtti.instances_of_class(manager_class, 32)) {
-        if (looks_like_static_manager(reader, addr)) {
-            *out = addr;
-            return true;
-        }
-    }
-    return false;
+    // 판정을 넘겨 첫 합격에서 멈춘다(TROUBLESHOOTING 4.33).
+    const auto hit = rtti.instances_of_class(
+        manager_class, 1,
+        [&](std::uintptr_t a) { return looks_like_static_manager(reader, a); });
+    if (hit.empty()) return false;
+    *out = hit.front();
+    return true;
 }
 
 bool roster_header(const mem::Reader& reader, std::uintptr_t manager,
@@ -212,13 +212,14 @@ bool build_static_catalog(const mem::Reader& reader, const mem::Rtti& rtti,
     if (manager_out != nullptr) *manager_out = 0;
     std::uintptr_t manager = 0;
     if (kind == RosterKind::Mercenary) {
-        for (const auto addr : rtti.instances_of_class(manager_class, 32)) {
-            if (looks_like_mercenary_manager(reader, addr)) {
-                manager = addr;
-                break;
-            }
-        }
-        if (manager == 0) return false;
+        // 용병 표는 느슨한 판정이라 가짜가 더 잘 섞인다 - 더더욱 훑은 수로
+        // 자르면 안 된다(TROUBLESHOOTING 4.33).
+        const auto hit = rtti.instances_of_class(
+            manager_class, 1, [&](std::uintptr_t a) {
+                return looks_like_mercenary_manager(reader, a);
+            });
+        if (hit.empty()) return false;
+        manager = hit.front();
     } else if (!find_static_manager(reader, rtti, manager_class, &manager)) {
         return false;
     }

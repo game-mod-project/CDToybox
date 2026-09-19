@@ -140,13 +140,14 @@ bool looks_like_item_manager(const mem::Reader& reader,
 bool find_item_manager(const mem::Rtti& rtti, const mem::Reader& reader,
                        std::uintptr_t* out) {
     if (out == nullptr) return false;
-    for (const auto addr : rtti.instances_of_class(kManagerClass, 32)) {
-        if (looks_like_item_manager(reader, addr)) {
-            *out = addr;
-            return true;
-        }
-    }
-    return false;
+    // 판정을 넘겨 **첫 합격에서 멈춘다.** 훑은 수로 상한을 두면 낮은 주소의
+    // 가짜가 앞자리를 다 차지해 진짜가 잘린다(TROUBLESHOOTING 4.33).
+    const auto hit = rtti.instances_of_class(
+        kManagerClass, 1,
+        [&](std::uintptr_t a) { return looks_like_item_manager(reader, a); });
+    if (hit.empty()) return false;
+    *out = hit.front();
+    return true;
 }
 
 bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
