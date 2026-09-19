@@ -5,6 +5,7 @@
 //   근거: specs/2026-09-18-game-update-2944.md §2 §10
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "mem/reader.h"
@@ -120,6 +121,24 @@ bool bounty_write_region(const mem::Reader& reader, std::uint32_t key,
 // 전부 0 으로. 바꾼 개수를 낸다. 구역이 여럿일 때 하나씩 누르게 하면
 // 오늘과 같은 일이 난다.
 bool bounty_clear_all(const mem::Reader& reader, int* changed_out);
+
+// 구역 키 -> 한글 이름. 못 풀면 **빈 문자열**이고, 그때 화면은 키를 그대로
+// 보인다. `rtti` 가 널이면 빈 문자열.
+//
+// 두 가지를 런타임에 알아낸다.
+//
+// 1. **키가 곧 현지화 엔티티 키인가.** 캐릭터 표가 그렇다(STATUS 1.9:
+//    레코드 +0x00 의 u32 전체가 엔티티 키). 구역도 같은 꼴로 본다.
+// 2. **이름의 필드 번호.** 표마다 다르다 - 아이템 0x70, 캐릭터 0x30
+//    (`roster.h` kCharNameField). 구역 것은 모른다.
+//
+// 현지화는 **실행 파일에 없어**(`.paz` 에서 런타임에 올라온다, STATUS 1.19)
+// 정적으로는 어느 쪽도 못 정한다. 그래서 처음 물을 때 번호를 0..kMax 로 훑어
+// 비지 않은 문자열이 나오는 자리를 잡아 두고, 그 뒤로는 그것만 쓴다.
+// 한 번도 안 풀리면 계속 빈 문자열이고 화면은 키로 간다 - **틀린 이름을
+// 자신 있게 내놓는 것보다 낫다**(TROUBLESHOOTING 4.8 의 폴백 교훈).
+std::string wanted_region_name(const mem::Rtti* rtti, const mem::Reader& reader,
+                               std::uint32_t key);
 
 // 수배(범죄수치) 치트 메시지.
 //

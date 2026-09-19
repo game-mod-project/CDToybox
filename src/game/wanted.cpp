@@ -6,8 +6,11 @@
 #include <cstring>
 #include <string>
 
+#include <map>
+
 #include "core/log.h"
 #include "game/grant.h"
+#include "game/localization.h"
 #include "mem/safe_read.h"
 
 namespace cdtb::game {
@@ -249,6 +252,52 @@ bool bounty_write_region(const mem::Reader& reader, std::uint32_t key,
     }
     log::warnf("벌금 쓰기: 구역 {} 의 기록을 못 찾았다", key);
     return false;
+}
+
+std::string wanted_region_name(const mem::Rtti* rtti, const mem::Reader& reader,
+                               std::uint32_t key) {
+    if (rtti == nullptr || key == 0) return {};
+
+    // 푼 것은 들고 있는다. 구역은 많아야 다섯이라 표가 작다.
+    static std::map<std::uint32_t, std::string> s_cache;
+    const auto hit = s_cache.find(key);
+    if (hit != s_cache.end()) return hit->second;
+
+    static LocSystem s_sys;
+    static bool s_have_sys = false;
+    if (!s_have_sys) {
+        s_have_sys = find_loc_system(*rtti, reader, &s_sys);
+        if (!s_have_sys) return {};   // 아직 안 올라왔다. 다음에 다시 본다
+    }
+
+    // 이름의 필드 번호는 표마다 다르다(아이템 0x70 · 캐릭터 0x30). 구역 것은
+    // 모르므로 **한 번만** 훑어 잡는다. 잡으면 그 뒤로는 그 번호만 쓴다.
+    static std::uint32_t s_field = 0;
+    static bool s_have_field = false;
+    constexpr std::uint32_t kFieldMax = 0x80;
+
+    std::string text;
+    if (s_have_field) {
+        if (!resolve(reader, s_sys, loc_key(key, s_field), &text, nullptr)) {
+            return {};
+        }
+    } else {
+        for (std::uint32_t f = 0; f <= kFieldMax; ++f) {
+            if (!resolve(reader, s_sys, loc_key(key, f), &text, nullptr)) {
+                continue;
+            }
+            if (text.empty()) continue;
+            s_field = f;
+            s_have_field = true;
+            log::infof("구역 이름 필드를 찾았다: 0x{:X} (구역 {} -> {})", f, key,
+                       text);
+            break;
+        }
+        if (!s_have_field) return {};
+    }
+    if (text.empty()) return {};
+    s_cache.emplace(key, text);
+    return text;
 }
 
 bool bounty_clear_all(const mem::Reader& reader, int* changed_out) {
