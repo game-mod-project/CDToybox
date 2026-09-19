@@ -495,11 +495,14 @@ void auto_analysis_loop() {
         // 게이지 배열을 값싸게 잡아 고정. 실제 freeze 는 렌더 프레임(~16ms).
         player_discover(reader);
 
-        // 탈것 체력·스태미나의 **권위 사본**(서버 realm) 찾기. 힙 전수라 값싸지
-        // 않아 **부탁할 때만** 돈다 - 창에서 체력 절을 펴거나 아직 못 짝지은
-        // 탈것이 보일 때 부탁이 선다(`vehicle_panel.cpp`).
-        if (mount_authority_take_refresh()) {
-            mount_authority_discover(rtti, reader);
+        // 월드에 들어오면 **미리 한 번** 찾아 둔다. 창을 열고 나서 찾기 시작하면
+        // 그 몇 초를 사람이 기다리는데, 훑기가 2초쯤이라 미리 해 두는 값이 더
+        // 싸다. 장비가 잡혔다는 것이 곧 월드 안이라는 뜻이라 그것을 게이트로
+        // 쓴다(지식 탐색과 같은 규칙).
+        static bool s_vital_primed = false;
+        if (!s_vital_primed && equip_ready()) {
+            s_vital_primed = true;
+            mount_authority_request_refresh();
         }
 
         // 낙사 방지 훅은 위(분석 스레드 머리)에서 이미 걸었다. 여기 남긴 것은
@@ -539,7 +542,21 @@ void auto_analysis_loop() {
             }
         }
 
-        for (int i = 0; i < 20 && !g_stop.load(); ++i) ::Sleep(100);
+        // 탈것 권위 사본 찾기는 **쉬는 동안** 집어 간다.
+        //
+        // 예전에는 통과 맨 끝에서만 봤다. 그런데 시작 무렵에는 통과 한 바퀴가
+        // 1분을 넘어(인벤토리·장비·지식·수배 탐색이 겹친다), 창을 연 뒤 81초를
+        // 기다린 실측이 나왔다(사용자 보고 2026-09-19). **기다린 것은 훑기가
+        // 아니라 차례였다** - 훑기 자체는 2초쯤이다(로그의 누적 창 수로 쟀다:
+        // 179창/초 × 32MB = 5.7GB/s, 힙 10.5GB).
+        //
+        // 여기서 보면 노는 2초 안에 집어 가므로 차례를 기다릴 일이 없다.
+        for (int i = 0; i < 20 && !g_stop.load(); ++i) {
+            if (mount_authority_take_refresh()) {
+                mount_authority_discover(rtti, reader);
+            }
+            ::Sleep(100);
+        }
     }
 }
 
