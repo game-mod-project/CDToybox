@@ -452,15 +452,33 @@ void draw_vehicle_panel(bool* open) {
                                     static_cast<long long>(m.hp_max),
                                     static_cast<long long>(m.sta_cur),
                                     static_cast<long long>(m.sta_max));
-                // **권위 사본을 못 찾았으면 미리 말한다.** 예전에는 "썼습니다"
-                // 가 뜨고 1초 뒤 숫자가 되돌아가, 사용자가 왜인지 알 길이 없었다.
-                if (m.authority == 0) {
-                    // **흐린 글씨로 두면 안 된다.** 실제로 이 상태에서 쓰고는
-                    // "썼습니다" 만 보고 탔다가 값이 되돌아간 일이 있었다
-                    // (사용자 보고 2026-09-19). 눈에 띄는 색으로 낸다.
-                    ImGui::TextColored(col::kWarn,
-                                       "  ⚠ 진짜 값을 든 사본을 찾는 중입니다"
-                                       " - 지금 쓰면 **타는 순간 되돌아갑니다**");
+                // **권위 사본이 없으면 아예 못 누르게 한다.** 경고만 띄우고
+                // 버튼을 열어 뒀더니, 사용자가 그 경고를 못 보고 눌렀다가
+                // "탑승하면 초기화된다" 로 읽었다(2026-09-19). 거울에만 쓴 것은
+                // 서 있는 동안만 그렇게 보이고 타는 순간 되돌아간다 - 그 함정을
+                // 화면이 만들지 않는다. 기다리면 저절로 열린다.
+                const bool ready = (m.authority != 0);
+                if (!ready) {
+                    switch (game::mount_authority_phase()) {
+                        case game::MountAuthPhase::Scanning:
+                            ImGui::TextColored(
+                                col::kWarn,
+                                "  진짜 값을 든 사본을 찾는 중입니다… %.0f초"
+                                " (힙을 통째로 훑어 1분쯤 걸립니다)",
+                                game::mount_authority_elapsed_sec());
+                            break;
+                        case game::MountAuthPhase::Done:
+                            ImGui::TextColored(
+                                col::kWarn,
+                                "  이 탈것의 사본을 못 찾았습니다 - 아래"
+                                " [진짜 값 사본 다시 찾기] 를 눌러 주십시오");
+                            break;
+                        default:
+                            ImGui::TextColored(col::kWarn,
+                                               "  진짜 값을 든 사본을 곧"
+                                               " 찾습니다…");
+                            break;
+                    }
                 }
 
                 // 입력값은 대상마다 따로 기억한다 - 창을 오가도 안 섞이게.
@@ -483,25 +501,22 @@ void draw_vehicle_panel(bool* open) {
                 want.sta_cur = box[2];
                 want.sta_max = box[3];
 
+                // 사본이 없으면 잠근다. **고정을 끄는 것은 막지 않는다** -
+                // 켜 둔 채로 사본이 사라지면(탈것을 새로 부르면) 끌 길이 없어진다.
+                ImGui::BeginDisabled(!ready);
                 if (ImGui::Button("적용 (한 번)")) {
-                    if (!game::mount_vital_write(reader, m.handle, want)) {
-                        notice_set(&s_note, NoticeLevel::Bad,
-                                   "실패 - 아무것도 안 썼습니다");
-                    } else if (m.authority == 0) {
-                        // **성공이라고 말하면 안 된다.** 거울에만 쓴 것은
-                        // 타는 순간 되돌아간다 - 그것을 "썼습니다" 로 알렸다가
-                        // 사용자가 왜 되돌아가는지 몰라 헤맸다(2026-09-19).
-                        notice_set(&s_note, NoticeLevel::Warn,
-                                   "{} - 보이는 값만 바꿨습니다. 진짜 사본을"
-                                   " 아직 못 찾아 **타면 되돌아갑니다**",
-                                   m.name);
-                    } else {
+                    if (game::mount_vital_write(reader, m.handle, want)) {
                         notice_set(&s_note, NoticeLevel::Ok, "{} 에 썼습니다",
                                    m.name);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Bad,
+                                   "실패 - 아무것도 안 썼습니다");
                     }
                 }
+                ImGui::EndDisabled();
                 ImGui::SameLine();
                 bool on = pinned;
+                ImGui::BeginDisabled(!ready && !pinned);
                 if (ImGui::Checkbox("고정", &on)) {
                     if (on) {
                         game::mount_pin_set(want);
@@ -509,6 +524,7 @@ void draw_vehicle_panel(bool* open) {
                         game::mount_pin_clear();
                     }
                 }
+                ImGui::EndDisabled();
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "게임은 이 값을 두 벌 들고 있고, 눈에 보이는 쪽은"

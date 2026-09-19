@@ -156,6 +156,24 @@ int mount_authority_discover(const mem::Rtti& rtti, const mem::Reader& reader);
 std::uintptr_t mount_authority_gauges(const mem::Reader& reader,
                                       std::uint32_t handle);
 
+// 어디까지 왔나. **화면이 이걸 보고 버튼을 잠근다.**
+//
+// 준비가 덜 된 채로 쓰면 거울에만 가고, 서 있는 동안은 그대로 보이다가 타는
+// 순간 되돌아간다. 예전에는 경고만 띄우고 버튼은 열어 뒀는데, 사용자가 그
+// 경고를 못 보고 눌렀다가 "탑승하면 초기화된다" 로 읽었다(2026-09-19).
+// 이제 **찾기 전에는 아예 못 누른다** - 기다리면 저절로 열린다.
+enum class MountAuthPhase {
+    Idle,       // 아직 부탁한 적 없다
+    Waiting,    // 부탁했고 분석 스레드가 집어 가기를 기다린다
+    Scanning,   // 훑는 중이다 (힙 전수)
+    Done,       // 한 번 끝났다. 짝지은 수는 mount_authority_count()
+};
+MountAuthPhase mount_authority_phase();
+
+// 지금 훑기가 시작된 뒤 몇 초나 지났나. 안 돌고 있으면 0.
+// "1분쯤 걸린다" 는 안내만으로는 멈춘 것인지 도는 것인지 못 가른다.
+double mount_authority_elapsed_sec();
+
 // 화면 표시용.
 std::size_t mount_authority_count();
 void mount_authority_request_refresh();

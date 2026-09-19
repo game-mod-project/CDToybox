@@ -1,6 +1,7 @@
 #include "game/mountvital.h"
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <utility>
 
@@ -19,7 +20,18 @@ MountPin g_pin;
 // 않는 이유는 `mountvital.h` 머리에 적었다 - 쓸 때마다 컴포넌트에서 다시 내려간다.
 std::mutex g_auth_mtx;
 std::vector<std::pair<std::uint32_t, std::uintptr_t>> g_auth;
-std::atomic<bool> g_auth_refresh{false};
+// 진행 단계. 화면이 이걸 보고 버튼을 잠근다(mountvital.h 의 MountAuthPhase).
+std::atomic<int> g_auth_phase{static_cast<int>(MountAuthPhase::Idle)};
+// 훑기가 시작된 시각. 단조 시계로 잰다 - ImGui 시계는 창을 숨기면 멈춘다
+// (imgui-time-freezes-when-hidden).
+std::atomic<std::uint64_t> g_auth_started_ms{0};
+
+std::uint64_t now_ms() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
 
 std::uint64_t rd64(const mem::Reader& r, std::uintptr_t a) {
     std::uint64_t v = 0;
@@ -151,6 +163,9 @@ bool mount_pin_active(const MountPin& pin) {
 // --------------------------------------------------------- 권위 사본
 
 int mount_authority_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
+    g_auth_phase.store(static_cast<int>(MountAuthPhase::Scanning),
+                       std::memory_order_release);
+    g_auth_started_ms.store(now_ms(), std::memory_order_release);
     const auto insts =
         rtti.instances_of_class(kMvServerStatusClass, kMvAuthorityMax);
     std::vector<std::pair<std::uint32_t, std::uintptr_t>> found;
@@ -179,9 +194,25 @@ int mount_authority_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
         std::lock_guard<std::mutex> lk(g_auth_mtx);
         g_auth.swap(found);
     }
-    log::infof("탈것 권위 사본: {} 후보 {}개 중 {}개를 짝지었다",
-               kMvServerStatusClass, insts.size(), n);
+    const double sec =
+        (now_ms() - g_auth_started_ms.load(std::memory_order_acquire)) / 1000.0;
+    g_auth_phase.store(static_cast<int>(MountAuthPhase::Done),
+                       std::memory_order_release);
+    log::infof("탈것 권위 사본: {} 후보 {}개 중 {}개를 짝지었다 ({:.1f}초)",
+               kMvServerStatusClass, insts.size(), n, sec);
     return n;
+}
+
+MountAuthPhase mount_authority_phase() {
+    return static_cast<MountAuthPhase>(
+        g_auth_phase.load(std::memory_order_acquire));
+}
+
+double mount_authority_elapsed_sec() {
+    if (mount_authority_phase() != MountAuthPhase::Scanning) return 0.0;
+    const std::uint64_t t0 = g_auth_started_ms.load(std::memory_order_acquire);
+    if (t0 == 0) return 0.0;
+    return (now_ms() - t0) / 1000.0;
 }
 
 std::uintptr_t mount_authority_gauges(const mem::Reader& reader,
@@ -212,11 +243,19 @@ std::size_t mount_authority_count() {
 }
 
 void mount_authority_request_refresh() {
-    g_auth_refresh.store(true, std::memory_order_release);
+    // 이미 돌고 있으면 겹쳐 부탁하지 않는다 - 힙 전수를 두 번 돌 이유가 없다.
+    if (mount_authority_phase() == MountAuthPhase::Scanning) return;
+    g_auth_phase.store(static_cast<int>(MountAuthPhase::Waiting),
+                       std::memory_order_release);
 }
 
 bool mount_authority_take_refresh() {
-    return g_auth_refresh.exchange(false, std::memory_order_acq_rel);
+    int want = static_cast<int>(MountAuthPhase::Waiting);
+    // 부탁이 서 있을 때만 집어 간다. 집는 순간 Scanning 으로 넘긴다 -
+    // discover 가 다시 세팅하지만, 그 사이 프레임에도 화면이 "찾는 중" 을 본다.
+    return g_auth_phase.compare_exchange_strong(
+        want, static_cast<int>(MountAuthPhase::Scanning),
+        std::memory_order_acq_rel);
 }
 
 // --------------------------------------------------------- 읽기
