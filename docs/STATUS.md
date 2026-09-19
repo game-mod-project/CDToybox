@@ -1554,8 +1554,32 @@ cat 9  엔티티 6101                   필드 0x93   "에르난드 공국의 �
 확인한다** - 주소는 죽는다(§1.4). 실제로 첫 판에 죽은 주소를 떴다가 그 가드가
 잡았다(그 자리엔 `ClientSyncSceneObjectBVHNodeMetaData` 가 들어앉아 있었다).
 
-**다음에 볼 곳** — 컴포넌트를 0x100 떴을 때 `+0x30` 말고도 같은 꼴의 벡터가
-**넷** 더 있었다. A/B 가 그중 어디가 움직이는지 말해 줄 것이다.
+**다음에 볼 곳 — `WantedState` 는 실재하고, `AllyGroup`(세력)이 얽혀 있다.**
+
+실행 파일에서 `eErrNo` 이름을 훑어 다섯을 얻었다(2026-09-19). 이 어휘가
+지금까지 없던 단서다.
+
+| 이름 | 읽히는 것 |
+|---|---|
+| `eErrNoPrevWantedStateCannotChange` | **상태를 바꾸려다 거부**될 때. `TrocTrChangeWantedStateReq` 의 거부로 유력하다 |
+| `eErrNoUnsaveableWantedState` | 상태에 **저장 가능/불가** 구분이 있다 |
+| `eErrNoNotExistAllyGroupWantedCrimeType` | **세력(AllyGroup)별 범죄 종류**가 있다 — 구역이 아니라 세력 축일 수 있다 |
+| `eErrNoIsCrimeException` | 범죄 예외 판정 |
+| `eErrNoDontUseContentsWantedLevel` | **WantedLevel** 이라는 별도 축 |
+
+즉 **벌금(금액) · WantedState · WantedLevel · 세력별 범죄종류**가 각각 다른
+것으로 보인다. 우리가 읽고 쓰는 것은 그중 **금액 하나뿐**이다.
+
+**다음 한 걸음** — §1.21.2 에서 쓴 방법 그대로다. 이름 문자열 바로 뒤의 한국어
+설명 → 값 전역 슬롯 → `xref_data.py` 로 **그 슬롯을 읽는 코드 한 곳** 까지
+내려간다. 그 코드가 무엇을 보는지가 곧 상태의 자리다.
+
+> 이번에 `grep -aoP` 로 설명을 뽑으려다 실패했다 — 이 환경의 git-bash 에
+> `grep -P` 가 없다. `tools/rtti/` 쪽으로 하는 편이 맞다.
+
+컴포넌트 쪽은 막혔다. `ClientSelfWantedActorComponent` 는 살아 있는 것이 하나
+뿐이고 지금 **구역 벡터가 비어 있으며**(크기 0), `CommonWantedActorComponent`
+는 살아 있는 인스턴스가 **없다**(후보 하나가 §4.33 의 낮은 주소 가짜).
 
 ```
 +0x40 {ptr, 9, 41}   +0x50 {ptr, 14, 18}   +0x70 {ptr, 17, 18}
