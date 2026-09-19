@@ -169,9 +169,7 @@ void draw_vehicle_panel(bool* open) {
         ImGui::Separator();
         ImGui::TextDisabled("서 있는 자리로 막히는 것 (게임 코드에 씁니다)");
         game::callgate_probe();
-        // **넷까지가 "서 있는 자리" 층이다.** 다섯째(보스룸)는 층이 달라
-        // 아래에서 따로 그린다 - 한 묶음으로 두면 문구가 거짓이 된다.
-        for (int g = 0; g < game::kCallGatePlaceCount; ++g) {
+        for (int g = 0; g < game::kCallGateCount; ++g) {
             const game::CallGateInfo ci = game::callgate_info(g);
             if (ci.unsupported) {
                 ImGui::TextColored(col::kBad, "%s - 이 게임 빌드에서는 못 씁니다",
@@ -200,46 +198,6 @@ void draw_vehicle_panel(bool* open) {
         ImGui::TextColored(col::kWarn,
                            "정말 못 서는 자리에서 부르면 탈것이 지형에 박히거나"
                            " 곧 사라질 수 있습니다");
-
-        // 보스룸(전용 스테이지). **층이 다르다** - 위 넷은 문구를 띄우며
-        // 거부하는데, 이쪽은 문구 없이 능력 자체를 막고 동반자를 걷어낸다
-        // (사용자 실측 2026-09-19, `game/callgate.h` 의 다섯째 설명).
-        ImGui::Separator();
-        ImGui::TextDisabled("보스룸 (문구 없이 막는 층)");
-        {
-            const int g = game::kCallGateExclusiveStage;
-            const game::CallGateInfo ci = game::callgate_info(g);
-            if (ci.unsupported) {
-                ImGui::TextColored(col::kBad, "%s - 이 게임 빌드에서는 못 씁니다",
-                                   ci.name);
-            } else {
-                bool on = ci.on;
-                ImGui::PushID(g);
-                if (ImGui::Checkbox(ci.name, &on)) {
-                    const char* why = "";
-                    if (game::callgate_set(g, on, &why)) {
-                        notice_set(&s_note, NoticeLevel::Ok, "{} {}", ci.name,
-                                   on ? "켰습니다" : "껐습니다");
-                    } else {
-                        notice_set(&s_note, NoticeLevel::Bad, "{} 실패 - {}",
-                                   ci.name, why);
-                    }
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "보스룸에서 문구 없이 탈것이 사라지고 호출도 안 되던"
-                        " 것을 겨냥합니다.\n"
-                        "AICondition_BlockByExclusiveStage 의 판정을 늘"
-                        " 막히지 않음 으로 둡니다.\n\n"
-                        "**아직 게임에서 확인 안 됐습니다.** 보스룸 차단이"
-                        " 정말 이 조건인지,\n"
-                        "호출만 풀리고 걷어내기는 그대로인지 눌러 봐야"
-                        " 압니다.\n"
-                        "이상하면 바로 끄십시오 - 되돌립니다.");
-                }
-                ImGui::PopID();
-            }
-        }
     }
 
     // ---------------------------------------------------------------- 시간
