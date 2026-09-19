@@ -32,7 +32,11 @@ using cdtb::game::kMvStatusActor;
 using cdtb::game::kTypeHealth;
 using cdtb::game::kTypeStamina;
 using cdtb::game::mount_clamp;
+using cdtb::game::mount_authority_phase;
+using cdtb::game::mount_authority_request_refresh;
+using cdtb::game::mount_authority_take_refresh;
 using cdtb::game::mount_handle_plausible;
+using cdtb::game::MountAuthPhase;
 using cdtb::game::mount_pin_active;
 using cdtb::game::mount_pin_wants;
 using cdtb::game::mount_type_safe;
@@ -153,6 +157,39 @@ TEST(mount_handle_plausible_rejects_junk) {
     CHECK(!mount_handle_plausible(0x00000003));
     CHECK(!mount_handle_plausible(0xB0110003));   // 한 자리 다르다
     CHECK(!mount_handle_plausible(0xC0100003));
+}
+
+// -------------------------------------------- 찾기 단계 (화면이 버튼을 잠근다)
+
+// 단계는 **전역 하나**다. 그래서 한 바퀴를 한 시험 안에서 다 돈다 - 시험을
+// 쪼개면 앞 시험이 남긴 단계에 뒤 시험이 걸린다(실제로 그렇게 두 개가 깨졌다).
+TEST(authority_phase_runs_one_scan_per_request) {
+    // 아무도 안 부탁했으면 화면이 "찾는 중" 을 띄우면 안 된다.
+    CHECK(mount_authority_phase() == MountAuthPhase::Idle);
+
+    mount_authority_request_refresh();
+    CHECK(mount_authority_phase() == MountAuthPhase::Waiting);
+
+    // 분석 스레드가 집어 가면 **곧바로** 훑는 중이 된다 - discover 가 실제로
+    // 시작하기 전 프레임에도 화면이 기다리라고 말할 수 있어야 한다.
+    CHECK(mount_authority_take_refresh());
+    CHECK(mount_authority_phase() == MountAuthPhase::Scanning);
+
+    // 부탁 하나에 훑기 하나다. 두 번 집어 가면 힙 전수를 두 번 돈다.
+    CHECK(!mount_authority_take_refresh());
+
+    // 훑는 중에 또 눌러도 겹쳐 돌지 않는다.
+    mount_authority_request_refresh();
+    CHECK(mount_authority_phase() == MountAuthPhase::Scanning);
+    CHECK(!mount_authority_take_refresh());
+}
+
+// 훑는 중이 아니면 경과 시간은 0 이다 - 화면이 "0초" 를 띄우고 멈춰 있으면
+// 사용자가 멈춘 줄 안다.
+TEST(authority_elapsed_is_zero_when_not_scanning) {
+    if (mount_authority_phase() != MountAuthPhase::Scanning) {
+        CHECK_EQ(cdtb::game::mount_authority_elapsed_sec(), 0.0);
+    }
 }
 
 }  // namespace
