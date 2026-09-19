@@ -57,12 +57,49 @@ namespace cdtb::game {
 // ⚠️ **위치가 진짜로 안 되는 자리면** 소환 뒤에 탈것이 지형에 박히거나 곧바로
 // 사라질 수 있다. 상시가 아니라 사용자가 켜고 끄는 토글이다.
 
+// ---- 다섯째는 **층이 다르다** (2026-09-19)
+//
+// 위 넷은 호출 처리기가 `eErrNo*` 를 돌려주는 층이라 **화면에 문구가 뜬다.**
+// 보스룸은 그렇지 않았다 - 사용자 실측으로 셋이 한꺼번에 나왔다:
+//
+//   · 문구가 **없다**           -> `failmessageinfo` 조건층이 아니다
+//   · 액터 메모리가 **풀렸다**   -> 내린 게 아니라 동반자를 걷어냈다
+//                                (`+0x60` 이 핸들이 아니라 float 1.0 이 돼 있었다)
+//   · 호출을 **시도조차 안 한다** -> 능력 자체가 막힌 상태다
+//
+// 엔진에 딱 그 기계가 있다: `AICondition_BlockByExclusiveStage`(vtable RVA
+// 0x58BFC40) · `ConditionData_ExclusiveStagePlaying` · 서버 메시지
+// `TrocTrMercenaryBlockedAbilityAck`("용병 능력 막힘").
+//
+// 판정 함수는 vtable 슬롯 1 = **RVA 0x22EA800** 이다. 반환 규약은 조건 계열과
+// 같다(참=0 · 거짓=1 · 판정불가=2):
+//
+//   0x022EA806  mov rbx, [rdx+0x68]     ; 액터 -> 홀더
+//   0x022EA80D  movzx r8d, byte [rcx+8] ; 조건 데이터의 인자
+//   0x022EA81A  call 0x207C890
+//   0x022EA820  cmp byte [rsp+0x30], 0
+//   0x022EA825  jne …                   ; 0 이면 -> bl=2 (판정불가)
+//   0x022EA83B  mov rcx, [rcx+0xB0]     ; **마을 판정이 쓰던 그 컴포넌트 계열**
+//   0x022EA842  call 0x1F5C4E0          ; 막혔나 -> al
+//   0x022EA847  movzx ebx, al
+//   0x022EA84A  xor bl, 1               ; <- 여기. 뒤집어서 참/거짓으로
+//
+// 그래서 `xor bl,1`(80 F3 01)을 `mov bl,1; nop`(B3 01 90)으로 바꾼다. al 이
+// 무엇이든 **거짓(1) = 막히지 않음**이 된다. 세 바이트가 정렬된 창 하나에
+// 들어가(창 0x22EA848, off 2) 원자 교환을 그대로 쓴다.
+//
+// ⚠️ **아직 게임에서 확인 안 됐다.** 보스룸 차단이 정말 이 조건인지는 눌러
+// 봐야 안다 - 이름만 보고 관문을 골랐다가 틀린 적이 있다(TROUBLESHOOTING 4.31).
+// 그리고 이것이 **호출**만 풀고 **걷어내기**는 딴 자리일 수도 있다.
 enum CallGate : int {
     kCallGateIndoor = 0,    // 실내에서는 호출할 수 없습니다
     kCallGateRoof = 1,      // 지붕 위에서는 호출할 수 없습니다
     kCallGateRegion = 2,    // 호출할 수 없는 지역입니다
     kCallGatePosition = 3,  // 호출할 수 없는 위치입니다 (성벽·지붕 위에서 실제로 뜨는 것)
-    kCallGateCount = 4,
+    // 여기까지가 "서 있는 자리" 층이다. 화면이 이 수로 갈라 그린다.
+    kCallGatePlaceCount = 4,
+    kCallGateExclusiveStage = 4,   // 전용 스테이지(보스룸) 차단 - 문구가 없는 층
+    kCallGateCount = 5,
 };
 
 struct CallGateInfo {

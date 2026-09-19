@@ -26,6 +26,8 @@
 namespace {
 
 using cdtb::game::callgate_def;
+using cdtb::game::kCallGateExclusiveStage;
+using cdtb::game::kCallGatePlaceCount;
 using cdtb::game::gate_apply;
 using cdtb::game::GateDef;
 using cdtb::game::GateIo;
@@ -50,8 +52,12 @@ std::uint64_t as_qword(const std::uint8_t b[8]) {
     return v;
 }
 
-TEST(callgate_table_has_all_four_gates) {
-    CHECK_EQ(kCallGateCount, 4);
+TEST(callgate_table_has_all_gates) {
+    // 넷은 "서 있는 자리" 층(문구를 띄우며 거부), 다섯째는 보스룸 층
+    // (문구 없이 막는다). 화면이 이 둘을 갈라 그리므로 경계가 못박혀야 한다.
+    CHECK_EQ(kCallGatePlaceCount, 4);
+    CHECK_EQ(kCallGateCount, 5);
+    CHECK_EQ(static_cast<int>(kCallGateExclusiveStage), kCallGatePlaceCount);
     for (int g = 0; g < kCallGateCount; ++g) {
         const GateDef* d = callgate_def(g);
         CHECK(d != nullptr);
@@ -77,17 +83,20 @@ TEST(callgate_gates_all_moved_by_one_delta_in_2944) {
     // 2850 -> 2944 에서 넷이 **같은 폭**으로 밀렸다. 하나만 폭이 다르면 그
     // 관문을 잘못 짚었다는 신호다 - 다음 갱신 때 이 대조가 그것을 잡는다.
     // (영역이 다르면 폭도 달라진다. 같은 영역 안에서만 성립한다.)
+    // **자리 층 넷만** 본다. 보스룸 관문은 2944 에서 처음 찾은 것이라
+    // 2850 짝이 없고, 애초에 다른 영역이라 폭도 다를 것이다.
     const long long kDelta = 0x7B1E0LL;
-    const long long old_rva[kCallGateCount] = {0x009635FCLL, 0x00963659LL,
-                                               0x009626B9LL, 0x009624E4LL};
-    for (int g = 0; g < kCallGateCount; ++g) {
+    const long long old_rva[kCallGatePlaceCount] = {0x009635FCLL, 0x00963659LL,
+                                                    0x009626B9LL, 0x009624E4LL};
+    for (int g = 0; g < kCallGatePlaceCount; ++g) {
         CHECK_EQ(static_cast<long long>(callgate_def(g)->rva) - old_rva[g],
                  kDelta);
     }
 }
 
 TEST(callgate_patches_exactly_one_byte_and_it_is_a_conditional_jump) {
-    for (int g = 0; g < kCallGateCount; ++g) {
+    // 자리 층 넷만이다. 보스룸 관문은 점프가 아니라 **결과를 고정**한다.
+    for (int g = 0; g < kCallGatePlaceCount; ++g) {
         const GateDef* d = callgate_def(g);
         // 쓰기 폭은 한 바이트다. 늘리면 뒤 명령을 먹는다.
         CHECK_EQ(static_cast<long long>(d->len), 1LL);
@@ -137,7 +146,9 @@ TEST(callgate_windows_are_the_measured_bytes) {
 }
 
 TEST(callgate_splice_turns_je_into_jmp_and_touches_nothing_else) {
-    for (int g = 0; g < kCallGateCount; ++g) {
+    // je -> jmp 는 **자리 층 넷**의 이야기다. 보스룸 관문은 결과를 고정하므로
+    // 따로 본다(exclusive_stage_gate_splice_leaves_the_rest_alone).
+    for (int g = 0; g < kCallGatePlaceCount; ++g) {
         const GateDef* d = callgate_def(g);
         std::uintptr_t base = 0;
         std::size_t off = 0;
@@ -203,9 +214,14 @@ TEST(callgate_round_trip_restores_the_original_window) {
                      gate_apply(*d, &s, kModBase, kModSize, true, bind(&m))),
                  static_cast<int>(kStepOk));
         CHECK(s.on);
-        // 켠 뒤에는 그 자리가 jmp 다.
+        // 켠 뒤에는 그 자리가 **정의가 말한 그 바이트들**이다. 관문마다 쓰는
+        // 것이 다르므로(자리 층은 jmp 한 바이트, 보스룸은 mov bl,1;nop 셋)
+        // kJmp 로 못박지 않고 정의를 그대로 대조한다.
         const std::size_t off = d->rva & 7ULL;
-        CHECK_EQ(static_cast<int>(m.buf[off]), static_cast<int>(kJmp));
+        for (std::size_t i = 0; i < d->len; ++i) {
+            CHECK_EQ(static_cast<int>(m.buf[off + i]),
+                     static_cast<int>(d->with[i]));
+        }
 
         CHECK_EQ(static_cast<int>(
                      gate_apply(*d, &s, kModBase, kModSize, false, bind(&m))),
@@ -215,6 +231,54 @@ TEST(callgate_round_trip_restores_the_original_window) {
         CHECK(std::memcmp(m.buf, d->want, 8) == 0);
         CHECK_EQ(m.writes, 2);
     }
+}
+
+// ------------------------------------------------- 보스룸(전용 스테이지) 관문
+
+TEST(exclusive_stage_gate_forces_the_verdict_not_a_jump) {
+    // 이 관문은 분기를 뒤집는 것이 아니라 판정 결과를 늘 "거짓" 으로 만든다.
+    //   xor bl,1  (80 F3 01)  ->  mov bl,1 ; nop  (B3 01 90)
+    // 반환 규약이 참=0 · 거짓=1 · 판정불가=2 라, bl=1 이 "막히지 않음" 이다.
+    const GateDef* d = callgate_def(kCallGateExclusiveStage);
+    CHECK(d != nullptr);
+    CHECK_EQ(static_cast<long long>(d->rva), 0x022EA84ALL);
+    CHECK_EQ(static_cast<long long>(d->len), 3LL);
+    CHECK_EQ(static_cast<int>(d->with[0]), 0xB3);   // mov bl, imm8
+    CHECK_EQ(static_cast<int>(d->with[1]), 0x01);   // 1 = 거짓
+    CHECK_EQ(static_cast<int>(d->with[2]), 0x90);   // nop (xor 의 셋째 바이트)
+}
+
+TEST(exclusive_stage_gate_overwrites_exactly_the_xor) {
+    // 덮는 자리가 정말 `xor bl,1` 이어야 한다. 한 칸만 밀려도 `lea` 를 먹는다.
+    const GateDef* d = callgate_def(kCallGateExclusiveStage);
+    std::uintptr_t base = 0;
+    std::size_t off = 0;
+    CHECK(patch_window(0x140000000ULL + d->rva, d->len, &base, &off));
+    CHECK_EQ(static_cast<long long>(off), 2LL);
+    CHECK(off + d->len <= 8);
+    CHECK_EQ(static_cast<int>(d->want[off]), 0x80);       // xor r/m8, imm8
+    CHECK_EQ(static_cast<int>(d->want[off + 1]), 0xF3);   // /6 bl
+    CHECK_EQ(static_cast<int>(d->want[off + 2]), 0x01);
+}
+
+TEST(exclusive_stage_gate_splice_leaves_the_rest_alone) {
+    const GateDef* d = callgate_def(kCallGateExclusiveStage);
+    std::uintptr_t base = 0;
+    std::size_t off = 0;
+    CHECK(patch_window(0x140000000ULL + d->rva, d->len, &base, &off));
+    const std::uint64_t orig = as_qword(d->want);
+    const std::uint64_t next = patch_splice(orig, off, d->with, d->len);
+    std::uint8_t after[8];
+    std::memcpy(after, &next, 8);
+    CHECK_EQ(static_cast<int>(after[2]), 0xB3);
+    CHECK_EQ(static_cast<int>(after[3]), 0x01);
+    CHECK_EQ(static_cast<int>(after[4]), 0x90);
+    for (std::size_t i = 0; i < 8; ++i) {
+        if (i >= off && i < off + d->len) continue;
+        CHECK_EQ(static_cast<int>(after[i]), static_cast<int>(d->want[i]));
+    }
+    // 되돌리면 원본과 같아야 한다.
+    CHECK(patch_splice(next, off, d->want + off, d->len) == orig);
 }
 
 }  // namespace

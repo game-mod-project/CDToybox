@@ -69,6 +69,14 @@ constexpr GateDef kGates[kCallGateCount] = {
      {0x06, 0x00, 0x84, 0xC0, 0x75, 0x0A, 0x8B, 0x05},
      {0xEB},
      1},
+    // 층이 다르다 - 문구 없이 막는 쪽이다(`callgate.h` 의 다섯째 설명).
+    // `xor bl,1` -> `mov bl,1; nop` : 판정을 늘 "막히지 않음" 으로 만든다.
+    {"보스룸에서도 호출 (전용 스테이지 무시)",
+     "AICondition_BlockByExclusiveStage 를 늘 거짓으로 - **미확인**",
+     0x022EA84A,
+     {0xB6, 0xD8, 0x80, 0xF3, 0x01, 0x48, 0x8D, 0x05},
+     {0xB3, 0x01, 0x90},   // mov bl,1 ; nop
+     3},
 };
 
 std::mutex g_mtx;
