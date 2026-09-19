@@ -520,10 +520,14 @@ void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
     std::vector<ClanEntry> list;
     if (!read_clan_roster(reader, srv, &list)) return;
     // 살아 있는 핸들은 **루프 밖에서 한 번만** 모은다. 예전에는 항목마다
-    // actor_handle_alive 를 불러 그때마다 액터 해시표를 통째로 다시 읽었다 -
-    // 명부가 880개가 되자 그리는 스레드가 **2.9초** 멎었다(실측 2026-09-19,
-    // `느림: 획득 뒤처리 2917.3ms`, TROUBLESHOOTING 2.16). 이 함수는
-    // overlay.cpp on_frame 에서 도므로 그 시간이 곧 화면 멈춤이다.
+    // actor_handle_alive 를 불러 그때마다 액터 해시표를 통째로 다시 읽었다
+    // (실측 2026-09-19: 핸들 달린 항목 4개 -> 한 바퀴에 표를 네 번).
+    // 이 함수는 overlay.cpp on_frame 에서 도므로 여기서 쓰는 시간이 곧 화면
+    // 멈춤이고, 같은 표를 여러 번 읽을 이유는 없다.
+    //
+    // **다만 이 자리가 `느림: 획득 뒤처리 2917.3ms` 의 원인이라는 근거는
+    // 없다** - 네 번으로는 규모가 안 맞는다(TROUBLESHOOTING 2.16 의 정정).
+    // 그 2.9초의 원인은 아직 안 좁혀졌다.
     ActorHandleSet alive;
     // 표를 못 읽으면 아무것도 건드리지 않는다(옛 `!known` 갈래와 같다).
     if (!actor_handle_set_cached(reader, &alive)) return;
