@@ -435,7 +435,27 @@ void draw_vehicle_panel(bool* open) {
         } else {
             const game::MountPin pin = game::mount_pin_get();
             ImGui::TextDisabled("값은 1000배 척도입니다 (2,500,000 = 생명 2500)");
+            // **드래곤과 A.T.A.G. 만 낸다**(사용자 요청 2026-09-19). 말·동물·
+            // 마차까지 늘어놓으면 스무 줄이 넘어 정작 쓸 둘을 찾기가 어렵다.
+            //
+            // 동반자 타입 행은 휠 카테고리와 같은 번호로 보인다(`mountslot.h`).
+            // **A.T.A.G. 3 · 말 1 · 동물 9 · 마차 7 은 실측했지만 드래곤 2 는
+            // 아직 눈으로 못 봤다.** 그래서 걸렀더니 하나도 안 남으면 전부 낸다 -
+            // 번호가 틀려도 "아무것도 안 보인다" 로는 안 끝나게.
+            constexpr std::uint16_t kRowDragon = 2;
+            constexpr std::uint16_t kRowAtag = 3;
+            std::vector<const game::MountVital*> shown;
             for (const game::MountVital& m : mv) {
+                if (m.merc_row == kRowDragon || m.merc_row == kRowAtag) {
+                    shown.push_back(&m);
+                }
+            }
+            const bool filtered = !shown.empty();
+            if (!filtered) {
+                for (const game::MountVital& m : mv) shown.push_back(&m);
+            }
+            for (const game::MountVital* mp : shown) {
+                const game::MountVital& m = *mp;
                 ImGui::PushID(static_cast<int>(m.handle));
                 if (!m.ok) {
                     ImGui::TextDisabled("%s - 게이지를 못 잡았습니다",
@@ -539,6 +559,10 @@ void draw_vehicle_panel(bool* open) {
                 }
                 ImGui::Separator();
                 ImGui::PopID();
+            }
+            if (!filtered) {
+                ImGui::TextDisabled("드래곤·A.T.A.G. 가 안 보여 전부 냅니다"
+                                    " (부르면 둘만 남습니다)");
             }
             ImGui::TextDisabled("체력·스태미나만 건드립니다. 나머지 게이지는"
                                 " 뜻을 확인하지 않아 그대로 둡니다.");
