@@ -706,17 +706,9 @@ void draw_wanted(const mem::Reader& reader) {
                 // 줄마다 ID 를 가른다 - 라벨이 같으면 첫 줄만 반응한다(6.17).
                 ImGui::PushID(static_cast<int>(r.key));
                 ImGui::TableNextColumn();
-                // 이름을 못 풀면 키를 그대로 보인다 - 틀린 이름을 자신 있게
-                // 내놓는 것보다 낫다(4.8 의 폴백 교훈).
-                const std::string nm =
-                    game::wanted_region_name(game::clan_rtti(), reader, r.key);
-                if (nm.empty()) {
-                    ImGui::Text("%u", r.key);
-                } else {
-                    ImGui::Text("%s", nm.c_str());
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(%u)", r.key);
-                }
+                // 이름은 아직 못 붙인다 - 추측으로 붙였다가 "구매하기" 가
+                // 떴다(wanted.h 머리말). 키를 그대로 보인다.
+                ImGui::Text("%u", r.key);
                 ImGui::TableNextColumn();
                 const double shown = game::bounty_from_raw(r.raw);
                 if (r.raw != 0) {
@@ -752,24 +744,13 @@ void draw_wanted(const mem::Reader& reader) {
         static int s_pick = 0;
         static double s_want = 0.0;
         if (s_pick >= static_cast<int>(regions.size())) s_pick = 0;
-        // 이름이 풀리면 이름으로, 아니면 키로 고른다.
-        const auto region_label = [&](const game::WantedRegion& r,
-                                      char* buf, std::size_t n) {
-            const std::string nm =
-                game::wanted_region_name(game::clan_rtti(), reader, r.key);
-            if (nm.empty()) {
-                std::snprintf(buf, n, "%u", r.key);
-            } else {
-                std::snprintf(buf, n, "%s (%u)", nm.c_str(), r.key);
-            }
-        };
-        char label[96];
-        region_label(regions[s_pick], label, sizeof label);
-        ImGui::SetNextItemWidth(200.0f);
+        char label[32];
+        std::snprintf(label, sizeof label, "%u", regions[s_pick].key);
+        ImGui::SetNextItemWidth(140.0f);
         if (ImGui::BeginCombo("구역", label)) {
             for (int i = 0; i < static_cast<int>(regions.size()); ++i) {
-                char one[96];
-                region_label(regions[i], one, sizeof one);
+                char one[32];
+                std::snprintf(one, sizeof one, "%u", regions[i].key);
                 if (ImGui::Selectable(one, i == s_pick)) s_pick = i;
             }
             ImGui::EndCombo();
@@ -792,8 +773,11 @@ void draw_wanted(const mem::Reader& reader) {
         }
         ImGui::TextDisabled("상한 %.2f (게임이 그 위로 안 올라갑니다)",
                             game::bounty_from_raw(game::kBountyMaxRaw));
-        ImGui::TextDisabled("이름이 안 뜨면 현지화가 아직 안 올라온 것입니다 -"
-                            " 그때는 키로 보입니다.");
+        ImGui::TextDisabled("구역은 키로 보입니다 - 이름 붙이기는 아직입니다"
+                            " (1000138 데메니스 · 1000131 에르난드).");
+        ImGui::TextColored(col::kWarn,
+                           "벌금을 0 으로 해도 수배 상태는 안 풀립니다 -"
+                           " 상태는 이 레코드에 없습니다(찾는 중).");
     } else if (game::wanted_component_ready()) {
         // 컴포넌트는 잡았는데 지역 데이터가 없다 = 지금 범죄 기록이 없다.
         // 여기서 "월드에 들어가면" 을 띄우면 영원히 안 바뀌는 것처럼 보인다.
