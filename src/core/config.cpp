@@ -227,8 +227,8 @@ bool save(const std::wstring& path, const Config& c) {
     }
     out << "\n";
     out << "; 다시 걸어 줄 지식. `번호:레벨` 을 쉼표로 잇는다.\n";
-    out << "; 지식 쓰기는 세이브를 못 넘어서, 이 목록이 있어야 게임을 다시 켤 때\n";
-    out << "; 사람이 또 누르지 않는다. 화면의 [잊기] 가 이 줄을 비운다.\n";
+    out << "; 지식 쓰기는 게임에서 저장하면 세이브에 남는다. 이 목록은 저장을 잊고\n";
+    out << "; 끈 판을 위한 것이다. 화면의 [잊기] 가 이 줄을 비운다.\n";
     out << "knowledge_keep = ";
     for (std::size_t i = 0; i < c.knowledge_keep.size(); ++i) {
         const auto& k = c.knowledge_keep[i];

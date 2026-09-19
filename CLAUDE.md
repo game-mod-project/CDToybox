@@ -43,8 +43,10 @@ D3D12 ImGui 오버레이. 싱글플레이 전용.
 
 ## 2. 워크트리 — 여러 세션이 하나를 같이 쓴다
 
-저장소는 `E:\CDToybox` **하나뿐**이다(2026-09-14 기준). 작업 디렉토리가
-게임 폴더로 열려 있어도 소스와 git 은 전부 여기 있다.
+작업 디렉토리가 게임 폴더로 열려 있어도 소스와 git 은 전부 `E:\CDToybox` 에
+있다. 워크트리는 **늘어나고 줄어드니 세지 말고 물어본다** — `git worktree list`
+가 지금 무엇이 붙어 있는지 알려 준다(2026-09-19 기준 `E:/CDToybox` = `develop`,
+`E:/CDToybox-mouse` = `feat/wanted-cheat`). **남의 트리는 건드리지 않는다.**
 
 **git 의 HEAD · 인덱스 · 워킹트리는 저장소당 하나다.** 브랜치를 만들어도 "내
 것" 이 되지 않는다. 다른 세션이 체크아웃하면 내 다음 커밋이 남의 브랜치로 가고,
@@ -80,7 +82,7 @@ git -C E:/CDToybox worktree add E:/CDToybox-xxx -b <브랜치> develop
 
 ```powershell
 .\scripts\build.ps1          # VS2022 BuildTools + Ninja, RelWithDebInfo
-.\build\cdtb_tests.exe       # 단위 시험 (현재 596개)
+.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (705개, 2026-09-19)
 .\scripts\deploy.ps1         # build\xinput1_4.dll -> 게임 bin64\
 ```
 

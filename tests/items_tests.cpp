@@ -534,8 +534,8 @@ TEST(config_drops_socket_cap_parts_past_the_vector) {
 
 // ---------------------------------------- 자동 재적용 지식 목록 (knowledge_keep)
 //
-// 지식 쓰기가 세이브를 못 넘으므로 이 목록이 게임 재시작을 건너게 해 준다.
-// `번호:레벨` 을 쉼표로 잇는다.
+// 지식 쓰기는 게임에서 저장하면 세이브에 남는다(실측 2026-09-15). 이 목록은 저장을
+// 잊고 끈 판에 다시 걸어 준다. `번호:레벨` 을 쉼표로 잇는다.
 
 TEST(config_reads_knowledge_keep) {
     const auto k = cdtb::config::parse_knowledge_keep("4883:1,4884:2");
