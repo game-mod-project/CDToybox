@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+#include "core/findlimit.h"
 #include "core/log.h"
 
 namespace cdtb::game {
@@ -297,6 +298,12 @@ std::atomic<bool> g_ready{false};
 // 표시명(현지화)이 실제로 붙었는가. 현지화가 카탈로그보다 늦게 올라오면
 // 첫 빌드는 표시명 0개다 - 이 플래그가 false 인 동안 다음 틱에 다시 만든다.
 std::atomic<bool> g_have_labels{false};
+// 그 재시도에 **끝**을 둔다(TROUBLESHOOTING 2.10.1). 한 번이 카탈로그 셋을
+// 통째로 다시 만드는 일이라, 현지화가 끝내 안 올라오면 분석 루프가 그것을
+// 영원히 되풀이한다. 그만두면 목록은 **내부 이름으로** 그대로 보인다 -
+// 못 쓰게 되는 것이 아니라 이름만 덜 예쁘다. 다시 보려면 `roster_labels_rearm`.
+constexpr int kLabelTries = 20;
+cdtb::FindLimit g_label_find{kLabelTries};
 
 }  // namespace
 
@@ -396,7 +403,8 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     // 표시명이 아직 안 붙었으면(현지화 지연) 다시 만든다. 목록 자체는 g_ready 로
     // 이미 보이지만, 라벨이 붙을 때까지 재빌드한다(아이템 표와 동일한 재시도).
     if (g_ready.load(std::memory_order_acquire) &&
-        g_have_labels.load(std::memory_order_acquire)) {
+        (g_have_labels.load(std::memory_order_acquire) ||
+         g_label_find.gave_up())) {
         return true;
     }
 
@@ -468,15 +476,36 @@ bool discover_roster(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (ok_m) g_mercenary.swap(std::move(m));
     // 표시명이 하나라도 붙었거나 현지화 시스템이 준비됐으면 재시도를 멈춘다.
     // (현지화가 아직이면 has_loc=false 라 다음 틱에 다시 만든다.)
-    g_have_labels.store(labeled > 0 || has_loc, std::memory_order_release);
+    const bool got_labels = labeled > 0 || has_loc;
+    g_have_labels.store(got_labels, std::memory_order_release);
     g_ready.store(true, std::memory_order_release);
     log::infof(
         "로스터: 탈것 {}개, 캐릭터 {}개(동반자 {}개), 용병 타입 {}개, 표시명 {}개",
         vn, cn, companions, ok_m ? mn : 0, labeled);
+    if (got_labels) {
+        g_label_find.note_success();
+    } else if (g_label_find.note_failure()) {
+        log::warnf("로스터 표시명: {}회 다시 만들어도 현지화가 안 올라왔다 - "
+                   "그만 만든다. 목록은 내부 이름으로 그대로 보인다",
+                   g_label_find.cap());
+    }
     return true;
 }
 
 bool roster_ready() { return g_ready.load(std::memory_order_acquire); }
+
+bool roster_labels_gave_up() {
+    return !g_have_labels.load(std::memory_order_acquire) &&
+           g_label_find.gave_up();
+}
+
+void roster_labels_rearm() {
+    if (g_label_find.gave_up()) {
+        log::infof("로스터 표시명: 다시 만들어 본다 ({}회까지)",
+                   g_label_find.cap());
+    }
+    g_label_find.rearm();
+}
 
 std::uintptr_t roster_char_manager() {
     return g_char_mgr.load(std::memory_order_acquire);
