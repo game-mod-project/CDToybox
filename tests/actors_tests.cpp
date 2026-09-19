@@ -164,6 +164,79 @@ TEST(actors_snapshot_fills_handles) {
     }
 }
 
+namespace {
+
+// 읽기 횟수를 센다. 이 아래 시험의 대상은 "무엇을 읽었나" 가 아니라
+// **몇 번 읽었나** 다 - 같은 표를 몇 번 다시 읽는지가 문제였다.
+class CountingMemory : public cdtb::mem::Reader {
+public:
+    explicit CountingMemory(const FakeMemory& m) : m_(m) {}
+    bool read(std::uintptr_t addr, void* out, std::size_t n) const override {
+        ++reads;
+        return m_.read(addr, out, n);
+    }
+    std::uintptr_t module_base() const override { return m_.module_base(); }
+    std::size_t module_size() const override { return m_.module_size(); }
+    std::vector<cdtb::mem::Range> heap_regions() const override {
+        return m_.heap_regions();
+    }
+    mutable std::size_t reads = 0;
+
+private:
+    const FakeMemory& m_;
+};
+
+}  // namespace
+
+// 명부 항목마다 `actor_handle_alive` 를 부르면 그때마다 액터 해시표를
+// **통째로 다시 읽는다.** 명부 880개 × 액터 수천 개가 되자 그리는 스레드가
+// 2.9초 멎었다(실측 2026-09-19, `느림: 획득 뒤처리 2917.3ms`).
+// 그래서 한 번 모아 두고 그 안에서 보는 길을 둔다.
+TEST(actor_handle_set_is_read_once_not_per_query) {
+    Fixture f;
+    CountingMemory cm(f.mem);
+
+    // 전제 확인: 표를 한 번 읽는 것 자체가 여러 번 읽기다(통째로 걷는다).
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> hs;
+    CHECK(cdtb::game::read_actor_handles(cm, f.mem.heap_addr(Fixture::kMgr), &hs));
+    CHECK(cm.reads >= 8);
+
+    // 한 번 모은다.
+    cm.reads = 0;
+    cdtb::game::ActorHandleSet set;
+    CHECK(cdtb::game::actor_handle_set(cm, f.mem.heap_addr(Fixture::kMgr), &set));
+    CHECK(set.known);
+    const std::size_t once = cm.reads;
+    CHECK(once >= 8);
+
+    // 그 뒤 200번 물어도 읽기가 **한 번도** 늘지 않는다.
+    for (int i = 0; i < 100; ++i) {
+        (void)cdtb::game::actor_handle_in_set(set, 0xB0100001u);
+        (void)cdtb::game::actor_handle_in_set(set,
+                                             0xDEAD0000u + static_cast<std::uint32_t>(i));
+    }
+    CHECK_EQ(cm.reads, once);
+
+    // 답도 맞아야 한다.
+    CHECK(cdtb::game::actor_handle_in_set(set, 0xB0100001u));
+    CHECK(cdtb::game::actor_handle_in_set(set, 0xB0100002u));
+    CHECK(!cdtb::game::actor_handle_in_set(set, 0xB0100003u));
+    CHECK(!cdtb::game::actor_handle_in_set(set, 0));
+}
+
+// 표를 못 읽으면 **모른다** 여야 한다. 이 값으로 "죽은 핸들" 을 판정해
+// 지우므로, 모를 때 "죽었다" 로 읽으면 살아 있는 개체의 소환 판정을 지운다
+// (= 중복 소환). 옛 `actor_handle_alive` 의 `known_out` 계약을 그대로 잇는다.
+TEST(actor_handle_set_says_unknown_when_the_table_is_unreadable) {
+    Fixture f;
+    f.mem.put_u32(Fixture::kCont + 0x88, 0);  // 버킷 수 0 - 읽을 수 없다
+    cdtb::game::ActorHandleSet set;
+    CHECK(!cdtb::game::actor_handle_set(f.mem, f.mem.heap_addr(Fixture::kMgr), &set));
+    CHECK(!set.known);
+    // 모르는 상태에서는 어떤 핸들도 "살아있다" 가 아니다.
+    CHECK(!cdtb::game::actor_handle_in_set(set, 0xB0100001u));
+}
+
 TEST(actor_manager_candidate_cap_leaves_room_for_junk) {
     // 후보는 **주소 순**이라, 힙이 위쪽에 잡히는 실행에서는 vtable 값을 우연히
     // 담은 낮은 주소의 가짜가 앞자리를 다 차지한다. 2026-09-18 실측에서 진짜

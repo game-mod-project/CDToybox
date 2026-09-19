@@ -1672,12 +1672,17 @@ void cmd_clanalive(mem::Rtti& rt, const mem::Reader& reader) {
         std::printf("명부를 읽지 못했습니다.\n");
         return;
     }
+    // 표는 **한 번만** 읽는다. 항목마다 물으면 그때마다 액터 해시표를 통째로
+    // 다시 읽는데, 프로브는 원격 읽기(ReadProcessMemory)라 모드보다 훨씬
+    // 비싸다. 같은 실수를 모드 쪽에서 그리는 스레드 2.9초 멈춤으로 만났다
+    // (TROUBLESHOOTING 2.16).
+    game::ActorHandleSet live;
+    const bool known = game::actor_handle_set_cached(reader, &live);
     int marked = 0, dead = 0, alive = 0, unknown = 0;
     for (const auto& e : list) {
         if (e.handle == 0) continue;
         ++marked;
-        bool known = false;
-        const bool ok = game::actor_handle_alive(reader, e.handle, &known);
+        const bool ok = known && game::actor_handle_in_set(live, e.handle);
         if (!known) {
             ++unknown;
         } else if (ok) {

@@ -131,6 +131,29 @@ bool actor_manager_ready();
 // "죽은 핸들" 을 판정해 지우므로, 모를 때는 건드리지 않는 쪽이 안전하다.
 bool actor_handle_alive(const mem::Reader& reader, std::uint32_t handle,
                         bool* known_out);
+
+// 살아 있는 핸들을 **한 번에** 모은 것.
+//
+// `actor_handle_alive` 는 부를 때마다 액터 해시표를 통째로 다시 읽는다.
+// 한 번 물을 때는 그래도 되지만 **명부처럼 여러 번 물어야 하면 안 된다** -
+// 명부 880개 × 액터 수천 개가 되자 그리는 스레드가 2.9초 멎었다
+// (실측 2026-09-19, `TROUBLESHOOTING.md` 2.16). 여러 번 물 자리에서는
+// 이것으로 한 번 모아 두고 `actor_handle_in_set` 으로 본다.
+struct ActorHandleSet {
+    // 오름차순·중복 없음. 이분 탐색으로 본다.
+    std::vector<std::uint32_t> handles;
+    // 표를 실제로 읽었는가. **거짓이면 아무것도 판정하지 않는다** - 이 값으로
+    // 죽은 핸들을 지우므로, 모를 때 "죽었다" 로 읽으면 살아 있는 개체의 소환
+    // 판정을 지워 중복 소환이 된다(`actor_handle_alive` 의 `known_out` 계약).
+    bool known = false;
+};
+// 매니저를 직접 주고 모은다(시험·프로브용).
+bool actor_handle_set(const mem::Reader& reader, std::uintptr_t manager,
+                      ActorHandleSet* out);
+// 캐시된 매니저로 모은다. 매니저를 못 잡았으면 `known = false`.
+bool actor_handle_set_cached(const mem::Reader& reader, ActorHandleSet* out);
+// 모은 것 안에서 본다. **읽기가 없다.**
+bool actor_handle_in_set(const ActorHandleSet& set, std::uint32_t handle);
 // 지금 걷는다. **그리는 스레드만** 부른다(버튼/주기/아래 tick). 실패하면 false
 // 이고 옛 판 유지. 다른 스레드가 갈아 끼우면 그리는 쪽이 쥔 원소 포인터가
 // 매달린다(Codex 지적 2026-09-11).
