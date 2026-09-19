@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -67,6 +68,26 @@ public:
     // 작은 주소를 객체 시작으로 보면 된다.
     std::vector<std::uintptr_t> instances_of_class(const std::string& name,
                                                    std::size_t max) const;
+
+    // 같은 탐색이되 **상한이 훑은 수가 아니라 합격한 수를 센다.**
+    //
+    // 위 오버로드의 `max` 는 훑은 수라 **가짜가 예산을 먹는다.** 후보는 주소
+    // 순이고 거기엔 vtable 값을 우연히 담은 메모리가 섞이므로, 힙이 위쪽에
+    // 잡히는 실행에서는 낮은 주소의 가짜가 앞자리를 다 차지해 진짜가 잘린다
+    // (실측 2026-09-18: 진짜가 11번째인데 상한이 8이라 월드 안에서 "매니저를
+    // 못 찾았습니다" 가 떴다 - `TROUBLESHOOTING.md` 4.33).
+    //
+    // **상한을 올리는 것으로는 절반만 풀린다** - 실제 인스턴스가 상한보다
+    // 적으면 늘 힙을 끝까지 읽는다. 판정을 여기로 넘기면 (1) 가짜가 예산을
+    // 안 먹고 (2) **첫 합격에서 멈출 수 있어**(max_accepted = 1) 오히려 싸다.
+    //
+    // `accept` 는 스캔 도중(락 밖에서) 불린다 - 값싸야 한다. `class_of_vtable` ·
+    // `class_of_object` 같은 색인 조회는 괜찮지만 **스캔 계열**
+    // (`instances_of_class` · `find_objects*` · `prefetch_instances`)을 그 안에서
+    // 다시 부르지는 말 것 - 힙을 훑는 도중에 힙을 또 훑게 된다.
+    std::vector<std::uintptr_t> instances_of_class(
+        const std::string& name, std::size_t max_accepted,
+        const std::function<bool(std::uintptr_t)>& accept) const;
 
     // 이름에 substring 이 **든** 모든 클래스의 객체를 힙 한 번 훑기로 찾는다(부분 일치
     // 하나). 클래스마다 따로 스캔하면 힙 전체를 매번 읽어야 하므로 모아서 온다.
@@ -162,6 +183,11 @@ public:
 private:
     std::vector<std::uintptr_t> instances_of_vtable(std::uintptr_t vtable,
                                                     std::size_t max) const;
+    // 힙을 훑으며 vtable 값을 담은 자리를 **하나씩 흘려보낸다.** on_hit 가 false 를
+    // 내면 그 자리에서 멈춘다. 모아서 돌려주는 instances_of_vtable 이 이것 위에 선다 -
+    // 판정을 넘기는 쪽은 후보를 통째로 담아 둘 이유가 없다.
+    void scan_vtable(std::uintptr_t vtable,
+                     const std::function<bool(std::uintptr_t)>& on_hit) const;
     // 힙을 한 번 훑어 matching 의 vtable 값을 담은 자리를 모은다(find_objects 계열의 공통 몸통).
     // per_class_max 가 0 이 아니면 클래스(이름 포인터)마다 그만큼까지만 담고, 상한에 닿은
     // 클래스 수를 capped_out 에 낸다.

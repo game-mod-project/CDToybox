@@ -242,10 +242,9 @@ Rtti::ScanStats Rtti::scan_stats() {
                      g_scan_lost_kb.load(std::memory_order_relaxed)};
 }
 
-std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
-                                                      std::size_t max) const {
-    std::vector<std::uintptr_t> out;
-    if (vtable == 0) return out;
+void Rtti::scan_vtable(std::uintptr_t vtable,
+                       const std::function<bool(std::uintptr_t)>& on_hit) const {
+    if (vtable == 0) return;
 
     std::vector<std::uint8_t> buf;
     for (const auto& reg : r_.heap_regions()) {
@@ -261,11 +260,19 @@ std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
                 std::uint64_t v;
                 std::memcpy(&v, buf.data() + i, 8);
                 if (v != vtable) continue;
-                out.push_back(base + done + i);
-                if (out.size() >= max) return out;
+                if (!on_hit(base + done + i)) return;
             }
         }
     }
+}
+
+std::vector<std::uintptr_t> Rtti::instances_of_vtable(std::uintptr_t vtable,
+                                                      std::size_t max) const {
+    std::vector<std::uintptr_t> out;
+    scan_vtable(vtable, [&](std::uintptr_t a) {
+        out.push_back(a);
+        return out.size() < max;   // 상한에 닿으면 멈춘다
+    });
     return out;
 }
 
@@ -555,6 +562,57 @@ std::vector<std::uintptr_t> Rtti::instances_of_class(const std::string& name,
                 out.push_back(a);
                 if (out.size() >= max) return out;
             }
+        }
+        break;
+    }
+    return out;
+}
+
+std::vector<std::uintptr_t> Rtti::instances_of_class(
+    const std::string& name, std::size_t max_accepted,
+    const std::function<bool(std::uintptr_t)>& accept) const {
+    std::vector<std::uintptr_t> out;
+    if (!accept || max_accepted == 0) return out;
+
+    // 미리 모아 둔 이름이면 힙을 다시 읽지 않는다. 다만 **스냅숏이 상한에
+    // 닿았으면 거기서도 가짜가 앞자리를 먹었을 수 있으므로** 믿지 않고 다시
+    // 걷는다 - 이 오버로드가 있는 이유가 바로 그 잘림이다(4.33).
+    std::vector<std::uintptr_t> snap;
+    bool have_snap = false;
+    {
+        std::lock_guard<std::mutex> lk(prefetch_mutex_);
+        const auto it = prefetch_.find(name);
+        if (it != prefetch_.end() &&
+            !(prefetch_cap_ != 0 && it->second.size() >= prefetch_cap_)) {
+            snap = it->second;
+            have_snap = true;
+        }
+    }
+    // 판정은 **락 밖에서** 한다 - accept 는 게임 메모리를 읽으므로 느릴 수 있고,
+    // 그 안에서 이 객체를 다시 부르면 교착한다.
+    if (have_snap) {
+        for (const auto a : snap) {
+            if (!accept(a)) continue;
+            out.push_back(a);
+            if (out.size() >= max_accepted) break;
+        }
+        return out;
+    }
+
+    for (const auto& t : find_types(name, 32)) {
+        if (t.name != name) continue;   // 완전 일치만
+        for (const auto vt : vtables_for(t.descriptor)) {
+            bool full = false;
+            scan_vtable(vt, [&](std::uintptr_t a) {
+                if (!accept(a)) return true;   // 가짜는 예산을 안 먹는다
+                out.push_back(a);
+                if (out.size() >= max_accepted) {
+                    full = true;
+                    return false;
+                }
+                return true;
+            });
+            if (full) return out;
         }
         break;
     }

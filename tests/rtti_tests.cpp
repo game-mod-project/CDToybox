@@ -229,3 +229,67 @@ TEST(rtti_prefetch_unknown_name_is_cached_as_empty_and_others_still_walk) {
     CHECK_EQ(rt.instances_of_class(".?AVFoo@@", 16).size(), 3u);   // 모르는 이름은 걷는다
     rt.clear_prefetch();
 }
+
+// ---- 상한이 훑은 수가 아니라 **합격한 수**를 센다 (TROUBLESHOOTING 4.33)
+//
+// 후보는 **주소 순**이고, 거기엔 vtable 값을 우연히 담은 메모리가 섞인다.
+// 힙이 위쪽에 잡히는 실행에서는 낮은 주소의 가짜가 앞자리를 다 차지하므로,
+// **훑은 수**로 상한을 두면 진짜가 잘린다 - 실측 2026-09-18 에 진짜가 11번째
+// 인데 상한이 8이라 월드 안에서 "매니저를 못 찾았습니다" 가 떴다.
+//
+// 상한을 올리는 것으로는 절반만 풀린다(그 절의 "대가" 문단) - 늘 힙을 끝까지
+// 읽게 된다. 판정을 넘기면 가짜가 예산을 안 먹고, 첫 합격에서 멈출 수 있어
+// **오히려 싸다.**
+
+TEST(rtti_instance_cap_counts_accepted_not_scanned) {
+    Fixture f;
+    cdtb::mem::Rtti rt(f.mem);
+    CHECK(rt.load_image());
+    // Foo 의 첫 vtable 은 0x10 과 0xC0 을 낸다(주소 순). 0x10 을 "가짜" 로 본다.
+    const std::uintptr_t junk = f.mem.heap_addr(Fixture::kObjFoo1);
+    const std::uintptr_t real = f.mem.heap_addr(Fixture::kObjFoo3);
+
+    // 옛 길: 훑은 수로 자른다 - 가짜가 앞서면 진짜를 볼 기회조차 없다.
+    const auto scanned = rt.instances_of_class(".?AVFoo@@", 1);
+    CHECK_EQ(scanned.size(), std::size_t{1});
+    CHECK_EQ(scanned[0], junk);
+
+    // 새 길: 합격한 수로 자른다.
+    int looked = 0;
+    const auto accepted = rt.instances_of_class(
+        ".?AVFoo@@", 1, [&](std::uintptr_t a) {
+            ++looked;
+            return a == real;
+        });
+    CHECK_EQ(accepted.size(), std::size_t{1});
+    CHECK_EQ(accepted[0], real);
+    CHECK(looked >= 2);   // 가짜를 실제로 지나쳐 갔다
+}
+
+TEST(rtti_instance_predicate_stops_at_the_cap) {
+    Fixture f;
+    cdtb::mem::Rtti rt(f.mem);
+    CHECK(rt.load_image());
+    // 전부 합격시켜도 상한이 1이면 **첫 합격에서 멈춘다** - 그래야 싸다.
+    int looked = 0;
+    const auto one = rt.instances_of_class(
+        ".?AVFoo@@", 1, [&](std::uintptr_t) { ++looked; return true; });
+    CHECK_EQ(one.size(), std::size_t{1});
+    CHECK_EQ(looked, 1);
+
+    // 상한이 넉넉하면 합격한 것을 다 낸다(Foo 는 셋).
+    int looked_all = 0;
+    const auto all = rt.instances_of_class(
+        ".?AVFoo@@", 64, [&](std::uintptr_t) { ++looked_all; return true; });
+    CHECK_EQ(all.size(), std::size_t{3});
+    CHECK_EQ(looked_all, 3);
+}
+
+TEST(rtti_instance_predicate_that_accepts_nothing_returns_empty) {
+    Fixture f;
+    cdtb::mem::Rtti rt(f.mem);
+    CHECK(rt.load_image());
+    const auto none = rt.instances_of_class(
+        ".?AVFoo@@", 8, [](std::uintptr_t) { return false; });
+    CHECK(none.empty());
+}
