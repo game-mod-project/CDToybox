@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 #include "game/nofall.h"
 #include "game/player.h"
@@ -683,41 +684,95 @@ void draw_wanted(const mem::Reader& reader) {
     // 매달릴 이유가 없다.
     const bool msg_ok = game::wanted_ready();
 
-    // --- 벌금 (요청하신 기능) ---
+    // --- 벌금: **구역이 여럿이다** ---
     //
-    // 화면의 "데메니스 왕국 / 벌금 N.NN" 을 그대로 읽고 쓴다. 제자리
-    // 쓰기이고, 쓰면 화면이 바로 따라온다(실측 2026-09-18).
-    std::uint64_t raw = 0;
-    if (game::bounty_read(reader, &raw)) {
-        static double s_want = -1.0;
-        const double now = game::bounty_from_raw(raw);
-        if (s_want < 0.0) s_want = now;   // 처음엔 현재 값으로 맞춰 둔다
-
-        ImGui::Text("현재 벌금  %.2f", now);
+    // 게임 창은 지금 있는 구역 하나만 보여 준다. 우리가 첫 칸만 보이면 둘이
+    // 어긋나 "고쳤는데 안 고쳐진" 것처럼 보인다 - 실제로 그랬다(2026-09-19:
+    // 데메니스를 0 으로 만드는 동안 에르난드의 81.00 이 그대로 남았다).
+    // 그래서 **전부** 낸다. 영토가 다섯이라 많아야 다섯 줄이다.
+    std::vector<game::WantedRegion> regions;
+    if (game::wanted_regions(reader, &regions)) {
+        ImGui::TextDisabled("구역 %zu곳 - 게임 창은 지금 있는 구역만 보여 줍니다.",
+                            regions.size());
+        if (ImGui::BeginTable("wanted_regions", 3,
+                              ImGuiTableFlags_SizingFixedFit |
+                                  ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("구역 키");
+            ImGui::TableSetupColumn("벌금");
+            ImGui::TableSetupColumn("##act");
+            ImGui::TableHeadersRow();
+            for (const auto& r : regions) {
+                ImGui::TableNextRow();
+                // 줄마다 ID 를 가른다 - 라벨이 같으면 첫 줄만 반응한다(6.17).
+                ImGui::PushID(static_cast<int>(r.key));
+                ImGui::TableNextColumn();
+                ImGui::Text("%u", r.key);
+                ImGui::TableNextColumn();
+                const double shown = game::bounty_from_raw(r.raw);
+                if (r.raw != 0) {
+                    ImGui::TextColored(col::kWarn, "%.2f", shown);
+                } else {
+                    ImGui::Text("%.2f", shown);
+                }
+                ImGui::TableNextColumn();
+                if (ImGui::SmallButton("0 으로")) {
+                    if (game::bounty_write_region(reader, r.key, 0)) {
+                        notice_set(&s_note, NoticeLevel::Ok,
+                                   "구역 {} 의 벌금을 지웠습니다", r.key);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Bad,
+                                   "쓰지 못했습니다");
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        // 구역이 여럿일 때 하나씩 누르게 하면 오늘과 같은 일이 난다.
+        if (ImGui::Button("전부 0 으로")) {
+            int changed = 0;
+            if (game::bounty_clear_all(reader, &changed)) {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "구역 {}곳의 벌금을 지웠습니다", changed);
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
+            }
+        }
+        // 값을 정해 쓰는 것은 한 구역씩. 어느 구역인지 골라야 한다.
+        static int s_pick = 0;
+        static double s_want = 0.0;
+        if (s_pick >= static_cast<int>(regions.size())) s_pick = 0;
+        char label[32];
+        std::snprintf(label, sizeof label, "%u", regions[s_pick].key);
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::BeginCombo("구역", label)) {
+            for (int i = 0; i < static_cast<int>(regions.size()); ++i) {
+                char one[32];
+                std::snprintf(one, sizeof one, "%u", regions[i].key);
+                if (ImGui::Selectable(one, i == s_pick)) s_pick = i;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
         ImGui::InputDouble("설정값", &s_want, 1.0, 10.0, "%.2f");
         ImGui::SameLine();
         if (ImGui::Button("적용")) {
             // notice_set 의 형식 문자열은 컴파일 타임 상수여야 한다 -
             // 삼항으로 고르면 std::format_string 이 안 받는다.
-            if (game::bounty_write(reader, game::bounty_to_raw(s_want))) {
+            const std::uint32_t key = regions[s_pick].key;
+            if (game::bounty_write_region(reader, key,
+                                          game::bounty_to_raw(s_want))) {
                 notice_set(&s_note, NoticeLevel::Ok,
-                           "벌금을 {:.2f} 로 썼습니다", s_want);
-            } else {
-                notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("0 으로 지우기")) {
-            if (game::bounty_write(reader, 0)) {
-                s_want = 0.0;
-                notice_set(&s_note, NoticeLevel::Ok, "벌금을 지웠습니다");
+                           "구역 {} 의 벌금을 {:.2f} 로 썼습니다", key, s_want);
             } else {
                 notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
             }
         }
         ImGui::TextDisabled("상한 %.2f (게임이 그 위로 안 올라갑니다)",
                             game::bounty_from_raw(game::kBountyMaxRaw));
+        ImGui::TextDisabled("구역 이름은 아직 안 붙였습니다 - 키로 보입니다"
+                            " (1000138 데메니스 · 1000131 에르난드).");
     } else if (game::wanted_component_ready()) {
         // 컴포넌트는 잡았는데 지역 데이터가 없다 = 지금 범죄 기록이 없다.
         // 여기서 "월드에 들어가면" 을 띄우면 영원히 안 바뀌는 것처럼 보인다.
@@ -726,7 +781,7 @@ void draw_wanted(const mem::Reader& reader) {
     } else if (game::wanted_find_gave_up()) {
         // **그만 찾은 상태다.** 한 번이 ~45초짜리 힙 전수라 못 찾는 동안 계속
         // 돌면 배경이 무거워진다(`game/wanted.h`). 다시 볼지는 사람이 정한다.
-        ImGui::TextDisabled("벌금 칸을 못 찾아 **찾기를 멈췄습니다.**");
+        ImGui::TextDisabled("벌금 칸을 못 찾아 찾기를 멈췄습니다.");
         if (ImGui::Button("다시 찾기")) {
             game::wanted_find_rearm();
             notice_set(&s_note, NoticeLevel::Ok,
