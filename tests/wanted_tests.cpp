@@ -252,3 +252,32 @@ TEST(wanted_find_rearm_clears_given_up) {
 }
 
 }  // namespace
+
+// ---------------------------------------- 구역 기록은 **여럿**이다
+//
+// `ClientSelfWantedActorComponent +0x30` 은 단일 포인터가 아니라
+// **`{데이터, 크기, 용량}` 벡터**다(실측 2026-09-19). 원소는 0x40 바이트,
+// `+0x28` 이 구역 키 · `+0x30` 이 벌금이다.
+//
+// 그걸 포인터로 읽으면 **첫 원소만** 보고 쓴다. 실제로 그래서
+// "벌금을 0 으로 내렸는데 수배가 안 풀린다" 가 났다 - 데메니스를 0 으로
+// 만드는 동안 에르난드의 81.00 은 한 번도 안 건드려졌다.
+//
+// 영토는 다섯이라(에르난드·페일론·데메니스·델레시아·붉은사막) 기록도
+// 다섯까지 난다.
+
+TEST(wanted_region_count_takes_a_sane_vector_head) {
+    CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 2, 2), std::size_t{2});
+    CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 1, 4), std::size_t{1});
+    // 영토 다섯이 전부 수배인 판
+    CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 5, 5), std::size_t{5});
+}
+
+TEST(wanted_region_count_refuses_a_head_that_makes_no_sense) {
+    // 힙이 요동칠 때 머리만 읽으면 쓰레기가 나온다. 말이 안 되면
+    // **아무것도 안 만지는** 쪽이 안전하다 - 이 값이 쓰기 자리를 정한다.
+    CHECK_EQ(cdtb::game::wanted_region_count(0, 2, 2), std::size_t{0});
+    CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 0, 4), std::size_t{0});
+    CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 5, 2), std::size_t{0});
+    CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 2, 1u << 20), std::size_t{0});
+}

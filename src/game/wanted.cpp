@@ -26,7 +26,12 @@ std::atomic<std::uint16_t> g_state_id{kChangeWantedStateId};
 
 // --- 벌금 사슬 ---
 constexpr const char* kCompClass = ".?AVClientSelfWantedActorComponent@pa@@";
-constexpr std::size_t kCompRegion = 0x30;   // -> WantedRegionData
+// **벡터다.** {데이터 ptr, 크기 u32, 용량 u32} - 단일 포인터가 아니다
+// (2026-09-19 정정, wanted.h 머리말).
+constexpr std::size_t kCompRegionVec = 0x30;
+constexpr std::size_t kVecSize = 0x38;
+constexpr std::size_t kVecCap = 0x3C;
+constexpr std::size_t kRegionKey = 0x28;    // u32 구역 키
 constexpr std::size_t kRegionFine = 0x30;   // u64 벌금 (2자리 고정소수)
 
 std::uintptr_t g_comp = 0;
@@ -49,17 +54,37 @@ bool comp_alive(const mem::Reader& reader) {
     return static_cast<std::uintptr_t>(vt) == g_comp_vtable;
 }
 
-// 컴포넌트 -> 현재 지역의 WantedRegionData. 0 이면 못 얻은 것이다.
-std::uintptr_t region_of(const mem::Reader& reader) {
-    if (!comp_alive(reader) || g_region_vtable == 0) return 0;
-    std::uint64_t r = 0;
-    if (!reader.read_value(g_comp + kCompRegion, &r) || r == 0) return 0;
-    // 지역 객체도 대조한다. 지역을 옮기면 이 포인터가 갈리는데, 그때
-    // 엉뚱한 자리에 쓰면 게임을 팅긴다.
-    std::uint64_t vt = 0;
-    if (!reader.read_value(static_cast<std::uintptr_t>(r), &vt)) return 0;
-    if (static_cast<std::uintptr_t>(vt) != g_region_vtable) return 0;
-    return static_cast<std::uintptr_t>(r);
+// 컴포넌트 -> 구역 기록 **전부**. 하나도 못 얻으면 빈 목록이다.
+//
+// **주소를 들고 있지 않는다.** 부를 때마다 벡터 머리부터 다시 읽는다 -
+// 구역이 하나 늘면 재할당돼 옛 주소가 죽는다(wanted.h 머리말의 실측).
+std::vector<WantedRegion> regions_now(const mem::Reader& reader) {
+    std::vector<WantedRegion> out;
+    if (!comp_alive(reader) || g_region_vtable == 0) return out;
+    std::uint64_t data = 0;
+    std::uint32_t size = 0, cap = 0;
+    if (!reader.read_value(g_comp + kCompRegionVec, &data)) return out;
+    if (!reader.read_value(g_comp + kVecSize, &size)) return out;
+    if (!reader.read_value(g_comp + kVecCap, &cap)) return out;
+    const std::size_t n = wanted_region_count(data, size, cap);
+    out.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uintptr_t a =
+            static_cast<std::uintptr_t>(data) + i * kWantedRegionStride;
+        // **원소마다** vtable 을 대조한다. 재할당 도중이면 절반만 성할 수 있고,
+        // 엉뚱한 자리에 쓰면 게임을 팅긴다.
+        std::uint64_t vt = 0;
+        if (!reader.read_value(a, &vt) ||
+            static_cast<std::uintptr_t>(vt) != g_region_vtable) {
+            continue;
+        }
+        WantedRegion r;
+        r.addr = a;
+        if (!reader.read_value(a + kRegionKey, &r.key)) continue;
+        if (!reader.read_value(a + kRegionFine, &r.raw)) continue;
+        out.push_back(r);
+    }
+    return out;
 }
 
 }  // namespace
@@ -125,8 +150,10 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
             ++n_seen;
             std::uint64_t vt = 0;
             if (!reader.read_value(addr, &vt) || vt == 0) return false;
+            // 벡터의 **데이터 포인터**가 곧 원소 [0] 의 주소라, 그것이
+            // WantedRegionData 인지 보는 것으로 컴포넌트를 가린다.
             std::uint64_t region = 0;
-            if (!reader.read_value(addr + kCompRegion, &region) ||
+            if (!reader.read_value(addr + kCompRegionVec, &region) ||
                 region == 0) {
                 return false;
             }
@@ -151,7 +178,7 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
         // 판정을 통과한 자리라 이 셋은 다시 읽힌다. 그래도 값이 사라졌으면
         // 잡지 않는다 - 힙은 스캔 도중에도 바뀐다.
         if (reader.read_value(addr, &vt) && vt != 0 &&
-            reader.read_value(addr + kCompRegion, &region) && region != 0 &&
+            reader.read_value(addr + kCompRegionVec, &region) && region != 0 &&
             reader.read_value(static_cast<std::uintptr_t>(region), &rvt) &&
             rvt != 0) {
             g_comp = addr;
@@ -172,7 +199,24 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     return false;
 }
 
-bool bounty_ready(const mem::Reader& reader) { return region_of(reader) != 0; }
+bool bounty_ready(const mem::Reader& reader) {
+    return !regions_now(reader).empty();
+}
+
+std::size_t wanted_region_count(std::uint64_t data, std::uint32_t size,
+                                std::uint32_t cap) {
+    if (data == 0 || size == 0) return 0;
+    if (size > cap) return 0;                 // 머리가 깨졌다
+    if (cap > kWantedRegionCapMax) return 0;  // 말이 안 되는 용량
+    return size;
+}
+
+bool wanted_regions(const mem::Reader& reader,
+                    std::vector<WantedRegion>* out) {
+    if (out == nullptr) return false;
+    *out = regions_now(reader);
+    return !out->empty();
+}
 
 bool wanted_component_ready() { return g_comp != 0 && g_comp_vtable != 0; }
 
@@ -185,26 +229,43 @@ void wanted_find_rearm() {
     log::infof("수배 컴포넌트: 다시 찾는다 ({}회까지)", kFindTries);
 }
 
-bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out) {
-    const std::uintptr_t region = region_of(reader);
-    if (region == 0 || raw_out == nullptr) return false;
-    return reader.read_value(region + kRegionFine, raw_out);
+bool bounty_write_region(const mem::Reader& reader, std::uint32_t key,
+                         std::uint64_t raw) {
+    // **여기서 다시 읽는다.** 화면이 들고 있던 주소로 쓰면 재할당된 뒤
+    // 죽은 배열에 쓴다 - 실측 2026-09-19 에 실제로 그랬다.
+    for (const auto& r : regions_now(reader)) {
+        if (r.key != key) continue;
+        std::uint64_t before = 0;
+        reader.read_value(r.addr + kRegionFine, &before);
+        if (!mem::safe_write_bytes(r.addr + kRegionFine, &raw, sizeof raw)) {
+            log::warnf("벌금 쓰기 실패: 구역 {} 0x{:X}", key,
+                       r.addr + kRegionFine);
+            return false;
+        }
+        // 쓴 값을 그대로 남긴다. 되돌릴 일이 생기면 이 줄이 원본이다.
+        log::infof("벌금: 구역 {} {} -> {} (0x{:X})", key, before, raw,
+                   r.addr + kRegionFine);
+        return true;
+    }
+    log::warnf("벌금 쓰기: 구역 {} 의 기록을 못 찾았다", key);
+    return false;
 }
 
-bool bounty_write(const mem::Reader& reader, std::uint64_t raw) {
-    const std::uintptr_t region = region_of(reader);
-    if (region == 0) {
-        log::warnf("벌금 쓰기: 지역 데이터를 못 얻었다");
+bool bounty_clear_all(const mem::Reader& reader, int* changed_out) {
+    if (changed_out != nullptr) *changed_out = 0;
+    const auto regions = regions_now(reader);
+    if (regions.empty()) {
+        log::warnf("벌금 전부 0: 구역 기록을 못 얻었다");
         return false;
     }
-    std::uint64_t before = 0;
-    reader.read_value(region + kRegionFine, &before);
-    if (!mem::safe_write_bytes(region + kRegionFine, &raw, sizeof raw)) {
-        log::warnf("벌금 쓰기 실패: 0x{:X}", region + kRegionFine);
-        return false;
+    int changed = 0;
+    for (const auto& r : regions) {
+        if (r.raw == 0) continue;
+        if (bounty_write_region(reader, r.key, 0)) ++changed;
     }
-    // 쓴 값을 그대로 남긴다. 되돌릴 일이 생기면 이 줄이 원본이다.
-    log::infof("벌금: {} -> {} (0x{:X})", before, raw, region + kRegionFine);
+    if (changed_out != nullptr) *changed_out = changed;
+    log::infof("벌금 전부 0: 구역 {}개 중 {}개를 바꿨다", regions.size(),
+               changed);
     return true;
 }
 

@@ -5,6 +5,7 @@
 //   근거: specs/2026-09-18-game-update-2944.md §2 §10
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -71,11 +72,54 @@ bool wanted_find_gave_up();
 // 다시 찾게 한다(화면 버튼). 세는 수를 0 으로 되돌릴 뿐이라 값싸다.
 void wanted_find_rearm();
 
-// 현재 지역의 벌금(저장 값). 못 읽으면 false.
-bool bounty_read(const mem::Reader& reader, std::uint64_t* raw_out);
+// --- 구역 기록은 **여럿**이다 (2026-09-19 정정) ------------------------
+//
+// `ClientSelfWantedActorComponent +0x30` 은 단일 포인터가 아니라
+// **`{데이터, 크기, 용량}` 벡터**다. 원소는 **0x40 바이트**이고
+// `+0x28` 이 구역 키, `+0x30` 이 벌금이다.
+//
+// 포인터로 읽으면 **첫 원소만** 보고 쓴다 - 벡터의 데이터 포인터가 곧
+// 원소 [0] 의 주소라 vtable 대조까지 통과해서, 틀린 줄 모르고 오래 썼다.
+// 증상은 "벌금을 0 으로 내렸는데 수배가 안 풀린다" 였다: 데메니스를 0 으로
+// 만드는 동안 에르난드의 81.00 은 한 번도 안 건드려졌다(실측 2026-09-19,
+// 화면과 바이트가 맞았다).
+//
+// 영토는 다섯이다 - 에르난드 공국 · 페일론 연합국 · 데메니스 왕국 ·
+// 델레시아 공화국 · 붉은사막. 그래서 기록도 다섯까지 난다.
+//
+// **게임 창은 지금 있는 구역 하나만 보여 준다.** 우리 창이 첫 칸만 보이면
+// 둘이 어긋나 "고쳤는데 안 고쳐진" 것처럼 보인다 - 전부 낸다.
+struct WantedRegion {
+    // 원소 주소. **들고 있지 말 것** - 구역이 하나 늘면 벡터가 재할당돼
+    // 이 주소가 죽는다(실측: 0x26387991EC0 -> 0x262F33FAC00).
+    std::uintptr_t addr = 0;
+    std::uint32_t key = 0;    // +0x28 구역 키 (1000138 데메니스 · 1000131 에르난드)
+    std::uint64_t raw = 0;    // +0x30 벌금 raw (2자리 고정소수)
+};
 
-// 현재 지역의 벌금을 쓴다. 0 이면 지우는 것이다.
-bool bounty_write(const mem::Reader& reader, std::uint64_t raw);
+// 벡터 원소 크기와, 머리를 믿어도 되는 선.
+inline constexpr std::size_t kWantedRegionStride = 0x40;
+inline constexpr std::uint32_t kWantedRegionCapMax = 64;
+
+// 벡터 머리가 말이 되는가. 되면 읽을 원소 수, 아니면 **0**.
+//
+// 힙이 요동칠 때 머리만 읽으면 쓰레기가 나온다. 말이 안 되면 아무것도 안
+// 만지는 쪽이 안전하다 - 이 값이 쓰기 자리를 정한다. 순수 함수라 시험한다.
+std::size_t wanted_region_count(std::uint64_t data, std::uint32_t size,
+                                std::uint32_t cap);
+
+// 지금 있는 구역 기록을 **전부** 읽는다. 하나도 못 읽으면 false.
+bool wanted_regions(const mem::Reader& reader,
+                    std::vector<WantedRegion>* out);
+
+// 그 구역의 벌금을 쓴다. **쓸 때마다 벡터를 다시 읽어** 자리를 다시 찾는다 -
+// 주소를 들고 있다 쓰면 재할당된 뒤 죽은 배열에 쓴다.
+bool bounty_write_region(const mem::Reader& reader, std::uint32_t key,
+                         std::uint64_t raw);
+
+// 전부 0 으로. 바꾼 개수를 낸다. 구역이 여럿일 때 하나씩 누르게 하면
+// 오늘과 같은 일이 난다.
+bool bounty_clear_all(const mem::Reader& reader, int* changed_out);
 
 // 수배(범죄수치) 치트 메시지.
 //
