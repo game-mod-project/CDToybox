@@ -455,9 +455,12 @@ void draw_vehicle_panel(bool* open) {
                 // **권위 사본을 못 찾았으면 미리 말한다.** 예전에는 "썼습니다"
                 // 가 뜨고 1초 뒤 숫자가 되돌아가, 사용자가 왜인지 알 길이 없었다.
                 if (m.authority == 0) {
-                    ImGui::TextDisabled(
-                        "  ⚠ 진짜 값을 든 사본을 아직 못 찾았습니다 - 지금 쓰면"
-                        " 곧 되돌아갑니다");
+                    // **흐린 글씨로 두면 안 된다.** 실제로 이 상태에서 쓰고는
+                    // "썼습니다" 만 보고 탔다가 값이 되돌아간 일이 있었다
+                    // (사용자 보고 2026-09-19). 눈에 띄는 색으로 낸다.
+                    ImGui::TextColored(col::kWarn,
+                                       "  ⚠ 진짜 값을 든 사본을 찾는 중입니다"
+                                       " - 지금 쓰면 **타는 순간 되돌아갑니다**");
                 }
 
                 // 입력값은 대상마다 따로 기억한다 - 창을 오가도 안 섞이게.
@@ -481,12 +484,20 @@ void draw_vehicle_panel(bool* open) {
                 want.sta_max = box[3];
 
                 if (ImGui::Button("적용 (한 번)")) {
-                    if (game::mount_vital_write(reader, m.handle, want)) {
-                        notice_set(&s_note, NoticeLevel::Ok, "{} 에 썼습니다",
-                                   m.name);
-                    } else {
+                    if (!game::mount_vital_write(reader, m.handle, want)) {
                         notice_set(&s_note, NoticeLevel::Bad,
                                    "실패 - 아무것도 안 썼습니다");
+                    } else if (m.authority == 0) {
+                        // **성공이라고 말하면 안 된다.** 거울에만 쓴 것은
+                        // 타는 순간 되돌아간다 - 그것을 "썼습니다" 로 알렸다가
+                        // 사용자가 왜 되돌아가는지 몰라 헤맸다(2026-09-19).
+                        notice_set(&s_note, NoticeLevel::Warn,
+                                   "{} - 보이는 값만 바꿨습니다. 진짜 사본을"
+                                   " 아직 못 찾아 **타면 되돌아갑니다**",
+                                   m.name);
+                    } else {
+                        notice_set(&s_note, NoticeLevel::Ok, "{} 에 썼습니다",
+                                   m.name);
                     }
                 }
                 ImGui::SameLine();
