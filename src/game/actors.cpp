@@ -296,6 +296,36 @@ bool actor_handle_alive(const mem::Reader& reader, std::uint32_t handle,
     return false;
 }
 
+bool actor_handle_set(const mem::Reader& reader, std::uintptr_t manager,
+                      ActorHandleSet* out) {
+    if (out == nullptr) return false;
+    out->handles.clear();
+    out->known = false;
+    if (manager == 0) return false;
+    std::vector<std::pair<std::uintptr_t, std::uint32_t>> handles;
+    if (!read_actor_handles(reader, manager, &handles) || handles.empty()) {
+        // 표를 못 읽었거나 비었다 - `actor_handle_alive` 와 같은 판정이다.
+        return false;
+    }
+    out->handles.reserve(handles.size());
+    for (const auto& hp : handles) out->handles.push_back(hp.second);
+    std::sort(out->handles.begin(), out->handles.end());
+    out->handles.erase(std::unique(out->handles.begin(), out->handles.end()),
+                       out->handles.end());
+    out->known = true;
+    return true;
+}
+
+bool actor_handle_set_cached(const mem::Reader& reader, ActorHandleSet* out) {
+    return actor_handle_set(reader, g_manager.load(std::memory_order_acquire),
+                            out);
+}
+
+bool actor_handle_in_set(const ActorHandleSet& set, std::uint32_t handle) {
+    if (!set.known || handle == 0) return false;
+    return std::binary_search(set.handles.begin(), set.handles.end(), handle);
+}
+
 bool actor_manager_ready() { return g_manager.load(std::memory_order_acquire) != 0; }
 
 bool refresh_live_actors(const mem::Reader& reader) {
