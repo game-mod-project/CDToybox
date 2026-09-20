@@ -327,3 +327,50 @@ TEST(species_message_separates_a_missing_record_from_a_missing_roster) {
     CHECK(m.find("찾는 중") == std::string::npos);
     CHECK(m.find("없습니다") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// 탈것 호출 거부 사유 (2026-09-20)
+//
+// 보스룸에서 왜 안 불리는지를 **추측하지 않고 찍기** 위한 것이다. 오류 코드는
+// 런타임에 등록되므로 상수가 아니다 - 전역 슬롯에서 읽은 값과 견준다.
+// ---------------------------------------------------------------------------
+#include "game/callcheck.h"
+
+using cdtb::game::callcheck_reason_name;
+using cdtb::game::kCallCheckReasonCount;
+
+TEST(callcheck_names_the_reason_by_matching_the_registered_value) {
+    const std::uint32_t v[] = {11, 22, 33, 44, 55};
+    CHECK(std::string(callcheck_reason_name(33, v, 5)) ==
+          "eErrNoCallVehicleMercenaryRideLimit");
+    CHECK(std::string(callcheck_reason_name(55, v, 5)) ==
+          "eErrNoCallVehicleInvalidPosition");
+}
+
+// **이름을 지어내지 않는다.** 모르는 코드는 nullptr 이어야 로그가 슬롯값을
+// 같이 찍어 밖에서 대조할 수 있다.
+TEST(callcheck_returns_null_for_an_unknown_code) {
+    const std::uint32_t v[] = {11, 22, 33, 44, 55};
+    CHECK(callcheck_reason_name(99, v, 5) == nullptr);
+    CHECK(callcheck_reason_name(0, v, 5) == nullptr);     // 0 은 성공이다
+    CHECK(callcheck_reason_name(11, nullptr, 5) == nullptr);
+}
+
+// **0 은 성공이고, 등록 전 슬롯도 0 이다.** 둘이 만나면 "성공인데 첫 칸
+// 이름이 붙는" 거짓말이 된다 - `err == 0` 을 먼저 걸러야 한다.
+//
+// (처음에 "0 인 슬롯은 건너뛴다" 를 시험으로 썼는데, RED 검증에서 그 가드를
+//  빼도 시험이 통과했다 - `err == 0` 이 앞서 걸리므로 **정의상 성립하는
+//  항등식**이었다. §7.7 그대로다. 진짜 위험을 재도록 고쳤다.)
+TEST(callcheck_never_names_success_even_when_slots_are_zero) {
+    const std::uint32_t none[] = {0, 0, 0, 0, 0};
+    CHECK(callcheck_reason_name(0, none, 5) == nullptr);   // <- 여기가 위험한 곳
+    CHECK(callcheck_reason_name(7, none, 5) == nullptr);
+    const std::uint32_t half[] = {0, 0, 7, 0, 0};
+    CHECK(std::string(callcheck_reason_name(7, half, 5)) ==
+          "eErrNoCallVehicleMercenaryRideLimit");
+}
+
+TEST(callcheck_reason_table_has_the_six_sites_five_distinct_errors) {
+    CHECK(kCallCheckReasonCount == static_cast<std::size_t>(5));
+}

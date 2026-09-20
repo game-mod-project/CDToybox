@@ -50,6 +50,7 @@
 #include "game/nofall.h"
 #include "game/player.h"
 #include "game/specguard.h"
+#include "game/callcheck.h"
 #include "game/spawnguard.h"
 #include "game/callgate.h"
 #include "game/dragondiag.h"

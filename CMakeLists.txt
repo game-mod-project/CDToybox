@@ -113,6 +113,7 @@ add_library(cdtoybox SHARED
     src/game/nofall_cave.cpp
     src/game/specguard.cpp
     src/game/spawnguard.cpp
+    src/game/callcheck.cpp
     src/game/spec_heal.cpp
     src/game/dragondiag.cpp
     src/game/towngate.cpp
