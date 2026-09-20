@@ -658,8 +658,21 @@ void draw_species_popup() {
     } else {
         ImGui::TextDisabled("줄을 눌러 고르세요");
     }
+    // **두 쪽(클라·서버) 명부가 다 있어야 쓴다.** 한쪽만 없으면
+    // `resolve_species_write` 가 반드시 실패하는데, 예전에는 버튼이 열려 있어
+    // 눌리고 "자리를 못 찾았습니다 - 월드 안인지 보세요" 가 떴다. **월드 안에
+    // 있던** 사용자가 그 문구를 보고 엉뚱한 곳을 봤다(2026-09-20) - 실제로는
+    // 아이템을 쓰면서 게임이 명부를 새로 만들었고(TROUBLESHOOTING 1.4) 클라
+    // 쪽을 48초짜리 힙 훑기로 다시 찾는 중이었다.
+    //
+    // 탈것 체력(MountAuthPhase)에서 이미 고친 모양 그대로 **준비될 때까지
+    // 잠그고 경과 시간을 낸다** - 기다리면 저절로 열린다(TROUBLESHOOTING 3.3.1).
+    const game::ClanRealmState srv_state = game::clan_realm_state(false);
+    const game::ClanRealmState cli_state = game::clan_realm_state(true);
+    const bool realms_ready = srv_state == game::ClanRealmState::Ready &&
+                              cli_state == game::ClanRealmState::Ready;
     ImGui::SameLine();
-    ImGui::BeginDisabled(pick == nullptr);
+    ImGui::BeginDisabled(pick == nullptr || !realms_ready);
     if (ImGui::Button("바꾸기 적용")) {
         std::string msg;
         const game::SpeciesApply r =
@@ -697,6 +710,37 @@ void draw_species_popup() {
         ImGui::SetTooltip("명부 레코드의 종을 그 자리에서 고쳐 씁니다.\n"
                           "저장·리로드에 남습니다.\n"
                           "되돌리려면 원래 종으로 다시 바꾸세요.");
+    }
+    if (!realms_ready) {
+        // 어느 쪽이 덜 됐는지 **이름을 말한다.** "자리를 못 찾았습니다" 하나로는
+        // 무엇을 기다려야 하는지 알 수 없다.
+        const bool srv_missing = srv_state != game::ClanRealmState::Ready;
+        const char* which = srv_missing ? "서버" : "클라";
+        const game::ClanRealmState st = srv_missing ? srv_state : cli_state;
+        switch (st) {
+            case game::ClanRealmState::Scanning:
+                ImGui::TextColored(col::kWarn,
+                                   "%s 쪽 명부를 다시 찾는 중입니다... %.0f초"
+                                   " (한 번에 1분쯤 걸립니다). 끝나면 저절로"
+                                   " 열립니다.",
+                                   which, game::clan_rescan_elapsed_sec());
+                break;
+            case game::ClanRealmState::GaveUp:
+                ImGui::TextColored(col::kWarn,
+                                   "%s 쪽 명부를 연속으로 못 찾아 그만"
+                                   " 찾았습니다 - 내 동반자 탭의 [다시 찾기] 를"
+                                   " 눌러 주십시오.",
+                                   which);
+                break;
+            default:
+                ImGui::TextColored(col::kWarn,
+                                   "%s 쪽 명부를 아직 못 잡았습니다 - 월드"
+                                   " 안이면 잠시 뒤 저절로 열립니다.",
+                                   which);
+                break;
+        }
+        ImGui::TextDisabled("  두 쪽에 다 써야 게임이 보는 사본이 바뀝니다"
+                            " (한쪽만 쓰면 우리 눈에만 바뀝니다).");
     }
     // 결과는 누른 버튼 바로 아래에 - 팝업 머리에 두면 표에 가려 안 보였다.
     notice_draw(g_species_notice);
