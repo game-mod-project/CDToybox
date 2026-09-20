@@ -132,6 +132,11 @@ cdtb::FindLimit g_find{kClanFindTries};
 mem::LocalReader g_worker_reader;
 const mem::Rtti* g_rescan_rtti = nullptr;
 std::atomic<bool> g_rescan_want[2]{};      // [0] 서버 [1] 클라이언트
+// 지금 워커가 훑고 있는 realm(-1 없음 · 0 서버 · 1 클라이언트)과 그 시작 시각.
+// **화면이 이걸 보고 버튼을 잠그고 경과 시간을 낸다.** 한 번이 47~60초라
+// "잠시 기다리십시오" 만으로는 도는 중인지 멈춘 것인지 못 가른다.
+std::atomic<int> g_rescan_active{-1};
+std::atomic<unsigned long long> g_rescan_t0{0};
 // discover_clan 이 쓴 RTTI(clan_rtti 로 공개). 배경 워커가 먼저 찾은 경우에도 채운다 -
 // 비면 종 바꾸기·획득 뒤처리·캐시 복구가 전부 막힌다(리뷰 C3).
 std::atomic<const mem::Rtti*> g_rtti{nullptr};
@@ -159,6 +164,8 @@ DWORD WINAPI rescan_worker(LPVOID) {
         const mem::Rtti* t = g_rescan_rtti;
         if (r == nullptr || t == nullptr) continue;
         const std::uint64_t t0 = GetTickCount64();
+        g_rescan_active.store(k, std::memory_order_release);
+        g_rescan_t0.store(t0, std::memory_order_release);
         std::uintptr_t found = 0;
         if (find_clan_of_class(*r, *t, k == 1 ? kClanClientClass : kClanClass,
                                &found)) {
@@ -179,6 +186,8 @@ DWORD WINAPI rescan_worker(LPVOID) {
                        GetTickCount64() - t0);
         }
     }
+    g_rescan_active.store(-1, std::memory_order_release);
+    g_rescan_t0.store(0, std::memory_order_release);
     g_rescan_busy.store(false, std::memory_order_release);
     return 0;
 }
@@ -267,6 +276,7 @@ bool resolve_species_write(const mem::Rtti& rtti, const mem::Reader& reader,
     SpeciesWriteTarget t;
     std::uintptr_t srv = 0, cli = 0;
     if (clan_component_cached(reader, rtti, false, &srv)) {
+        t.server_comp = true;
         std::uintptr_t rec = 0;
         std::uint16_t row = 0xFFFF;
         if (find_record_by_no(reader, srv, merc_no, &rec, &row)) {
@@ -275,6 +285,7 @@ bool resolve_species_write(const mem::Rtti& rtti, const mem::Reader& reader,
         }
     }
     if (clan_component_cached(reader, rtti, true, &cli)) {
+        t.client_comp = true;
         std::uintptr_t rec = 0;
         std::uint16_t row = 0xFFFF;
         if (find_record_by_no(reader, cli, merc_no, &rec, &row)) {
@@ -559,6 +570,55 @@ void tick_hire_cleanup(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (cleared > 0) refresh_clan_roster(reader);
 }
 
+ClanRealmState clan_realm_state_of(bool cached, bool scanning, bool gave_up) {
+    // 순서가 뜻이다. 캐시가 있으면 훑는 중이든 그만뒀든 **쓸 수 있고**,
+    // 도는 중이면 "그만뒀다" 보다 그것을 먼저 말한다 - 기다리면 되기 때문이다.
+    if (cached) return ClanRealmState::Ready;
+    if (scanning) return ClanRealmState::Scanning;
+    if (gave_up) return ClanRealmState::GaveUp;
+    return ClanRealmState::Missing;
+}
+
+ClanRealmState clan_realm_state(bool client) {
+    const int k = client ? 1 : 0;
+    const std::uintptr_t have =
+        (client ? g_cached_client : g_cached_server)
+            .load(std::memory_order_acquire);
+    const bool scanning =
+        g_rescan_active.load(std::memory_order_acquire) == k ||
+        g_rescan_want[k].load(std::memory_order_acquire);
+    return clan_realm_state_of(have != 0, scanning, g_find.gave_up());
+}
+
+double clan_rescan_elapsed_sec() {
+    const unsigned long long t0 = g_rescan_t0.load(std::memory_order_acquire);
+    if (t0 == 0) return 0.0;
+    const unsigned long long now = GetTickCount64();
+    return now > t0 ? static_cast<double>(now - t0) / 1000.0 : 0.0;
+}
+
+std::string species_no_target_message(const SpeciesTargetGap& gap) {
+    // **둘 다 없을 때만 월드를 묻는다.** 한쪽만 없는데 "월드 안인지 보세요" 라
+    // 하면 월드 안에 있는 사용자가 엉뚱한 곳을 본다(2026-09-20 실제로 그랬다).
+    if (!gap.server_comp && !gap.client_comp) {
+        return "명부를 아직 못 찾았습니다 - 월드 안인지 보세요";
+    }
+    if (!gap.server_comp) {
+        return "서버 쪽 명부를 아직 못 찾았습니다 (배경에서 찾는 중일 수 있습니다)";
+    }
+    if (!gap.client_comp) {
+        return "클라 쪽 명부를 아직 못 찾았습니다 (배경에서 찾는 중일 수 있습니다)";
+    }
+    // 컴포넌트는 둘 다 잡혔다 - 그러면 그 번호의 레코드가 없는 것이다.
+    // 이것을 "찾는 중" 이라고 하면 영영 기다리게 된다.
+    if (!gap.server_rec && !gap.client_rec) {
+        return "그 번호가 두 명부 어디에도 없습니다";
+    }
+    if (!gap.server_rec) return "그 번호가 서버 명부에 없습니다";
+    if (!gap.client_rec) return "그 번호가 클라 명부에 없습니다";
+    return "자리는 찾았습니다";   // ok() 가 참이면 여기로 오지 않는다
+}
+
 SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
                            std::uint16_t row, std::string* msg) {
     const mem::Rtti* rtti = clan_rtti();
@@ -568,7 +628,7 @@ SpeciesApply apply_species(const mem::Reader& reader, std::uint64_t merc_no,
     }
     SpeciesWriteTarget t;
     if (!resolve_species_write(*rtti, reader, merc_no, &t)) {
-        *msg = "자리를 못 찾았습니다 - 월드 안인지 보세요";
+        *msg = species_no_target_message(t.gap());
         return SpeciesApply::NoTarget;
     }
     // 게임 상태를 바꾸는 일은 **반드시 로그에 남긴다.** 이것이 없어서 사용자가

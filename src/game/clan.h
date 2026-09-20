@@ -116,13 +116,53 @@ bool read_clan_roster(const mem::Reader& reader, std::uintptr_t clan,
 //
 // 쓰기 자체는 호출자가 한다. DLL 은 제 주소 공간이고 probe 는
 // WriteProcessMemory 라 공통 추상화가 없기 때문이다.
+// 자리를 못 찾았을 때 **무엇이 없었는지.** 예전에는 이유를 안 갈라
+// "자리를 못 찾았습니다 - 월드 안인지 보세요" 하나로 냈는데, 사용자가 **월드
+// 안에서** 그 문구를 보고 엉뚱한 곳을 봤다(2026-09-20). 실제로는 아이템을
+// 쓰면서 게임이 명부를 새로 만들었고(TROUBLESHOOTING §1.4) 클라 쪽을 48초짜리
+// 힙 훑기로 다시 찾는 중이었다.
+struct SpeciesTargetGap {
+    bool server_comp = false;   // 서버 명부 컴포넌트를 잡았나
+    bool client_comp = false;   // 클라 명부 컴포넌트를 잡았나
+    bool server_rec = false;    // 그 번호의 레코드가 서버 명부에 있나
+    bool client_rec = false;    // 클라 명부에 있나
+};
+
+// 그 빈틈을 사람 말로 옮긴다. 순수 함수 - 시험이 문구 규칙을 못박는다.
+std::string species_no_target_message(const SpeciesTargetGap& gap);
+
 struct SpeciesWriteTarget {
     std::uintptr_t server = 0;      // 서버 레코드의 +0x20 주소. 0 이면 못 찾음
     std::uintptr_t client = 0;      // 클라 레코드의 +0x20 주소
     std::uint16_t server_row = 0xFFFF;
     std::uint16_t client_row = 0xFFFF;
+    bool server_comp = false;       // 컴포넌트까지는 잡았나 (레코드와 구분)
+    bool client_comp = false;
     bool ok() const { return server != 0 && client != 0; }
+    SpeciesTargetGap gap() const {
+        return {server_comp, client_comp, server != 0, client != 0};
+    }
 };
+
+// --- 종 바꾸기 준비 상태 ------------------------------------------------
+//
+// 종 바꾸기는 **클라·서버 두 쪽 명부가 다 있어야** 한다(`resolve_species_write`
+// 의 `ok()`). 한쪽만 없어도 반드시 실패하는데, 화면이 그동안 버튼을 열어 둬서
+// 눌리고 실패했다. 탈것 체력(`MountAuthPhase`)에서 이미 고친 모양 그대로
+// **준비될 때까지 화면이 버튼을 잠근다** - 기다리면 저절로 열린다.
+enum class ClanRealmState {
+    Ready,      // 캐시가 차 있다
+    Scanning,   // 배경 재탐색이 그 realm 을 훑는 중이다
+    GaveUp,     // 연속 실패로 그만뒀다 - 창의 [다시 찾기] 가 필요하다
+    Missing,    // 아직 없다 (월드 밖일 수 있다)
+};
+// 순수 판정. 세 신호에서 상태 하나를 만든다 - 시험이 우선순위를 못박는다.
+ClanRealmState clan_realm_state_of(bool cached, bool scanning, bool gave_up);
+ClanRealmState clan_realm_state(bool client);
+// 지금 도는 재탐색이 시작된 뒤 몇 초. 안 돌고 있으면 0.
+// "10초쯤 걸립니다" 만으로는 **도는 중인지 멈춘 것인지** 못 가른다 - 탈것
+// 체력에서 같은 이유로 경과 시간을 붙였다(TROUBLESHOOTING §3.3.1).
+double clan_rescan_elapsed_sec();
 
 // 번호로 두 세계의 종 필드 주소를 그 자리에서 찾는다.
 //

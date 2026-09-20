@@ -256,3 +256,74 @@ TEST(hire_inv_wire_rejects_a_small_buffer) {
     std::size_t len = 0;
     CHECK(!cdtb::game::build_hire_inv_wire(1, 2, wire, sizeof(wire), &len));
 }
+
+// ---------------------------------------------------------------------------
+// 종 바꾸기 준비 상태 (2026-09-20)
+//
+// 종 바꾸기는 **클라·서버 두 쪽 명부가 다 있어야** 한다. 한쪽만 없어도
+// `resolve_species_write` 가 false 를 내는데, 예전에는 화면이 그것을
+// "자리를 못 찾았습니다 - 월드 안인지 보세요" **하나로** 냈다. 사용자가
+// **월드 안에서** 그 문구를 보고 엉뚱한 곳을 봤다 - 실제로는 아이템을 쓰면서
+// 게임이 명부를 새로 만들었고(TROUBLESHOOTING §1.4) 클라 쪽을 48초짜리 힙
+// 훑기로 다시 찾는 중이었다.
+// ---------------------------------------------------------------------------
+#include "game/clan.h"
+
+using cdtb::game::ClanRealmState;
+using cdtb::game::clan_realm_state_of;
+using cdtb::game::species_no_target_message;
+using cdtb::game::SpeciesTargetGap;
+
+TEST(clan_realm_state_prefers_ready_over_everything) {
+    // 캐시가 차 있으면 훑는 중이든 그만뒀든 쓸 수 있다.
+    CHECK(clan_realm_state_of(true, false, false) == ClanRealmState::Ready);
+    CHECK(clan_realm_state_of(true, true, false) == ClanRealmState::Ready);
+    CHECK(clan_realm_state_of(true, true, true) == ClanRealmState::Ready);
+}
+
+TEST(clan_realm_state_says_scanning_before_gave_up) {
+    // 도는 중이면 "그만뒀다" 보다 그것을 먼저 말한다 - 기다리면 되기 때문이다.
+    CHECK(clan_realm_state_of(false, true, false) == ClanRealmState::Scanning);
+    CHECK(clan_realm_state_of(false, true, true) == ClanRealmState::Scanning);
+}
+
+TEST(clan_realm_state_distinguishes_gave_up_from_not_yet) {
+    // 이 둘을 섞으면 화면이 "곧 찾습니다" 를 영영 띄운다(TROUBLESHOOTING 2.10.1).
+    CHECK(clan_realm_state_of(false, false, true) == ClanRealmState::GaveUp);
+    CHECK(clan_realm_state_of(false, false, false) == ClanRealmState::Missing);
+}
+
+// 둘 다 없을 때만 "월드 안인지" 를 묻는다. 한쪽만 없으면 그 한쪽을 말한다 -
+// 그것이 2026-09-20 에 사용자를 헤매게 한 지점이다.
+TEST(species_message_asks_about_the_world_only_when_both_are_missing) {
+    SpeciesTargetGap g;   // 전부 false
+    const std::string m = species_no_target_message(g);
+    CHECK(m.find("월드") != std::string::npos);
+}
+
+TEST(species_message_names_the_missing_realm) {
+    SpeciesTargetGap only_server;
+    only_server.server_comp = true;
+    only_server.server_rec = true;
+    const std::string a = species_no_target_message(only_server);
+    CHECK(a.find("클라") != std::string::npos);
+    CHECK(a.find("월드") == std::string::npos);   // 월드 탓으로 돌리지 않는다
+
+    SpeciesTargetGap only_client;
+    only_client.client_comp = true;
+    only_client.client_rec = true;
+    const std::string b = species_no_target_message(only_client);
+    CHECK(b.find("서버") != std::string::npos);
+    CHECK(b.find("월드") == std::string::npos);
+}
+
+// 컴포넌트는 둘 다 잡혔는데 그 번호의 레코드만 없는 경우. "명부를 찾는 중"
+// 이라고 하면 영영 기다리게 된다 - 다른 말이어야 한다.
+TEST(species_message_separates_a_missing_record_from_a_missing_roster) {
+    SpeciesTargetGap comps_ok;
+    comps_ok.server_comp = true;
+    comps_ok.client_comp = true;   // 레코드는 둘 다 없음
+    const std::string m = species_no_target_message(comps_ok);
+    CHECK(m.find("찾는 중") == std::string::npos);
+    CHECK(m.find("없습니다") != std::string::npos);
+}
