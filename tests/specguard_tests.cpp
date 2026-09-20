@@ -1,10 +1,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <vector>
 
+#include "game/guardcave.h"
 #include "game/specguard_sites.h"
 #include "game/specguard_tail.h"
 #include "harness.h"
+
+using cdtb::game::build_spawn_thunk;
+using cdtb::game::emit_hit_bump;
+using cdtb::game::kHitBumpLen;
 
 using cdtb::game::kSpecguardDivMem;
 using cdtb::game::kSpecguardDivReg;
@@ -136,4 +142,68 @@ TEST(specguard_site_total_counts_both_tables) {
 TEST(specguard_tail_accepts_the_2944_twin_tail) {
     const std::uint8_t test_rdx[] = {0x48, 0x85, 0xD2};
     CHECK(specguard_tail_is_safe(test_rdx, sizeof(test_rdx)));
+}
+
+// ---------------------------------------------------------------------------
+// 케이브 바이트 (2026-09-20)
+//
+// 가드가 **실제로 0/널 갈래를 탔는지**를 재려고 케이브에 카운터 올리기를 넣는다.
+// 케이브는 손으로 짠 기계어라 **오프셋이 한 칸만 틀리면 게임의 남의 명령
+// 한복판으로 뛴다.** 그래서 바이트를 만드는 부분을 순수 함수로 빼고 여기서
+// 못박는다.
+// ---------------------------------------------------------------------------
+// push rax / mov rax,imm64 / lock inc dword [rax] / pop rax
+//
+// **rax 를 보존하고 플래그만 건드린다.** specguard 의 0 갈래에서는 바로 뒤에
+// `xor eax,eax` 가 와서 플래그를 다시 쓰므로 무해하다 - 순서를 바꾸면
+// 게임이 읽는 ZF 가 달라진다.
+TEST(hit_bump_is_fifteen_bytes_and_preserves_rax) {
+    std::vector<std::uint8_t> b;
+    emit_hit_bump(b, 0x1122334455667788ULL);
+    CHECK_EQ(b.size(), kHitBumpLen);
+    CHECK_EQ(b.size(), static_cast<std::size_t>(15));
+    CHECK_EQ(b[0], static_cast<std::uint8_t>(0x50));   // push rax
+    CHECK_EQ(b[1], static_cast<std::uint8_t>(0x48));   // mov rax, imm64
+    CHECK_EQ(b[2], static_cast<std::uint8_t>(0xB8));
+    for (int i = 0; i < 8; ++i) {
+        CHECK_EQ(b[3 + i],
+                 static_cast<std::uint8_t>(0x88 - 0x11 * i));   // LE imm64
+    }
+    CHECK_EQ(b[11], static_cast<std::uint8_t>(0xF0));   // lock
+    CHECK_EQ(b[12], static_cast<std::uint8_t>(0xFF));   // inc dword [rax]
+    CHECK_EQ(b[13], static_cast<std::uint8_t>(0x00));
+    CHECK_EQ(b[14], static_cast<std::uint8_t>(0x58));   // pop rax
+}
+
+// 썽크: 조회를 부르고 **널이면** 카운터를 올린 뒤 빈 레코드를 돌려준다.
+// `jne` 는 널이 아닐 때 그 둘을 **건너뛰어 ret 으로** 가야 한다.
+TEST(spawn_thunk_jne_skips_the_bump_and_lands_on_ret) {
+    const std::vector<std::uint8_t> t =
+        build_spawn_thunk(0x140214611ULL, 0x1406CF2F70ULL, 0x7FF012345678ULL);
+    // sub(4) mov r11(10) call(3) add(4) test(3) jne(2) bump(15) mov rax(10) ret(1)
+    CHECK_EQ(t.size(), static_cast<std::size_t>(52));
+    CHECK_EQ(t[24], static_cast<std::uint8_t>(0x75));   // jne rel8
+    const std::size_t after_jne = 26;
+    const std::size_t target = after_jne + t[25];
+    CHECK_EQ(target, t.size() - 1);                     // = ret 의 자리
+    CHECK_EQ(t[target], static_cast<std::uint8_t>(0xC3));
+    // 건너뛴 구간이 bump + `mov rax, 빈레코드` 여야 한다.
+    CHECK_EQ(t[26], static_cast<std::uint8_t>(0x50));   // bump 시작
+    CHECK_EQ(t[41], static_cast<std::uint8_t>(0x48));   // mov rax, imm64
+    CHECK_EQ(t[42], static_cast<std::uint8_t>(0xB8));
+}
+
+// 널이 아닐 때는 **카운터를 안 올린다.** 그래야 숫자가 "막은 횟수" 를 뜻한다.
+TEST(spawn_thunk_counts_only_the_null_path) {
+    const std::vector<std::uint8_t> t = build_spawn_thunk(0x10ULL, 0x20ULL, 0x30ULL);
+    // jne 가 건너뛰는 구간 안에 lock(0xF0) 이 있어야 한다 = 널 갈래에만 있다.
+    const std::size_t after_jne = 26;
+    const std::size_t target = after_jne + t[25];
+    bool lock_inside = false, lock_outside = false;
+    for (std::size_t i = 0; i < t.size(); ++i) {
+        if (t[i] != 0xF0) continue;
+        (i >= after_jne && i < target ? lock_inside : lock_outside) = true;
+    }
+    CHECK(lock_inside);
+    CHECK(!lock_outside);
 }

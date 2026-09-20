@@ -4,6 +4,7 @@
 //   보도록 넓혔다. 자리와 근거는 `game/spawnguard_site.h`.
 // @build 1.0.0.2944  kLookupRva · kEmptyRecordRva 재도출(짝 97곳 만장일치)
 
+#include "game/guardcave.h"
 #include "game/spawnguard.h"
 #include "game/spawnguard_site.h"
 
@@ -41,6 +42,13 @@ struct BusyGuard {
 constexpr int kEmptyWaitLogAt = 600;
 std::atomic<int> g_empty_waits{0};
 
+// **썽크가 실제로 막은 횟수.** 케이브가 널 갈래에서만 `lock inc` 로 올린다
+// (`guardcave.h`). 0 이면 이번 판에 한 번도 안 막았다는 뜻이고, 그것도
+// 정보다 - 자리가 낡아 아무것도 안 막고 있어도 크래시 조건이 안 걸린 판에서는
+// 똑같이 "정상" 으로 보이기 때문이다(2026-09-20 확인 때 이 구멍이 남았다).
+std::atomic<std::uint32_t> g_hits{0};
+std::atomic<bool> g_hits_told{false};
+
 void* alloc_near(std::uintptr_t target, std::size_t size) {
     SYSTEM_INFO si{};
     GetSystemInfo(&si);
@@ -56,11 +64,6 @@ void* alloc_near(std::uintptr_t target, std::size_t size) {
         }
     }
     return nullptr;
-}
-
-void put8(std::vector<std::uint8_t>& b, std::uint64_t v) {
-    for (int i = 0; i < 8; ++i)
-        b.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFF));
 }
 
 }  // namespace
@@ -131,23 +134,16 @@ bool spawnguard_install(const mem::Reader& reader) {
     }
 
     // 3) 썽크: 원래 조회를 부르고, 널이면 빈 레코드를 돌려준다.
-    void* cave = alloc_near(site, 64);
+    void* cave = alloc_near(site, 96);
     if (cave == nullptr) {
         log::warnf("소환 가드: 케이브 확보 실패");
         g_unsupported.store(true, std::memory_order_release);
         return false;
     }
-    std::vector<std::uint8_t> b;
-    b.insert(b.end(), {0x48, 0x83, 0xEC, 0x28});         // sub rsp,0x28
-    b.insert(b.end(), {0x49, 0xBB});                     // mov r11, imm64
-    put8(b, lookup);
-    b.insert(b.end(), {0x41, 0xFF, 0xD3});               // call r11
-    b.insert(b.end(), {0x48, 0x83, 0xC4, 0x28});         // add rsp,0x28
-    b.insert(b.end(), {0x48, 0x85, 0xC0});               // test rax,rax
-    b.insert(b.end(), {0x75, 0x0A});                     // jne +10 (ret 로)
-    b.insert(b.end(), {0x48, 0xB8});                     // mov rax, imm64
-    put8(b, empty);
-    b.push_back(0xC3);                                   // ret
+    // 바이트는 `guardcave.h` 의 순수 함수가 만든다 - rel8 을 손으로 세면
+    // 조각 길이가 바뀔 때 조용히 남의 자리로 뛴다. 시험이 그 산술을 못박는다.
+    const std::vector<std::uint8_t> b = build_spawn_thunk(
+        lookup, empty, reinterpret_cast<std::uint64_t>(&g_hits));
     std::memcpy(cave, b.data(), b.size());
     FlushInstructionCache(GetCurrentProcess(), cave, b.size());
 
@@ -176,6 +172,23 @@ bool spawnguard_install(const mem::Reader& reader) {
 
 bool spawnguard_unsupported() {
     return g_unsupported.load(std::memory_order_acquire);
+}
+
+std::uint32_t spawnguard_hits() {
+    return g_hits.load(std::memory_order_relaxed);
+}
+
+void spawnguard_tick_report() {
+    const std::uint32_t n = g_hits.load(std::memory_order_relaxed);
+    if (n == 0) return;
+    // **한 번만.** 되풀이되는 줄은 로그를 묻는다(TROUBLESHOOTING 6.19).
+    bool expected = false;
+    if (!g_hits_told.compare_exchange_strong(expected, true,
+                                             std::memory_order_acq_rel)) {
+        return;
+    }
+    log::infof("소환 가드가 **실제로 막았다** - 조회가 널을 낸 것을 {}회 빈 "
+               "레코드로 대신했다 (이 줄은 한 번만 나온다)", n);
 }
 
 }  // namespace cdtb::game

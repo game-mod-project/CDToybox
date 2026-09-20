@@ -26,4 +26,11 @@ bool specguard_installed();
 // 0곳일 때만 알렸다).
 bool specguard_unsupported();
 
+// 가드가 **실제로 막은 횟수.** 케이브가 0 갈래에서만 올린다. 0 이면 이번
+// 판에 한 번도 안 막았다 - 자리가 낡아도 크래시 조건이 안 걸린 판에서는
+// 똑같이 "정상" 으로 보이므로, 이 숫자가 그 구멍을 메운다.
+std::uint32_t specguard_hits();
+// 처음 올라갔을 때 **한 줄만** 남긴다. 매 프레임 불러도 된다.
+void specguard_tick_report();
+
 }  // namespace cdtb::game
