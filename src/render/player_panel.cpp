@@ -690,37 +690,54 @@ void draw_wanted(const mem::Reader& reader) {
     // 어긋나 "고쳤는데 안 고쳐진" 것처럼 보인다 - 실제로 그랬다(2026-09-19:
     // 데메니스를 0 으로 만드는 동안 에르난드의 81.00 이 그대로 남았다).
     // 그래서 **전부** 낸다. 영토가 다섯이라 많아야 다섯 줄이다.
-    std::vector<game::WantedRegion> regions;
-    if (game::wanted_regions(reader, &regions)) {
+    // **값은 realm 마다 따로다.** 한 벌만 보이면 "고쳤는데 안 고쳐진" 것처럼
+    // 보인다 - 2026-09-20 에 서버 100.00 / 클라 30.00 이었다(wanted.h).
+    std::vector<game::WantedRegionRow> rows;
+    if (game::wanted_region_rows(reader, &rows)) {
         ImGui::TextDisabled("구역 %zu곳 - 게임 창은 지금 있는 구역만 보여 줍니다.",
-                            regions.size());
-        if (ImGui::BeginTable("wanted_regions", 3,
+                            rows.size());
+        if (ImGui::BeginTable("wanted_regions", 2 + game::kWantedRealmCount,
                               ImGuiTableFlags_SizingFixedFit |
                                   ImGuiTableFlags_RowBg)) {
             ImGui::TableSetupColumn("구역");
-            ImGui::TableSetupColumn("벌금");
+            for (int i = 0; i < game::kWantedRealmCount; ++i) {
+                ImGui::TableSetupColumn(
+                    game::wanted_realm_name(static_cast<game::WantedRealm>(i)));
+            }
             ImGui::TableSetupColumn("##act");
             ImGui::TableHeadersRow();
-            for (const auto& r : regions) {
+            for (const auto& row : rows) {
                 ImGui::TableNextRow();
                 // 줄마다 ID 를 가른다 - 라벨이 같으면 첫 줄만 반응한다(6.17).
-                ImGui::PushID(static_cast<int>(r.key));
+                ImGui::PushID(static_cast<int>(row.key));
                 ImGui::TableNextColumn();
                 // 이름은 아직 못 붙인다 - 추측으로 붙였다가 "구매하기" 가
                 // 떴다(wanted.h 머리말). 키를 그대로 보인다.
-                ImGui::Text("%u", r.key);
-                ImGui::TableNextColumn();
-                const double shown = game::bounty_from_raw(r.raw);
-                if (r.raw != 0) {
-                    ImGui::TextColored(col::kWarn, "%.2f", shown);
-                } else {
-                    ImGui::Text("%.2f", shown);
+                ImGui::Text("%u", row.key);
+                const bool split = row.disagrees();
+                for (int i = 0; i < game::kWantedRealmCount; ++i) {
+                    ImGui::TableNextColumn();
+                    if (!row.have[i]) {
+                        ImGui::TextDisabled("-");
+                        continue;
+                    }
+                    const double shown = game::bounty_from_raw(row.raw[i]);
+                    // realm 끼리 어긋나면 **그것부터** 눈에 띄어야 한다.
+                    if (split) {
+                        ImGui::TextColored(col::kBad, "%.2f", shown);
+                    } else if (row.raw[i] != 0) {
+                        ImGui::TextColored(col::kWarn, "%.2f", shown);
+                    } else {
+                        ImGui::Text("%.2f", shown);
+                    }
                 }
                 ImGui::TableNextColumn();
                 if (ImGui::SmallButton("0 으로")) {
-                    if (game::bounty_write_region(reader, r.key, 0)) {
+                    const int n = game::bounty_write_region(reader, row.key, 0);
+                    if (n > 0) {
                         notice_set(&s_note, NoticeLevel::Ok,
-                                   "구역 {} 의 벌금을 지웠습니다", r.key);
+                                   "구역 {} 의 벌금을 {}곳에 지웠습니다",
+                                   row.key, n);
                     } else {
                         notice_set(&s_note, NoticeLevel::Bad,
                                    "쓰지 못했습니다");
@@ -743,14 +760,14 @@ void draw_wanted(const mem::Reader& reader) {
         // 값을 정해 쓰는 것은 한 구역씩. 어느 구역인지 골라야 한다.
         static int s_pick = 0;
         static double s_want = 0.0;
-        if (s_pick >= static_cast<int>(regions.size())) s_pick = 0;
+        if (s_pick >= static_cast<int>(rows.size())) s_pick = 0;
         char label[32];
-        std::snprintf(label, sizeof label, "%u", regions[s_pick].key);
+        std::snprintf(label, sizeof label, "%u", rows[s_pick].key);
         ImGui::SetNextItemWidth(140.0f);
         if (ImGui::BeginCombo("구역", label)) {
-            for (int i = 0; i < static_cast<int>(regions.size()); ++i) {
+            for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
                 char one[32];
-                std::snprintf(one, sizeof one, "%u", regions[i].key);
+                std::snprintf(one, sizeof one, "%u", rows[i].key);
                 if (ImGui::Selectable(one, i == s_pick)) s_pick = i;
             }
             ImGui::EndCombo();
@@ -762,11 +779,13 @@ void draw_wanted(const mem::Reader& reader) {
         if (ImGui::Button("적용")) {
             // notice_set 의 형식 문자열은 컴파일 타임 상수여야 한다 -
             // 삼항으로 고르면 std::format_string 이 안 받는다.
-            const std::uint32_t key = regions[s_pick].key;
-            if (game::bounty_write_region(reader, key,
-                                          game::bounty_to_raw(s_want))) {
+            const std::uint32_t key = rows[s_pick].key;
+            const int n = game::bounty_write_region(
+                reader, key, game::bounty_to_raw(s_want));
+            if (n > 0) {
                 notice_set(&s_note, NoticeLevel::Ok,
-                           "구역 {} 의 벌금을 {:.2f} 로 썼습니다", key, s_want);
+                           "구역 {} 의 벌금을 {:.2f} 로 {}곳에 썼습니다", key,
+                           s_want, n);
             } else {
                 notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
             }
@@ -775,9 +794,16 @@ void draw_wanted(const mem::Reader& reader) {
                             game::bounty_from_raw(game::kBountyMaxRaw));
         ImGui::TextDisabled("구역은 키로 보입니다 - 이름 붙이기는 아직입니다"
                             " (1000138 데메니스 · 1000131 에르난드).");
+        ImGui::TextDisabled("칸이 realm 별입니다 - 붉은 줄은 realm 끼리 값이"
+                            " 어긋났다는 뜻입니다.");
         ImGui::TextColored(col::kWarn,
                            "벌금을 0 으로 해도 수배 상태는 안 풀립니다 -"
                            " 상태는 이 레코드에 없습니다(찾는 중).");
+        // 화면은 값을 **다시 그릴 때만** 바뀐다. 눌러쓰기로는 게임의
+        // UpdateWantedPrice(RVA 0x7CA44B)가 안 불린다 - 지도를 다시 열면
+        // 맞는데 HUD 포스터는 낡은 수를 든다(실측 2026-09-20).
+        ImGui::TextDisabled("쓴 값은 게임이 화면을 다시 그릴 때 반영됩니다"
+                            " - 지도를 닫았다 여십시오.");
     } else if (game::wanted_component_ready()) {
         // 컴포넌트는 잡았는데 지역 데이터가 없다 = 지금 범죄 기록이 없다.
         // 여기서 "월드에 들어가면" 을 띄우면 영원히 안 바뀌는 것처럼 보인다.

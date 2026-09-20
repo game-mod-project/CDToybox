@@ -2,6 +2,7 @@
 
 #include <windows.h>   // GetTickCount64 - 재탐색 간격을 막는 데 쓴다
 
+#include <algorithm>   // std::sort - 합친 표를 키 순으로 낸다
 #include <atomic>
 #include <cstring>
 #include <string>
@@ -25,17 +26,37 @@ std::atomic<std::uint16_t> g_clear_id{kClearWantedId};
 std::atomic<std::uint16_t> g_state_id{kChangeWantedStateId};
 
 // --- 벌금 사슬 ---
-constexpr const char* kCompClass = ".?AVClientSelfWantedActorComponent@pa@@";
 // **벡터다.** {데이터 ptr, 크기 u32, 용량 u32} - 단일 포인터가 아니다
 // (2026-09-19 정정, wanted.h 머리말).
 constexpr std::size_t kCompRegionVec = 0x30;
 constexpr std::size_t kVecSize = 0x38;
 constexpr std::size_t kVecCap = 0x3C;
+constexpr std::size_t kCompOwner = 0x08;     // 주인 액터 (진짜/가짜를 가른다)
 constexpr std::size_t kRegionKey = 0x28;    // u32 구역 키
 constexpr std::size_t kRegionFine = 0x30;   // u64 벌금 (2자리 고정소수)
 
-std::uintptr_t g_comp = 0;
-std::uintptr_t g_comp_vtable = 0;    // 처음 찾을 때 적어 두고 대조에 쓴다
+// 지역 레코드의 클래스. vtable 을 **힙을 안 훑고** 이름으로 얻는 데 쓴다.
+constexpr const char* kRegionClass = ".?AVWantedRegionData@pa@@";
+
+// realm 셋. 같은 모양의 컴포넌트가 realm 마다 하나씩 산다(wanted.h 머리말).
+struct RealmState {
+    const char* cls;
+    const char* label;
+    std::uintptr_t comp = 0;
+    std::uintptr_t comp_vtable = 0;
+};
+
+RealmState g_realm[kWantedRealmCount] = {
+    {".?AVClientSelfWantedActorComponent@pa@@", "클라"},
+    {".?AVServerWantedActorComponent@pa@@", "서버"},
+    {".?AVCommonWantedActorComponent@pa@@", "커먼"},
+};
+
+RealmState* realm_at(WantedRealm realm) {
+    const int i = static_cast<int>(realm);
+    if (i < 0 || i >= kWantedRealmCount) return nullptr;
+    return &g_realm[i];
+}
 
 // 월드 안에서 몇 번까지 스스로 훑어 볼 것인가. 다 쓰면 그만두고, 화면에서
 // 눌러야 다시 본다. 한 번에 ~45초짜리 힙 전수라 이 수를 늘리면 비싸진다.
@@ -47,25 +68,26 @@ std::uintptr_t g_region_vtable = 0;
 
 // 살아 있는가. 세이브를 다시 부르면 그 자리에 다른 객체가 들어앉는다 -
 // 실제로 좌표·쿼터니언 뭉치를 읽을 뻔했다. vtable 로 거른다.
-bool comp_alive(const mem::Reader& reader) {
-    if (g_comp == 0 || g_comp_vtable == 0) return false;
+bool comp_alive(const mem::Reader& reader, const RealmState& rs) {
+    if (rs.comp == 0 || rs.comp_vtable == 0) return false;
     std::uint64_t vt = 0;
-    if (!reader.read_value(g_comp, &vt)) return false;
-    return static_cast<std::uintptr_t>(vt) == g_comp_vtable;
+    if (!reader.read_value(rs.comp, &vt)) return false;
+    return static_cast<std::uintptr_t>(vt) == rs.comp_vtable;
 }
 
 // 컴포넌트 -> 구역 기록 **전부**. 하나도 못 얻으면 빈 목록이다.
 //
 // **주소를 들고 있지 않는다.** 부를 때마다 벡터 머리부터 다시 읽는다 -
 // 구역이 하나 늘면 재할당돼 옛 주소가 죽는다(wanted.h 머리말의 실측).
-std::vector<WantedRegion> regions_now(const mem::Reader& reader) {
+std::vector<WantedRegion> regions_now(const mem::Reader& reader,
+                                      const RealmState& rs) {
     std::vector<WantedRegion> out;
-    if (!comp_alive(reader) || g_region_vtable == 0) return out;
+    if (!comp_alive(reader, rs) || g_region_vtable == 0) return out;
     std::uint64_t data = 0;
     std::uint32_t size = 0, cap = 0;
-    if (!reader.read_value(g_comp + kCompRegionVec, &data)) return out;
-    if (!reader.read_value(g_comp + kVecSize, &size)) return out;
-    if (!reader.read_value(g_comp + kVecCap, &cap)) return out;
+    if (!reader.read_value(rs.comp + kCompRegionVec, &data)) return out;
+    if (!reader.read_value(rs.comp + kVecSize, &size)) return out;
+    if (!reader.read_value(rs.comp + kVecCap, &cap)) return out;
     const std::size_t n = wanted_region_count(data, size, cap);
     out.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -104,8 +126,23 @@ double bounty_from_raw(std::uint64_t raw) {
     return static_cast<double>(raw) / 100.0;
 }
 
+const char* wanted_realm_name(WantedRealm realm) {
+    const RealmState* rs = realm_at(realm);
+    return rs != nullptr ? rs->label : "?";
+}
+
 bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
-    if (comp_alive(reader)) return true;
+    // 죽은 자리는 먼저 비운다. 세이브를 다시 부르면 그 자리에 다른 객체가
+    // 들어앉으므로, 비워 두지 않으면 영영 다시 안 찾는다.
+    bool all = (g_region_vtable != 0);
+    for (auto& rs : g_realm) {
+        if (rs.comp != 0 && !comp_alive(reader, rs)) {
+            rs.comp = 0;
+            rs.comp_vtable = 0;
+        }
+        if (rs.comp == 0) all = false;
+    }
+    if (all) return true;
 
     // 월드 밖에서는 아직 없다. 설치 지점에서 한 번만 부르고 끝냈더니
     // 시작 때 등록표 둘만 보고 포기했고, 그 뒤로 영영 못 찾았다 -
@@ -124,7 +161,8 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     //
     // 그래서 **몇 번 해 보고 그만둔다.** 다시 보려면 화면에서 눌러야 한다
     // (`wanted_find_rearm`). 한 번만 해 보고 그만두지 않는 이유는 위 문단이다 -
-    // 월드에 막 들어온 순간에는 아직 없을 수 있다.
+    // 월드에 막 들어온 순간에는 아직 없을 수 있고, realm 이 셋이라 한 통과에
+    // 다 안 잡힐 수도 있다.
     if (g_find_tries >= kFindTries) return false;
     static std::uint64_t s_last_ms = 0;
     const std::uint64_t now = ::GetTickCount64();
@@ -132,75 +170,85 @@ bool wanted_component_find(const mem::Rtti& rtti, const mem::Reader& reader) {
     s_last_ms = now;
     ++g_find_tries;
 
-    // 힙 전수 탐색이라 비싸다. 죽었을 때만 다시 돈다.
-    //
-    // **"+0x30 이 0 이 아니다" 로는 못 가른다.** 등록표 쪽 객체에도
-    // vtable 이 들어 있고 그 자리에 무엇이든 들어 있어서, 첫 후보를
-    // 집었더니 0x1804F8C0(지역 0x1574128)이 나왔다 - 실제 힙 객체는
-    // 0x22D5AC7A100 꼴이다. 벌금 칸이 통째로 안 그려졌다(2026-09-18).
-    //
-    // 그래서 **가리키는 것의 클래스 이름을 대조한다.** 주소 범위로
-    // 추측하지 않는다.
-    // 판정을 스캔에 넘겨 **첫 합격에서 멈춘다.** 훑은 수로 64 를 두면 낮은
-    // 주소의 가짜가 앞자리를 다 차지해 진짜가 잘린다(TROUBLESHOOTING 4.33) -
-    // 여기는 위에서 보듯 가짜 후보가 실제로 여럿 걸리는 자리라 특히 그렇다.
-    std::size_t n_seen = 0;
-    const auto hit = rtti.instances_of_class(
-        kCompClass, 1, [&](std::uintptr_t addr) {
-            ++n_seen;
-            std::uint64_t vt = 0;
-            if (!reader.read_value(addr, &vt) || vt == 0) return false;
-            // 벡터의 **데이터 포인터**가 곧 원소 [0] 의 주소라, 그것이
-            // WantedRegionData 인지 보는 것으로 컴포넌트를 가린다.
-            std::uint64_t region = 0;
-            if (!reader.read_value(addr + kCompRegionVec, &region) ||
-                region == 0) {
-                return false;
+    // 지역 레코드의 vtable 은 **힙을 안 훑고** 얻는다 - RTTI 표에서 이름으로
+    // 바로 내려간다. 예전에는 컴포넌트를 잡을 때 딸려 온 첫 원소에서 읽었고,
+    // 그래서 범죄 기록이 없으면 못 얻었다(오늘 3회 실패의 절반이 이것이다).
+    if (g_region_vtable == 0) {
+        for (const auto& t : rtti.find_types(kRegionClass, 8)) {
+            if (t.name != kRegionClass) continue;
+            const auto vts = rtti.vtables_for(t.descriptor);
+            if (!vts.empty()) {
+                g_region_vtable = vts.front();
+                log::infof("수배 지역 레코드 vtable: 0x{:X}", g_region_vtable);
+                break;
             }
-            const std::string cls =
-                rtti.class_of_object(static_cast<std::uintptr_t>(region));
-            if (cls.find("WantedRegionData") == std::string::npos) {
-                log::infof("수배 컴포넌트 후보 0x{:X} 는 건너뛴다 - +0x30 이 "
-                           "{} 다",
-                           addr, cls.empty() ? "이름 없음" : cls);
-                return false;
-            }
-            std::uint64_t rvt = 0;
-            if (!reader.read_value(static_cast<std::uintptr_t>(region), &rvt) ||
-                rvt == 0) {
-                return false;
-            }
-            return true;
-        });
-    if (!hit.empty()) {
-        const std::uintptr_t addr = hit.front();
-        std::uint64_t vt = 0, region = 0, rvt = 0;
-        // 판정을 통과한 자리라 이 셋은 다시 읽힌다. 그래도 값이 사라졌으면
-        // 잡지 않는다 - 힙은 스캔 도중에도 바뀐다.
-        if (reader.read_value(addr, &vt) && vt != 0 &&
-            reader.read_value(addr + kCompRegionVec, &region) && region != 0 &&
-            reader.read_value(static_cast<std::uintptr_t>(region), &rvt) &&
-            rvt != 0) {
-            g_comp = addr;
-            g_comp_vtable = static_cast<std::uintptr_t>(vt);
-            g_region_vtable = static_cast<std::uintptr_t>(rvt);
-            log::infof("수배 컴포넌트: 0x{:X} (지역 0x{:X} {})", g_comp, region,
-                       rtti.class_of_object(static_cast<std::uintptr_t>(region)));
-            return true;
         }
+    }
+
+    // **힙은 한 번만 훑는다.** 클래스마다 instances_of_class 를 부르면 realm
+    // 수만큼 전수 탐색이 된다 - 카메라에서 vtable 7개로 122초를 겪었다.
+    std::vector<std::string> names;
+    names.reserve(kWantedRealmCount);
+    for (const auto& rs : g_realm) names.emplace_back(rs.cls);
+    // 상한은 전체 수다(클래스별이 아니다) **그리고 낮은 주소부터 채운다**.
+    // 등록표 행이 낮은 주소에 있어 예산을 먼저 먹으므로 넉넉히 준다
+    // (TROUBLESHOOTING 4.33). 실측 총 5개라 32 면 남는다.
+    const auto found = rtti.find_objects_of(names, 32);
+
+    int got = 0;
+    const std::size_t seen = found.size();
+    for (const auto& f : found) {
+        RealmState* rs = nullptr;
+        for (auto& r : g_realm) {
+            if (f.cls == r.cls) {
+                rs = &r;
+                break;
+            }
+        }
+        if (rs == nullptr || rs->comp != 0) continue;
+        std::uint64_t vt = 0;
+        if (!reader.read_value(f.address, &vt) || vt == 0) continue;
+        // **진짜는 주인이 액터다.** 가짜는 등록표 행이고 여기가 작은 정수다
+        // (0x565 · 0x37E2). wanted.h 머리말의 실측.
+        std::uint64_t owner = 0;
+        if (!reader.read_value(f.address + kCompOwner, &owner) || owner == 0) {
+            continue;
+        }
+        const std::string ocls =
+            rtti.class_of_object(static_cast<std::uintptr_t>(owner));
+        if (ocls.find("Actor") == std::string::npos) {
+            log::infof("수배 컴포넌트 후보 0x{:X}({}) 는 건너뛴다 - 주인이 {}",
+                       f.address, rs->label,
+                       ocls.empty() ? "이름 없음" : ocls);
+            continue;
+        }
+        rs->comp = f.address;
+        rs->comp_vtable = static_cast<std::uintptr_t>(vt);
+        ++got;
+        log::infof("수배 컴포넌트 {}: 0x{:X} (주인 0x{:X} {})", rs->label,
+                   rs->comp, owner, ocls);
+    }
+    if (got > 0 || wanted_component_ready()) {
+        if (g_region_vtable == 0) {
+            log::warnf("수배: 지역 레코드 vtable 을 못 얻었다 - 값은 못 읽는다");
+        }
+        return true;
     }
     const auto st = mem::Rtti::scan_stats();
     const bool last = g_find_tries >= kFindTries;
     log::warnf("수배 컴포넌트를 못 찾았다 ({}/{}회{}) - 후보 {}개, "
                "힙 훑기 누적: 창 {} · 쪼갠 창 {} · 끝내 못 읽음 {}KB",
                g_find_tries, kFindTries,
-               last ? ", **그만 찾는다 - 창에서 [다시 찾기]**" : "", n_seen,
+               last ? ", **그만 찾는다 - 창에서 [다시 찾기]**" : "", seen,
                st.windows, st.retried, st.lost_kb);
     return false;
 }
 
 bool bounty_ready(const mem::Reader& reader) {
-    return !regions_now(reader).empty();
+    for (const auto& rs : g_realm) {
+        if (!regions_now(reader, rs).empty()) return true;
+    }
+    return false;
 }
 
 std::size_t wanted_region_count(std::uint64_t data, std::uint32_t size,
@@ -211,17 +259,85 @@ std::size_t wanted_region_count(std::uint64_t data, std::uint32_t size,
     return size;
 }
 
-bool wanted_regions(const mem::Reader& reader,
-                    std::vector<WantedRegion>* out) {
+bool WantedRegionRow::disagrees() const {
+    bool seen = false;
+    std::uint64_t first = 0;
+    for (int i = 0; i < kWantedRealmCount; ++i) {
+        if (!have[i]) continue;
+        if (!seen) {
+            first = raw[i];
+            seen = true;
+        } else if (raw[i] != first) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<WantedRegionRow> merge_region_rows(
+    const std::vector<WantedRegion> (&per_realm)[kWantedRealmCount]) {
+    std::vector<WantedRegionRow> out;
+    for (int i = 0; i < kWantedRealmCount; ++i) {
+        for (const auto& r : per_realm[i]) {
+            WantedRegionRow* row = nullptr;
+            for (auto& x : out) {
+                if (x.key == r.key) {
+                    row = &x;
+                    break;
+                }
+            }
+            if (row == nullptr) {
+                out.push_back(WantedRegionRow{});
+                row = &out.back();
+                row->key = r.key;
+            }
+            // 한 realm 에 같은 키가 두 번 나오면 **첫 칸을 지키지 않는다** -
+            // 뒤엣것이 최신이라고 볼 근거가 없으므로 먼저 읽은 것을 남긴다.
+            if (!row->have[i]) {
+                row->have[i] = true;
+                row->raw[i] = r.raw;
+            }
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const WantedRegionRow& a, const WantedRegionRow& b) {
+                  return a.key < b.key;
+              });
+    return out;
+}
+
+bool wanted_regions_of(const mem::Reader& reader, WantedRealm realm,
+                       std::vector<WantedRegion>* out) {
     if (out == nullptr) return false;
-    *out = regions_now(reader);
+    const RealmState* rs = realm_at(realm);
+    if (rs == nullptr) {
+        out->clear();
+        return false;
+    }
+    *out = regions_now(reader, *rs);
     return !out->empty();
 }
 
-bool wanted_component_ready() { return g_comp != 0 && g_comp_vtable != 0; }
+bool wanted_region_rows(const mem::Reader& reader,
+                        std::vector<WantedRegionRow>* out) {
+    if (out == nullptr) return false;
+    std::vector<WantedRegion> per_realm[kWantedRealmCount];
+    for (int i = 0; i < kWantedRealmCount; ++i) {
+        per_realm[i] = regions_now(reader, g_realm[i]);
+    }
+    *out = merge_region_rows(per_realm);
+    return !out->empty();
+}
+
+bool wanted_component_ready() {
+    for (const auto& rs : g_realm) {
+        if (rs.comp != 0 && rs.comp_vtable != 0) return true;
+    }
+    return false;
+}
 
 bool wanted_find_gave_up() {
-    return g_comp == 0 && g_find_tries >= kFindTries;
+    return !wanted_component_ready() && g_find_tries >= kFindTries;
 }
 
 void wanted_find_rearm() {
@@ -229,43 +345,56 @@ void wanted_find_rearm() {
     log::infof("수배 컴포넌트: 다시 찾는다 ({}회까지)", kFindTries);
 }
 
-bool bounty_write_region(const mem::Reader& reader, std::uint32_t key,
-                         std::uint64_t raw) {
-    // **여기서 다시 읽는다.** 화면이 들고 있던 주소로 쓰면 재할당된 뒤
-    // 죽은 배열에 쓴다 - 실측 2026-09-19 에 실제로 그랬다.
-    for (const auto& r : regions_now(reader)) {
-        if (r.key != key) continue;
-        std::uint64_t before = 0;
-        reader.read_value(r.addr + kRegionFine, &before);
-        if (!mem::safe_write_bytes(r.addr + kRegionFine, &raw, sizeof raw)) {
-            log::warnf("벌금 쓰기 실패: 구역 {} 0x{:X}", key,
-                       r.addr + kRegionFine);
-            return false;
+int bounty_write_region(const mem::Reader& reader, std::uint32_t key,
+                        std::uint64_t raw) {
+    // **realm 마다 따로 쓴다.** 클라만 쓰면 서버 값이 그대로 남는다 -
+    // 2026-09-20 실측에서 서버 100.00 / 클라 30.00 이었다(wanted.h 머리말).
+    int wrote = 0;
+    for (const auto& rs : g_realm) {
+        // **여기서 다시 읽는다.** 화면이 들고 있던 주소로 쓰면 재할당된 뒤
+        // 죽은 배열에 쓴다 - 실측 2026-09-19 에 실제로 그랬다.
+        for (const auto& r : regions_now(reader, rs)) {
+            if (r.key != key) continue;
+            std::uint64_t before = 0;
+            reader.read_value(r.addr + kRegionFine, &before);
+            if (!mem::safe_write_bytes(r.addr + kRegionFine, &raw,
+                                       sizeof raw)) {
+                log::warnf("벌금 쓰기 실패: {} 구역 {} 0x{:X}", rs.label, key,
+                           r.addr + kRegionFine);
+                break;
+            }
+            // 쓴 값을 그대로 남긴다. 되돌릴 일이 생기면 이 줄이 원본이다.
+            log::infof("벌금: {} 구역 {} {} -> {} (0x{:X})", rs.label, key,
+                       before, raw, r.addr + kRegionFine);
+            ++wrote;
+            break;
         }
-        // 쓴 값을 그대로 남긴다. 되돌릴 일이 생기면 이 줄이 원본이다.
-        log::infof("벌금: 구역 {} {} -> {} (0x{:X})", key, before, raw,
-                   r.addr + kRegionFine);
-        return true;
     }
-    log::warnf("벌금 쓰기: 구역 {} 의 기록을 못 찾았다", key);
-    return false;
+    if (wrote == 0) {
+        log::warnf("벌금 쓰기: 구역 {} 의 기록을 어느 realm 에서도 못 찾았다",
+                   key);
+    }
+    return wrote;
 }
 
 bool bounty_clear_all(const mem::Reader& reader, int* changed_out) {
     if (changed_out != nullptr) *changed_out = 0;
-    const auto regions = regions_now(reader);
-    if (regions.empty()) {
+    std::vector<WantedRegionRow> rows;
+    if (!wanted_region_rows(reader, &rows)) {
         log::warnf("벌금 전부 0: 구역 기록을 못 얻었다");
         return false;
     }
     int changed = 0;
-    for (const auto& r : regions) {
-        if (r.raw == 0) continue;
-        if (bounty_write_region(reader, r.key, 0)) ++changed;
+    for (const auto& row : rows) {
+        bool need = false;
+        for (int i = 0; i < kWantedRealmCount; ++i) {
+            if (row.have[i] && row.raw[i] != 0) need = true;
+        }
+        if (!need) continue;
+        if (bounty_write_region(reader, row.key, 0) > 0) ++changed;
     }
     if (changed_out != nullptr) *changed_out = changed;
-    log::infof("벌금 전부 0: 구역 {}개 중 {}개를 바꿨다", regions.size(),
-               changed);
+    log::infof("벌금 전부 0: 구역 {}개 중 {}개를 바꿨다", rows.size(), changed);
     return true;
 }
 

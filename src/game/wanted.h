@@ -42,10 +42,27 @@ double bounty_from_raw(std::uint64_t raw);
 //
 // 사슬은 둘뿐이다. 컴포넌트를 한 번 찾아 두면 그 뒤는 공짜다.
 //
-//   ClientSelfWantedActorComponent  -> +0x30 -> WantedRegionData -> +0x30
+//   <realm>WantedActorComponent  -> +0x30 -> WantedRegionData -> +0x30
 //
 // RTTI 로 컴포넌트를 찾는 것은 힙 전수 탐색이라 5분씩 걸린다. 그래서
 // 시작에 한 번만 하고(인벤토리 컴포넌트와 같은 방식) 주소를 들고 있는다.
+// realm 이 셋이지만 **힙은 한 번만** 훑는다 - `find_objects_of` 가 이름
+// 여럿을 한 통과로 받는다. 클래스마다 따로 훑으면 3배가 된다.
+//
+// --- 무엇이 진짜 컴포넌트인가 (2026-09-20 정정) ------------------------
+//
+// 예전 기준은 "`+0x30` 이 `WantedRegionData` 를 가리킨다" 였다. 그건
+// **범죄 기록이 있을 때만** 참이라, 죄가 없으면 컴포넌트를 영영 못 찾았다 -
+// 2026-09-20 09:57~09:58 에 3회 연속 실패하고 그만둔 것이 그것이다.
+//
+// 진짜와 가짜를 가르는 것은 `+0x08` 이다. 가짜는 **등록표 행**이고
+// `{vtable, 클래스번호}` 가 0x10 마다 반복된다.
+//
+//   클라 진짜  +0x08 -> ClientChildOnlyInGameActor
+//   서버 진짜  +0x08 -> ServerChildOnlyInGameActor
+//   등록표 행  +0x08 =  0x565 / 0x37E2   (포인터가 아니다)
+//
+// 그래서 **주인이 액터인가**로 가른다. 주소 범위로 추측하지 않는다.
 //
 // **주소는 세이브를 다시 부르면 죽는다.** 읽기·쓰기 전에 `+0x00` vtable 을
 // 대조해 죽은 주소를 거른다 - 실제로 한 번 죽은 주소를 읽어 좌표 뭉치를
@@ -109,14 +126,56 @@ inline constexpr std::uint32_t kWantedRegionCapMax = 64;
 std::size_t wanted_region_count(std::uint64_t data, std::uint32_t size,
                                 std::uint32_t cap);
 
-// 지금 있는 구역 기록을 **전부** 읽는다. 하나도 못 읽으면 false.
-bool wanted_regions(const mem::Reader& reader,
-                    std::vector<WantedRegion>* out);
+// --- 값은 **두 벌**이다 (2026-09-20 실측) -------------------------------
+//
+// 이 게임은 싱글인데 안이 MMO 프레임워크라 클라와 서버가 한 프로세스에
+// 산다. 수배 컴포넌트도 realm 마다 따로 살고, **같은 구역 키의 레코드가
+// 값이 다르다.**
+//
+//   서버 0x47776405440  +0x28 = 1000131  +0x30 = 10000  (100.00)
+//   클라 0x477E87F4300  +0x28 = 1000131  +0x30 =  3000  ( 30.00)
+//
+// 같은 `WantedRegionData` 클래스이고 `+0x1B`·`+0x1E`·`+0x2E` 도 갈린다.
+// 그동안 우리는 **클라 한 벌만** 썼다 - "벌금을 0 으로 내려도 수배가 안
+// 풀린다" 의 한 축이 이것이다. `setspecies` 가 이미 클라+서버로 쓴다.
+enum class WantedRealm { kClient = 0, kServer = 1, kCommon = 2 };
+inline constexpr int kWantedRealmCount = 3;
 
-// 그 구역의 벌금을 쓴다. **쓸 때마다 벡터를 다시 읽어** 자리를 다시 찾는다 -
-// 주소를 들고 있다 쓰면 재할당된 뒤 죽은 배열에 쓴다.
-bool bounty_write_region(const mem::Reader& reader, std::uint32_t key,
-                         std::uint64_t raw);
+// 로그·화면에 쓰는 짧은 이름. realm 밖의 값이면 "?".
+const char* wanted_realm_name(WantedRealm realm);
+
+// 화면 한 줄 = 한 구역 키의 realm 별 값.
+struct WantedRegionRow {
+    std::uint32_t key = 0;
+    std::uint64_t raw[kWantedRealmCount]{};
+    bool have[kWantedRealmCount]{};
+
+    // realm 끼리 값이 어긋나 있는가. **가진 realm 끼리만** 견준다.
+    // 화면이 이걸 짚어 줘야 오늘 같은 일을 다시 안 겪는다.
+    bool disagrees() const;
+};
+
+// 키별로 realm 을 합친다. 키 오름차순이다.
+//
+// **순수 함수라 시험한다.** 오늘 서버 값을 못 본 것이 이 합침이 없어서였다.
+std::vector<WantedRegionRow> merge_region_rows(
+    const std::vector<WantedRegion> (&per_realm)[kWantedRealmCount]);
+
+// 한 realm 의 구역 기록을 **전부** 읽는다. 하나도 못 읽으면 false.
+bool wanted_regions_of(const mem::Reader& reader, WantedRealm realm,
+                       std::vector<WantedRegion>* out);
+
+// 살아 있는 realm 을 전부 읽어 키별로 합친다. 한 줄도 없으면 false.
+bool wanted_region_rows(const mem::Reader& reader,
+                        std::vector<WantedRegionRow>* out);
+
+// 그 구역의 벌금을 **살아 있는 모든 realm 에** 쓴다. 쓴 realm 수를 낸다 -
+// 0 이면 아무 데도 못 썼다는 뜻이다.
+//
+// **쓸 때마다 벡터를 다시 읽어** 자리를 다시 찾는다 - 주소를 들고 있다
+// 쓰면 재할당된 뒤 죽은 배열에 쓴다.
+int bounty_write_region(const mem::Reader& reader, std::uint32_t key,
+                        std::uint64_t raw);
 
 // 전부 0 으로. 바꾼 개수를 낸다. 구역이 여럿일 때 하나씩 누르게 하면
 // 오늘과 같은 일이 난다.
