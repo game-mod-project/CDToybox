@@ -1,9 +1,26 @@
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 
+#include "game/specguard_sites.h"
 #include "game/specguard_tail.h"
 #include "harness.h"
 
+using cdtb::game::kSpecguardDivMem;
+using cdtb::game::kSpecguardDivReg;
+using cdtb::game::kSpecguardSiteTotal;
+using cdtb::game::SpecguardSite;
 using cdtb::game::specguard_tail_is_safe;
+
+// 표에 그 RVA 가 그 patch_len 으로 들어 있는가.
+template <std::size_t N>
+static bool has_site(const SpecguardSite (&t)[N], std::uint64_t rva,
+                     int patch_len) {
+    for (std::size_t i = 0; i < N; ++i) {
+        if (t[i].rva == rva) return t[i].patch_len == patch_len;
+    }
+    return false;
+}
 
 // 2850 의 실제 꼬리 다섯 개 - 전부 위치 독립이라 통과해야 한다.
 TEST(specguard_tail_accepts_the_2850_tails) {
@@ -70,4 +87,53 @@ TEST(specguard_tail_rejects_truncated_and_accepts_immediates) {
     CHECK(specguard_tail_is_safe(xor_reg, sizeof(xor_reg)));
     CHECK(specguard_tail_is_safe(nop, sizeof(nop)));
     CHECK(specguard_tail_is_safe(push, sizeof(push)));
+}
+
+// ---------------------------------------------------------------------------
+// 사이트 표 (2026-09-20 조사)
+//
+// 표의 RVA 자체는 시험이 검증할 수 없다 - 저장소에 게임 exe 가 없다. 여기서
+// 못박는 것은 **표가 무엇을 들고 있는가**다: 자리를 지우거나 patch_len 을
+// 흘리면 시험이 잡는다. RVA 의 근거는 `specguard_sites.h` 의 주석과
+// `specs/2026-09-20-specguard-div-family.md` 에 있다.
+// ---------------------------------------------------------------------------
+
+// 0xF83F65B 와 0xF83F6B4 는 **같은 함수**(0xF83F5D0..0xF83F734) 안의 두 div 다.
+// 둘 다 `[rdi+8]` 로 나누고 0 갈래가 div 로 샌다. 앞의 것만 걸면 가드가
+// 몫 0 을 내고 `cmp eax,[rdi+4] / jae` 가 **안 뛰어** 그대로 뒤의 div 로
+// 흘러가 거기서 죽는다 - 크래시를 89바이트 뒤로 옮길 뿐이다(실측 2026-09-20).
+TEST(specguard_reg_table_has_both_divs_of_the_bag_render_function) {
+    CHECK(has_site(kSpecguardDivReg, 0xF83F65BULL, 6));
+    CHECK(has_site(kSpecguardDivReg, 0xF83F6B4ULL, 6));
+}
+
+// 2944 실측 자리 셋(kDivReg)과 하나(kDivMem[3])는 그대로 있어야 한다.
+TEST(specguard_table_keeps_the_2944_measured_sites) {
+    CHECK(has_site(kSpecguardDivReg, 0x240919BULL, 5));
+    CHECK(has_site(kSpecguardDivReg, 0x24095B4ULL, 6));
+    CHECK(has_site(kSpecguardDivMem, 0x240937DULL, 6));
+}
+
+// 2850 값으로 남겨 둔 셋은 **지우지 않는다.** install 이 opcode 를 보고
+// 거부하므로 안전하고, 남아 있어야 kSiteTotal 이 실제 자리 수를 세어
+// `specguard_unsupported()` 가 참이 되고 지급 창이 경고한다. 지우면
+// "전부 설치" 라는 거짓 보고가 된다.
+TEST(specguard_table_keeps_the_stale_2850_entries) {
+    CHECK(has_site(kSpecguardDivMem, 0xEB26B4ULL, 7));
+    CHECK(has_site(kSpecguardDivMem, 0xEA920FULL, 5));
+    CHECK(has_site(kSpecguardDivMem, 0x21DB8D8ULL, 7));
+}
+
+TEST(specguard_site_total_counts_both_tables) {
+    CHECK(kSpecguardSiteTotal ==
+          static_cast<int>(std::size(kSpecguardDivMem) +
+                           std::size(kSpecguardDivReg)));
+    CHECK(kSpecguardSiteTotal == 8);
+}
+
+// 0xF83F6B4 의 꼬리. `48 85 D2` = test rdx,rdx - REX 접두를 건너뛰면 0x85 이고
+// modrm 0xD2 는 mod==3 이라 RIP 상대가 아니다. 케이브로 옮겨도 안전하다.
+TEST(specguard_tail_accepts_the_2944_twin_tail) {
+    const std::uint8_t test_rdx[] = {0x48, 0x85, 0xD2};
+    CHECK(specguard_tail_is_safe(test_rdx, sizeof(test_rdx)));
 }
