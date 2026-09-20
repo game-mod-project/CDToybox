@@ -398,6 +398,100 @@ bool bounty_clear_all(const mem::Reader& reader, int* changed_out) {
     return true;
 }
 
+const char* wanted_state_name(std::uint8_t state) {
+    // 표본으로 확인한 것만 이름을 준다(2026-09-20, 전단 둘째 줄과 대조).
+    switch (state) {
+        case 1: return "수색";
+        case 2: return "체포";
+        default: return "?";
+    }
+}
+
+bool wanted_now(const mem::Reader& reader, WantedNow* out) {
+    if (out == nullptr) return false;
+    *out = WantedNow{};
+    bool any = false;
+    for (int i = 0; i < kWantedRealmCount; ++i) {
+        const RealmState& rs = g_realm[i];
+        if (!comp_alive(reader, rs)) continue;
+        std::uint8_t st = 0;
+        std::uint32_t nr = 0, nw = 0, nc = 0;
+        if (!reader.read_value(rs.comp + kCompState, &st)) continue;
+        if (!reader.read_value(rs.comp + kVecSize, &nr)) continue;
+        if (!reader.read_value(rs.comp + kCompWitnessSize, &nw)) continue;
+        if (!reader.read_value(rs.comp + kCompRecordSize, &nc)) continue;
+        out->have[i] = true;
+        out->state[i] = st;
+        out->regions[i] = nr;
+        out->witness[i] = nw;
+        out->records[i] = nc;
+        any = true;
+    }
+    return any;
+}
+
+int wanted_purge(const mem::Reader& reader, const WantedPurge& what) {
+    // 벌금부터. 레코드를 없애기 전에 써야 값이 남지 않는다 - 벡터만 비우면
+    // 원소는 용량 안에 그대로 있고, 게임이 그 자리에 다시 push 하면 옛 값을
+    // 덮어쓰는 대신 **읽을** 수도 있다. 순서가 공짜니 안전한 쪽으로 둔다.
+    if (what.bounty) {
+        int changed = 0;
+        bounty_clear_all(reader, &changed);
+    }
+
+    const std::uint32_t zero32 = 0;
+    const std::uint8_t zero8 = 0;
+    int touched = 0;
+    for (int i = 0; i < kWantedRealmCount; ++i) {
+        const RealmState& rs = g_realm[i];
+        if (!comp_alive(reader, rs)) continue;
+        bool did = false;
+
+        // 지역 벡터. **크기만** 0 으로 내린다 - 원소를 지우거나 포인터를
+        // 건드리면 게임의 해제 경로가 무엇을 할지 모른다.
+        if (what.regions) {
+            std::uint32_t before = 0;
+            reader.read_value(rs.comp + kVecSize, &before);
+            if (before != 0 && mem::safe_write_bytes(rs.comp + kVecSize, &zero32,
+                                                    sizeof zero32)) {
+                log::infof("수배 지우기: {} 지역 {} -> 0 (0x{:X})", rs.label,
+                           before, rs.comp + kVecSize);
+                did = true;
+            }
+        }
+        if (what.witness) {
+            for (const auto off : {kCompWitnessSize, kCompRecordSize}) {
+                std::uint32_t before = 0;
+                reader.read_value(rs.comp + off, &before);
+                if (before == 0) continue;
+                if (mem::safe_write_bytes(rs.comp + off, &zero32,
+                                          sizeof zero32)) {
+                    log::infof("수배 지우기: {} {} {} -> 0 (0x{:X})", rs.label,
+                               off == kCompWitnessSize ? "목격자" : "범죄기록",
+                               before, rs.comp + off);
+                    did = true;
+                }
+            }
+        }
+        if (what.state) {
+            std::uint8_t before = 0;
+            reader.read_value(rs.comp + kCompState, &before);
+            if (before != 0 && mem::safe_write_bytes(rs.comp + kCompState,
+                                                    &zero8, sizeof zero8)) {
+                log::infof("수배 지우기: {} 상태 {}({}) -> 0 (0x{:X})",
+                           rs.label, before, wanted_state_name(before),
+                           rs.comp + kCompState);
+                did = true;
+            }
+        }
+        if (did) ++touched;
+    }
+    if (touched == 0) {
+        log::warnf("수배 지우기: 손댈 것이 없었다 (이미 비었거나 못 읽었다)");
+    }
+    return touched;
+}
+
 bool build_clear_wanted_wire(std::uint32_t handle, std::uint8_t flag,
                              std::uint8_t* out, std::size_t cap,
                              std::size_t* len_out) {
