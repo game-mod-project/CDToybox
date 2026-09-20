@@ -800,6 +800,13 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 가드가 **실제로 막았는지** 는 처음 한 번만 로그에 남는다.
         cdtb::game::specguard_tick_report();
         cdtb::game::spawnguard_tick_report();
+        // 탈것 호출이 거부되면 **그 사유**를 찍는다(보스룸 조사).
+        //
+        // **상시로 건다.** 아래 `dragondiag` 는 게임을 팅기게 한 전력이 있어
+        // ini 로 잠겨 있지만, 이쪽은 성격이 다르다 - 형제인 `고용 작업 추적`·
+        // `소환 작업 추적`(둘 다 거부 코드를 찍는다)과 같은 순수 통과 훅이고,
+        // 인자 수를 호출자 둘에서 세었으며(1.14) 대상은 의미로 확인한다.
+        cdtb::game::callcheck_diag_install(reader);
         // 소환 진단 훅은 **설정으로 켤 때만** 건다. 기능이 아니라 조사용이고,
         // 그중 하나가 게임을 팅기게 했다(2026-09-15).
         // 휠 칸 등록 채우기도 같은 훅(0x2096C30)을 쓰므로 그때도 건다.
