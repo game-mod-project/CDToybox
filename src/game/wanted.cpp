@@ -398,6 +398,15 @@ bool bounty_clear_all(const mem::Reader& reader, int* changed_out) {
     return true;
 }
 
+const char* wanted_region_name(std::uint32_t key) {
+    // **화면에서 본 것만 적는다**(wanted.h 머리말). 추측은 안 적는다.
+    switch (key) {
+        case 1000131: return "에르난드 공국";   // 2026-09-20 지도 확인
+        case 1000138: return "데메니스 왕국";   // 2026-09-18 지도 확인
+        default: return nullptr;
+    }
+}
+
 const char* wanted_state_name(std::uint8_t state) {
     // 표본으로 확인한 것만 이름을 준다(2026-09-20, 전단 둘째 줄과 대조).
     switch (state) {

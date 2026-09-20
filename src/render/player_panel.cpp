@@ -711,9 +711,15 @@ void draw_wanted(const mem::Reader& reader) {
                 // 줄마다 ID 를 가른다 - 라벨이 같으면 첫 줄만 반응한다(6.17).
                 ImGui::PushID(static_cast<int>(row.key));
                 ImGui::TableNextColumn();
-                // 이름은 아직 못 붙인다 - 추측으로 붙였다가 "구매하기" 가
-                // 떴다(wanted.h 머리말). 키를 그대로 보인다.
-                ImGui::Text("%u", row.key);
+                // **키를 먼저** 낸다. 이름은 실측된 것만 뒤에 붙는다 -
+                // 틀린 줄이 있으면 키와 나란히 보여 바로 눈에 띈다
+                // (wanted.h 머리말: 추측으로 붙였다 "구매하기" 가 떴다).
+                const char* rname = game::wanted_region_name(row.key);
+                if (rname != nullptr) {
+                    ImGui::Text("%u · %s", row.key, rname);
+                } else {
+                    ImGui::Text("%u", row.key);
+                }
                 const bool split = row.disagrees();
                 for (int i = 0; i < game::kWantedRealmCount; ++i) {
                     ImGui::TableNextColumn();
@@ -796,8 +802,10 @@ void draw_wanted(const mem::Reader& reader) {
         }
         ImGui::TextDisabled("상한 %.2f (게임이 그 위로 안 올라갑니다)",
                             game::bounty_from_raw(game::kBountyMaxRaw));
-        ImGui::TextDisabled("구역은 키로 보입니다 - 이름 붙이기는 아직입니다"
-                            " (1000138 데메니스 · 1000131 에르난드).");
+        // 이름은 **화면에서 확인된 짝만** 붙는다. 키에서 끌어내는 길은
+        // 아직 못 찾았다(wanted.h 머리말에 반증한 이론 넷을 적어 뒀다).
+        ImGui::TextDisabled("이름은 화면에서 확인된 구역에만 붙습니다 -"
+                            " 나머지는 키로 나옵니다.");
         ImGui::TextDisabled("칸이 realm 별입니다 - 붉은 줄은 realm 끼리 값이"
                             " 어긋났다는 뜻입니다.");
         // 화면은 값을 **다시 그릴 때만** 바뀐다. 눌러쓰기로는 게임의
