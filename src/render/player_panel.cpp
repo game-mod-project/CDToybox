@@ -750,11 +750,15 @@ void draw_wanted(const mem::Reader& reader) {
         // 구역이 여럿일 때 하나씩 누르게 하면 오늘과 같은 일이 난다.
         if (ImGui::Button("전부 0 으로")) {
             int changed = 0;
-            if (game::bounty_clear_all(reader, &changed)) {
+            if (!game::bounty_clear_all(reader, &changed)) {
+                notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
+            } else if (changed == 0) {
+                // 이미 다 0 이면 "0곳을 지웠습니다" 가 실패처럼 읽힌다.
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "이미 전부 0 입니다 - 바꿀 것이 없었습니다");
+            } else {
                 notice_set(&s_note, NoticeLevel::Ok,
                            "구역 {}곳의 벌금을 지웠습니다", changed);
-            } else {
-                notice_set(&s_note, NoticeLevel::Bad, "쓰지 못했습니다");
             }
         }
         // 값을 정해 쓰는 것은 한 구역씩. 어느 구역인지 골라야 한다.
@@ -796,14 +800,81 @@ void draw_wanted(const mem::Reader& reader) {
                             " (1000138 데메니스 · 1000131 에르난드).");
         ImGui::TextDisabled("칸이 realm 별입니다 - 붉은 줄은 realm 끼리 값이"
                             " 어긋났다는 뜻입니다.");
-        ImGui::TextColored(col::kWarn,
-                           "벌금을 0 으로 해도 수배 상태는 안 풀립니다 -"
-                           " 상태는 이 레코드에 없습니다(찾는 중).");
         // 화면은 값을 **다시 그릴 때만** 바뀐다. 눌러쓰기로는 게임의
         // UpdateWantedPrice(RVA 0x7CA44B)가 안 불린다 - 지도를 다시 열면
-        // 맞는데 HUD 포스터는 낡은 수를 든다(실측 2026-09-20).
+        // 맞는데 HUD 전단은 낡은 수를 든다(실측 2026-09-20).
         ImGui::TextDisabled("쓴 값은 게임이 화면을 다시 그릴 때 반영됩니다"
                             " - 지도를 닫았다 여십시오.");
+
+        ImGui::Separator();
+
+        // --- 값을 0 으로 만드는 것과 **지우는** 것은 다르다 ---
+        //
+        // 벌금 0 은 이미 든다 - 화면 라벨이 "현상 수배" 에서 "벌금" 으로
+        // 바뀌는 것이 그 증거다. 그런데 지도에는 구역 줄이 `0 / 벌금` 으로
+        // 남는다. 목록이 도는 것은 값이 아니라 **레코드의 존재**다.
+        ImGui::TextColored(col::kWarn,
+                           "벌금 0 으로는 지도의 구역 줄이 안 사라집니다 -"
+                           " 목록은 값이 아니라 기록을 봅니다.");
+
+        game::WantedNow now;
+        if (game::wanted_now(reader, &now)) {
+            if (ImGui::BeginTable("wanted_now", 5,
+                                  ImGuiTableFlags_SizingFixedFit |
+                                      ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("realm");
+                ImGui::TableSetupColumn("상태");
+                ImGui::TableSetupColumn("구역");
+                ImGui::TableSetupColumn("목격자");
+                ImGui::TableSetupColumn("범죄기록");
+                ImGui::TableHeadersRow();
+                for (int i = 0; i < game::kWantedRealmCount; ++i) {
+                    if (!now.have[i]) continue;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s", game::wanted_realm_name(
+                                          static_cast<game::WantedRealm>(i)));
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u (%s)", now.state[i],
+                                game::wanted_state_name(now.state[i]));
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u", now.regions[i]);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u", now.witness[i]);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u", now.records[i]);
+                }
+                ImGui::EndTable();
+            }
+        }
+
+        // 무엇이 화면을 바꿨는지 갈리려면 하나씩 끌 수 있어야 한다.
+        static game::WantedPurge s_purge;
+        ImGui::Checkbox("벌금", &s_purge.bounty);
+        ImGui::SameLine();
+        ImGui::Checkbox("구역 기록", &s_purge.regions);
+        ImGui::SameLine();
+        ImGui::Checkbox("목격자·범죄기록", &s_purge.witness);
+        ImGui::SameLine();
+        ImGui::Checkbox("상태", &s_purge.state);
+        if (ImGui::Button("수배 지우기")) {
+            const int n = game::wanted_purge(reader, s_purge);
+            if (n > 0) {
+                notice_set(&s_note, NoticeLevel::Ok,
+                           "{}개 realm 에서 지웠습니다 - 지도를 닫았다 여십시오",
+                           n);
+            } else {
+                notice_set(&s_note, NoticeLevel::Bad,
+                           "손댈 것이 없었습니다 (이미 비었습니다)");
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "고른 것을 realm 전부에서 비웁니다.\n"
+                "되돌리기는 없습니다 - 게임의 자기 상태를 지우는 것이라\n"
+                "원래 값을 되돌려 놔도 화면이 안 따라옵니다.\n"
+                "잘못되면 세이브를 다시 부르십시오.");
+        }
     } else if (game::wanted_component_ready()) {
         // 컴포넌트는 잡았는데 지역 데이터가 없다 = 지금 범죄 기록이 없다.
         // 여기서 "월드에 들어가면" 을 띄우면 영원히 안 바뀌는 것처럼 보인다.
@@ -819,10 +890,13 @@ void draw_wanted(const mem::Reader& reader) {
                        "다시 찾습니다 - 한 번에 1분쯤 걸립니다");
         }
         if (ImGui::IsItemHovered()) {
+            // 예전 풍선말은 "죄를 지은 뒤 누르라" 였다. 그때 기준이
+            // "+0x30 이 WantedRegionData" 라 범죄 기록이 있어야만 찾았기
+            // 때문이다. 지금은 주인이 액터인지로 가르므로 죄와 무관하다.
             ImGui::SetTooltip(
                 "힙을 통째로 훑습니다 - 한 번에 1분쯤 걸리고 그동안 배경이"
                 " 무겁습니다.\n"
-                "죄를 지어 수배가 붙은 뒤에 누르시면 찾을 가능성이 높습니다.");
+                "월드 안이면 죄가 없어도 찾습니다.");
         }
     } else {
         ImGui::TextDisabled("벌금을 아직 못 읽었습니다 - 월드에 들어가면"
@@ -847,7 +921,9 @@ void draw_wanted(const mem::Reader& reader) {
     ImGui::InputInt("대상 핸들", &s_handle, 0, 0,
                     ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::SameLine();
-    ImGui::TextDisabled("(기본 0x%08X = 플레이어로 추정)",
+    // 추정이 아니다 - 수배 컴포넌트의 주인 액터 +0x60 에서 실측했다
+    // (2026-09-20: 01 00 10 A0 -> 0xA0100001).
+    ImGui::TextDisabled("(기본 0x%08X = 플레이어, 실측 확정)",
                         game::kAssumedPlayerHandle);
 
     ImGui::SetNextItemWidth(140.0f);
@@ -855,12 +931,15 @@ void draw_wanted(const mem::Reader& reader) {
     ImGui::SameLine();
     ImGui::TextDisabled("(뜻 미확인 - 0 과 1 을 견줘 보십시오)");
 
-    // 벌금을 0 으로 만들어도 지도에 지역 항목이 남는다(실측 2026-09-18).
-    // 액수와 상태는 다른 것이고, 상태 쪽 뜻은 아직 모른다 - 그래서
-    // 값을 쓸어 볼 수 있게 그대로 열어 둔다.
+    // 상태 값의 뜻은 전단 둘째 줄과 맞춰 알아냈다(2026-09-20, 표본 셋):
+    // 1 = 수색 · 2 = 체포. 0 은 아직 모른다.
+    //
+    // 게임의 처리기는 **이전 상태가 2(체포)면 거부한다** -
+    // eErrNoPrevWantedStateCannotChange (RVA 0x025D8386).
     static int s_state = 0;
     static int s_extra = 0;
-    ImGui::SeparatorText("상태 바꾸기 (뜻 미확인 - 쓸어 보는 중)");
+    ImGui::SeparatorText("상태 바꾸기 (1 수색 · 2 체포 · 0 미확인)");
+    ImGui::TextDisabled("체포 상태(2)에서는 게임이 변경을 거부합니다.");
     ImGui::SetNextItemWidth(90.0f);
     ImGui::InputInt("상태", &s_state);
     ImGui::SameLine();

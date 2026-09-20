@@ -181,6 +181,55 @@ int bounty_write_region(const mem::Reader& reader, std::uint32_t key,
 // 오늘과 같은 일이 난다.
 bool bounty_clear_all(const mem::Reader& reader, int* changed_out);
 
+// --- 값을 0 으로 만드는 것과 **지우는** 것은 다르다 (2026-09-20) ---------
+//
+// 벌금을 0 으로 쓰면 화면 라벨이 "현상 수배" -> "벌금" 으로 바뀌고 값도 0 이
+// 된다. **쓰기는 든다.** 그런데 지도에는 그 구역 줄이 **그대로 남는다** -
+// `0 / 벌금` 으로. 목록이 도는 것은 값이 아니라 **레코드의 존재**이기
+// 때문이다(`UIGamePlayControlCommon_MapWantedRegion`).
+//
+// 그래서 지우려면 벡터를 **비워야** 한다. 원소를 지우는 것이 아니라 크기를
+// 0 으로 내린다 - 용량은 그대로라 게임이 다음에 push 하면 그 자리에 쓴다.
+//
+// 컴포넌트에 비울 것이 넷이다(전부 realm 마다).
+//
+//   +0x18  상태 u8        1 수색 · 2 체포 (0 의 뜻은 아직 모른다)
+//   +0x38  지역 벡터 크기  지도의 구역 줄
+//   +0x48  목격자 벡터 크기
+//   +0x58  범죄기록 벡터 크기
+inline constexpr std::size_t kCompState = 0x18;
+inline constexpr std::size_t kCompWitnessSize = 0x48;
+inline constexpr std::size_t kCompRecordSize = 0x58;
+
+// 지금 무엇이 얼마나 들어 있나. 화면이 그대로 보여 준다 - 눌러서 무엇이
+// 줄었는지 보이지 않으면 또 "안 고쳐졌다" 가 된다.
+struct WantedNow {
+    bool have[kWantedRealmCount]{};
+    std::uint8_t state[kWantedRealmCount]{};
+    std::uint32_t regions[kWantedRealmCount]{};
+    std::uint32_t witness[kWantedRealmCount]{};
+    std::uint32_t records[kWantedRealmCount]{};
+};
+bool wanted_now(const mem::Reader& reader, WantedNow* out);
+
+// 상태 바이트의 이름. 모르는 값은 숫자 그대로.
+const char* wanted_state_name(std::uint8_t state);
+
+// 무엇을 비울지. 하나씩 끌 수 있어야 **무엇이 화면을 바꿨는지** 갈린다.
+struct WantedPurge {
+    bool bounty = true;    // 벌금을 0 으로
+    bool regions = true;   // 지역 벡터 비우기 (지도 줄이 사라진다)
+    bool witness = true;   // 목격자·범죄기록 벡터 비우기
+    bool state = true;     // 상태 바이트 0
+};
+
+// 살아 있는 realm 에 전부 적용한다. 손댄 realm 수를 낸다.
+//
+// **되돌리기는 없다.** 게임의 자기 상태를 지우는 것이라 원래 값을 되돌려
+// 놔도 화면이 따라오지 않는다(화면은 `UpdateWanted*` 호출로만 바뀐다).
+// 잘못되면 세이브를 다시 부르는 쪽이 확실하다.
+int wanted_purge(const mem::Reader& reader, const WantedPurge& what);
+
 // --- 구역 이름은 아직 못 붙인다 (2026-09-19) --------------------------
 //
 // 한 번 붙였다가 **걷어냈다.** 이름의 필드 번호를 모르는 채 "0x00..0x80 을
