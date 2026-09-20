@@ -44,4 +44,13 @@ namespace cdtb::game {
 bool spawnguard_install(const mem::Reader& reader);
 bool spawnguard_unsupported();   // 바이트가 달라 이 빌드에선 못 걺
 
+// 썽크가 **실제로 막은 횟수.** 케이브가 널 갈래에서만 올린다.
+//
+// 0 이면 이번 판에 한 번도 안 막았다. 그것도 정보다 - 자리가 낡아 가드가
+// 아무것도 안 막고 있어도, 마침 크래시 조건이 안 걸린 판에서는 똑같이
+// "정상" 으로 보인다(2026-09-20 게임 확인 때 이 구멍이 남았다).
+std::uint32_t spawnguard_hits();
+// 처음 올라갔을 때 **한 줄만** 남긴다. 매 프레임 불러도 된다.
+void spawnguard_tick_report();
+
 }  // namespace cdtb::game

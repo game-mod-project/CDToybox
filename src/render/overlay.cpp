@@ -796,6 +796,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         // 분석 루프의 늦은 지점에서 설치하면 그 전에 지급/가방 열기로 크래시.
         cdtb::game::specguard_install(reader);
         cdtb::game::spawnguard_install(reader);
+        // 가드가 **실제로 막았는지** 는 처음 한 번만 로그에 남는다.
+        cdtb::game::specguard_tick_report();
+        cdtb::game::spawnguard_tick_report();
         // 소환 진단 훅은 **설정으로 켤 때만** 건다. 기능이 아니라 조사용이고,
         // 그중 하나가 게임을 팅기게 했다(2026-09-15).
         // 휠 칸 등록 채우기도 같은 훅(0x2096C30)을 쓰므로 그때도 건다.

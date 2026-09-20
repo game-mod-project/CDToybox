@@ -6,6 +6,7 @@
 //   함수 안의 쌍둥이다. 앞의 것만 걸면 크래시가 89바이트 뒤로 옮겨갈 뿐이다.
 //   자리 표와 근거는 `game/specguard_sites.h`.
 
+#include "game/guardcave.h"
 #include "game/specguard.h"
 #include "game/specguard_sites.h"
 #include "game/specguard_tail.h"
@@ -38,6 +39,12 @@ namespace {
 // 동시에 부를 수 있어 CAS 로 한 스레드만 들어간다(Codex 지적 2026-09-11).
 std::atomic<int> g_state{0};
 std::atomic<int> g_count{0};
+// **가드가 실제로 막은 횟수.** 케이브가 0 갈래에서만 `lock inc` 로 올린다
+// (`guardcave.h`). 0 이면 이번 판에 한 번도 안 막았다는 뜻이고, 그것도 정보다 -
+// 자리가 낡아 아무것도 안 막고 있어도 크래시 조건이 안 걸린 판에서는 똑같이
+// "정상" 으로 보이기 때문이다(2026-09-20 게임 확인 때 이 구멍이 남았다).
+std::atomic<std::uint32_t> g_hits{0};
+std::atomic<bool> g_hits_told{false};
 constexpr int kSiteTotal = kSpecguardSiteTotal;
 
 void* alloc_near(std::uintptr_t target, std::size_t size) {
@@ -131,7 +138,7 @@ bool install_divguard(const mem::Reader& reader, std::uintptr_t site,
                    site, o[dl], o[dl + 1], o[dl + 2]);
         return false;
     }
-    void* cave = alloc_near(site, 96);
+    void* cave = alloc_near(site, 128);
     if (cave == nullptr) return false;
     const std::uintptr_t ca = reinterpret_cast<std::uintptr_t>(cave);
     const std::uintptr_t back = site + patch_len;
@@ -151,6 +158,9 @@ bool install_divguard(const mem::Reader& reader, std::uintptr_t site,
     const std::size_t jmp1 = b.size();
     b.insert(b.end(), {0xE9, 0, 0, 0, 0});
     const std::size_t zero_pos = b.size();
+    // **막은 갈래에서만** 센다. `xor` **앞**이어야 한다 - 뒤에 두면 게임이
+    // 읽는 플래그가 달라진다(`guardcave.h`).
+    emit_hit_bump(b, reinterpret_cast<std::uint64_t>(&g_hits));
     b.insert(b.end(), {0x33, 0xC0, 0x33, 0xD2});   // xor eax;xor edx
     for (int k = 0; k < tail_len; ++k) b.push_back(o[dl + k]);   // tail lea 재실행
     const std::size_t jmp2 = b.size();
@@ -199,7 +209,7 @@ bool install_regdiv(const mem::Reader& reader, std::uintptr_t site,
         return false;
     }
 
-    void* cave = alloc_near(site, 96);
+    void* cave = alloc_near(site, 128);
     if (cave == nullptr) return false;
     const std::uintptr_t ca = reinterpret_cast<std::uintptr_t>(cave);
     const std::uintptr_t back = site + patch_len;
@@ -213,6 +223,9 @@ bool install_regdiv(const mem::Reader& reader, std::uintptr_t site,
     const std::size_t jmp1 = b.size();
     b.insert(b.end(), {0xE9, 0, 0, 0, 0});
     const std::size_t zero_pos = b.size();
+    // **막은 갈래에서만** 센다. `xor` **앞**이어야 한다 - 뒤에 두면 게임이
+    // 읽는 플래그가 달라진다(`guardcave.h`).
+    emit_hit_bump(b, reinterpret_cast<std::uint64_t>(&g_hits));
     b.insert(b.end(), {0x33, 0xC0, 0x33, 0xD2});       // xor eax;xor edx
     for (int k = 0; k < tail_len; ++k) b.push_back(o[3 + k]);   // 꼬리 재실행
     const std::size_t jmp2 = b.size();
@@ -270,6 +283,23 @@ bool specguard_install(const mem::Reader& reader) {
 bool specguard_installed() {
     return g_state.load(std::memory_order_acquire) == 2;
 }
+std::uint32_t specguard_hits() {
+    return g_hits.load(std::memory_order_relaxed);
+}
+
+void specguard_tick_report() {
+    const std::uint32_t n = g_hits.load(std::memory_order_relaxed);
+    if (n == 0) return;
+    // **한 번만.** 되풀이되는 줄은 로그를 묻는다(TROUBLESHOOTING 6.19).
+    bool expected = false;
+    if (!g_hits_told.compare_exchange_strong(expected, true,
+                                             std::memory_order_acq_rel)) {
+        return;
+    }
+    log::infof("특수아이템 가드가 **실제로 막았다** - 0 으로 나눌 뻔한 것을 {}회 "
+               "건너뛰었다 (이 줄은 한 번만 나온다)", n);
+}
+
 bool specguard_unsupported() {
     return g_state.load(std::memory_order_acquire) == 2 &&
            g_count.load(std::memory_order_acquire) < kSiteTotal;
