@@ -1,9 +1,11 @@
+// @build 1.0.0.2944  **kCallSiteRva 를 재도출했다**(2026-09-20) - 0x2B8DD36.
+//   조회를 부르는 273곳 중 뒤가 `cmp qword [rax+0x28],-1` 인 자리는 한 곳뿐이고
+//   (파일 전량에서도 한 곳) 그것이 널 검사가 빠진 그 자리다. 판정을 그 꼬리까지
+//   보도록 넓혔다. 자리와 근거는 `game/spawnguard_site.h`.
 // @build 1.0.0.2944  kLookupRva · kEmptyRecordRva 재도출(짝 97곳 만장일치)
-// @build 1.0.0.2850  **kCallSiteRva 는 재도출 못 했다** - 옛 자리가 je 라
-//   install 이 안전하게 거부한다. 2944 에서는 게임이 스스로 가드하는 것으로
-//   보인다. 근거: specs/2026-09-18-game-update-2944.md §5
 
 #include "game/spawnguard.h"
+#include "game/spawnguard_site.h"
 
 #include <windows.h>
 
@@ -16,20 +18,11 @@
 namespace cdtb::game {
 namespace {
 
-// 이 빌드의 확정 RVA. 1.0.0.2850(2026-09-11) 갱신에서 다시 뽑았다 - 조회 함수는
-// `call X ; lea reg,[빈 레코드]` 짝 37곳으로, 자리는 옛 자리 +0x2040(형제 자리
-// 0x2ABD8EB → 0x2ABF92B 도 같은 폭), 빈 레코드는 데이터 +0x4150. 2760 까지는
-// 0x2AD51F8 / 0x208F5C0 / 0x6BB3F70 (실측 2026-09-09). specs/2026-09-11-game-update-2850.md.
-// **1.0.0.2944(2026-09-18): 이 자리는 재도출하지 못했다 - 옛 값을 그대로 둔다.**
-// 옛 자리 0x2AD7238 은 새 exe 에서 `je`(0x0F) 라 install 이 "call 이 아니다" 로
-// 안전하게 거부한다. 2850 의 지문(`mov rcx,rax ; call 조회 ; mov edi,0xC`)은 새
-// exe 에 **0곳**이고, 조회 함수를 부르는 272곳 중 소환 작업 함수(0x2B9EB50) 안의
-// 유일한 호출(+0x1E7)은 **게임이 스스로** `lea rdi,[빈 레코드] ; test rax,rax ;
-// cmovne` 로 가드하고 있다 - 2944 에서는 이 가드가 필요 없어졌을 수 있다(정적으로
-// 단정 못 한다). 필요하다고 판명되면 크래시 자리를 라이브로 잡아 넣을 것.
-constexpr std::uint64_t kCallSiteRva = 0x2AD7238;   // 2850 값, 2944 미도출
-constexpr std::uint64_t kLookupRva = 0x2146110;     // 번호 -> 레코드 조회
-constexpr std::uint64_t kEmptyRecordRva = 0x6CF2F70;
+// 자리·조회·빈 레코드의 RVA 와 자리 판정은 `game/spawnguard_site.h` 에 있다
+// (시험이 봐야 해서 헤더로 뺐다). 빌드별 이동은 거기 주석에 있다.
+constexpr std::uint64_t kCallSiteRva = kSpawnCallSiteRva;
+constexpr std::uint64_t kLookupRva = kSpawnLookupRva;
+constexpr std::uint64_t kEmptyRecordRva = kSpawnEmptyRecordRva;
 
 // 빈 레코드의 표식. 게임이 "없음"을 이 두 값으로 나타낸다.
 constexpr std::size_t kRecNoOff = 0x28;    // u64, 없으면 -1
@@ -84,23 +77,39 @@ bool spawnguard_install(const mem::Reader& reader) {
     const std::uintptr_t lookup = base + kLookupRva;
     const std::uintptr_t empty = base + kEmptyRecordRva;
 
-    // 1) 그 자리가 정말 우리가 읽은 그 call 인가.
-    std::uint8_t o[5]{};
+    // 1) 그 자리가 정말 "조회를 부르고 **곧장** [rax+0x28] 을 견주는" 그 자리인가.
+    //    `E8` + 대상만 보면 게임이 이미 막아 둔 266곳도 전부 통과한다 - 자리가
+    //    낡아 그중 하나에 떨어지면 멀쩡한 자리를 건드리게 되므로 꼬리까지 본다.
+    std::uint8_t o[10]{};
     if (!reader.read(site, o, sizeof(o))) return false;
-    if (o[0] != 0xE8) {
-        log::warnf("소환 가드: 0x{:X} 가 call 이 아니다 (0x{:02X}) - 설치 안 함",
-                   kCallSiteRva, o[0]);
-        g_unsupported.store(true, std::memory_order_release);
-        return false;
-    }
-    std::int32_t rel = 0;
-    std::memcpy(&rel, o + 1, 4);
-    const std::uintptr_t target = site + 5 + static_cast<std::intptr_t>(rel);
-    if (target != lookup) {
-        log::warnf("소환 가드: call 대상이 0x{:X} 가 아니라 0x{:X} - 설치 안 함",
-                   kLookupRva, target - base);
-        g_unsupported.store(true, std::memory_order_release);
-        return false;
+    switch (spawnguard_check_site(o, sizeof(o), site, lookup)) {
+        case SpawnSite::kOk:
+            break;
+        case SpawnSite::kShort:
+            return false;   // 읽기 실패와 같이 본다 - 다음 프레임에 다시
+        case SpawnSite::kNotCall:
+            log::warnf("소환 가드: 0x{:X} 가 call 이 아니다 (0x{:02X}) - 설치 안 함",
+                       kCallSiteRva, o[0]);
+            g_unsupported.store(true, std::memory_order_release);
+            return false;
+        case SpawnSite::kWrongTarget: {
+            std::int32_t rel = 0;
+            std::memcpy(&rel, o + 1, 4);
+            const std::uintptr_t target =
+                site + 5 +
+                static_cast<std::uintptr_t>(static_cast<std::intptr_t>(rel));
+            log::warnf("소환 가드: call 대상이 0x{:X} 가 아니라 0x{:X} - 설치 안 함",
+                       kLookupRva, target - base);
+            g_unsupported.store(true, std::memory_order_release);
+            return false;
+        }
+        case SpawnSite::kGuarded:
+            log::warnf("소환 가드: 0x{:X} 의 조회 뒤가 `cmp [rax+0x28],-1` 이 아니다"
+                       " ({:02X} {:02X} {:02X} {:02X} {:02X}) - 게임이 이미 막은"
+                       " 자리일 수 있다, 설치 안 함",
+                       kCallSiteRva, o[5], o[6], o[7], o[8], o[9]);
+            g_unsupported.store(true, std::memory_order_release);
+            return false;
     }
 
     // 2) 전역 빈 레코드가 초기화됐는가. 아직이면 다음에 다시 본다 -
