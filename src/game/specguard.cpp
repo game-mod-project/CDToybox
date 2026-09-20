@@ -1,16 +1,20 @@
-// @build 1.0.0.2944  div 사이트 넷 재도출(kDivMem[3] · kDivReg 셋)
-// @build 1.0.0.2850  **가방 렌더 셋(kDivMem[0..2])은 재도출 못 했다** -
-//   그 div 형태가 새 exe 에 없다. opcode 검사가 걸러 4/7 설치로 끝난다.
-//   근거: specs/2026-09-18-game-update-2944.md §4
+// @build 1.0.0.2944  div 사이트 다섯(kDivMem[3] · kDivReg 넷)
+// @build 1.0.0.2944  **가방 렌더 셋(kDivMem[0..2])은 2944 에 없다** - 바이트열을
+//   파일 397MB 전량에서 찾아 0곳임을 확인했다(2026-09-20). 표에는 남겨 둔다,
+//   opcode 검사가 걸러 5/8 설치로 끝나고 경고가 뜬다.
+// @build 1.0.0.2944  **0xF83F6B4 를 더했다**(2026-09-20) - 0xF83F65B 와 같은
+//   함수 안의 쌍둥이다. 앞의 것만 걸면 크래시가 89바이트 뒤로 옮겨갈 뿐이다.
+//   자리 표와 근거는 `game/specguard_sites.h`.
 
 #include "game/specguard.h"
+#include "game/specguard_sites.h"
 #include "game/specguard_tail.h"
 
 #include <windows.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstring>
-#include <iterator>
 #include <vector>
 
 #include "core/log.h"
@@ -27,50 +31,14 @@ namespace {
 // rtti.loaded()==false 라 설치가 조용히 건너뛰어졌다(실측 2026-09-07). 모듈
 // 베이스 + 이 빌드의 확정 RVA 로 바로 가서 예상 opcode 를 확인한 뒤 패치한다.
 //
-// 빌드 2.00.01(2658) 실측 div-by-special-state 지점들. {RVA, 패치길이}.
-// 1.0.0.2850(2026-09-11) 갱신: 같은 명령 바이트열(div + 꼬리)로 새 exe 를 찾아
-// 7곳 전부 유일하게 다시 잡았다(+0xAC0 / +0x1570 / +0x15A0 / -0x4B640). 아래
-// 주석의 옛 RVA 는 2760 까지의 값이다. specs/2026-09-11-game-update-2850.md.
-//
-// **1.0.0.2944(2026-09-18) 갱신: 넷만 다시 잡혔다.** div <reg> 셋과 div [rdi+8]
-// 은 바이트열이 그대로라 유일하게 나왔다(+0xB9160 셋 · +0x825E40 하나). 나머지
-// 셋(가방 렌더의 div [rbp+0xF0] · div [rsp+0x38] · div [rbp-0x38])은 **그 형태가
-// 새 exe 어디에도 없다** - 컴파일러가 분모를 레지스터로 재할당한 것으로 보인다.
-// 실행 섹션 전체에서 `div r/m64` 를 전수 디스어셈블해 확인했다(메모리 피연산자
-// 244곳 중 rbp/rsp 기반은 둘뿐이고 둘 다 무관).
-//
-// 못 찾은 셋은 **2850 값을 그대로 둔다.** install_* 가 opcode 를 확인하고
-// 어긋나면 패치하지 않으므로 안전하고, 배열에 남겨 둬야 kSiteTotal 이 7 로
-// 유지돼 `specguard_unsupported()` 가 참이 되어 지급 창이 경고를 낸다 - 실제로
-// 가드가 셋 빠진 상태이므로 그것이 참이다. 셋을 배열에서 빼면 "7/7 설치" 로
-// 거짓 보고가 된다. specs/2026-09-18-game-update-2944.md.
-// 패치길이 = div 바이트 + (div<5 일 때) 5바이트를 채우려고 함께 옮기는 꼬리
-// 명령. 꼬리는 위치 독립 명령이어야 한다(rel jmp/call·RIP 상대 금지) -
-// specguard_tail_is_safe 가 설치 전에 확인하고 아니면 warn 후 건너뛴다.
-//  - 0xEB1BF4  div [rbp+0xf0] (7)                 가방 렌더
-//  - 0xEA874F  div [rsp+0x38] (5)                 가방 렌더
-//  - 0x21DA368 div [rbp-0x38] (4) + lea(3)=7      가방 렌더
-//  - 0x234EC7D div [rdi+8]   (4) + mov edx,[rdi](2)=6   착용
-// + 계열 B: 0xF064E5B  div r8 ; cmp eax,[rdi+4] (6)     가방 렌더
-struct DivSite { std::uint64_t rva; int patch_len; };
-// div qword ptr [mem] 지점(가방 렌더 3 + 착용 1).
-constexpr DivSite kDivMem[] = {
-    // 앞 셋은 2850 값(2944 미발견, opcode 검사가 걸러 낸다). 넷째만 2944 실측.
-    {0xEB26B4, 7}, {0xEA920F, 5}, {0x21DB8D8, 7}, {0x240937D, 6}};
-// div <reg> 지점. 분모가 레지스터. patch_len = div(3) + 위치독립 꼬리.
-//  - 0xF064E5B  div r8  + cmp eax,[rdi+4](3) = 6      가방 렌더
-//  - 0x234EA9B  div r14 + mov ecx,edi(2)     = 5      착용/특수능력 영역
-//  - 0x234EEB4  div r9  + mov ecx,r8d(3)      = 6      특수능력 사용
-constexpr DivSite kDivReg[] = {
-    // 셋 다 2944 실측(2850 은 0xF01981B · 0x235003B · 0x2350454).
-    {0xF83F65B, 6}, {0x240919B, 5}, {0x24095B4, 6}};
+// 자리 표는 `game/specguard_sites.h` 에 있다(시험이 봐야 해서 헤더로 뺐다).
+// 거기에 각 RVA 의 근거·빌드별 이동·왜 낡은 셋을 안 지우는지가 적혀 있다.
 
 // 0 안 함, 1 설치 중(다른 스레드는 손대지 않는다), 2 끝. 렌더 루프와 분석 루프가
 // 동시에 부를 수 있어 CAS 로 한 스레드만 들어간다(Codex 지적 2026-09-11).
 std::atomic<int> g_state{0};
 std::atomic<int> g_count{0};
-constexpr int kSiteTotal =
-    static_cast<int>(std::size(kDivMem) + std::size(kDivReg));
+constexpr int kSiteTotal = kSpecguardSiteTotal;
 
 void* alloc_near(std::uintptr_t target, std::size_t size) {
     SYSTEM_INFO si{};
@@ -281,10 +249,10 @@ bool specguard_install(const mem::Reader& reader) {
     }
 
     int n = 0;
-    for (const auto& s : kDivMem) {
+    for (const auto& s : kSpecguardDivMem) {
         if (install_divguard(reader, base + s.rva, s.patch_len)) ++n;
     }
-    for (const auto& s : kDivReg) {
+    for (const auto& s : kSpecguardDivReg) {
         if (install_regdiv(reader, base + s.rva, s.patch_len)) ++n;
     }
     g_count.store(n, std::memory_order_release);
