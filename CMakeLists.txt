@@ -152,6 +152,7 @@ add_executable(cdtb_tests
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
     tests/specguard_tests.cpp
+    tests/spawnguard_tests.cpp
     tests/stash_tests.cpp
     tests/stash_queue_tests.cpp
     tests/roster_tests.cpp
