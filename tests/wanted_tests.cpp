@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "game/wanted.h"
 #include "harness.h"
@@ -280,4 +281,108 @@ TEST(wanted_region_count_refuses_a_head_that_makes_no_sense) {
     CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 0, 4), std::size_t{0});
     CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 5, 2), std::size_t{0});
     CHECK_EQ(cdtb::game::wanted_region_count(0x1000, 2, 1u << 20), std::size_t{0});
+}
+
+// ---------------------------------------- 값은 **두 벌**이다
+//
+// 클라와 서버가 한 프로세스에 살고, **같은 구역 키의 레코드가 값이 다르다**
+// (실측 2026-09-20: 서버 10000 / 클라 3000). 그동안 클라 한 벌만 썼다.
+//
+// 합치는 것은 순수 함수라 여기서 못박는다 - 오늘 서버 값을 못 본 것이
+// 이 합침이 없어서였다.
+
+namespace {
+
+cdtb::game::WantedRegion mk(std::uint32_t key, std::uint64_t raw) {
+    cdtb::game::WantedRegion r;
+    r.addr = 0x1000 + key;   // 합침은 주소를 안 본다
+    r.key = key;
+    r.raw = raw;
+    return r;
+}
+
+}  // namespace
+
+TEST(wanted_merge_puts_each_realm_in_its_own_column) {
+    std::vector<cdtb::game::WantedRegion>
+        per[cdtb::game::kWantedRealmCount];
+    per[0] = {mk(1000131, 3000)};     // 클라
+    per[1] = {mk(1000131, 10000)};    // 서버
+    const auto rows = cdtb::game::merge_region_rows(per);
+    CHECK_EQ(rows.size(), std::size_t{1});
+    CHECK_EQ(rows[0].key, std::uint32_t{1000131});
+    CHECK(rows[0].have[0]);
+    CHECK(rows[0].have[1]);
+    CHECK(!rows[0].have[2]);
+    CHECK_EQ(rows[0].raw[0], std::uint64_t{3000});
+    CHECK_EQ(rows[0].raw[1], std::uint64_t{10000});
+}
+
+TEST(wanted_merge_flags_the_split_that_fooled_us) {
+    // 2026-09-20 그 판 그대로. 이 줄이 붉게 떴으면 하루를 안 썼다.
+    std::vector<cdtb::game::WantedRegion>
+        per[cdtb::game::kWantedRealmCount];
+    per[0] = {mk(1000131, 3000)};
+    per[1] = {mk(1000131, 10000)};
+    CHECK(cdtb::game::merge_region_rows(per)[0].disagrees());
+}
+
+TEST(wanted_merge_calls_one_realm_agreement) {
+    // 한 realm 에만 있으면 어긋난 것이 아니다 - 견줄 상대가 없다.
+    std::vector<cdtb::game::WantedRegion>
+        per[cdtb::game::kWantedRealmCount];
+    per[0] = {mk(1000131, 3000)};
+    CHECK(!cdtb::game::merge_region_rows(per)[0].disagrees());
+    // 값이 같으면 당연히 아니다.
+    per[1] = {mk(1000131, 3000)};
+    CHECK(!cdtb::game::merge_region_rows(per)[0].disagrees());
+    // 0 끼리도 같다 - 다 지운 뒤가 이 상태다.
+    per[0] = {mk(1000131, 0)};
+    per[1] = {mk(1000131, 0)};
+    CHECK(!cdtb::game::merge_region_rows(per)[0].disagrees());
+}
+
+TEST(wanted_merge_keeps_keys_only_one_realm_knows) {
+    // realm 마다 아는 구역이 다를 수 있다. 빠뜨리면 그 구역은 영영 못 지운다.
+    std::vector<cdtb::game::WantedRegion>
+        per[cdtb::game::kWantedRealmCount];
+    per[0] = {mk(1000138, 500)};
+    per[1] = {mk(1000131, 10000)};
+    const auto rows = cdtb::game::merge_region_rows(per);
+    CHECK_EQ(rows.size(), std::size_t{2});
+    // 키 오름차순이다 - 줄 순서가 프레임마다 바뀌면 누르는 자리가 흔들린다.
+    CHECK_EQ(rows[0].key, std::uint32_t{1000131});
+    CHECK_EQ(rows[1].key, std::uint32_t{1000138});
+    CHECK(rows[0].have[1] && !rows[0].have[0]);
+    CHECK(rows[1].have[0] && !rows[1].have[1]);
+}
+
+TEST(wanted_merge_takes_the_first_when_a_realm_repeats_a_key) {
+    // 한 realm 이 같은 키를 두 번 들고 있으면 **먼저 읽은 것**을 남긴다.
+    // 뒤엣것이 최신이라고 볼 근거가 없다.
+    std::vector<cdtb::game::WantedRegion>
+        per[cdtb::game::kWantedRealmCount];
+    per[0] = {mk(1000131, 700), mk(1000131, 900)};
+    const auto rows = cdtb::game::merge_region_rows(per);
+    CHECK_EQ(rows.size(), std::size_t{1});
+    CHECK_EQ(rows[0].raw[0], std::uint64_t{700});
+}
+
+TEST(wanted_merge_of_nothing_is_nothing) {
+    std::vector<cdtb::game::WantedRegion>
+        per[cdtb::game::kWantedRealmCount];
+    CHECK(cdtb::game::merge_region_rows(per).empty());
+}
+
+TEST(wanted_realm_names_are_distinct_and_bounded) {
+    // 화면의 열 제목이다. 범위 밖은 "?" 로 떨어져야 한다.
+    const char* a = cdtb::game::wanted_realm_name(cdtb::game::WantedRealm::kClient);
+    const char* b = cdtb::game::wanted_realm_name(cdtb::game::WantedRealm::kServer);
+    const char* c = cdtb::game::wanted_realm_name(cdtb::game::WantedRealm::kCommon);
+    CHECK(std::strcmp(a, b) != 0);
+    CHECK(std::strcmp(b, c) != 0);
+    CHECK_EQ(std::strcmp(cdtb::game::wanted_realm_name(
+                             static_cast<cdtb::game::WantedRealm>(99)),
+                         "?"),
+             0);
 }
