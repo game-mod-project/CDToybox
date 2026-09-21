@@ -2017,6 +2017,10 @@ rtti.instances_of_class(cls, 1, [&](std::uintptr_t a) { return 판정(a); });
 찾으면 그만 읽는다"** 가 필요하다(`instances_of_class` 에 판정을 넘기는 형태).
 지금은 프로브 명령에 넉넉한 시간(5분 이상)을 주고 쓴다.
 
+> **그 뒤** — `752f51d` 가 그 형태를 넣었다: `instances_of_class(name,
+> max_accepted, accept)` 는 **합격한 수**를 센다. items·roster 는 첫 합격에서
+> 멈춘다. `find_actor_manager` 만 "가장 많은 것" 을 고르느라 아직 옛 오버로드다.
+
 관련: [2.10](#210-못-찾는-것을-10초마다-다시-훑었다)
 
 ---
