@@ -45,8 +45,8 @@ D3D12 ImGui 오버레이. 싱글플레이 전용.
 
 작업 디렉토리가 게임 폴더로 열려 있어도 소스와 git 은 전부 `E:\CDToybox` 에
 있다. 워크트리는 **늘어나고 줄어드니 세지 말고 물어본다** — `git worktree list`
-가 지금 무엇이 붙어 있는지 알려 준다(2026-09-21 기준 `E:/CDToybox` = `develop`,
-`E:/CDToybox-mouse` = `feat/wanted-cheat`, `E:/CDToybox-spec` = 조사·문서 작업).
+가 지금 무엇이 붙어 있는지 알려 준다(본 트리 `E:/CDToybox` = `develop`. 보조 트리
+목록은 금방 낡으니 여기 적지 않는다).
 **남의 트리는 건드리지 않는다.**
 
 **트리를 나눠도 배포본은 하나다** — 게임의 `bin64\xinput1_4.dll` 은 세션 수와 무관하게

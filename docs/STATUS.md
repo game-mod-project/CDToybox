@@ -2150,10 +2150,9 @@ scripts/      build.ps1 · deploy.ps1 · overlay-check.ps1(화면 검증)
 `github.com/game-mod-project/CDToybox` 다. 릴리스만 `develop` → `main` PR.
 
 워크트리는 **늘어나고 줄어드니 여기 적어 두지 않는다** - `git worktree list` 를
-본다(2026-09-21 기준 `E:/CDToybox` = `develop`, `E:/CDToybox-mouse` =
-`feat/wanted-cheat`, `E:/CDToybox-spec` = 조사·문서 작업). **커밋·머지 직전에 매번 `git -C <트리> branch --show-current`
-로 확인한다** - 남이 HEAD 를 바꿔 둘 수 있다(2026-09-10 · 09-12 사고 둘,
-`TROUBLESHOOTING.md` §7.1). 규율 전문은 `CLAUDE.md` §2.
+본다(본 트리 `E:/CDToybox` = `develop`). **커밋·머지 직전에 매번
+`git -C <트리> branch --show-current` 로 확인한다** - 남이 HEAD 를 바꿔 둘 수
+있다(2026-09-10 · 09-12 사고 둘, `TROUBLESHOOTING.md` §7.1). 규율 전문은 `CLAUDE.md` §2.
 
 
 ---
