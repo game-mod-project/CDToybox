@@ -2057,7 +2057,7 @@ rtti.instances_of_class(cls, 1, [&](std::uintptr_t a) { return 판정(a); });
 사례다. 그때는 "이름 말고 문구를 보라" 였고, 이번은 **"문구가 없다는 것도
 증거다"** 였다.
 
-기록: `specs/2026-09-16-vehicle-place-and-dismount.md` §6 (배제된 것·반증된
+기록: `specs/2026-09-16-vehicle-place-and-dismount.md` §8 (배제된 것·반증된
 후보·막힌 길 전부).
 
 ---
