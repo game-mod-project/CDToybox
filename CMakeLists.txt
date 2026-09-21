@@ -114,7 +114,7 @@ add_library(cdtoybox SHARED
     src/game/specguard.cpp
     src/game/spawnguard.cpp
     src/game/callcheck.cpp
-    src/game/bosscall.cpp
+    src/game/actionlimit.cpp
     src/game/spec_heal.cpp
     src/game/dragondiag.cpp
     src/game/towngate.cpp
@@ -176,7 +176,7 @@ add_executable(cdtb_tests
     tests/nofall_tests.cpp
     tests/towngate_tests.cpp
     tests/callgate_tests.cpp
-    tests/bosscall_tests.cpp
+    tests/actionlimit_tests.cpp
     tests/mountvital_tests.cpp
     tests/mountslot_tests.cpp
     tests/bag_capacity_tests.cpp
@@ -205,7 +205,7 @@ add_executable(cdtb_tests
     src/game/wheelfill.cpp
     src/game/towngate.cpp
     src/game/callgate.cpp
-    src/game/bosscall.cpp
+    src/game/actionlimit.cpp
     src/game/mountvital.cpp
     src/game/mountslot.cpp
     src/render/notice_state.cpp
