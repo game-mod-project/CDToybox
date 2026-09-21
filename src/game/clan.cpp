@@ -579,15 +579,18 @@ ClanRealmState clan_realm_state_of(bool cached, bool scanning, bool gave_up) {
     return ClanRealmState::Missing;
 }
 
-ClanRealmState clan_realm_state(bool client) {
+ClanRealmState clan_realm_state(const mem::Reader& reader, bool client) {
     const int k = client ? 1 : 0;
     const std::uintptr_t have =
         (client ? g_cached_client : g_cached_server)
             .load(std::memory_order_acquire);
+    // **`clan_component_cached` 와 같은 검사다.** 0 이 아닌 것과 쓸 수 있는
+    // 것은 다르다 - 죽은 포인터가 남아 있으면 예전에는 Ready 라고 말했다.
+    const bool usable = have != 0 && looks_like_clan_component(reader, have);
     const bool scanning =
         g_rescan_active.load(std::memory_order_acquire) == k ||
         g_rescan_want[k].load(std::memory_order_acquire);
-    return clan_realm_state_of(have != 0, scanning, g_find.gave_up());
+    return clan_realm_state_of(usable, scanning, g_find.gave_up());
 }
 
 double clan_rescan_elapsed_sec() {
