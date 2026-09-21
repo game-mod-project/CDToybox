@@ -153,10 +153,16 @@ using DeserFn = void*(__fastcall*)(void*, void*, void*, void*);
 constexpr std::size_t kPacketLen = 0x10;      // u16 전체길이
 constexpr std::size_t kPacketPayload = 0x18;  // 페이로드 포인터
 constexpr int kMaxDumps = 600;   // 전체 상한(태그별 상한이 주된 조절기다)
-constexpr int kMaxPerTag = 12;   // 한 계통이 로그를 묻지 못하게
+constexpr int kMaxPerTag = 12;   // 한 계통이 한 창에서 로그를 묻지 못하게
+// 태그 예산을 되채우는 주기. 시작 동기화의 폭주가 몇 분 뒤의 클릭을 굶기면
+// 안 된다(`companion.h` 의 `CaptureBudget` 설명 - 2026-09-21 실측).
+constexpr std::uint64_t kTagWindowMs = 60000;
 constexpr std::size_t kHexCap = 768;
 
 std::atomic<int> g_dumps{0};
+// 태그 예산은 두 칸(쓴 줄 수·창 시작)이라 원자 하나로 못 담는다. 캡처는
+// 네트워크 메시지마다 한 번이라 자물쇠 경합이 없다.
+std::mutex g_budget_mutex;
 std::atomic<bool> g_installed{false};
 std::mutex g_last_mutex;
 HireAck g_acks[kHireAckSlots];
@@ -167,12 +173,8 @@ CatchCapture g_last_catch;
 // 동기화에서 한 메시지가 80건을 한꺼번에 쏟아 예산을 다 태웠고, 정작 보려던
 // 클릭이 2분 뒤에 와서 한 줄도 안 찍혔다. 한 계통의 폭주가 다른 계통을
 // 굶기면 안 된다(TROUBLESHOOTING 6.19 - 한 줄이 로그를 묻는다).
-void dump_payload(void* packet, const char* tag, std::atomic<int>* budget) {
+void dump_payload(void* packet, const char* tag, CaptureBudget* budget) {
     if (packet == nullptr) return;
-    if (budget != nullptr &&
-        budget->load(std::memory_order_relaxed) >= kMaxPerTag) {
-        return;
-    }
     if (g_dumps.load(std::memory_order_relaxed) >= kMaxDumps) return;
     auto* p = reinterpret_cast<const std::uint8_t*>(packet);
     std::uint16_t len = 0;
@@ -180,8 +182,16 @@ void dump_payload(void* packet, const char* tag, std::atomic<int>* budget) {
     std::memcpy(&len, p + kPacketLen, sizeof(len));
     std::memcpy(&payload, p + kPacketPayload, sizeof(payload));
     if (payload == 0 || len == 0 || len > 8192) return;
+    // 예산은 **찍을 것이 있다고 확인된 뒤에** 쓴다. 버릴 꾸러미로 예산을
+    // 태우면 정작 보려던 클릭이 굶는다.
+    if (budget != nullptr) {
+        std::lock_guard<std::mutex> lock(g_budget_mutex);
+        if (!capture_budget_take(budget, GetTickCount64(), kMaxPerTag,
+                                 kTagWindowMs)) {
+            return;
+        }
+    }
     g_dumps.fetch_add(1, std::memory_order_relaxed);
-    if (budget != nullptr) budget->fetch_add(1, std::memory_order_relaxed);
     auto* pl = reinterpret_cast<const std::uint8_t*>(payload);
     std::uint16_t id = 0, body = 0;
     decode_message_header(pl, len, &id, &body);
@@ -236,7 +246,7 @@ void dump_payload(void* packet, const char* tag, std::atomic<int>* budget) {
 // 메시지마다 detour·원본이 따로 있어야 해서 매크로로 찍어 낸다.
 #define CDTB_COMP_DETOUR(id, tag)                                            \
     DeserFn g_orig_##id = nullptr;                                          \
-    std::atomic<int> g_budget_##id{0};                                      \
+    CaptureBudget g_budget_##id{};                                          \
     void* __fastcall det_##id(void* a, void* b, void* p, void* d) {         \
         dump_payload(p, tag, &g_budget_##id);                                \
         return g_orig_##id(a, b, p, d);                                      \

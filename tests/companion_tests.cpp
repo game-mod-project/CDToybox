@@ -374,3 +374,64 @@ TEST(callcheck_never_names_success_even_when_slots_are_zero) {
 TEST(callcheck_reason_table_has_the_six_sites_five_distinct_errors) {
     CHECK(kCallCheckReasonCount == static_cast<std::size_t>(5));
 }
+
+// ---------------------------------------------------------------------------
+// **거부가 없는 것도 결과다** (2026-09-21)
+//
+// 첫 실측에서 보스룸 시도 뒤 거부 줄이 한 줄도 안 나왔다. 그 침묵은 정반대인
+// 두 가지를 못 가른다 - 검증기를 안 거쳤거나(차단이 위), 거쳤는데 통과했거나
+// (차단이 아래). 그래서 **오류값과 무관하게 들어온 횟수를 센다.**
+//
+// 이 시험이 지키는 것은 딱 하나다: 누가 `calls` 증가에 조건을 달면 계기가
+// 다시 (가)/(나)를 못 가르는 옛 상태로 돌아간다. `err == 0` 인 호출에서
+// `calls` 가 늘지 않으면 아래 CHECK 가 깨진다.
+TEST(callcheck_counts_a_pass_as_a_call_not_just_a_reject) {
+    cdtb::game::CallCheckCounts c{};
+    cdtb::game::callcheck_count_one(0, &c);   // 통과 - **이것도 호출이다**
+    CHECK(c.calls == 1u);
+    CHECK(c.pass == 1u);
+    CHECK(c.reject == 0u);
+
+    cdtb::game::callcheck_count_one(0x1234, &c);
+    CHECK(c.calls == 2u);
+    CHECK(c.pass == 1u);
+    CHECK(c.reject == 1u);
+
+    // 센 것이 새지 않는다.
+    CHECK(c.calls == c.pass + c.reject);
+    cdtb::game::callcheck_count_one(7, nullptr);  // 널은 그냥 돌아간다
+}
+
+// ---------------------------------------------------------------------------
+// 캡처 예산 창 (2026-09-21)
+//
+// 실측: `슬롯사용/변경` 이 한 순간에 12줄을 몰아 찍어 자기 태그 예산을 다
+// 태웠고, 몇 분 뒤 보스룸 클릭은 한 줄도 안 남았다. 태그로 나눈 것만으로는
+// 폭주하는 태그가 **자기 자신을 굶기는** 것을 못 막는다.
+// ---------------------------------------------------------------------------
+TEST(capture_budget_refills_after_the_window_passes) {
+    cdtb::game::CaptureBudget b{};
+    // 한 순간에 몰아친 셋을 다 쓴다(창 안 상한 3).
+    CHECK(cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
+    CHECK(cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
+    CHECK(cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
+    // 같은 창에서는 더 못 쓴다 - 로그를 묻지 못하게 하는 쪽은 그대로다.
+    CHECK(!cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
+    CHECK(!cdtb::game::capture_budget_take(&b, 59999, 3, 60000));
+    // 창이 지나면 되채운다 - 이것이 없어서 클릭이 굶었다.
+    CHECK(cdtb::game::capture_budget_take(&b, 61000, 3, 60000));
+    CHECK(b.used == 1);
+}
+
+// 시계가 0 에서 시작해도 예산이 무한이 되면 안 된다. 창 시작을 값(0)이 아니라
+// 상태(`started`)로 가르는 이유가 이것이다.
+TEST(capture_budget_does_not_refill_forever_at_tick_zero) {
+    cdtb::game::CaptureBudget b{};
+    CHECK(cdtb::game::capture_budget_take(&b, 0, 2, 60000));
+    CHECK(cdtb::game::capture_budget_take(&b, 0, 2, 60000));
+    CHECK(!cdtb::game::capture_budget_take(&b, 0, 2, 60000));
+}
+
+TEST(capture_budget_takes_nothing_for_a_null_slot) {
+    CHECK(!cdtb::game::capture_budget_take(nullptr, 0, 3, 60000));
+}
