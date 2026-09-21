@@ -66,6 +66,13 @@ inline constexpr CallCheckReason kCallCheckReasons[] = {
     {0x6CF7B28, "eErrNoCallVehicleMercenaryRideLimit"},
     {0x6CF7B24, "eErrNoCallVehicleMercenaryMovableNavigation"},
     {0x6CF7AFC, "eErrNoCallVehicleInvalidPosition"},
+    // 아래 둘은 검증기 **앞단**(`kWheelPreFnRva`)이 낸다(2026-09-21). 등록 코드
+    // `lea rcx,[슬롯] / lea r8,[설명] / lea rdx,[이름] / call 0x1427810` 으로
+    // 짝지었고, 같은 방법이 대조군 `0x6CF7AFC` 에서 정확히 맞았다.
+    //   0x21FE601 -> "FocusActor를 찾을 수 없습니다."
+    //   0x21FED36 -> "이미 호출된 용병입니다."
+    {0x6CF6ED8, "eErrNotFoundFocusActor"},
+    {0x6CF6F7C, "eErrNoAlreadySummonedMercenary"},
 };
 inline constexpr std::size_t kCallCheckReasonCount =
     sizeof(kCallCheckReasons) / sizeof(kCallCheckReasons[0]);
@@ -126,7 +133,80 @@ inline void callcheck_count_one(std::uint32_t err, CallCheckCounts* c) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 휠의 앞 두 단 (2026-09-21, 파일로 거슬러 올라감)
+// ---------------------------------------------------------------------------
+// 보스룸 실측(대조군 포함): 벌판에서는 검증기 진입 1·통과, 휠 요청(2166) 나감,
+// 서버 응답 옴. 보스룸에서는 **셋 다 없다** -> 차단이 검증기 **위**다.
+// 호출 그래프를 거슬러 가며 vtable 칸을 RTTI 로 풀었다:
+//
+//   UIGamePlayControlRoot_ContentSlotMenu::vtable[18]  0x10BE8B0  (휠 UI)
+//     0x10BE8D5  [this+0x1C8] == -1                -> 나감 (고른 칸 없음)
+//     0x10BE8E7  0x64F490 -> 0x8B4480(관리자+0x50)  -> 못 찾으면 **문구 없이** 나감 (관문①)
+//     0x10BE8F8  [this+0x158] 로 갈림 - 2 가 탈것
+//     0x10BED36  call 0x9E0FC0                      (앞단)
+//                  0x8B4510(관리자+0x58 -> +0xD8) 실패 -> eErrNotFoundFocusActor
+//                  레코드 +0x148 != FFFF 이고 +0x50 != 0 -> eErrNoAlreadySummonedMercenary
+//                  call 0x9DD420                     (검증기)
+//     0x10BED45  오류 == [0x6A6555C] 이면 문구 없음, 아니면 등록표에서 문구
+//
+//   통과하면 ClientFrameEventCallMercenary::vtable[1] 0x7FBA70 -> 0x7FCC10
+//   -> 0xBE31F0 이 메시지 2166(`mov ecx,0x876`)을 만든다 - 캡처 헤더와 바이트까지 맞음.
+//
+// **관문①에는 훅을 안 건다.** `0x64F490` 은 호출자가 545곳인 흔한 도우미다. 대신
+// 탈것 칸이고 고른 칸이 있는데 앞단에 **안 왔다면** 그 사이 출구는 관문① 하나뿐이다
+// (0x10BE8E7 ~ 0x10BED36 명령 순서로 확인). 그래서 결과는 훅 없이도 가려진다.
+//
+// 인자 수(§1.14): 휠 UI 는 `this` 하나(rdx/r8/r9 를 읽기 전에 먼저 쓰고 스택 인자를
+// 안 읽는다). 앞단은 셋(this · 오류 out · 번호) - 호출자 둘 다 rcx/rdx/r8 만 채우고
+// 콜리가 스택 인자를 안 읽는다. 휠은 오류를 반환값이 아니라 **넘겨준 칸**에서 읽는다.
+inline constexpr std::uint64_t kWheelUiFnRva = 0x10BE8B0;
+inline constexpr std::size_t kWheelUiPreCallOff = 0x486;   // call kWheelPreFnRva
+inline constexpr std::size_t kWheelUiSlotOff = 0x1C8;      // i32, -1 = 고른 칸 없음
+inline constexpr std::size_t kWheelUiKindOff = 0x158;      // u8, 칸 종류
+inline constexpr std::uint8_t kWheelKindVehicle = 2;
+inline constexpr std::uint64_t kWheelPreFnRva = 0x9E0FC0;
+inline constexpr std::size_t kWheelPreValidatorCallOff = 0x14C;  // call kCallCheckFnRva
+inline constexpr std::uint64_t kSilentErrorRva = 0x6A6555C;      // 이 값과 같으면 문구 없음
+
+// 휠 UI 한 번의 결말. 순서가 곧 코드의 순서다.
+enum class WheelVerdict : int {
+    NoSlot = 0,      // 고른 칸 없음 - 관문① 앞에서 나감
+    NotVehicle,      // 탈것 칸이 아니다 (다른 갈래)
+    BlockedAtGate1,  // 탈것 칸인데 앞단에 안 옴 -> 관문①(주 플레이어)
+    PreRejected,     // 앞단이 오류를 냈다
+    PrePassed,       // 앞단 통과 - 검증기까지 갔다
+};
+inline constexpr int kWheelVerdictCount = 5;
+
+inline WheelVerdict wheel_verdict(std::int32_t slot, std::uint8_t kind,
+                                  bool pre_entered, std::uint32_t pre_err) {
+    if (slot == -1) return WheelVerdict::NoSlot;
+    if (kind != kWheelKindVehicle) return WheelVerdict::NotVehicle;
+    // 여기서 "앞단에 안 왔다" 를 관문①로 읽는 근거는 위 명령 순서다 - 탈것
+    // 갈래에서는 관문① 뒤에 다른 출구가 없다.
+    if (!pre_entered) return WheelVerdict::BlockedAtGate1;
+    return pre_err == 0 ? WheelVerdict::PrePassed : WheelVerdict::PreRejected;
+}
+
+inline const char* wheel_verdict_text(WheelVerdict v) {
+    switch (v) {
+        case WheelVerdict::NoSlot:
+            return "고른 칸 없음 - 관문① 앞에서 나감";
+        case WheelVerdict::NotVehicle:
+            return "탈것 칸이 아님";
+        case WheelVerdict::BlockedAtGate1:
+            return "앞단에 안 옴 - 관문①(주 플레이어 조회)에서 문구 없이 막힘";
+        case WheelVerdict::PreRejected:
+            return "앞단이 거부";
+        case WheelVerdict::PrePassed:
+            return "앞단 통과 - 검증기까지 감";
+    }
+    return "?";
+}
+
 // 훅을 건다. 거부는 **사유까지** 찍고, 통과는 **수만** 센다(줄 수 제한).
+// 검증기 하나에 더해 휠 UI·앞단도 같이 건다 - 전부 `call_diag` 뒤다.
 bool callcheck_diag_install(const mem::Reader& reader);
 bool callcheck_diag_installed();
 // 마지막으로 본 거부 코드(0 이면 아직 없음). 화면·시험용.

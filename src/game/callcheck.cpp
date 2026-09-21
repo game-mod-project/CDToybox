@@ -1,4 +1,5 @@
-// @build 1.0.0.2944  검증기 0x9DD420 · 오류 슬롯 다섯. 근거는 `callcheck.h`.
+// @build 1.0.0.2944  검증기 0x9DD420 · 휠 UI 0x10BE8B0 · 앞단 0x9E0FC0 ·
+//   오류 슬롯 일곱. 근거는 `callcheck.h`.
 
 #include "game/callcheck.h"
 
@@ -6,6 +7,8 @@
 
 #include <atomic>
 #include <cstring>
+#include <format>
+#include <string>
 
 #include "core/log.h"
 #include "game/spawnguard_site.h"
@@ -43,31 +46,207 @@ std::atomic<int> g_report_lines{0};
 constexpr std::uint64_t kReportGapMs = 1000;
 constexpr int kMaxReportLines = 40;
 
-void say(std::uint32_t err, std::uint64_t merc_no) {
-    if (err == 0) return;
-    g_last.store(err, std::memory_order_relaxed);
-    if (g_said.exchange(err, std::memory_order_relaxed) == err) return;
-    if (g_lines.fetch_add(1, std::memory_order_relaxed) >= kMaxLines) return;
-
-    std::uint32_t values[kCallCheckReasonCount]{};
+// 등록된 오류 값을 슬롯에서 읽어 온다(값은 런타임에 정해진다).
+void read_reason_values(std::uint32_t (&values)[kCallCheckReasonCount]) {
     for (std::size_t i = 0; i < kCallCheckReasonCount; ++i) {
         std::uint32_t v = 0;
         if (mem::safe_read_bytes(g_base + kCallCheckReasons[i].slot_rva, &v,
                                  sizeof(v))) {
             values[i] = v;
+        } else {
+            values[i] = 0;
         }
     }
+}
+
+// 오류 코드를 사람이 읽을 글로. **이름을 지어내지 않는다** - 모르면 슬롯값을
+// 전부 같이 찍어 밖에서 대조한다.
+std::string reason_text(std::uint32_t err) {
+    std::uint32_t values[kCallCheckReasonCount]{};
+    read_reason_values(values);
     const char* name = callcheck_reason_name(err, values, kCallCheckReasonCount);
     if (name != nullptr) {
-        log::infof("탈것 호출 거부: 번호 {} -> {} (코드 0x{:X})", merc_no, name,
-                   err);
-    } else {
-        // **이름을 지어내지 않는다.** 슬롯 다섯을 같이 찍어 밖에서 대조한다.
-        log::infof("탈것 호출 거부: 번호 {} -> 코드 0x{:X} (아는 다섯 중 없음; "
-                   "슬롯값 {:X} {:X} {:X} {:X} {:X})",
-                   merc_no, err, values[0], values[1], values[2], values[3],
-                   values[4]);
+        return std::string(name) + " (코드 0x" + std::format("{:X}", err) + ")";
     }
+    std::string s = std::format("코드 0x{:X} (아는 {}개 중 없음; 슬롯값", err,
+                                kCallCheckReasonCount);
+    for (std::size_t i = 0; i < kCallCheckReasonCount; ++i) {
+        s += std::format(" {:X}", values[i]);
+    }
+    return s + ")";
+}
+
+void say(std::uint32_t err, std::uint64_t merc_no) {
+    if (err == 0) return;
+    g_last.store(err, std::memory_order_relaxed);
+    if (g_said.exchange(err, std::memory_order_relaxed) == err) return;
+    if (g_lines.fetch_add(1, std::memory_order_relaxed) >= kMaxLines) return;
+    log::infof("탈것 호출 거부: 번호 {} -> {}", merc_no, reason_text(err));
+}
+
+// ------------------------------------------------------- 휠 UI · 앞단
+
+// 인자 수는 `callcheck.h` 의 "휠의 앞 두 단" (호출자 쪽에서 셌다, §1.14).
+// 휠 UI 는 this 하나지만 네 레지스터를 그대로 넘긴다 - 콜리가 rdx/r8/r9 를
+// 읽기 전에 먼저 쓰므로 무엇이 들어 있든 상관없다.
+using WheelUiFn = void* (*)(void*, void*, void*, void*);
+using WheelPreFn = std::uint32_t* (*)(void*, std::uint32_t*, std::uint64_t,
+                                      void*);
+WheelUiFn g_orig_ui = nullptr;
+WheelPreFn g_orig_pre = nullptr;
+std::atomic<bool> g_ui_on{false};
+std::atomic<bool> g_pre_on{false};
+
+// 휠 UI 한 번 **안에서** 앞단이 불렸는지를 짝짓는다. 앞단은 펫 UI 도 부르므로
+// (0x10A0A49) 전역 하나로는 섞인다 - 같은 스레드의 같은 호출 안인지로 가른다.
+thread_local bool t_in_wheel = false;
+thread_local bool t_pre_entered = false;
+thread_local std::uint32_t t_pre_err = 0;
+thread_local std::uint64_t t_pre_merc = 0;
+
+std::atomic<std::uint32_t> g_ui_calls{0};
+std::atomic<std::uint32_t> g_verdicts[kWheelVerdictCount]{};
+std::atomic<std::uint64_t> g_ui_last_key{~0ull};
+std::atomic<int> g_ui_lines{0};
+constexpr int kMaxUiLines = 30;
+std::atomic<std::uint32_t> g_ui_reported{0};
+std::atomic<std::uint64_t> g_ui_reported_at{0};
+std::atomic<int> g_ui_report_lines{0};
+
+void report_wheel(WheelVerdict v, std::int32_t slot, std::uint8_t kind,
+                  std::uint32_t err, std::uint64_t merc) {
+    // 같은 결말이 이어지면 넘긴다. 결말이 바뀌면(벌판 -> 보스룸) 다시 찍는다.
+    const std::uint64_t key =
+        (static_cast<std::uint64_t>(static_cast<int>(v)) << 32) | err;
+    if (g_ui_last_key.exchange(key, std::memory_order_relaxed) == key) return;
+    if (g_ui_lines.fetch_add(1, std::memory_order_relaxed) >= kMaxUiLines) return;
+
+    std::string tail;
+    if (v == WheelVerdict::PreRejected) {
+        std::uint32_t silent = 0;
+        const bool have_silent = mem::safe_read_bytes(
+            g_base + kSilentErrorRva, &silent, sizeof(silent));
+        tail = " -> " + reason_text(err);
+        if (have_silent && silent == err) {
+            tail += " [문구 없음 값과 같다 - 화면에 안 뜬다]";
+        }
+    }
+    log::infof("휠 UI: 칸 {} 종류 {} 번호 {} -> {}{}", slot,
+               static_cast<unsigned>(kind), merc,
+               wheel_verdict_text(v), tail);
+}
+
+void* detour_wheel_ui(void* self, void* a2, void* a3, void* a4) {
+    const auto obj = reinterpret_cast<std::uintptr_t>(self);
+    std::int32_t slot = -1;
+    std::uint8_t kind = 0xFF;
+    const bool readable =
+        mem::safe_read_bytes(obj + kWheelUiSlotOff, &slot, sizeof(slot)) &&
+        mem::safe_read_bytes(obj + kWheelUiKindOff, &kind, sizeof(kind));
+
+    // 재진입해도 바깥 호출의 값을 잃지 않게 통째로 보관했다가 되돌린다.
+    const bool s_in = t_in_wheel;
+    const bool s_entered = t_pre_entered;
+    const std::uint32_t s_err = t_pre_err;
+    const std::uint64_t s_merc = t_pre_merc;
+    t_in_wheel = true;
+    t_pre_entered = false;
+    t_pre_err = 0;
+    t_pre_merc = 0;
+
+    void* r = g_orig_ui(self, a2, a3, a4);
+
+    const bool entered = t_pre_entered;
+    const std::uint32_t err = t_pre_err;
+    const std::uint64_t merc = t_pre_merc;
+    t_in_wheel = s_in;
+    t_pre_entered = s_entered;
+    t_pre_err = s_err;
+    t_pre_merc = s_merc;
+
+    g_ui_calls.fetch_add(1, std::memory_order_relaxed);
+    if (!readable) {
+        // 칸을 못 읽었으면 결말을 짓지 않는다 - 추측으로 채우지 않는다.
+        if (g_ui_lines.fetch_add(1, std::memory_order_relaxed) < kMaxUiLines) {
+            log::warnf("휠 UI: 객체 0x{:X} 의 칸/종류를 못 읽었다 - 결말 생략",
+                       obj);
+        }
+        return r;
+    }
+    const WheelVerdict v = wheel_verdict(slot, kind, entered, err);
+    g_verdicts[static_cast<int>(v)].fetch_add(1, std::memory_order_relaxed);
+    report_wheel(v, slot, kind, err, merc);
+    return r;
+}
+
+std::uint32_t* detour_wheel_pre(void* self, std::uint32_t* err,
+                                std::uint64_t merc_no, void* a4) {
+    std::uint32_t* r = g_orig_pre(self, err, merc_no, a4);
+    if (t_in_wheel) {
+        std::uint32_t v = 0;
+        if (err != nullptr &&
+            !mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(err), &v,
+                                  sizeof(v))) {
+            v = 0;
+        }
+        t_pre_entered = true;
+        t_pre_err = v;
+        t_pre_merc = merc_no;
+    }
+    return r;
+}
+
+// `site` 의 명령이 `call rel32` 이고 그 대상이 `want` 인가. 흔한 프롤로그 대신
+// **이 함수만의 의미**로 확인한다(§1.5).
+bool call_goes_to(const mem::Reader& reader, std::uintptr_t site,
+                  std::uintptr_t want, std::uintptr_t* got) {
+    std::uint8_t c[5]{};
+    if (!reader.read(site, c, sizeof(c)) || c[0] != 0xE8) {
+        *got = 0;
+        return false;
+    }
+    std::int32_t rel = 0;
+    std::memcpy(&rel, c + 1, 4);
+    *got = site + 5 + static_cast<std::uintptr_t>(static_cast<std::intptr_t>(rel));
+    return *got == want;
+}
+
+void install_wheel_hooks(const mem::Reader& reader, std::uintptr_t base) {
+    std::uintptr_t got = 0;
+    const std::uintptr_t pre = base + kWheelPreFnRva;
+    if (!call_goes_to(reader, pre + kWheelPreValidatorCallOff,
+                      base + kCallCheckFnRva, &got)) {
+        log::warnf("휠 앞단 진단: 0x{:X}+0x{:X} 가 검증기를 부르지 않는다"
+                   " (대상 0x{:X}) - 안 건다",
+                   kWheelPreFnRva, kWheelPreValidatorCallOff,
+                   got ? got - base : 0);
+        return;
+    }
+    const std::uintptr_t ui = base + kWheelUiFnRva;
+    if (!call_goes_to(reader, ui + kWheelUiPreCallOff, pre, &got)) {
+        log::warnf("휠 UI 진단: 0x{:X}+0x{:X} 가 앞단을 부르지 않는다"
+                   " (대상 0x{:X}) - 안 건다",
+                   kWheelUiFnRva, kWheelUiPreCallOff, got ? got - base : 0);
+        return;
+    }
+    // 앞단을 먼저 건다 - 휠 UI 가 먼저 걸리면 짝이 빈 채로 결말을 지을 수 있다.
+    if (!mem::hook_install(reinterpret_cast<void*>(pre),
+                           reinterpret_cast<void*>(&detour_wheel_pre),
+                           reinterpret_cast<void**>(&g_orig_pre))) {
+        log::warnf("휠 앞단 진단: 후킹 실패 (RVA 0x{:X})", kWheelPreFnRva);
+        return;
+    }
+    g_pre_on.store(true, std::memory_order_release);
+    if (!mem::hook_install(reinterpret_cast<void*>(ui),
+                           reinterpret_cast<void*>(&detour_wheel_ui),
+                           reinterpret_cast<void**>(&g_orig_ui))) {
+        log::warnf("휠 UI 진단: 후킹 실패 (RVA 0x{:X})", kWheelUiFnRva);
+        return;
+    }
+    g_ui_on.store(true, std::memory_order_release);
+    log::infof("휠 UI 진단 설치 (UI 0x{:X} · 앞단 0x{:X}) - 휠을 누를 때마다 "
+               "어느 관문에서 끝났는지 찍는다",
+               kWheelUiFnRva, kWheelPreFnRva);
 }
 
 std::uint32_t* detour(void* a1, std::uint32_t* err, void* a3, void* a4,
@@ -136,6 +315,8 @@ bool callcheck_diag_install(const mem::Reader& reader) {
     log::infof("호출 검증기 진단 설치 (RVA 0x{:X}) - 탈것 호출이 거부되면 그 "
                "사유를 찍는다",
                kCallCheckFnRva);
+    // 검증기 **위**를 보는 둘. 실패해도 검증기 진단은 그대로 둔다.
+    install_wheel_hooks(reader, base);
     return true;
 }
 
@@ -155,7 +336,36 @@ CallCheckCounts callcheck_counts() {
     return c;
 }
 
+namespace {
+
+// 휠 UI 요약. 수가 바뀔 때만, 1초에 한 번·40줄까지(검증기 요약과 같은 규칙).
+void wheel_tick_report() {
+    const std::uint32_t n = g_ui_calls.load(std::memory_order_relaxed);
+    if (n == 0 || n == g_ui_reported.load(std::memory_order_relaxed)) return;
+    const std::uint64_t now = GetTickCount64();
+    if (now - g_ui_reported_at.load(std::memory_order_relaxed) < kReportGapMs) {
+        return;
+    }
+    if (g_ui_report_lines.load(std::memory_order_relaxed) >= kMaxReportLines) {
+        return;
+    }
+    g_ui_report_lines.fetch_add(1, std::memory_order_relaxed);
+    g_ui_reported.store(n, std::memory_order_relaxed);
+    g_ui_reported_at.store(now, std::memory_order_relaxed);
+    auto c = [](WheelVerdict v) {
+        return g_verdicts[static_cast<int>(v)].load(std::memory_order_relaxed);
+    };
+    log::infof("휠 UI: 총 {}회 (칸 없음 {} / 탈것 아님 {} / 관문① {} / 앞단 거부 {}"
+               " / 앞단 통과 {})",
+               n, c(WheelVerdict::NoSlot), c(WheelVerdict::NotVehicle),
+               c(WheelVerdict::BlockedAtGate1), c(WheelVerdict::PreRejected),
+               c(WheelVerdict::PrePassed));
+}
+
+}  // namespace
+
 void callcheck_tick_report() {
+    wheel_tick_report();
     const std::uint32_t n = g_calls.load(std::memory_order_relaxed);
     if (n == 0) return;
 
