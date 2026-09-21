@@ -169,6 +169,32 @@ inline constexpr std::uint64_t kWheelPreFnRva = 0x9E0FC0;
 inline constexpr std::size_t kWheelPreValidatorCallOff = 0x14C;  // call kCallCheckFnRva
 inline constexpr std::uint64_t kSilentErrorRva = 0x6A6555C;      // 이 값과 같으면 문구 없음
 
+// 관문①·②가 묻는 **관리자의 칸**. 결말 줄에 그 포인터와 vtable 을 **읽기만** 해서
+// 붙인다 - 게임 함수는 부르지 않는다(관문의 `vtable[24](obj,4,0x10)` 은 잠금·참조
+// 계열일 수 있어 부작용이 없다고 장담 못 한다).
+//
+// 왜: 탈것 권위 문서(`specs/2026-09-19-mount-vitals-authority.md` §7-2)의 실측 -
+// **스테이지 전환이 플레이어 액터를 재생성**하고 옛 액터 메모리가 풀린다. 관문①은
+// 관리자 `+0x50`(주 플레이어)이 살아 있는지를 묻는다. 보스룸에서 그 칸이 비었는지,
+// 다른 클래스로 바뀌었는지가 벌판 줄과 나란히 놓으면 바로 보인다.
+//
+// 오프셋은 설치 때 **바이트로** 대조한다(2944):
+//   0x64F490+0x15  48 8B 0D rel32 -> 0x6D691B0   관리자 전역
+//   0x64F490+0x1C  48 8B 49 30                   +0x30
+//   0x64F490+0x20  call 0x8B4480                 관문①
+//   0x8B4480+0x1A  48 8B 79 50                   주 플레이어 +0x50
+//   0x8B4510+0x23  48 8B 79 58                   포커스 +0x58
+//   0x8B4510+0xEF  4C 8B B0 D8 00 00 00          -> +0xD8
+// 하나라도 다르면 칸 읽기만 끄고 결말은 그대로 찍는다.
+inline constexpr std::uint64_t kFocusQueryFnRva = 0x64F490;
+inline constexpr std::uint64_t kMainPlayerCheckFnRva = 0x8B4480;
+inline constexpr std::uint64_t kFocusActorCheckFnRva = 0x8B4510;
+inline constexpr std::uint64_t kFocusMgrGlobalRva = 0x6D691B0;
+inline constexpr std::size_t kFocusMgrOff = 0x30;
+inline constexpr std::size_t kMainPlayerOff = 0x50;
+inline constexpr std::size_t kFocusCtlOff = 0x58;
+inline constexpr std::size_t kFocusActorOff = 0xD8;
+
 // 휠 UI 한 번의 결말. 순서가 곧 코드의 순서다.
 enum class WheelVerdict : int {
     NoSlot = 0,      // 고른 칸 없음 - 관문① 앞에서 나감
