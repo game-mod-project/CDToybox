@@ -27,6 +27,10 @@ D3D12 ImGui 오버레이. 싱글플레이 전용.
 
 - `main` · `develop` 에 **직접 push 금지**. 모든 변경은 PR 을 거친다.
 - 머지는 기본 merge commit. 스쿼시·리베이스는 명시 요청이 있을 때만.
+- **머지한 PR 의 브랜치는 로컬·원격 모두 직접 지운다** — `git branch -d <브랜치>` ·
+  `git push origin --delete <브랜치>`. 저장소의 "머지 후 자동 삭제" 는 켜지 않는다
+  (2026-09-22 사용자 결정: 수동 삭제). 안 지워서 지난 브랜치 54개가 원격에 쌓여
+  있었다(2026-09-21 정리). `archive/*` 는 지우지 않는다.
 - 원격: `origin = github.com/game-mod-project/CDToybox`.
 
 **⚠️ CI 워크플로가 없다.** `.github/` 자체가 없으므로 "CI 녹색 확인" 을
