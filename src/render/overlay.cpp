@@ -50,7 +50,7 @@
 #include "game/nofall.h"
 #include "game/player.h"
 #include "game/specguard.h"
-#include "game/bosscall.h"
+#include "game/actionlimit.h"
 #include "game/callcheck.h"
 #include "game/spawnguard.h"
 #include "game/callgate.h"
@@ -739,12 +739,6 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
         cdtb::game::wheel_teardown();
         cdtb::game::mount_timer_teardown();
         cdtb::game::call_place_teardown();
-        {
-            // 보스룸 호출이 켜져 있으면 훅을 끄고 제 관문을 되돌린다. 아래
-            // callgate_remove_all 도 그 관문을 되돌리지만, 훅은 여기서만 끈다.
-            const mem::LocalReader boss_reader;
-            cdtb::game::bosscall_set(boss_reader, false);
-        }
         cdtb::game::callgate_remove_all();
         cdtb::game::town_gate_teardown();
         cdtb::game::disguise_teardown();
@@ -818,20 +812,9 @@ void on_frame(IDXGISwapChain3* sc, ID3D12CommandQueue* queue) {
             cdtb::game::callcheck_diag_install(reader);
             cdtb::game::callcheck_tick_report();
         }
-        // 보스룸에서도 탈것 호출(`bosscall.h`). ini 로 켜 두었으면 첫 프레임에
-        // **한 번만** 건다 - 그 뒤 켜고 끄기는 화면 토글의 몫이다. 제한 목록은
-        // 켜져 있거나 `call_diag` 일 때만, **바뀔 때만** 로그에 남긴다.
-        {
-            static bool s_boss_applied = false;
-            if (g_cfg.boss_call && !s_boss_applied) {
-                s_boss_applied = true;
-                const char* why = "";
-                if (!cdtb::game::bosscall_set(reader, true, &why)) {
-                    log::warnf("보스룸 호출: ini 로 켜려 했으나 실패 - {}", why);
-                }
-            }
-            cdtb::game::bosscall_tick(reader, g_cfg.call_diag);
-        }
+        // 행동 제한 목록(`actionlimit.h`). `call_diag` 일 때만, **바뀔 때만** 한 줄 -
+        // 보스룸 같은 곳의 출입이 저절로 찍힌다. 읽기만 한다.
+        cdtb::game::action_limit_tick(reader, g_cfg.call_diag);
         // 소환 진단 훅은 **설정으로 켤 때만** 건다. 기능이 아니라 조사용이고,
         // 그중 하나가 게임을 팅기게 했다(2026-09-15).
         // 휠 칸 등록 채우기도 같은 훅(0x2096C30)을 쓰므로 그때도 건다.

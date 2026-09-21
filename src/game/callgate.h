@@ -62,10 +62,7 @@ enum CallGate : int {
     kCallGateRoof = 1,      // 지붕 위에서는 호출할 수 없습니다
     kCallGateRegion = 2,    // 호출할 수 없는 지역입니다
     kCallGatePosition = 3,  // 호출할 수 없는 위치입니다 (성벽·지붕 위에서 실제로 뜨는 것)
-    // 검증기의 탑승 제한(`eErrNoCallVehicleMercenaryRideLimit`). 보스룸 같은 곳이
-    // 거는 행동 제한(`PlayerActionLimitDesc._rideLimit`)을 넘긴다 - `bosscall.h`.
-    kCallGateRideLimit = 4,
-    kCallGateCount = 5,
+    kCallGateCount = 4,
 };
 
 struct CallGateInfo {
