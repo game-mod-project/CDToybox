@@ -658,21 +658,25 @@ void draw_species_popup() {
     } else {
         ImGui::TextDisabled("줄을 눌러 고르세요");
     }
-    // **두 쪽(클라·서버) 명부가 다 있어야 쓴다.** 한쪽만 없으면
-    // `resolve_species_write` 가 반드시 실패하는데, 예전에는 버튼이 열려 있어
-    // 눌리고 "자리를 못 찾았습니다 - 월드 안인지 보세요" 가 떴다. **월드 안에
-    // 있던** 사용자가 그 문구를 보고 엉뚱한 곳을 봤다(2026-09-20) - 실제로는
-    // 아이템을 쓰면서 게임이 명부를 새로 만들었고(TROUBLESHOOTING 1.4) 클라
-    // 쪽을 48초짜리 힙 훑기로 다시 찾는 중이었다.
+    // 두 쪽(클라·서버) 명부 상태. **알림용이지 잠금용이 아니다.**
     //
-    // 탈것 체력(MountAuthPhase)에서 이미 고친 모양 그대로 **준비될 때까지
-    // 잠그고 경과 시간을 낸다** - 기다리면 저절로 열린다(TROUBLESHOOTING 3.3.1).
-    const game::ClanRealmState srv_state = game::clan_realm_state(false);
-    const game::ClanRealmState cli_state = game::clan_realm_state(true);
+    // 2026-09-20 에 이 상태로 버튼을 잠갔다가 멀쩡히 돌던 종 바꾸기를
+    // 망가뜨렸다(TROUBLESHOOTING 7.17). `resolve_species_write` 는 캐시를 읽기만
+    // 하는 것이 아니라 **비었으면 그 자리에서 찾아 채우거나 배경 재탐색을
+    // 요청한다** - 즉 **누르는 것이 방아쇠다.** 잠그면 방아쇠가 안 당겨지고
+    // 캐시는 영영 안 찬다. 눌러야 열리는 문을 못 누르게 잠근 꼴이었다.
+    //
+    // 실패 사유는 누른 **뒤에** `species_no_target_message` 가 정확히 말한다
+    // (원래 문제였던 "월드 안인지 보세요" 는 그쪽에서 고쳤다). 여기서는 무엇을
+    // 기다리는지 글로만 알린다.
+    const game::ClanRealmState srv_state =
+        game::clan_realm_state(g_near_reader, false);
+    const game::ClanRealmState cli_state =
+        game::clan_realm_state(g_near_reader, true);
     const bool realms_ready = srv_state == game::ClanRealmState::Ready &&
                               cli_state == game::ClanRealmState::Ready;
     ImGui::SameLine();
-    ImGui::BeginDisabled(pick == nullptr || !realms_ready);
+    ImGui::BeginDisabled(pick == nullptr);
     if (ImGui::Button("바꾸기 적용")) {
         std::string msg;
         const game::SpeciesApply r =
@@ -713,7 +717,8 @@ void draw_species_popup() {
     }
     if (!realms_ready) {
         // 어느 쪽이 덜 됐는지 **이름을 말한다.** "자리를 못 찾았습니다" 하나로는
-        // 무엇을 기다려야 하는지 알 수 없다.
+        // 무엇을 기다려야 하는지 알 수 없다. 버튼은 열려 있으므로 **눌러도
+        // 된다** - 누르는 것이 곧 찾기를 시작시킨다.
         const bool srv_missing = srv_state != game::ClanRealmState::Ready;
         const char* which = srv_missing ? "서버" : "클라";
         const game::ClanRealmState st = srv_missing ? srv_state : cli_state;
@@ -721,21 +726,21 @@ void draw_species_popup() {
             case game::ClanRealmState::Scanning:
                 ImGui::TextColored(col::kWarn,
                                    "%s 쪽 명부를 다시 찾는 중입니다... %.0f초"
-                                   " (한 번에 1분쯤 걸립니다). 끝나면 저절로"
-                                   " 열립니다.",
+                                   " (한 번에 1분쯤 걸립니다). 지금 눌러도"
+                                   " 됩니다 - 찾히면 그때 써집니다.",
                                    which, game::clan_rescan_elapsed_sec());
                 break;
             case game::ClanRealmState::GaveUp:
                 ImGui::TextColored(col::kWarn,
                                    "%s 쪽 명부를 연속으로 못 찾아 그만"
-                                   " 찾았습니다 - 내 동반자 탭의 [다시 찾기] 를"
-                                   " 눌러 주십시오.",
+                                   " 찾았습니다 - 눌러서 다시 시도하거나, 내"
+                                   " 동반자 탭의 [다시 찾기] 를 쓰십시오.",
                                    which);
                 break;
             default:
                 ImGui::TextColored(col::kWarn,
-                                   "%s 쪽 명부를 아직 못 잡았습니다 - 월드"
-                                   " 안이면 잠시 뒤 저절로 열립니다.",
+                                   "%s 쪽 명부를 아직 못 잡았습니다 - **누르면"
+                                   " 그때 찾습니다.** 월드 안이어야 합니다.",
                                    which);
                 break;
         }

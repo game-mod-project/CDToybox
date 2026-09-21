@@ -146,19 +146,33 @@ struct SpeciesWriteTarget {
 
 // --- 종 바꾸기 준비 상태 ------------------------------------------------
 //
-// 종 바꾸기는 **클라·서버 두 쪽 명부가 다 있어야** 한다(`resolve_species_write`
-// 의 `ok()`). 한쪽만 없어도 반드시 실패하는데, 화면이 그동안 버튼을 열어 둬서
-// 눌리고 실패했다. 탈것 체력(`MountAuthPhase`)에서 이미 고친 모양 그대로
-// **준비될 때까지 화면이 버튼을 잠근다** - 기다리면 저절로 열린다.
+// ⚠️ **이 상태로 버튼을 잠그지 말 것.** 2026-09-20 에 잠갔다가 멀쩡히 돌던
+// 종 바꾸기를 망가뜨렸다(TROUBLESHOOTING 7.17).
+//
+// `resolve_species_write` 는 캐시를 **읽기만** 하지 않는다. `clan_component_cached`
+// 가 (1) 캐시 포인터를 `looks_like_clan_component` 로 **검사**하고, (2) 비었으면
+// 그 자리에서 `find_clan_of_class` 로 **찾아서 캐시를 채우거나** 배경 재탐색을
+// **요청**한다. 즉 **누르는 것이 곧 방아쇠다.**
+//
+// 그런데 아래 상태는 `캐시 != 0` 만 본다. 둘이 규칙이 다르니 양쪽으로 틀린다:
+//
+//   - 캐시가 비면 `Missing` -> 버튼을 잠근다 -> 방아쇠가 안 당겨진다 ->
+//     캐시는 영영 안 찬다. **눌러야 열리는 문을 못 누르게 잠갔다.**
+//   - 캐시에 죽은 포인터가 남아 있으면 `Ready` -> 버튼을 열지만 실제로는 실패.
+//
+// 그래서 이것은 **알림용**이다. 무엇을 기다리는지 글로 알려 주는 데만 쓴다.
+// 실패 사유는 `species_no_target_message` 가 눌린 **뒤에** 정확히 말한다.
 enum class ClanRealmState {
-    Ready,      // 캐시가 차 있다
+    Ready,      // 캐시가 차 있고 살아 있어 보인다
     Scanning,   // 배경 재탐색이 그 realm 을 훑는 중이다
     GaveUp,     // 연속 실패로 그만뒀다 - 창의 [다시 찾기] 가 필요하다
     Missing,    // 아직 없다 (월드 밖일 수 있다)
 };
 // 순수 판정. 세 신호에서 상태 하나를 만든다 - 시험이 우선순위를 못박는다.
 ClanRealmState clan_realm_state_of(bool cached, bool scanning, bool gave_up);
-ClanRealmState clan_realm_state(bool client);
+// **reader 를 받는다.** 캐시 포인터가 0 이 아닌 것과 쓸 수 있는 것은 다르다 -
+// `clan_component_cached` 와 **같은 검사**를 써야 둘이 어긋나지 않는다.
+ClanRealmState clan_realm_state(const mem::Reader& reader, bool client);
 // 지금 도는 재탐색이 시작된 뒤 몇 초. 안 돌고 있으면 0.
 // "10초쯤 걸립니다" 만으로는 **도는 중인지 멈춘 것인지** 못 가른다 - 탈것
 // 체력에서 같은 이유로 경과 시간을 붙였다(TROUBLESHOOTING §3.3.1).

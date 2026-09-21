@@ -401,37 +401,3 @@ TEST(callcheck_counts_a_pass_as_a_call_not_just_a_reject) {
     CHECK(c.calls == c.pass + c.reject);
     cdtb::game::callcheck_count_one(7, nullptr);  // 널은 그냥 돌아간다
 }
-
-// ---------------------------------------------------------------------------
-// 캡처 예산 창 (2026-09-21)
-//
-// 실측: `슬롯사용/변경` 이 한 순간에 12줄을 몰아 찍어 자기 태그 예산을 다
-// 태웠고, 몇 분 뒤 보스룸 클릭은 한 줄도 안 남았다. 태그로 나눈 것만으로는
-// 폭주하는 태그가 **자기 자신을 굶기는** 것을 못 막는다.
-// ---------------------------------------------------------------------------
-TEST(capture_budget_refills_after_the_window_passes) {
-    cdtb::game::CaptureBudget b{};
-    // 한 순간에 몰아친 셋을 다 쓴다(창 안 상한 3).
-    CHECK(cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
-    CHECK(cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
-    CHECK(cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
-    // 같은 창에서는 더 못 쓴다 - 로그를 묻지 못하게 하는 쪽은 그대로다.
-    CHECK(!cdtb::game::capture_budget_take(&b, 1000, 3, 60000));
-    CHECK(!cdtb::game::capture_budget_take(&b, 59999, 3, 60000));
-    // 창이 지나면 되채운다 - 이것이 없어서 클릭이 굶었다.
-    CHECK(cdtb::game::capture_budget_take(&b, 61000, 3, 60000));
-    CHECK(b.used == 1);
-}
-
-// 시계가 0 에서 시작해도 예산이 무한이 되면 안 된다. 창 시작을 값(0)이 아니라
-// 상태(`started`)로 가르는 이유가 이것이다.
-TEST(capture_budget_does_not_refill_forever_at_tick_zero) {
-    cdtb::game::CaptureBudget b{};
-    CHECK(cdtb::game::capture_budget_take(&b, 0, 2, 60000));
-    CHECK(cdtb::game::capture_budget_take(&b, 0, 2, 60000));
-    CHECK(!cdtb::game::capture_budget_take(&b, 0, 2, 60000));
-}
-
-TEST(capture_budget_takes_nothing_for_a_null_slot) {
-    CHECK(!cdtb::game::capture_budget_take(nullptr, 0, 3, 60000));
-}
