@@ -30,6 +30,19 @@ std::atomic<int> g_lines{0};
 std::atomic<std::uint32_t> g_said{0};
 std::uintptr_t g_base = 0;
 
+// **들어온 횟수**(`callcheck.h` 의 (가)/(나) 설명). 거부와 달리 통과도 센다.
+std::atomic<std::uint32_t> g_calls{0};
+std::atomic<std::uint32_t> g_pass{0};
+std::atomic<std::uint32_t> g_reject{0};
+std::atomic<bool> g_told_first{false};
+std::atomic<std::uint32_t> g_reported{0};
+std::atomic<std::uint64_t> g_reported_at{0};
+std::atomic<int> g_report_lines{0};
+// 요약은 1초에 한 번까지, 그리고 다 합쳐 40줄까지. 검증기가 매 프레임 불리는
+// 종류였더라도 로그를 묻지 못하게 한다(§6.19).
+constexpr std::uint64_t kReportGapMs = 1000;
+constexpr int kMaxReportLines = 40;
+
 void say(std::uint32_t err, std::uint64_t merc_no) {
     if (err == 0) return;
     g_last.store(err, std::memory_order_relaxed);
@@ -62,13 +75,22 @@ std::uint32_t* detour(void* a1, std::uint32_t* err, void* a3, void* a4,
     std::uint32_t* r = g_orig(a1, err, a3, a4, a5);
     // 호출자 둘은 각각 `*err` 와 `*ret` 을 읽는다 - 둘은 같은 자리다.
     std::uint32_t* p = (err != nullptr) ? err : r;
+    std::uint32_t v = 0;
     if (p != nullptr) {
-        std::uint32_t v = 0;
-        if (mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(p), &v,
-                                 sizeof(v)) &&
-            v != 0) {
-            say(v, reinterpret_cast<std::uint64_t>(a3));
+        // 못 읽으면 0 으로 둔다 - **통과로 세지 않으려고** 따로 가른다.
+        if (!mem::safe_read_bytes(reinterpret_cast<std::uintptr_t>(p), &v,
+                                  sizeof(v))) {
+            v = 0;
         }
+    }
+    // **오류값과 무관하게 무조건 센다.** 여기 조건을 달면 "안 거쳤다" 와
+    // "거쳤는데 통과했다" 를 다시 못 가른다(`callcheck.h` 의 (가)/(나)).
+    g_calls.fetch_add(1, std::memory_order_relaxed);
+    if (v == 0) {
+        g_pass.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_reject.fetch_add(1, std::memory_order_relaxed);
+        say(v, reinterpret_cast<std::uint64_t>(a3));
     }
     return r;
 }
@@ -123,6 +145,45 @@ bool callcheck_diag_installed() {
 
 std::uint32_t callcheck_last_error() {
     return g_last.load(std::memory_order_relaxed);
+}
+
+CallCheckCounts callcheck_counts() {
+    CallCheckCounts c{};
+    c.calls = g_calls.load(std::memory_order_relaxed);
+    c.pass = g_pass.load(std::memory_order_relaxed);
+    c.reject = g_reject.load(std::memory_order_relaxed);
+    return c;
+}
+
+void callcheck_tick_report() {
+    const std::uint32_t n = g_calls.load(std::memory_order_relaxed);
+    if (n == 0) return;
+
+    // 첫 호출은 **한 번만** 크게 알린다. 이 줄이 있느냐 없느냐가 차단이
+    // 검증기 위인지 아래인지를 가른다 - 이번 조사의 갈림길이다.
+    bool expected = false;
+    if (g_told_first.compare_exchange_strong(expected, true,
+                                             std::memory_order_acq_rel)) {
+        log::infof("호출 검증기가 **실제로 불렸다** (RVA 0x{:X}) - 탈것 호출이 "
+                   "여기까지는 온다 (이 줄은 한 번만 나온다)",
+                   kCallCheckFnRva);
+    }
+
+    // 그 뒤로는 **수가 달라졌을 때만**, 그것도 1초에 한 번까지.
+    if (n == g_reported.load(std::memory_order_relaxed)) return;
+    const std::uint64_t now = GetTickCount64();
+    if (now - g_reported_at.load(std::memory_order_relaxed) < kReportGapMs) {
+        return;
+    }
+    if (g_report_lines.load(std::memory_order_relaxed) >= kMaxReportLines) {
+        return;
+    }
+    g_report_lines.fetch_add(1, std::memory_order_relaxed);
+    g_reported.store(n, std::memory_order_relaxed);
+    g_reported_at.store(now, std::memory_order_relaxed);
+    log::infof("호출 검증기: 총 {}회 (통과 {} / 거부 {})", n,
+               g_pass.load(std::memory_order_relaxed),
+               g_reject.load(std::memory_order_relaxed));
 }
 
 }  // namespace cdtb::game

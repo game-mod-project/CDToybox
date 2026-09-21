@@ -327,6 +327,44 @@ bool request_catch(std::uintptr_t session, std::uint32_t target,
 bool catch_ready();
 
 // ----------------------------------------------------------------------
+// 캡처 예산은 **창(window) 단위**다
+//
+// 2026-09-16 에 전역 예산 하나를 태그별로 쪼갰다 - 시작 동기화의 한 메시지가
+// 80건을 쏟아 예산을 다 태우고 정작 보려던 클릭이 한 줄도 안 남았기 때문이다.
+//
+// 그런데 2026-09-21 실측에서 **같은 일이 한 태그 안에서** 또 났다.
+// `슬롯사용/변경` 이 09:45:12 한 순간에 12줄을 몰아 찍어 자기 태그 예산을
+// 다 태웠고, 몇 분 뒤 보스룸 클릭은 한 줄도 안 남았다. 태그로 나눈 것만으로는
+// 부족했다 - **폭주하는 태그가 자기 자신을 굶긴다.**
+//
+// 그래서 예산을 시간 창으로 되채운다. 한 창에 `max_per_window` 줄까지 찍고,
+// 창이 지나면 다시 그만큼 준다. 총량은 여전히 전역 상한이 막으므로 로그를
+// 묻지는 못한다(TROUBLESHOOTING 6.19).
+struct CaptureBudget {
+    bool started = false;
+    int used = 0;
+    std::uint64_t window_start_ms = 0;
+};
+
+// 지금 한 줄 더 찍어도 되는가. 되면 `b` 를 고쳐 쓰고 true.
+//
+// `started` 를 따로 두는 이유: 창 시작을 0 으로 표시하면 `now_ms` 가 0 일 때
+// 매번 창이 새로 열려 예산이 무한이 된다. 값이 아니라 **상태**로 가른다.
+inline bool capture_budget_take(CaptureBudget* b, std::uint64_t now_ms,
+                                int max_per_window,
+                                std::uint64_t window_ms) {
+    if (b == nullptr) return false;
+    if (!b->started || now_ms - b->window_start_ms >= window_ms) {
+        b->started = true;
+        b->window_start_ms = now_ms;
+        b->used = 0;
+    }
+    if (b->used >= max_per_window) return false;
+    ++b->used;
+    return true;
+}
+
+// ----------------------------------------------------------------------
 // 명령 파일 (DLL 옆 cdtoybox_cmd.txt)
 //
 // 오버레이를 누르지 않고도 밖에서 실험을 걸 수 있게 한다. 한 줄에

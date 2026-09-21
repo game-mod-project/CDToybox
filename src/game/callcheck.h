@@ -95,10 +95,46 @@ inline const char* callcheck_reason_name(std::uint32_t err,
     return nullptr;
 }
 
-// 훅을 건다. 조사용이라 **거부(오류 != 0)만** 찍고 줄 수를 제한한다.
+// ---------------------------------------------------------------------------
+// **들어온 횟수를 무조건 센다** (2026-09-21)
+// ---------------------------------------------------------------------------
+// 첫 실측에서 보스룸 시도 뒤 거부 줄이 **한 줄도 없었다**. 그런데 그 침묵은
+// 서로 정반대인 두 가지를 못 가른다:
+//
+//   (가) 검증기를 **아예 안 거쳤다**  -> 차단이 이 **위**(휠·조건층)에 있다
+//   (나) 거쳤고 **통과(0)했다**        -> 차단이 이 **아래**(서버·모션층)에 있다
+//
+// 거부만 세는 계기로는 (가)와 (나)를 영원히 못 가른다. 그래서 오류값과 무관하게
+// **들어온 횟수 자체**를 센다. 이 한 칸이 이번 조사의 전부다.
+struct CallCheckCounts {
+    std::uint32_t calls;   // 검증기에 들어온 총 횟수
+    std::uint32_t pass;    // 그중 오류 0 (통과)
+    std::uint32_t reject;  // 그중 오류 != 0 (거부)
+};
+
+// 한 번의 호출을 센다. `err` 은 검증기가 낸 값(0 = 통과).
+//
+// **`calls` 는 오류값과 무관하게 는다.** 통과도 호출이다 - 여기서 조건을 달면
+// 계기가 다시 (가)/(나)를 못 가르는 옛 상태로 돌아간다.
+inline void callcheck_count_one(std::uint32_t err, CallCheckCounts* c) {
+    if (c == nullptr) return;
+    ++c->calls;
+    if (err == 0) {
+        ++c->pass;
+    } else {
+        ++c->reject;
+    }
+}
+
+// 훅을 건다. 거부는 **사유까지** 찍고, 통과는 **수만** 센다(줄 수 제한).
 bool callcheck_diag_install(const mem::Reader& reader);
 bool callcheck_diag_installed();
 // 마지막으로 본 거부 코드(0 이면 아직 없음). 화면·시험용.
 std::uint32_t callcheck_last_error();
+// 지금까지 센 것. 화면·시험용.
+CallCheckCounts callcheck_counts();
+// 프레임마다 부른다. 첫 호출을 한 번 알리고, 그 뒤로는 수가 달라졌을 때만
+// 요약을 찍는다(되풀이되는 줄은 로그를 묻는다 - TROUBLESHOOTING 6.19).
+void callcheck_tick_report();
 
 }  // namespace cdtb::game
