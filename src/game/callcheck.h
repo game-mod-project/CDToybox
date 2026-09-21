@@ -20,6 +20,14 @@ namespace cdtb::game {
 // `AICondition_BlockByExclusiveStage` 와 `AICondition_CheckIsRideLimit` 이다.
 // 자리가 틀린 것이 아니라 **조건이 틀렸다** - 패치는 로그로 걸린 것을 확인했다.
 //
+// ⚠️ 2026-09-21 정정 — "조건이 틀렸다" 가 아니라 **조건 체계가 달랐다.** 그 둘은
+// AI 차트의 조건이고, 캐릭터 행동 차트가 쓰는 조건 표(0x6DD2870)에는 없다. 이
+// 검증기는 휠이 아니라 **"부르기" 동작의 프레임 이벤트**
+// (`ClientFrameEventCallMercenary::[1]` 0x7FBA70 의 `call [rax+0x148]`)가 부르고,
+// 그 동작을 여는 조건 `{0xED, Skill_CallVehicle}` 의 평가 함수 0x362DF0 이
+// 행동 제한 목록의 허용 스킬그룹 목록으로 호출 스킬을 막는다 — `bosscall.h` ·
+// `specs/2026-09-21-boss-room-action-limit.md`.
+//
 // 그래서 이번에는 **고르기 전에 잰다.** 오류 이름 -> 값 슬롯 -> 읽는 곳
 // (`TROUBLESHOOTING.md` §4.31 의 기법)으로 내려가니 거부가 한 함수에 모여 있다.
 //

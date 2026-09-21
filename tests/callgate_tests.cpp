@@ -8,6 +8,11 @@
 //   지붕 RVA 0x009DE839  창 0x009DE838 +1   C0 **74** 0A 8B 05 DB 92 31
 //   지역 RVA 0x009DD899  창 0x009DD898 +1   C0 **74** 75 8B 05 7F A2 31
 //   위치 RVA 0x009DD6C4  창 0x009DD6C0 +4   06 00 84 C0 **75** 0A 8B 05
+//   탑승제한 RVA 0x009DD564  창 0x009DD560 +4   00 00 84 C0 **74** 0D 8B 05
+//
+// 다섯째(탑승 제한)는 2026-09-21 에 더했다 - 보스룸 조사(`bosscall.h`). 같은 8바이트가
+// 실행 파일에 **두 곳**(0x39D3E2 · 0x9DD560)이라 AOB 로는 못 찾고, RVA 에서 창
+// 전체를 대조해야 한다. 2850 이력이 없어 아래 "같은 폭으로 밀렸다" 대조에서 빠진다.
 //
 // 2850 자리는 실내 0x9635FC · 지붕 0x963659 · 지역 0x9626B9 · 위치 0x9624E4
 // 였다(넷 다 +0x7B1E0 밀렸다). 갱신 때 이 시험이 먼저 빨개져야 한다 - 그것이
@@ -34,6 +39,7 @@ using cdtb::game::kCallGateCount;
 using cdtb::game::kCallGateIndoor;
 using cdtb::game::kCallGatePosition;
 using cdtb::game::kCallGateRegion;
+using cdtb::game::kCallGateRideLimit;
 using cdtb::game::kCallGateRoof;
 using cdtb::game::kStepOk;
 using cdtb::game::patch_splice;
@@ -50,8 +56,8 @@ std::uint64_t as_qword(const std::uint8_t b[8]) {
     return v;
 }
 
-TEST(callgate_table_has_all_four_gates) {
-    CHECK_EQ(kCallGateCount, 4);
+TEST(callgate_table_has_all_five_gates) {
+    CHECK_EQ(kCallGateCount, 5);
     for (int g = 0; g < kCallGateCount; ++g) {
         const GateDef* d = callgate_def(g);
         CHECK(d != nullptr);
@@ -71,6 +77,8 @@ TEST(callgate_sites_match_the_measured_rvas) {
              0x009DD899LL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGatePosition)->rva),
              0x009DD6C4LL);
+    CHECK_EQ(static_cast<long long>(callgate_def(kCallGateRideLimit)->rva),
+             0x009DD564LL);
 }
 
 TEST(callgate_gates_all_moved_by_one_delta_in_2944) {
@@ -78,9 +86,11 @@ TEST(callgate_gates_all_moved_by_one_delta_in_2944) {
     // 관문을 잘못 짚었다는 신호다 - 다음 갱신 때 이 대조가 그것을 잡는다.
     // (영역이 다르면 폭도 달라진다. 같은 영역 안에서만 성립한다.)
     const long long kDelta = 0x7B1E0LL;
-    const long long old_rva[kCallGateCount] = {0x009635FCLL, 0x00963659LL,
-                                               0x009626B9LL, 0x009624E4LL};
-    for (int g = 0; g < kCallGateCount; ++g) {
+    // 2850 이력이 있는 것은 앞 넷뿐이다(탑승 제한은 2944 에서 처음 짚었다).
+    constexpr int kWithHistory = 4;
+    const long long old_rva[kWithHistory] = {0x009635FCLL, 0x00963659LL,
+                                             0x009626B9LL, 0x009624E4LL};
+    for (int g = 0; g < kWithHistory; ++g) {
         CHECK_EQ(static_cast<long long>(callgate_def(g)->rva) - old_rva[g],
                  kDelta);
     }
@@ -130,10 +140,28 @@ TEST(callgate_windows_are_the_measured_bytes) {
                                     0x31};
     const std::uint8_t position[8] = {0x06, 0x00, 0x84, 0xC0, 0x75, 0x0A, 0x8B,
                                       0x05};
+    const std::uint8_t ride_limit[8] = {0x00, 0x00, 0x84, 0xC0, 0x74, 0x0D, 0x8B,
+                                        0x05};
     CHECK(std::memcmp(callgate_def(kCallGateIndoor)->want, indoor, 8) == 0);
     CHECK(std::memcmp(callgate_def(kCallGateRoof)->want, roof, 8) == 0);
     CHECK(std::memcmp(callgate_def(kCallGateRegion)->want, region, 8) == 0);
     CHECK(std::memcmp(callgate_def(kCallGatePosition)->want, position, 8) == 0);
+    CHECK(std::memcmp(callgate_def(kCallGateRideLimit)->want, ride_limit, 8) == 0);
+}
+
+TEST(callgate_ride_limit_skips_the_ride_limit_error_only) {
+    // 검증기 0x9DD55C `call [rax+0x2C0]`(액터 [88] = 탑승 제한) -> test al,al ->
+    // **je 0x9DD573**(통과) / 떨어지면 `eErrNoCallVehicleMercenaryRideLimit` 대입.
+    // je 의 거리 0x0D 가 그 오류 대입(mov eax,[rip] 6 + mov [rsi],eax 2 +
+    // jmp 5)을 정확히 건너뛴다.
+    const GateDef* d = callgate_def(kCallGateRideLimit);
+    const std::size_t off = d->rva & 7ULL;
+    CHECK_EQ(static_cast<long long>(off), 4LL);
+    CHECK_EQ(static_cast<int>(d->want[off]), static_cast<int>(kJe));
+    CHECK_EQ(static_cast<int>(d->want[off + 1]), 0x0D);
+    // 앞 두 바이트(`00 00`)가 위치 관문(`06 00`)·실내 관문(`03 03`)과 다르다.
+    CHECK(std::memcmp(d->want, callgate_def(kCallGatePosition)->want, 2) != 0);
+    CHECK(std::memcmp(d->want, callgate_def(kCallGateIndoor)->want, 2) != 0);
 }
 
 TEST(callgate_splice_turns_je_into_jmp_and_touches_nothing_else) {

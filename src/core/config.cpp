@@ -177,6 +177,8 @@ Config load(const std::wstring& path) {
             c.summon_diag = (to_int(val, 0) != 0);
         } else if (key == "call_diag") {
             c.call_diag = (to_int(val, 0) != 0);
+        } else if (key == "boss_call") {
+            c.boss_call = (to_int(val, 0) != 0);
         } else if (key == "wheel_fill") {
             c.wheel_fill = (to_int(val, 0) != 0);
         } else if (key == "wheel_swap_slot") {
@@ -214,6 +216,8 @@ bool save(const std::wstring& path, const Config& c) {
     out << "; 소환 진단 훅. 조사할 때만 1. 기본 0 (기능이 아니라 조사용이다).\n";
     out << "summon_diag = " << (c.summon_diag ? 1 : 0) << "\n";
     out << "call_diag = " << (c.call_diag ? 1 : 0) << "\n";
+    out << "; 보스룸에서도 탈것 호출(행동 제한을 호출에서만 넘긴다). 기본 0.\n";
+    out << "boss_call = " << (c.boss_call ? 1 : 0) << "\n";
     out << "; 휠 칸 등록 채우기. 얹기가 고른 종만 '올려 둔 칸' 을 채운다.\n";
     out << "wheel_fill = " << (c.wheel_fill ? 1 : 0) << "\n";
     out << "; 얹기가 동반자 칸까지 옮길지. 0 이면 장소 제한만 푼다.\n";
