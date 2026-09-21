@@ -1,5 +1,8 @@
 # 포획으로 얻는 탈것·반려동물 목록 (2026-09-05, 실측)
 
+> **정리 (2026-09-21) — ✅ 참조 자료.** 라이브 메모리에서 뽑은 표이고 이후 문서가
+> 원본으로 인용한다(`2026-09-08-companion-catalog-and-acquire-research.md`). 반박된 줄은 없다.
+
 라이브 게임 메모리(PID 45420)에서 `CharacterInfoManager`(7250) 와
 `MercenaryInfoManager`(21) 를 교차해 뽑았다. 스크래치 `catch_scan.py`.
 

@@ -1,5 +1,12 @@
 # CT / ASI 참고 모드 기능 검토 — 우리 모드로 추출할 후보
 
+> **정리 (2026-09-21) — 📐 설계 → 일부.** B-1 플레이어 치트(`STATUS.md` §1.13) · B-7
+> 가방(§1.16) · B-9 Max Refine(§1.12 — 지금은 "전부 담금질 최대" · "전부 연마 최대" 둘)은
+> 들어왔다. B-8 중 아이템 하나 지우기는 닫힌
+> 길이다(`TROUBLESHOOTING.md` §9). B-5 텔레포트를 포함한 나머지는 구현 기록이 없다.
+> "소켓은 게임이 막음" 은 틀렸고(`2026-09-07-socket-grant-unlock-research.md`), "캐릭터
+> 스폰(우리 고유)" 은 금지·제거됐다(`TROUBLESHOOTING.md` §1.9).
+
 **대상:** Nexus 3209 "Crimson Desert Enhanced Ultimate" = Cheat Engine 테이블(CT)
 + standalone trainer(ASI, `CrimsonInvEditor.asi`). 둘 다 같은 코드베이스, 게임
 2.0.0.2(build 1.0.0.2692) 기준. 소켓·장비·텔레포트·염색 리버스의 원출처는

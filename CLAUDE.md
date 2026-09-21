@@ -45,8 +45,15 @@ D3D12 ImGui 오버레이. 싱글플레이 전용.
 
 작업 디렉토리가 게임 폴더로 열려 있어도 소스와 git 은 전부 `E:\CDToybox` 에
 있다. 워크트리는 **늘어나고 줄어드니 세지 말고 물어본다** — `git worktree list`
-가 지금 무엇이 붙어 있는지 알려 준다(2026-09-19 기준 `E:/CDToybox` = `develop`,
-`E:/CDToybox-mouse` = `feat/wanted-cheat`). **남의 트리는 건드리지 않는다.**
+가 지금 무엇이 붙어 있는지 알려 준다(2026-09-21 기준 `E:/CDToybox` = `develop`,
+`E:/CDToybox-mouse` = `feat/wanted-cheat`, `E:/CDToybox-spec` = 조사·문서 작업).
+**남의 트리는 건드리지 않는다.**
+
+**트리를 나눠도 배포본은 하나다** — 게임의 `bin64\xinput1_4.dll` 은 세션 수와 무관하게
+하나라서, 한 트리가 develop 을 안 받은 채 배포하면 남의 기능이 사라진다(2026-09-18 실제로
+겪었다). 배포는 **develop 정본에서**, 배포 전에 한 줄:
+`git merge-base --is-ancestor origin/develop HEAD` (0 이 아니면 배포하지 않는다).
+`deploy.ps1` 은 **백업하지 않으므로** 직전 DLL 을 먼저 따로 복사해 둔다.
 
 **git 의 HEAD · 인덱스 · 워킹트리는 저장소당 하나다.** 브랜치를 만들어도 "내
 것" 이 되지 않는다. 다른 세션이 체크아웃하면 내 다음 커밋이 남의 브랜치로 가고,
@@ -82,7 +89,7 @@ git -C E:/CDToybox worktree add E:/CDToybox-xxx -b <브랜치> develop
 
 ```powershell
 .\scripts\build.ps1          # VS2022 BuildTools + Ninja, RelWithDebInfo
-.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (705개, 2026-09-19)
+.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (756개, 2026-09-21)
 .\scripts\deploy.ps1         # build\xinput1_4.dll -> 게임 bin64\
 ```
 
@@ -138,8 +145,9 @@ docs/       아래 참조
 |---|---|
 | `docs/STATUS.md` | **먼저 읽을 것.** 지금 무엇이 되고 · 안 되고 · 왜 그런가 |
 | `docs/TROUBLESHOOTING.md` | 겪은 문제와 해결. 증상 색인이 앞에 있다 |
-| `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (50여 편). 한 주제가 여러 편이면 **최신 편의 머리말이 어느 편이 정본인지 밝힌다** |
-| `docs/superpowers/plans/` | 단계별 구현 계획 (6편, 전부 구현 완료 — 머리말의 완료 배너를 볼 것) |
+| `docs/README.md` | **문서 지도.** 조사 기록·계획을 주제별로 묶고 편마다 지금 상태(해결·미해결·반증·기록)와 근거를 적었다 |
+| `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (59편). 한 주제가 여러 편이면 **문서 지도와 최신 편의 머리말이 어느 편이 정본인지 밝힌다** |
+| `docs/superpowers/plans/` | 단계별 구현 계획 (6편 — 5편 구현 완료, 1단계 계획은 값 스캐너만 완료·카메라 보류. 머리말 배너를 볼 것) |
 | `docs/special-function-items.md` | `specguard` 대상 32종 — 치트로 만들면 인벤 렌더에서 죽는 장비 |
 
 문서 곳곳이 `.superpowers/sdd/<플랜>/progress.md` 를 실행 장부로 가리킨다.
