@@ -1,5 +1,9 @@
 # 패널 공통화 — 검토 기록 (2026-09-10)
 
+> **정리 (2026-09-21) — ✅ 완료.** Critical/Important 없이 머지됐다
+> (`plans/2026-09-10-panel-shared-widgets.md`). §4 화면 확인 목록과 취향 질문의 결과는
+> 이후 문서에 기록이 없다.
+
 대상: `626b919`(계획 직전 develop) → `706f353`(2단계 브랜치 끝). 설계는
 `2026-09-10-panel-shared-widgets-design.md`, 계획은
 `../plans/2026-09-10-panel-shared-widgets.md`.

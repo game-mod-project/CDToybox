@@ -1,5 +1,12 @@
 # 장비 에디터 이식 설계 (소켓·연마·염색, both-realms, NPC 불필요)
 
+> **정리 (2026-09-21) — 📐 설계 → 구현됨 (두 곳 틀림).** 장비 에디터는 들어왔다
+> (`STATUS.md` §1.12). 단 착용 항목 **`+0x0A` 는 연마가 아니라 담금질**이고 장비 연마는
+> `+0x58` 이다. 포인터 사슬(MGRCHAIN AOB)은 한 번도 안 타서 2026-09-10 지웠고 실제로는
+> 힙 스캔으로 찾는다(둘 다 `STATUS.md` §1.12). "잠긴 소켓 열기 불가" 도 틀렸다
+> (`2026-09-07-socket-grant-unlock-research.md`) — 위쪽 "⛔ 불가" 줄은 그어 두었지만 뒤쪽의
+> "잠긴 칸 못 씀" · "잠긴소켓 거부" 는 그대로 남아 있다.
+
 **출처/저작권:** 소켓·장비 컴포넌트 매핑의 원출처는 **XeTrinityz/Trinity
 (MIT, github.com/XeTrinityz/Trinity)**. 사용자가 받은 "Crimson Desert
 Enhanced Ultimate" CT(Nexus 3209)가 이를 Cheat Engine 테이블로 이식했고,

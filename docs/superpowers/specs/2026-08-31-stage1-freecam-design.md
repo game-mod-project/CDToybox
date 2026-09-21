@@ -1,5 +1,11 @@
 # CDToybox 1단계 설계 — 실시간 분리 프리카메라
 
+> **정리 (2026-09-21) — 📐 설계 → 일부.** M1·M2 는 값 스캔이 아니라 RTTI 탐색으로
+> 했다(`2026-08-31-camera-offsets.md`). 값 스캐너는 들어왔고(`plans/2026-08-31-stage1-m1-m2-value-scanner.md`),
+> §4.3 스캔 패널의 빈 스텁은 2026-09-10 지웠다(`2026-09-10-dead-code-cleanup.md`).
+> 목표인 프리카메라(M4)는 렌더가 읽는 값을 못 찾아 **보류** — 코드는 있으나 훅을
+> 걸지 않는다(`STATUS.md` §3).
+
 - 작성일: 2026-08-31
 - 대상: Crimson Desert Enhanced 2.00.01
 - 선행: `2026-08-31-stage0-scaffold-design.md` (완료), `2026-08-31-d3d12-overlay-research.md`

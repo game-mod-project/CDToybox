@@ -1,5 +1,12 @@
 # CDToybox 0단계 설계 — 오버레이 + 스캐너 골대
 
+> **정리 (2026-09-21) — 📐 설계 → 구현됨.** 프록시 · D3D12 훅 · ImGui 오버레이 · 스캐너
+> 골대는 들어왔다(`STATUS.md` §1.1 · §1.2, 계획 `plans/2026-08-31-stage0-scaffold.md`).
+> 여기서 달라진 것 셋 — 큐를 `ExecuteCommandLists` 첫 호출에서 잡는 설계는 틀려
+> 걷어냈고(`2026-08-31-d3d12-overlay-research.md` §2 · §5), 단축키는 `End` 가 아니라
+> 켜기 `Insert` · 비활성화 `F10` 이며, 실행 코드는 `.text1` 한 곳이 아니다(섹션 배치는
+> `STATUS.md` §2.1).
+
 - 작성일: 2026-08-31
 - 대상: Crimson Desert Enhanced 2.00.01 (Steam AppID 3321460, buildid 24994088)
 - 범위: 0단계(기반 골대)만. 게임 내부 구조 역공학은 1단계 이후.
