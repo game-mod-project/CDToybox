@@ -339,11 +339,18 @@ TEST(species_message_separates_a_missing_record_from_a_missing_roster) {
 using cdtb::game::callcheck_reason_name;
 using cdtb::game::kCallCheckReasonCount;
 
+// 이름을 못 찾으면 nullptr 다. `std::string(nullptr)` 는 시험을 **실패가 아니라
+// 팅기게** 한다(2026-09-21 RED 확인 때 실제로 segfault 로 실행기 전체가 죽었다).
+// 기대가 어긋나면 FAIL 로 보이도록 글로 바꿔 비교한다.
+static std::string reason_or_null(const char* p) {
+    return p != nullptr ? std::string(p) : std::string("(nullptr)");
+}
+
 TEST(callcheck_names_the_reason_by_matching_the_registered_value) {
     const std::uint32_t v[] = {11, 22, 33, 44, 55};
-    CHECK(std::string(callcheck_reason_name(33, v, 5)) ==
+    CHECK(reason_or_null(callcheck_reason_name(33, v, 5)) ==
           "eErrNoCallVehicleMercenaryRideLimit");
-    CHECK(std::string(callcheck_reason_name(55, v, 5)) ==
+    CHECK(reason_or_null(callcheck_reason_name(55, v, 5)) ==
           "eErrNoCallVehicleInvalidPosition");
 }
 
@@ -367,12 +374,51 @@ TEST(callcheck_never_names_success_even_when_slots_are_zero) {
     CHECK(callcheck_reason_name(0, none, 5) == nullptr);   // <- 여기가 위험한 곳
     CHECK(callcheck_reason_name(7, none, 5) == nullptr);
     const std::uint32_t half[] = {0, 0, 7, 0, 0};
-    CHECK(std::string(callcheck_reason_name(7, half, 5)) ==
+    CHECK(reason_or_null(callcheck_reason_name(7, half, 5)) ==
           "eErrNoCallVehicleMercenaryRideLimit");
 }
 
-TEST(callcheck_reason_table_has_the_six_sites_five_distinct_errors) {
-    CHECK(kCallCheckReasonCount == static_cast<std::size_t>(5));
+// 검증기 다섯 + 앞단 둘(2026-09-21). 앞단 둘은 등록 코드에서 짝지었다.
+TEST(callcheck_reason_table_covers_validator_and_wheel_pre_check) {
+    CHECK(kCallCheckReasonCount == static_cast<std::size_t>(7));
+    const std::uint32_t v[] = {11, 22, 33, 44, 55, 66, 77};
+    CHECK(reason_or_null(callcheck_reason_name(66, v, 7)) ==
+          "eErrNotFoundFocusActor");
+    CHECK(reason_or_null(callcheck_reason_name(77, v, 7)) ==
+          "eErrNoAlreadySummonedMercenary");
+    // 표를 늘려도 0 은 여전히 성공이다 - 이름을 붙이지 않는다.
+    CHECK(callcheck_reason_name(0, v, 7) == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// 휠 UI 한 번의 결말 (2026-09-21)
+//
+// 순서가 곧 게임 코드의 순서다(0x10BE8D5 -> 0x10BE8E7 -> 0x10BE8F8 ->
+// 0x10BED36). 특히 "탈것 칸인데 앞단에 안 옴" 을 관문①로 읽는 것은 그 사이에
+// 다른 출구가 없다는 명령 순서에 기댄다 - 그 가정이 이 함수에 박혀 있다.
+// ---------------------------------------------------------------------------
+using cdtb::game::wheel_verdict;
+using cdtb::game::WheelVerdict;
+
+TEST(wheel_verdict_follows_the_game_code_order) {
+    // 고른 칸이 없으면 종류·앞단과 무관하게 거기서 끝난다.
+    CHECK(wheel_verdict(-1, 2, false, 0) == WheelVerdict::NoSlot);
+    CHECK(wheel_verdict(-1, 2, true, 5) == WheelVerdict::NoSlot);
+    // 탈것 칸이 아니면 다른 갈래다.
+    CHECK(wheel_verdict(3, 0, false, 0) == WheelVerdict::NotVehicle);
+    CHECK(wheel_verdict(3, 1, false, 0) == WheelVerdict::NotVehicle);
+    // 탈것 칸인데 앞단에 안 왔다 -> 관문①. 보스룸에서 가릴 바로 그 칸이다.
+    CHECK(wheel_verdict(3, 2, false, 0) == WheelVerdict::BlockedAtGate1);
+    // 앞단에 왔으면 앞단의 오류가 결말이다.
+    CHECK(wheel_verdict(3, 2, true, 0x1234) == WheelVerdict::PreRejected);
+    CHECK(wheel_verdict(3, 2, true, 0) == WheelVerdict::PrePassed);
+}
+
+// **앞단에 안 온 것과 앞단이 통과시킨 것을 섞으면 안 된다.** 둘 다 오류값은 0
+// 이다 - 들어왔는지 여부로만 갈린다. §7.15 의 (가)/(나)가 한 단 위에서 되풀이된다.
+TEST(wheel_verdict_never_reads_a_missing_pre_check_as_a_pass) {
+    CHECK(wheel_verdict(0, 2, false, 0) != WheelVerdict::PrePassed);
+    CHECK(wheel_verdict(0, 2, true, 0) == WheelVerdict::PrePassed);
 }
 
 // ---------------------------------------------------------------------------
