@@ -1,4 +1,5 @@
 // @build 1.0.0.2944  관문 넷 전부 재도출(오류 문구 -> 값 슬롯 -> 내는 곳)
+//   + 다섯째(탑승 제한) 2026-09-21, 오류 값 슬롯 +0x6CF7B28 -> 0x9DD566
 //   근거: specs/2026-09-18-game-update-2944.md §8
 
 #include "game/callgate.h"
@@ -67,6 +68,20 @@ constexpr GateDef kGates[kCallGateCount] = {
      "\"호출할 수 없는 위치입니다\" 를 넘긴다 — 성벽·지붕 위에서 실제로 뜨는 것",
      0x009DD6C4,
      {0x06, 0x00, 0x84, 0xC0, 0x75, 0x0A, 0x8B, 0x05},
+     {0xEB},
+     1},
+    // 2026-09-21 보스룸 조사에서 더했다(`bosscall.h`). 오류 이름
+    // `eErrNoCallVehicleMercenaryRideLimit` 의 값 슬롯 +0x6CF7B28 을 읽는 곳이
+    // 실행 파일 전체에 **하나**(0x9DD566)이고, 그 앞이
+    //   0x9DD55C call [rax+0x2C0]   ; 액터 [88] = 제한 목록 중 _rideLimit 이 있나
+    //   0x9DD562 test al,al
+    //   0x9DD564 je 0x9DD573        ; <- 여기
+    // 다. 같은 8바이트가 0x39D3E2 에도 있어 **AOB 로는 못 찾는다** - RVA 에서 창
+    // 전체를 대조한다(다른 관문과 같은 방식).
+    {"탑승 제한 구역에서도 호출",
+     "행동 제한의 탑승 금지(_rideLimit)로 검증기가 거부하는 것을 넘긴다 — 보스룸 등",
+     0x009DD564,
+     {0x00, 0x00, 0x84, 0xC0, 0x74, 0x0D, 0x8B, 0x05},
      {0xEB},
      1},
 };

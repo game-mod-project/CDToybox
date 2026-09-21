@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "game/actors.h"
+#include "game/bosscall.h"
 #include "game/companion.h"
 #include "game/callgate.h"
 #include "game/grant.h"
@@ -170,6 +171,9 @@ void draw_vehicle_panel(bool* open) {
         ImGui::TextDisabled("서 있는 자리로 막히는 것 (게임 코드에 씁니다)");
         game::callgate_probe();
         for (int g = 0; g < game::kCallGateCount; ++g) {
+            // 탑승 제한 관문은 서 있는 자리가 아니라 행동 제한이다 - 아래
+            // "보스룸에서도 호출" 이 함께 켜고 끈다.
+            if (g == game::kCallGateRideLimit) continue;
             const game::CallGateInfo ci = game::callgate_info(g);
             if (ci.unsupported) {
                 ImGui::TextColored(col::kBad, "%s - 이 게임 빌드에서는 못 씁니다",
@@ -198,6 +202,55 @@ void draw_vehicle_panel(bool* open) {
         ImGui::TextColored(col::kWarn,
                            "정말 못 서는 자리에서 부르면 탈것이 지형에 박히거나"
                            " 곧 사라질 수 있습니다");
+
+        // 보스룸. 휠에서 골라도 아무 일도 없고 문구도 없던 곳이다. 캐릭터의
+        // **행동 제한 목록**이 호출 스킬을 막는다(`bosscall.h`, 2026-09-21).
+        ImGui::Separator();
+        ImGui::TextDisabled("보스룸 같은 곳이 거는 행동 제한 (게임 코드에 씁니다)");
+        const game::BossCallState bc = game::bosscall_state(reader);
+        if (bc.unsupported) {
+            ImGui::TextColored(col::kBad,
+                               "보스룸에서도 호출 - 이 게임 빌드에서는 못 씁니다");
+        } else {
+            bool boss_on = bc.on;
+            if (ImGui::Checkbox("보스룸에서도 호출", &boss_on)) {
+                const char* why = "";
+                if (game::bosscall_set(reader, boss_on, &why)) {
+                    notice_set(&s_note, NoticeLevel::Ok, "보스룸에서도 호출 {}",
+                               boss_on ? "켰습니다" : "껐습니다");
+                } else {
+                    notice_set(&s_note, NoticeLevel::Bad, "보스룸에서도 호출 실패 - {}",
+                               why);
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "보스룸 같은 곳은 캐릭터에 행동 제한을 겁니다. 그 제한의\n"
+                    "'허용 스킬그룹 목록' 이 탈것 호출 스킬을 조용히 막습니다 -\n"
+                    "호출 스킬은 어느 그룹에도 안 속해서입니다.\n\n"
+                    "켜면 **탈것·드래곤 호출 판정에서만** 그 목록을 넘기고,\n"
+                    "호출 검증기의 탑승 금지 거부도 넘깁니다. 다른 스킬과\n"
+                    "전투 제한은 그대로입니다. 모드를 내리면 되돌립니다.");
+            }
+        }
+        if (!bc.player) {
+            ImGui::TextDisabled("지금 걸린 행동 제한: 플레이어를 아직 못 읽었습니다");
+        } else if (bc.limits == 0) {
+            ImGui::TextDisabled("지금 걸린 행동 제한: 없음");
+        } else {
+            ImGui::Text("지금 걸린 행동 제한 %d개 (허용 그룹 목록 %d · 탑승 금지 %d"
+                        " · 하차 강제 %d)",
+                        bc.limits, bc.with_allow, bc.ride, bc.ride_off);
+            for (int i = 0; i < bc.shown; ++i) {
+                char line[160] = {};
+                game::action_limit_text(bc.entry[i], line, sizeof(line));
+                ImGui::BulletText("%s", line);
+            }
+        }
+        if (bc.hidden > 0) {
+            ImGui::TextDisabled("호출 판정에서 허용 목록을 넘긴 횟수 %u (통과 %u · 그래도 막힘 %u)",
+                                bc.hidden, bc.passed, bc.blocked);
+        }
     }
 
     // ---------------------------------------------------------------- 시간
