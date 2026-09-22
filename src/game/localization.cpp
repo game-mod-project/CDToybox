@@ -24,9 +24,6 @@ constexpr std::size_t kEntryOffset = 0x18;   // u32    풀 오프셋
 
 constexpr std::uint32_t kUnresolved = 0xFFFFFFFFu;
 
-// 문자열 하나를 읽을 때의 상한. 이름·설명이라 이 정도면 넉넉하다.
-constexpr std::size_t kMaxText = 512;
-
 // LocalizationStringBase::str() 본문 28바이트. ?? 는 disp32 두 개다.
 //
 //   8B 41 18              mov  eax, [rcx+0x18]
@@ -161,11 +158,12 @@ bool search_category(const mem::Reader& reader, std::uintptr_t array,
 }
 
 bool read_pool_text(const mem::Reader& reader, const LocSystem& sys,
-                    std::uint32_t offset, std::string* out) {
+                    std::uint32_t offset, std::size_t max_len,
+                    std::string* out) {
     if (offset == kUnresolved || offset >= sys.pool_size) return false;
 
     std::size_t n = sys.pool_size - offset;
-    if (n > kMaxText) n = kMaxText;
+    if (n > max_len) n = max_len;
 
     std::string buf(n, '\0');
     if (!reader.read(sys.pool + offset, buf.data(), n)) return false;
@@ -180,7 +178,8 @@ bool read_pool_text(const mem::Reader& reader, const LocSystem& sys,
 }  // namespace
 
 bool resolve(const mem::Reader& reader, const LocSystem& sys,
-             std::uint64_t key, std::string* text_out, int* category_out) {
+             std::uint64_t key, std::string* text_out, int* category_out,
+             std::size_t max_len) {
     if (text_out == nullptr || !sys.valid()) return false;
 
     std::uint64_t cat_table = 0;
@@ -210,7 +209,7 @@ bool resolve(const mem::Reader& reader, const LocSystem& sys,
         // 아직 안 풀렸어도 다른 카테고리를 더 뒤지지 않는다.
         std::uint32_t offset = 0;
         if (!reader.read_value(entry + kEntryOffset, &offset)) return false;
-        if (!read_pool_text(reader, sys, offset, text_out)) return false;
+        if (!read_pool_text(reader, sys, offset, max_len, text_out)) return false;
         if (category_out != nullptr) *category_out = cat;
         return true;
     }
