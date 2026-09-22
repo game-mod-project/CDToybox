@@ -16,6 +16,7 @@
 #include "render/icon_atlas.h"
 #include "render/layout.h"
 #include "render/overlay.h"
+#include "render/table_order.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -180,6 +181,7 @@ void draw_item_panel(bool* open) {
     // ImGui 1.92.9b 가 새 열 수에 차례로 끼워 맞춰, 바꾼 뒤 첫 실행에서 열 순서가
     // 흐트러졌다(설명 열을 넣은 2026-09-22, 하니스 실측). 저장된 정렬은 한 번 잃는다.
     if (ImGui::BeginTable("items7", 7, kFlags)) {
+        table_keep_natural_order();   // 다시 켤 때 정렬한 열이 맨 앞에 서지 않게(table_order.h)
         // 별표는 첫 칸에 따로 둔다. 키 칸에 겹쳐 놓았더니 줄 전체를
         // 덮는 Selectable 이 클릭을 가져가 눌리지 않았다.
         ImGui::TableSetupColumn("★", ImGuiTableColumnFlags_WidthFixed |

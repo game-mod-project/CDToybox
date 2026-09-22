@@ -21,6 +21,7 @@
 #include "render/item_style.h"
 #include "render/layout.h"
 #include "render/notice.h"
+#include "render/table_order.h"
 #include "render/table_sort_imgui.h"
 
 namespace cdtb::render {
@@ -558,6 +559,7 @@ void draw_grant_panel(bool* open) {
                                   ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                                   ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate,
                               sessions_size)) {
+            table_keep_natural_order();   // 다시 켤 때 정렬한 열이 맨 앞에 서지 않게(table_order.h)
             ImGui::TableSetupScrollFreeze(0, 1);   // 스크롤해도 머리글은 남는다
             ImGui::TableSetupColumn("주소");
             // 기본은 호출 많은 순 - 게임이 쉬지 않고 부르는 세션이 살아 있는 것이다.

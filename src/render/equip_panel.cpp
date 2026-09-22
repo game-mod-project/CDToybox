@@ -22,6 +22,7 @@
 #include "render/layout.h"
 #include "render/notice.h"
 #include "render/overlay.h"
+#include "render/table_order.h"
 #include "render/table_sort_imgui.h"
 
 namespace cdtb::render {
@@ -487,6 +488,7 @@ void draw_equip_panel(bool* open) {
                                    ImGuiTableFlags_Sortable |
                                    ImGuiTableFlags_SortTristate;
     if (ImGui::BeginTable("worn", 6, kF)) {
+        table_keep_natural_order();   // 다시 켤 때 정렬한 열이 맨 앞에 서지 않게(table_order.h)
         ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthFixed |
                                             ImGuiTableColumnFlags_DefaultSort,
                                 90.0f);

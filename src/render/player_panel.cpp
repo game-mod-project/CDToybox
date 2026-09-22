@@ -20,6 +20,7 @@
 #include "game/wanted.h"
 #include "render/colors.h"
 #include "render/confirm.h"
+#include "render/table_order.h"
 #include "render/table_sort_imgui.h"
 #include "render/notice.h"
 #include "mem/reader.h"
@@ -346,6 +347,7 @@ void draw_knowledge(const mem::Reader& reader) {
         ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (!s_scan.needs.empty() &&
         ImGui::BeginTable("know_needs", 7, kKnowF, ImVec2(0.0f, 220.0f))) {
+        table_keep_natural_order();   // 다시 켤 때 정렬한 열이 맨 앞에 서지 않게(table_order.h)
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 55.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -460,6 +462,7 @@ void draw_knowledge(const mem::Reader& reader) {
     }
     if (!s_scan.fresh.empty() &&
         ImGui::BeginTable("know_fresh", 4, kKnowF, ImVec2(0.0f, 220.0f))) {
+        table_keep_natural_order();
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 55.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch, 1.0f);

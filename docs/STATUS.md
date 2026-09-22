@@ -296,6 +296,7 @@ $ cdtb_probe items find 비약
 `specs/2026-09-22-item-description-effects-design.md` §3. 두 표의 ImGui 표 ID 를 열 수와 함께
 바꿨다(`items7` · `inv10`) — 옛 저장 설정이 새 열 수에 잘못 끼워져 첫 실행의 열 순서가
 흐트러지지 않게 하려는 것이고, 저장된 정렬은 한 번 초기화된다.
+다시 켤 때 정렬한 열이 맨 앞에 서던 ImGui 결함(상류 ocornut/imgui#9519)은 모든 정렬 표에서 table_keep_natural_order() 로 막는다(TS §6.27).
 
 ### 1.8 인게임 아이템 목록 (완료, 화면 확인)
 
