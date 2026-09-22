@@ -351,6 +351,13 @@ call  0x02AA55D0
   바꿔 가며 다시 부르지 않는다 — 한 번 부를 때마다 사용자가 크래시를 맞는다.
 - 실패가 되풀이될 수 있는 호출은 **한 번 예외가 나면 그 실행 내내 잠근다.**
   네 번 눌린 뒤에야 잠금을 넣었다.
+- **고정 RVA 로 게임 함수를 부르면 부르기 전에 그 자리를 대조한다(2026-09-22 추가).**
+  이 호출은 vtable 만 보고 `base + kKnowRegisterRva` 를 불렀다. 1.0.0.2949 에서 지식
+  컴포넌트 코드가 통째로 옮겨져 옛 자리가 명령 중간이 됐는데, 그때는 vtable 도 옮겨 대조가
+  먼저 막았을 뿐이다. 둘이 따로 낡으면 명령 중간으로 뛰어든다. 첫 15바이트 대조
+  (`know_register_prologue_ok`)를 넣었다 — 자격 검사 썽크·호출 검증기는 이미 그렇게 하고
+  있었다. 2949 자리는 게임 자신의 호출부(이 절의 명령 배열)로 되짚었다
+  (`specs/2026-09-22-game-update-2949.md` §5).
 
 ---
 
@@ -2345,8 +2352,12 @@ py -3.14 tools/rtti/cheat_report.py "<exe>" TrocTr > id_map.tsv   # 1115개 전�
   실행됨
 - `커서 가드 설치 완료` · `raw input 등록`
 
-고정 RVA 가족: `companion.h` · `grant.h` · `grant.cpp` · `specguard.cpp`(7곳) ·
-`spawnguard.cpp`(3) · `roster.h`(3).
+고정 RVA 가족: 손으로 세지 말고 `py -3.14 tools/rtti/recheck.py <exe>` 의 4번 표를 본다
+(소스를 읽어 만든다). 그 표에 안 잡히는 **배열·구조체 안 자리**도 있다 —
+`specguard_sites.h`(8) · `skillgate.cpp`(관문 2) · `callgate.cpp`(관문 4) · `grant.cpp`
+(`kGoodDriveSites`) · `callcheck.h`(오류 슬롯 7). 2949(2026-09-22)에서는 이 전부를 다시 짚었다
+— 폭이 구역마다 달랐고(0 · +0x10 · 수십만) 지식 컴포넌트 코드는 통째로 옮겨졌다
+(`specs/2026-09-22-game-update-2949.md`).
 
 ---
 

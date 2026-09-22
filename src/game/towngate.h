@@ -1,7 +1,9 @@
 #pragma once
 
-// @build 1.0.0.2944  kRegionMgrGlobalRva 를 표 이름 `regioninfo` 에서 재도출
-//   RegionInfo 필드 오프셋(+0x74 +0x75 +0x08)은 2944 에서 그대로다
+// @build 1.0.0.2949  kRegionMgrGlobalRva 가 그대로다(2026-09-22) - 표 이름 `regioninfo`
+//   를 만드는 함수 0x50D700(2944 와 같은 함수)이 여전히 0x6D69AD0 을 읽는다.
+//   RegionInfo 필드 오프셋(+0x74 +0x75 +0x08)은 2944 에서 확인했고, 2949 첫 실행에서도
+//   마을 판정이 2944 와 같은 187칸을 풀었다(로그 13:05:04).
 #include <cstddef>
 #include <cstdint>
 

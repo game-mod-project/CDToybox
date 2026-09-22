@@ -111,6 +111,9 @@ TEST(the_measured_offsets_are_pinned) {
     // 목적이다 - 값을 고치기 전에 새 exe 에서 다시 짚었는지 확인할 것
     // (2944 는 게임을 켠 채 cdtb_probe 로 인스턴스를 잡아 확정했다).
     // 오프셋(+0x08 개수 · +0x58 배열 …)은 2944 에서도 그대로다.
+    // 2949(2026-09-22): 전역은 그대로다 - 지식 정보 조회 0x433650 이 `mov rbx,[0x6D69AB8]`
+    // 뒤 `[rbx+8]` 로 번호를 견주고 `[rbx+0x58]` 배열을 읽는다(그 결과의 +0x104 를 등록
+    // 호출부가 읽으므로 지식 표임이 코드로 선다).
     CHECK(cdtb::game::kKnowMgrGlobalRva == 0x06D69AB8);
     CHECK(cdtb::game::kKnowMgrCount == 0x08);
     CHECK(cdtb::game::kKnowMgrArray == 0x58);
@@ -166,18 +169,45 @@ TEST(know_auto_upsert_keeps_separate_numbers_apart) {
 
 TEST(the_skill_registration_constants_are_pinned) {
     // 게임 함수를 부르는 기능이라 상수 하나가 틀리면 남의 코드를 부른다.
-    // 전부 실행 파일에서 직접 읽어 확인했다(2026-09-14):
-    //   0x02AA55D0 프롤로그: mov [rsp+0x18],r8d / mov [rsp+0x10],dx / mov [rsp+8],rcx
+    // 전부 실행 파일에서 직접 읽어 확인했다(2944: 2026-09-14, 2949: 2026-09-22):
+    //   2944 0x02AA55D0 프롤로그: mov [rsp+0x18],r8d / mov [rsp+0x10],dx / mov [rsp+8],rcx
     //     -> (rcx = 서버 컴포넌트, dx = u16 지식키, r8d = i32 레벨, r9b = u8 조용히)
-    //   ServerKnowledgeActorComponent vtable RVA 0x05A13200 (RTTI COL 0x5E7AC08)
-    CHECK(cdtb::game::kKnowRegisterRva == 0x02AA55D0);
-    CHECK(cdtb::game::kServerCompVtableRva == 0x05A13200);
+    //   2949 0x02B72C90 - 게임 호출부 0x2B73B10 · 0x2B73BB8(간격 0xA8, 2944 와 같다)가
+    //     부르는 대상이고 첫 15바이트가 위 프롤로그 그대로다.
+    //   ServerKnowledgeActorComponent vtable RVA 2944 0x05A13200 -> 2949 0x05B2B880 (RTTI)
+    CHECK(cdtb::game::kKnowRegisterRva == 0x02B72C90);
+    CHECK(cdtb::game::kServerCompVtableRva == 0x05B2B880);
     CHECK(cdtb::game::kKnowMapCount == 0xF4);
     CHECK(cdtb::game::kInfoApplySkill == 0x104);
     CHECK(cdtb::game::kNoApplySkill == 0xFFFF);
     // 습득 시각 칸은 레코드 안이어야 한다(24바이트를 넘으면 남의 레코드를 쓴다).
     CHECK(cdtb::game::kKnowRecObj + 8 <= cdtb::game::kKnowRecStride);
     CHECK(cdtb::game::kKnowRecFlag + 1 <= cdtb::game::kKnowRecStride);
+}
+
+// 등록 함수를 부르기 전의 자리 대조(2026-09-22). 2949 로 갱신됐을 때 옛 자리가 명령
+// 중간이었다 - 거기로 뛰어들지 않게 첫 15바이트를 본다.
+TEST(know_register_prologue_accepts_the_measured_bytes) {
+    // 2949 파일 0x2B72C90 에서 읽은 첫 15바이트(2944 의 0x02AA55D0 과 같다).
+    const std::uint8_t head[] = {0x44, 0x89, 0x44, 0x24, 0x18, 0x66, 0x89, 0x54,
+                                 0x24, 0x10, 0x48, 0x89, 0x4C, 0x24, 0x08, 0x55};
+    CHECK(cdtb::game::know_register_prologue_ok(head, sizeof(head)));
+    CHECK(cdtb::game::know_register_prologue_ok(head, 15));
+}
+
+TEST(know_register_prologue_rejects_stale_short_or_null) {
+    // 2949 에서 옛 자리 0x2AA55D0 에 있던 것 - 명령 중간(`fbstp ...` 로 풀린다).
+    std::uint8_t stale[15] = {0xDF, 0x75, 0xED, 0x48, 0x8D, 0x85, 0xE0, 0x00,
+                              0x00, 0x00, 0x48, 0x8B, 0x8D, 0xD0, 0x00};
+    CHECK(!cdtb::game::know_register_prologue_ok(stale, sizeof(stale)));
+    const std::uint8_t head[] = {0x44, 0x89, 0x44, 0x24, 0x18, 0x66, 0x89, 0x54,
+                                 0x24, 0x10, 0x48, 0x89, 0x4C, 0x24, 0x08};
+    CHECK(!cdtb::game::know_register_prologue_ok(head, 14));   // 모자라다
+    CHECK(!cdtb::game::know_register_prologue_ok(nullptr, 15));
+    std::uint8_t one_off[15];
+    for (int i = 0; i < 15; ++i) one_off[i] = head[i];
+    one_off[14] = 0x09;   // 마지막 한 바이트만 달라도 거부
+    CHECK(!cdtb::game::know_register_prologue_ok(one_off, sizeof(one_off)));
 }
 
 // ------------------------------------- 스킬 맵 읽기 (2026-09-16)

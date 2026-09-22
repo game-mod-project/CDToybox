@@ -1,10 +1,10 @@
 #pragma once
 
-// @build 1.0.0.2944  매니저 전역을 **라이브 프로브로 확정**했다(정적으로는
-//   끝까지 안 갈렸다 - 네 갈래가 다 막혔다). 게임을 켠 채
-//   `cdtb_probe instances .?AVKnowledgeInfoManager@pa@@` 로 인스턴스를 잡고,
-//   그 포인터를 담은 은행 칸을 바이트로 찾았다. 근거: 2944 스펙 §6.
-//   낡으면 know_mgr_sane 이 걸러 "표를 아직 못 잡았습니다" 로 끝난다.
+// @build 1.0.0.2949  지식 등록 함수(0x2B72C90)와 서버 컴포넌트 vtable(0x5B2B880)을
+//   재도출했고, 매니저 전역(0x6D69AB8)은 지식 정보 조회 함수 0x433650 이 읽는 전역으로
+//   그대로임을 확인했다(2026-09-22). 근거: specs/2026-09-22-game-update-2949.md §5.
+//   (2944 때 매니저 전역은 라이브 프로브로 확정했다 - 2944 스펙 §6. 낡으면
+//   know_mgr_sane 이 걸러 "표를 아직 못 잡았습니다" 로 끝난다.)
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -193,8 +193,34 @@ KnowWrite know_forget(const mem::Reader& reader, int number);
 // 함수 모양은 프롤로그를 직접 읽어 확인했다(인자 4개, 스택 인자 없음):
 //   0x02AA55D0  mov [rsp+0x18], r8d / mov [rsp+0x10], dx / mov [rsp+8], rcx
 //   -> (rcx = 서버 컴포넌트, dx = u16 지식키, r8d = i32 레벨, r9b = u8 조용히)
-inline constexpr std::uintptr_t kKnowRegisterRva = 0x02AA55D0;
-inline constexpr std::uintptr_t kServerCompVtableRva = 0x05A13200;
+//
+// 1.0.0.2949(2026-09-22): **지식 컴포넌트 코드가 통째로 옮겨졌다**(옛 자리는 명령 중간).
+// 게임 자신의 호출부로 되짚었다 - 0x2B73B10 의 명령 배열이 2944 호출부(0x02AA6450)와
+// 하나하나 같다(`mov ecx,0xffff; cmp word [rax+0x104],cx; je; mov r9b,1; mov r8d,edi;
+// movzx edx,..; mov rcx,r13; call`). 같은 함수의 둘째 호출부 0x2B73BB8 과의 간격도
+// 2944(0x02AA6450 / 0x02AA64F8)와 같은 0xA8 이다. 대상 0x2B72C90 의 첫 15바이트가 위
+// 프롤로그 그대로다. vtable 은 RTTI 로 0x5B2B880 이고, 2949 실행 로그도
+// `지식 컴포넌트 … vtable 0x145B2B880` 을 찍었다.
+inline constexpr std::uintptr_t kKnowRegisterRva = 0x02B72C90;       // 2944 0x02AA55D0
+inline constexpr std::uintptr_t kServerCompVtableRva = 0x05B2B880;   // 2944 0x05A13200
+
+// 등록 함수의 첫 15바이트(위 세 명령). **부르기 전에 이것을 대조한다.** 이 호출은
+// 게임 함수를 직접 부르므로, 갱신으로 자리가 낡으면 명령 중간으로 뛰어들어 죽는다 -
+// 2949 에서 실제로 옛 자리가 명령 중간이었다. 그때 vtable 대조가 먼저 막아 주었지만
+// (vtable 도 옮겼다) 둘이 따로 낡을 수 있으니 자리 자체를 따로 확인한다.
+inline constexpr std::uint8_t kKnowRegisterPrologue[15] = {
+    0x44, 0x89, 0x44, 0x24, 0x18,    // mov [rsp+0x18], r8d
+    0x66, 0x89, 0x54, 0x24, 0x10,    // mov [rsp+0x10], dx
+    0x48, 0x89, 0x4C, 0x24, 0x08};   // mov [rsp+8], rcx
+
+// `p` 는 등록 함수 자리에서 읽은 바이트. 모자라거나 다르면 false.
+inline bool know_register_prologue_ok(const std::uint8_t* p, std::size_t n) {
+    if (p == nullptr || n < sizeof(kKnowRegisterPrologue)) return false;
+    for (std::size_t i = 0; i < sizeof(kKnowRegisterPrologue); ++i) {
+        if (p[i] != kKnowRegisterPrologue[i]) return false;
+    }
+    return true;
+}
 inline constexpr std::size_t kKnowMapCount = 0xF4;      // u32 맵 원소 수
 inline constexpr std::size_t kInfoApplySkill = 0x104;   // u16, 0xFFFF = 붙을 스킬 없음
 inline constexpr std::uint16_t kNoApplySkill = 0xFFFF;

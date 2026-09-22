@@ -1,5 +1,6 @@
-// @build 1.0.0.2944  검증기 0x9DD420 · 휠 UI 0x10BE8B0 · 앞단 0x9E0FC0 ·
-//   오류 슬롯 일곱. 근거는 `callcheck.h`.
+// @build 1.0.0.2949  휠 UI 0x10BE8C0(재도출) · 검증기 0x9DD420 · 앞단 0x9E0FC0 ·
+//   관리자·관문 함수 셋 · 오류 슬롯 일곱(여기까지 그대로임을 대조, 2026-09-22).
+//   근거는 `callcheck.h`.
 
 #include "game/callcheck.h"
 

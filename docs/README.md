@@ -1,13 +1,14 @@
 # 문서 지도
 
-**갱신:** 2026-09-21 · exe **1.0.0.2944**
+**갱신:** 2026-09-22 · exe **1.0.0.2949**
 
-조사 기록 59편 · 계획 6편이 어디에 무엇이 있고 **지금도 유효한가**를 한 곳에 모았다.
+조사 기록 60편 · 계획 6편이 어디에 무엇이 있고 **지금도 유효한가**를 한 곳에 모았다.
 상태는 문서 자신의 문장이나 **이후 문서의 명시적 문장**으로만 정했다. 조사 기록 55편은
 제목 아래(제목 위에 옛 배너가 있는 편은 맨 위)의 `정리 (2026-09-21)` 배너가 같은 상태와
-근거를 적는다. 나머지 10편 — 계획 6편 · `socket-wire-format` · `story-mount-clone-design` ·
-`dragon-wheel-handoff` · `boss-room-action-limit` — 은 그 배너가 없고, 이미 상태를 적어 둔
-옛 배너가 그 역할을 한다. 본문은 역사 기록이라 고치지 않았다 — **배너가 본문보다 우선한다.**
+근거를 적는다. 나머지 11편 — 계획 6편 · `socket-wire-format` · `story-mount-clone-design` ·
+`dragon-wheel-handoff` · `boss-room-action-limit` · `game-update-2949` — 은 그 배너가 없고,
+문서 첫머리의 상태 배너가 그 역할을 한다. 본문은 역사 기록이라 고치지 않았다 — **배너가
+본문보다 우선한다.**
 
 ## 먼저 읽을 것
 
@@ -138,14 +139,15 @@
 
 ## 10. 게임 갱신 대응
 
-현행 빌드는 **1.0.0.2944**. 갱신 때마다 `patch-recheck` 절차와 TS §5 를 본다.
+현행 빌드는 **1.0.0.2949**. 갱신 때마다 `patch-recheck` 절차와 TS §5 를 본다.
 
 | 문서 | 상태 | 지금 참인 것 · 근거 |
 |---|---|---|
 | [patch-recheck](superpowers/specs/2026-09-01-patch-recheck.md) | ✅ 지금도 쓰는 절차 | 갱신 뒤 확인 목록은 TS §5.5 도 |
-| [game-update-2944](superpowers/specs/2026-09-18-game-update-2944.md) | 📜 기록 (현행) | specguard 5/8 · spawnguard · 구동 자리는 이후 해결. 남은 것: 세션 전역 A/B · `dragondiag`(TS §8) |
-| [specguard-div-family](superpowers/specs/2026-09-20-specguard-div-family.md) | ✅ 해결 | 5/8 게임 확인, 실제로 4회 막은 것까지 확인(STATUS §1.15) |
-| [spawnguard-callsite](superpowers/specs/2026-09-20-spawnguard-callsite.md) | ✅ 해결 | `0x2B8DD36`, 게임 확인. 실제로 막은 횟수는 기록 없음 |
+| [game-update-2949](superpowers/specs/2026-09-22-game-update-2949.md) | 📜 기록 (현행) · 게임 확인 대기 | 고정 RVA 전부 정적 재도출. 남은 확인: 지급 한 번(`구동 자리 +2AD106D`) · 예약슬롯/GPV 전역 탐침(§11) |
+| [game-update-2944](superpowers/specs/2026-09-18-game-update-2944.md) | 📜 기록 | specguard 5/8 · spawnguard · 구동 자리는 이후 해결. 남은 것: 세션 전역 A/B · `dragondiag`(TS §8). 2944 자리들은 2949 에서 다시 짚었다 |
+| [specguard-div-family](superpowers/specs/2026-09-20-specguard-div-family.md) | ✅ 해결 | 5/8 게임 확인, 실제로 4회 막은 것까지 확인(STATUS §1.15). 가족 표식은 2949 재도출에도 그대로 쓰였다 |
+| [spawnguard-callsite](superpowers/specs/2026-09-20-spawnguard-callsite.md) | ✅ 해결 | `0x2B8DD36`(2944), 게임 확인. 2949 는 `0x2B8DD46`(같은 지문). 실제로 막은 횟수는 기록 없음 |
 | [game-update-2850](superpowers/specs/2026-09-11-game-update-2850.md) | ✅ 완료 | 2850 대응. 세션 전역 A/B 는 지금도 미확정 |
 | [game-update-break](superpowers/specs/2026-09-04-game-update-break.md) | ✅ 해결 · 소켓 판정 ❌ | 대응표·지급 복구. "소켓 전달을 없앴다" 는 틀렸다 |
 

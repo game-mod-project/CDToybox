@@ -4,6 +4,8 @@
 // 실측 자리(2026-09-20, exe 1.0.0.2944):
 //   RVA 0x02B8DD36  E8 D5 83 5B FF   call 0x2146110      (번호 -> 레코드 조회)
 //   RVA 0x02B8DD3B  48 83 78 28 FF   cmp qword [rax+0x28], -1   <- 널 검사가 없다
+// 1.0.0.2949(2026-09-22)에서는 자리 0x02B8DD46 · 조회 0x2146120 으로 **함께** +0x10
+// 밀려, 그 자리 10바이트가 위와 한 글자도 다르지 않다(2949 파일에서 읽어 확인).
 //
 // 조회를 부르는 자리는 **273곳**인데 그중 뒤가 이 `cmp` 인 것은 **한 곳뿐**이다
 // (파일 397MB 전량에서도 한 곳). 그래서 꼬리까지 봐야 자리가 확정된다 -
@@ -30,7 +32,8 @@ constexpr std::uintptr_t kLookup = kBase + kSpawnLookupRva;
 }  // namespace
 
 // 실측 바이트 그대로. rel32 = 0xFF5B83D5 = -0xA47C2B 이고
-// 0x2B8DD3B - 0xA47C2B = 0x2146110 이다.
+// 0x2B8DD3B - 0xA47C2B = 0x2146110 이다(2944). 2949 는 0x2B8DD4B - 0xA47C2B =
+// 0x2146120 으로 같은 바이트가 새 상수와 맞는다.
 TEST(spawnguard_site_accepts_the_measured_2944_bytes) {
     const std::uint8_t o[] = {0xE8, 0xD5, 0x83, 0x5B, 0xFF,
                               0x48, 0x83, 0x78, 0x28, 0xFF};
@@ -76,9 +79,9 @@ TEST(spawnguard_site_rejects_short_and_null_reads) {
 
 // 표식 셋이 흘러내리지 않게 못박는다. RVA 자체는 시험이 검증할 수 없다 -
 // 저장소에 게임 exe 가 없다. 근거는 `spawnguard_site.h` 주석과
-// `specs/2026-09-20-spawnguard-callsite.md`.
-TEST(spawnguard_site_keeps_the_measured_2944_rvas) {
-    CHECK(kSpawnCallSiteRva == 0x2B8DD36ULL);
-    CHECK(kSpawnLookupRva == 0x2146110ULL);
+// `specs/2026-09-22-game-update-2949.md` §4(2944: `specs/2026-09-20-spawnguard-callsite.md`).
+TEST(spawnguard_site_keeps_the_measured_2949_rvas) {
+    CHECK(kSpawnCallSiteRva == 0x2B8DD46ULL);
+    CHECK(kSpawnLookupRva == 0x2146120ULL);
     CHECK(kSpawnEmptyRecordRva == 0x6CF2F70ULL);
 }
