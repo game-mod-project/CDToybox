@@ -92,6 +92,7 @@ add_library(cdtoybox SHARED
     src/game/freecam.cpp
     src/game/localization.cpp
     src/game/items.cpp
+    src/game/item_text.cpp
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/wanted.cpp
@@ -150,6 +151,7 @@ add_executable(cdtb_tests
     tests/item_key_map_tests.cpp
     tests/inventory_tests.cpp
     tests/item_view_tests.cpp
+    tests/item_text_tests.cpp
     tests/icon_map_tests.cpp
     tests/cursor_tests.cpp
     tests/grant_tests.cpp
@@ -190,6 +192,7 @@ add_executable(cdtb_tests
     src/game/stash.cpp
     src/game/localization.cpp
     src/game/items.cpp
+    src/game/item_text.cpp
     src/game/inventory.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
@@ -239,6 +242,7 @@ add_executable(cdtb_probe
     src/game/analysis.cpp
     src/game/localization.cpp
     src/game/items.cpp
+    src/game/item_text.cpp
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/wanted.cpp
