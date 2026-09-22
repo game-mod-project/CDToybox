@@ -1,4 +1,5 @@
-// @build 1.0.0.2944  kGpvMgrGlobalRva 를 라이브 프로브로 확정했다.
+// @build 1.0.0.2949  kGpvMgrGlobalRva 가 그대로다(2026-09-22) - 2949 실행 중 그 전역이
+//   `GamePlayVariableInfoManager`(개수 59)를 가리켰다(읽기 전용 탐침).
 // @build 1.0.0.2850  **kCondNameTableRva · kEmptyStrRva 는 아직 미도출.**
 //   원소 조건 이름 표시에만 쓰이고, 못 읽으면 번호로 떨어진다.
 
