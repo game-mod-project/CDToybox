@@ -11,6 +11,7 @@
 
 #include "core/log.h"
 #include "core/write_log.h"
+#include "game/item_text.h"
 #include "game/roster.h"   // read_engine_string - 엔진 문자열은 한 군데서만 읽는다
 #include "mem/scanner.h"
 
@@ -65,6 +66,9 @@ constexpr std::size_t kRecKey = 0x00;       // u32 키
 constexpr std::size_t kRecStringKey = 0x08;
 constexpr std::size_t kRecMaxStack = 0x18;  // u32 _maxStackCount
 constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
+// u64 설명 현지화 키. `_itemDesc`(+0xB0) 객체의 키 칸이다 - 이름 키 +0x28 이
+// `_itemName`(+0x20) 의 키 칸인 것과 같은 꼴(스펙 §3, 6816개 전수).
+constexpr std::size_t kRecDescKey = 0xB8;
 constexpr std::size_t kRecEquipType = 0x42;  // u16 _equipTypeInfo (FFFF=장비 아님)
 constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
@@ -172,6 +176,8 @@ bool read_item_table(const mem::Reader& reader, std::uintptr_t manager,
         e.record = static_cast<std::uintptr_t>(record);
         if (!reader.read_value(e.record + kRecKey, &e.key)) continue;
         if (!reader.read_value(e.record + kRecNameKey, &e.name_key)) continue;
+        // 설명 키. 못 읽으면 0 으로 둔다 - 설명만 빠진다.
+        reader.read_value(e.record + kRecDescKey, &e.desc_key);
         // 없으면 0 으로 둔다. 등급 0 은 '등급 없음' 이라 뜻이 맞는다.
         reader.read_value(e.record + kRecGrade, &e.grade);
         reader.read_value(e.record + kRecMaxStack, &e.max_stack);
@@ -244,6 +250,12 @@ bool build_item_catalog(const mem::Reader& reader, std::uintptr_t manager,
         if (has_loc) {
             // 못 풀려도 항목은 남긴다. 키는 있는 아이템이다.
             resolve(reader, sys, e.name_key, &entry.name, nullptr);
+            // 설명은 이름보다 길다(최장 503바이트) - 상한을 올려 읽는다.
+            std::string raw;
+            if (e.desc_key != 0 &&
+                resolve(reader, sys, e.desc_key, &raw, nullptr, kLocMaxDescText)) {
+                entry.desc = clean_item_desc(raw);
+            }
         }
         catalog.push_back(std::move(entry));
     }
@@ -311,8 +323,10 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
 
     std::size_t named = 0;
+    std::size_t described = 0;
     for (const auto& e : *built) {
         if (!e.name.empty()) ++named;
+        if (!e.desc.empty()) ++described;
     }
 
     // 목록을 먼저 채우고 나서 준비 플래그를 세운다. 그리는 쪽은
@@ -323,8 +337,9 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     publish_catalog(std::move(built));
     g_ready.store(true, std::memory_order_release);
     if (named > 0) g_named.store(true, std::memory_order_release);
-    log::infof("아이템 표: {}개, 이름 풀린 것 {}개{}", total, named,
-               named == 0 ? " - 현지화를 기다렸다 다시 만든다" : "");
+    // 설명 수도 남긴다 - 게임 확인 때 로그만으로 "설명 6736개"(2949 실측)를 대조한다.
+    log::infof("아이템 표: {}개, 이름 풀린 것 {}개, 설명 풀린 것 {}개{}", total, named,
+               described, named == 0 ? " - 현지화를 기다렸다 다시 만든다" : "");
     return named > 0;
 }
 

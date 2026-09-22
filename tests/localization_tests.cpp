@@ -187,6 +187,34 @@ TEST(resolve_handles_empty_category_without_reading_array) {
     CHECK(!cdtb::game::resolve(f.mem, f.system(), Fixture::kKeyA, &text, nullptr));
 }
 
+// 설명은 이름보다 길다(2949 최장 503바이트). 기본 상한 512 안에서 널을 못 찾는
+// 긴 문자열은 실패다 - 잘린 문장을 내보이지 않는다. 상한을 올리면 읽는다.
+TEST(resolve_default_limit_rejects_text_longer_than_512) {
+    Fixture f;
+    f.mem.heap.resize(0x2000, 0);
+    const std::string long_text(600, 'a');
+    f.mem.put_str(Fixture::kPool + 0x100, long_text.c_str());
+    f.mem.put_u32(Fixture::kEntries + 0x18, 0x100u);   // 항목 A 가 긴 문자열을 가리킨다
+    LocSystem s = f.system();
+    s.pool_size = 0x1000;
+    std::string text;
+    CHECK(!cdtb::game::resolve(f.mem, s, Fixture::kKeyA, &text, nullptr));
+}
+
+TEST(resolve_reads_long_text_under_the_desc_limit) {
+    Fixture f;
+    f.mem.heap.resize(0x2000, 0);
+    const std::string long_text(600, 'a');
+    f.mem.put_str(Fixture::kPool + 0x100, long_text.c_str());
+    f.mem.put_u32(Fixture::kEntries + 0x18, 0x100u);
+    LocSystem s = f.system();
+    s.pool_size = 0x1000;
+    std::string text;
+    CHECK(cdtb::game::resolve(f.mem, s, Fixture::kKeyA, &text, nullptr,
+                              cdtb::game::kLocMaxDescText));
+    CHECK_EQ(text.size(), static_cast<std::size_t>(600));
+}
+
 // ---------------------------------------------------------- 카테고리 표
 
 TEST(loc_categories_reports_every_slot_with_counts) {

@@ -39,6 +39,7 @@ struct Row {
     std::uint32_t slot = 0;
     std::uint32_t key = 0;           // 0 이면 대응표에 없다
     std::string name;
+    std::string desc;                // 아이템표의 정리된 설명 - 설명 칸과 검색에 쓴다
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
     // 누구 전용인가. 아이템표에서 가져온다 - 대응표에 없는 줄은 공용으로
@@ -77,12 +78,12 @@ bool g_waiting = true;
 // 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류. 같은
 // 위젯(render/filter_bar)을 쓴다. '이름 없는 것 감추기' 는 이 창에 없다.
 FilterBar g_bar;
-// 이 창의 필터바 옵션. 이름만 본다 - 키 문자열까지 걸면 숫자를 쳤을 때
-// 동작이 바뀐다. 힌트("이름으로 검색")와 match_key=false 가 한 쌍이다.
+// 이 창의 필터바 옵션. 이름 · 설명만 본다 - 키 문자열까지 걸면 숫자를 쳤을 때
+// 동작이 바뀐다. 힌트("이름 · 설명으로 검색")와 match_key=false 가 한 쌍이다.
 const FilterBarOpts g_opts = [] {
     FilterBarOpts o;
     o.id = "inv";
-    o.hint = "이름으로 검색";
+    o.hint = "이름 · 설명으로 검색";
     o.match_key = false;
     return o;
 }();
@@ -153,6 +154,7 @@ void refresh(const mem::Reader& reader) {
 
             if (const auto* e = game::item_by_key(r.key)) {
                 r.name = e->name;
+                r.desc = e->desc;
                 r.grade = e->grade;
                 r.category = e->category;
                 r.max_endurance = e->max_endurance;
@@ -830,7 +832,10 @@ void draw_inventory_panel(bool* open) {
     // 표를 닫은 뒤 읽는다.
     bool need_refresh = false;
     // 열 차례가 apply_sort 의 색인과 **같아야 한다**.
-    if (ImGui::BeginTable("inv", 9,
+    // 표 ID 는 열 수를 바꿀 때 같이 바꾼다 - 옛 ID 의 저장 설정(정렬 열 한 줄)을
+    // ImGui 1.92.9b 가 새 열 수에 차례로 끼워 맞춰, 바꾼 뒤 첫 실행에서 열 순서가
+    // 흐트러졌다(설명 열을 넣은 2026-09-22, 하니스 실측). 저장된 정렬은 한 번 잃는다.
+    if (ImGui::BeginTable("inv10", 10,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Sortable,
@@ -849,6 +854,10 @@ void draw_inventory_panel(bool* open) {
         ImGui::TableSetupColumn("연마", ImGuiTableColumnFlags_WidthFixed,
                                 45.0f);
         ImGui::TableSetupColumn("소켓", ImGuiTableColumnFlags_WidthStretch);
+        // 설명(스펙 §2). apply_sort 의 색인 0~7 을 안 밀게 소켓 뒤에 두고 정렬하지
+        // 않는다. 버튼 열은 9 로 밀리지만 NoSort 라 정렬과 무관하다.
+        ImGui::TableSetupColumn("설명", ImGuiTableColumnFlags_WidthStretch |
+                                            ImGuiTableColumnFlags_NoSort);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed |
                                         ImGuiTableColumnFlags_NoSort,
                                 160.0f);
@@ -861,7 +870,7 @@ void draw_inventory_panel(bool* open) {
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
             if (!game::passes(filter, r.name, r.grade, r.category, r.key,
-                              r.owner)) {
+                              r.owner, r.desc)) {
                 continue;
             }
             ++shown;
@@ -905,6 +914,8 @@ void draw_inventory_panel(bool* open) {
             if (!r.text.sockets.empty()) {
                 ImGui::TextUnformatted(r.text.sockets.c_str());
             }
+            ImGui::TableNextColumn();
+            desc_cell(r.desc);
             ImGui::TableNextColumn();
             // 제자리 수정은 게임이 되쓴다. 대신 값을 지급 칸에 채워
             // 주고, 고쳐서 새로 지급하게 한다.

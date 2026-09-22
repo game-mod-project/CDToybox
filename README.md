@@ -40,6 +40,6 @@ git submodule update --init --recursive   # imgui · minhook — 없으면 빌�
 | [docs/README.md](docs/README.md) | **문서 지도** — 조사 기록·계획을 주제별로 묶고 편마다 지금 상태를 적었다 |
 | [CLAUDE.md](CLAUDE.md) | 작업 규율 — 브랜치 전략 · 공유 워크트리 · 빌드 · 구조 |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | 기능별 리버스 근거 · 설계 |
-| [docs/superpowers/plans/](docs/superpowers/plans/) | 단계별 구현 계획 (6편 — 5편 완료, 1단계는 값 스캐너만 완료·카메라 보류) |
+| [docs/superpowers/plans/](docs/superpowers/plans/) | 단계별 구현 계획 (7편 — 5편 완료, 1단계는 값 스캐너만 완료·카메라 보류, 아이템 설명·효과 계획은 진행 중) |
 
 개인용. 싱글플레이 전용.

@@ -208,16 +208,21 @@ TEST(sort_items_orders_by_grade) {
 
 TEST(passes_agrees_with_filter_items) {
     // filter_items 가 passes 를 부르도록 바뀌었다. 같은 입력에 같은
-    // 판정을 내야 한다 - 이름·키·이름없음·등급·분류를 전부 돈다.
-    const auto named = sample();
+    // 판정을 내야 한다 - 이름·설명·키·이름없음·등급·분류를 전부 돈다.
+    const auto named = [] {
+        auto v = sample();
+        v[2].desc = "나무를 베는 데 쓴다";   // 설명으로만 걸리는 줄
+        return v;
+    }();
     const auto tiers = graded();
 
-    ItemFilter fs[6];
+    ItemFilter fs[7];
     fs[1].query = "화살";
     fs[2].query = "9500";
     fs[3].hide_unnamed = true;
     fs[4].grade = 0;
     fs[5].category = 56;
+    fs[6].query = "나무를";
 
     for (const auto* all : {&named, &tiers}) {
         for (const auto& f : fs) {
@@ -229,7 +234,8 @@ TEST(passes_agrees_with_filter_items) {
                     if (o == &e) in = true;
                 }
                 const bool p = cdtb::game::passes(f, e.name, e.grade,
-                                                  e.category, e.key, e.owner);
+                                                  e.category, e.key, e.owner,
+                                                  e.desc);
                 CHECK_EQ(p, in);
                 if (p) ++n;
             }
@@ -239,7 +245,7 @@ TEST(passes_agrees_with_filter_items) {
 }
 
 TEST(passes_ignores_key_when_match_key_is_off) {
-    // 인벤토리는 이름만 본다. 숫자를 쳐도 키가 걸리면 안 된다.
+    // 인벤토리는 키를 안 본다(이름 · 설명만). 숫자를 쳐도 키가 걸리면 안 된다.
     ItemFilter f;
     f.query = "9500";
     f.match_key = false;
@@ -261,6 +267,42 @@ TEST(passes_with_key_off_drops_unnamed_even_if_key_matches) {
     f.query = "200997";
     f.match_key = false;
     CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u, EquipOwner::Shared));
+}
+
+TEST(passes_matches_the_description_text) {
+    ItemFilter f;
+    f.query = "관통력";
+    CHECK(cdtb::game::passes(f, "편전", 0, 0, 2200u, EquipOwner::Shared,
+                             "막강한 관통력과 파괴력"));
+    CHECK(!cdtb::game::passes(f, "화살", 0, 0, 50001u, EquipOwner::Shared,
+                              "기본 화살"));
+}
+
+TEST(passes_matches_description_even_when_key_is_off) {
+    // 인벤토리는 키로는 안 찾지만 설명으로는 찾는다(스펙 §5).
+    ItemFilter f;
+    f.query = "관통력";
+    f.match_key = false;
+    CHECK(cdtb::game::passes(f, "편전", 0, 0, 2200u, EquipOwner::Shared,
+                             "막강한 관통력"));
+}
+
+TEST(passes_still_hides_unnamed_even_if_the_description_matches) {
+    ItemFilter f;
+    f.query = "관통력";
+    f.hide_unnamed = true;
+    CHECK(!cdtb::game::passes(f, "", 0, 0, 200997u, EquipOwner::Shared,
+                              "관통력"));
+}
+
+TEST(filter_items_matches_the_catalog_description) {
+    auto all = sample();
+    all[2].desc = "나무를 베는 데 쓴다";
+    ItemFilter f;
+    f.query = "나무를";
+    const auto out = cdtb::game::filter_items(all, f);
+    CHECK_EQ(out.size(), static_cast<std::size_t>(1));
+    if (!out.empty()) CHECK_EQ(out[0]->key, 950002u);
 }
 
 // ------------------------------------------------- Combo 색인 -> 필터

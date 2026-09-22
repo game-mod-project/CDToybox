@@ -37,7 +37,8 @@ int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
 }  // namespace
 
 bool passes(const ItemFilter& f, std::string_view name, int grade,
-            int category, std::uint32_t key, EquipOwner owner) {
+            int category, std::uint32_t key, EquipOwner owner,
+            std::string_view text) {
     if (f.hide_unnamed && name.empty()) return false;
     if (f.grade >= 0 && grade != f.grade) return false;
     if (f.category >= 0 && category != f.category) return false;
@@ -46,7 +47,11 @@ bool passes(const ItemFilter& f, std::string_view name, int grade,
     if (!name.empty() && name.find(f.query) != std::string_view::npos) {
         return true;
     }
-    // 이름과 키 둘 다에 건다. 지급 대상을 키로만 아는 경우가 있다.
+    // 설명에도 건다(스펙 §5). 키를 안 보는 창(인벤토리)에서도 설명은 본다.
+    if (!text.empty() && text.find(f.query) != std::string_view::npos) {
+        return true;
+    }
+    // 키에도 건다(match_key 일 때). 지급 대상을 키로만 아는 경우가 있다.
     if (!f.match_key) return false;
     char digits[16];
     std::snprintf(digits, sizeof(digits), "%u", key);
@@ -76,7 +81,7 @@ std::vector<const ItemCatalogEntry*> filter_items(
     std::vector<const ItemCatalogEntry*> out;
     out.reserve(all.size());
     for (const auto& e : all) {
-        if (!passes(filter, e.name, e.grade, e.category, e.key, e.owner)) {
+        if (!passes(filter, e.name, e.grade, e.category, e.key, e.owner, e.desc)) {
             continue;
         }
         out.push_back(&e);

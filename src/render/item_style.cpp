@@ -1,7 +1,9 @@
 #include "render/item_style.h"
 
 #include <cstdio>
+#include <string_view>
 
+#include "game/item_text.h"
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -115,6 +117,20 @@ const char* category_name(std::uint8_t c) {
         case 59: return "횃불";
         case 55: return "분무기 등짐";
         default: return nullptr;
+    }
+}
+
+void desc_cell(const std::string& desc) {
+    if (desc.empty()) return;
+    const std::string_view line = game::desc_first_line(desc);
+    ImGui::TextUnformatted(line.data(), line.data() + line.size());
+    // BeginItemTooltip 은 잠깐 멈췄을 때만 뜬다(ImGuiHoveredFlags_ForTooltip) - 줄을 훑으며
+    // 지나갈 때마다 큰 툴팁이 깜빡이지 않는다. 설명은 최장 503바이트라 줄바꿈이 필요하다.
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+        ImGui::TextUnformatted(desc.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
     }
 }
 

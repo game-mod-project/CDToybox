@@ -57,6 +57,9 @@ struct Fixture {
             // 이름 현지화 키는 레코드가 직접 들고 있다.
             mem.put_u64(rec + 0x28,
                         (static_cast<std::uint64_t>(keys[i]) << 32) | 0x70ull);
+            // 설명 현지화 키는 +0xB8 이다(스펙 §3). 필드 0x71.
+            mem.put_u64(rec + 0xB8,
+                        (static_cast<std::uint64_t>(keys[i]) << 32) | 0x71ull);
             // 등급 +0x210 (0=없음, 1..5), 분류 +0xA3
             mem.put_u8(rec + 0x210, static_cast<std::uint8_t>(i + 1));
             mem.put_u8(rec + 0xA3, static_cast<std::uint8_t>(56 + i));
@@ -92,13 +95,13 @@ struct Fixture {
 
     // --- 현지화 시스템도 같은 힙에 세운다 ---
     //   0x0600 시스템 / 0x0700 카테고리 표 / 0x0A80 포인터 배열
-    //   0x0B00 항목 3개 / 0x0C00 문자열 풀
+    //   0x0B00 항목 6개 / 0x0C00 문자열 풀
     static constexpr std::size_t kLocSys = 0x0600;
     static constexpr std::size_t kLocCats = 0x0700;
     static constexpr std::size_t kLocPtrs = 0x0A80;
     static constexpr std::size_t kLocEntries = 0x0B00;
     static constexpr std::size_t kLocPool = 0x0C00;
-    static constexpr std::uint32_t kLocPoolSize = 0x40;
+    static constexpr std::uint32_t kLocPoolSize = 0x200;
     static constexpr int kLocCategory = 3;
 
     void build_localization() {
@@ -107,22 +110,28 @@ struct Fixture {
         mem.put_u32(kLocSys + 0x60, kLocPoolSize);
 
         mem.put_u64(kLocCats + kLocCategory * 16 + 0, mem.heap_addr(kLocPtrs));
-        mem.put_u32(kLocCats + kLocCategory * 16 + 8, 3);
+        mem.put_u32(kLocCats + kLocCategory * 16 + 8, 6);
 
-        // 이름 키는 레코드가 든 것과 같아야 한다. 오름차순이어야
-        // 이분 탐색이 성립하는데 키 자체가 오름차순이므로 그대로다.
+        // 이름(0x70)과 설명(0x71)을 아이템마다 붙여 둔다. (키 << 32) | 필드 라
+        // 이 차례가 곧 오름차순이다 - 이분 탐색이 성립한다. 항목 0 은 여전히
+        // 아이템 A 의 이름이다(이름 없음 시험이 그 키를 망가뜨린다).
         const std::uint32_t keys[3] = {kKeyA, kKeyB, kKeyC};
-        const std::uint32_t offs[3] = {0x00, 0x10, 0x20};
         for (int i = 0; i < 3; ++i) {
-            const std::size_t e = kLocEntries + i * 0x20;
-            mem.put_u64(kLocPtrs + i * 8, mem.heap_addr(e));
-            mem.put_u64(e + 0x10,
-                        (static_cast<std::uint64_t>(keys[i]) << 32) | 0x70ull);
-            mem.put_u32(e + 0x18, offs[i]);
+            for (int fld = 0; fld < 2; ++fld) {
+                const int n = i * 2 + fld;
+                const std::size_t e = kLocEntries + n * 0x20;
+                mem.put_u64(kLocPtrs + n * 8, mem.heap_addr(e));
+                mem.put_u64(e + 0x10, (static_cast<std::uint64_t>(keys[i]) << 32) |
+                                          (0x70ull + static_cast<std::uint64_t>(fld)));
+                mem.put_u32(e + 0x18, static_cast<std::uint32_t>(n * 0x40));
+            }
         }
-        mem.put_str(kLocPool + 0x00, "편전");
-        mem.put_str(kLocPool + 0x10, "화살");
-        mem.put_str(kLocPool + 0x20, "지속 보급 화살");
+        mem.put_str(kLocPool + 0x000, "편전");
+        mem.put_str(kLocPool + 0x040, "짧은 화살.<br/>활로 쏜다.");
+        mem.put_str(kLocPool + 0x080, "화살");
+        mem.put_str(kLocPool + 0x0C0, "{Staticinfo:Knowledge:Knowledge_Hp#생명} 회복");
+        mem.put_str(kLocPool + 0x100, "지속 보급 화살");
+        mem.put_str(kLocPool + 0x140, "보급 화살.");
     }
 
     LocSystem loc_system() const {
@@ -267,6 +276,53 @@ TEST(build_item_catalog_fails_when_manager_is_bad) {
     std::vector<cdtb::game::ItemCatalogEntry> out;
     CHECK(!cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
                                           &out));
+}
+
+TEST(read_item_table_reads_the_desc_key_at_0xB8) {
+    Fixture f;
+    std::vector<ItemEntry> out;
+    CHECK(cdtb::game::read_item_table(f.mem, f.manager(), &out, 0));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK_EQ(out[0].desc_key, 0x0000089800000071ull);   // 2200
+        CHECK_EQ(out[2].desc_key,
+                 (static_cast<std::uint64_t>(Fixture::kKeyC) << 32) | 0x71ull);
+    }
+}
+
+TEST(build_item_catalog_fills_cleaned_descriptions) {
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK_EQ(out[0].desc, std::string("짧은 화살.\n활로 쏜다."));
+        CHECK_EQ(out[1].desc, std::string("생명 회복"));
+        CHECK_EQ(out[2].desc, std::string("보급 화살."));
+    }
+}
+
+TEST(build_item_catalog_leaves_desc_empty_when_the_desc_key_is_zero) {
+    // 설명이 없어도 아이템은 남고 이름도 그대로다(스펙 §6).
+    Fixture f;
+    f.mem.put_u64(Fixture::kRecords + Fixture::kRecStride + 0xB8, 0);   // 레코드 1
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), f.loc_system(),
+                                         &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) {
+        CHECK(out[1].desc.empty());
+        CHECK_EQ(out[1].name, std::string("화살"));
+    }
+}
+
+TEST(build_item_catalog_has_no_desc_without_localization) {
+    Fixture f;
+    std::vector<cdtb::game::ItemCatalogEntry> out;
+    CHECK(cdtb::game::build_item_catalog(f.mem, f.manager(), LocSystem{}, &out));
+    CHECK_EQ(out.size(), static_cast<std::size_t>(3));
+    if (out.size() == 3) CHECK(out[0].desc.empty());
 }
 
 // ------------------------------------------------------------ 후보 검증

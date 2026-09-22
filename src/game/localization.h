@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -35,6 +36,13 @@ constexpr std::uint32_t loc_key_field(std::uint64_t key) {
 // 게임이 카테고리를 0x36 미만으로 검사한다(cmp al, 0x36).
 inline constexpr int kLocCategoryCount = 0x36;
 
+// 문자열 하나를 읽는 상한. 이 안에서 널 종단을 못 찾으면 실패로 친다 -
+// 잘린 문장을 내보이지 않는다. 이름은 기본 상한 안에 든다.
+inline constexpr std::size_t kLocMaxText = 512;
+// 아이템 설명용 상한. 2949 실측 최장 503바이트의 네 배다
+// (specs/2026-09-22-item-description-effects-design.md §3).
+inline constexpr std::size_t kLocMaxDescText = 2048;
+
 struct LocSystem {
     std::uintptr_t object = 0;      // 현지화 시스템 객체
     std::uintptr_t global = 0;      // 그것을 담은 전역 슬롯 (진단용)
@@ -67,8 +75,9 @@ bool loc_categories(const mem::Reader& reader, const LocSystem& sys,
                     std::vector<LocCategory>* out);
 
 // 카테고리 0..kLocCategoryCount-1 을 훑어 키를 이분 탐색하고 문자열을
-// 읽는다. category_out 은 널이어도 된다.
+// 읽는다. category_out 은 널이어도 된다. max_len 은 읽기 상한(바이트)이다.
 bool resolve(const mem::Reader& reader, const LocSystem& sys,
-             std::uint64_t key, std::string* text_out, int* category_out);
+             std::uint64_t key, std::string* text_out, int* category_out,
+             std::size_t max_len = kLocMaxText);
 
 }  // namespace cdtb::game
