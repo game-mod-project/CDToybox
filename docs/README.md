@@ -144,7 +144,7 @@
 | 문서 | 상태 | 지금 참인 것 · 근거 |
 |---|---|---|
 | [patch-recheck](superpowers/specs/2026-09-01-patch-recheck.md) | ✅ 지금도 쓰는 절차 | 갱신 뒤 확인 목록은 TS §5.5 도 |
-| [game-update-2949](superpowers/specs/2026-09-22-game-update-2949.md) | 📜 기록 (현행) · 게임 확인 대기 | 고정 RVA 전부 정적 재도출. 남은 확인: 지급 한 번(`구동 자리 +2AD106D`) · 예약슬롯/GPV 전역 탐침(§11) |
+| [game-update-2949](superpowers/specs/2026-09-22-game-update-2949.md) | ✅ 완료 (게임 확인 2026-09-22) | 고정 RVA 전부 재도출, §11.1 전 항목 게임 확인. 재도출 경로는 `tools/rtti/rederive.py` 로 옮겼다 |
 | [game-update-2944](superpowers/specs/2026-09-18-game-update-2944.md) | 📜 기록 | specguard 5/8 · spawnguard · 구동 자리는 이후 해결. 남은 것: 세션 전역 A/B · `dragondiag`(TS §8). 2944 자리들은 2949 에서 다시 짚었다 |
 | [specguard-div-family](superpowers/specs/2026-09-20-specguard-div-family.md) | ✅ 해결 | 5/8 게임 확인, 실제로 4회 막은 것까지 확인(STATUS §1.15). 가족 표식은 2949 재도출에도 그대로 쓰였다 |
 | [spawnguard-callsite](superpowers/specs/2026-09-20-spawnguard-callsite.md) | ✅ 해결 | `0x2B8DD36`(2944), 게임 확인. 2949 는 `0x2B8DD46`(같은 지문). 실제로 막은 횟수는 기록 없음 |
