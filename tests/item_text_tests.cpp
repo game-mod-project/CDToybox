@@ -50,9 +50,16 @@ TEST(clean_item_desc_leaves_a_placeholder_with_two_hashes_alone) {
 }
 
 TEST(clean_item_desc_does_not_swallow_the_next_placeholder) {
-    // 앞 것은 안 닫혀 그대로 두고, 뒤의 온전한 자리표시는 푼다.
+    // 앞 것은 # 가 둘이라(뒤 자리표시의 # 까지) 그대로 두고, 뒤의 온전한 자리표시는 푼다.
     CHECK_EQ(clean_item_desc("{Staticinfo:A:B#x {Staticinfo:C:D#y}"),
              std::string("{Staticinfo:A:B#x y"));
+}
+
+TEST(clean_item_desc_does_not_let_a_placeholder_swallow_a_nested_one) {
+    // 앞 것은 # 가 없고 안에 { 가 또 있다 - 중첩 { 조건만이 이것을 막는다
+    // (조건이 없으면 앞 것이 뒤 자리표시의 # 를 자기 것으로 삼아 "y" 가 된다).
+    CHECK_EQ(clean_item_desc("{Staticinfo:A:B {Staticinfo:C:D#y}"),
+             std::string("{Staticinfo:A:B y"));
 }
 
 TEST(clean_item_desc_trims_spaces_around_line_breaks) {

@@ -323,8 +323,10 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
 
     std::size_t named = 0;
+    std::size_t described = 0;
     for (const auto& e : *built) {
         if (!e.name.empty()) ++named;
+        if (!e.desc.empty()) ++described;
     }
 
     // 목록을 먼저 채우고 나서 준비 플래그를 세운다. 그리는 쪽은
@@ -335,8 +337,9 @@ bool discover_items(const mem::Rtti& rtti, const mem::Reader& reader) {
     publish_catalog(std::move(built));
     g_ready.store(true, std::memory_order_release);
     if (named > 0) g_named.store(true, std::memory_order_release);
-    log::infof("아이템 표: {}개, 이름 풀린 것 {}개{}", total, named,
-               named == 0 ? " - 현지화를 기다렸다 다시 만든다" : "");
+    // 설명 수도 남긴다 - 게임 확인 때 로그만으로 "설명 6736개"(2949 실측)를 대조한다.
+    log::infof("아이템 표: {}개, 이름 풀린 것 {}개, 설명 풀린 것 {}개{}", total, named,
+               described, named == 0 ? " - 현지화를 기다렸다 다시 만든다" : "");
     return named > 0;
 }
 

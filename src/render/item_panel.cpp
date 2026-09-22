@@ -193,7 +193,8 @@ void draw_item_panel(bool* open) {
                                 120.0f);
         ImGui::TableSetupColumn("전용", ImGuiTableColumnFlags_WidthFixed,
                                 64.0f);
-        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+        // 이름은 설명보다 두 배 넓게 - 인벤토리 창과 같은 비율이다. 설명은 칸에서 잘리고 툴팁에 전문이 있다.
+        ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch, 2.0f);
         // 설명(스펙 §2). 정렬 색인(item_sort_from_specs)을 안 밀게 맨 끝에 두고
         // 정렬하지 않는다.
         ImGui::TableSetupColumn("설명", ImGuiTableColumnFlags_WidthStretch |
