@@ -20,6 +20,7 @@
 #include "render/gem_picker.h"
 #include "render/item_style.h"
 #include "render/layout.h"
+#include "render/level_edit.h"
 #include "render/notice.h"
 #include "render/overlay.h"
 #include "render/table_order.h"
@@ -34,9 +35,9 @@ bool g_sock_open_req = false;    // 다음 프레임에 팝업을 연다
 GemPicker g_sock_picker;         // 칸 팝업 안의 보석 목록 상태
 Notice g_notice;
 // 담금질·연마 편집값. 인스턴스별로 유지한다 - 매 프레임 스냅샷으로 덮으면 입력이
-// 리셋돼 값이 안 바뀐다.
-std::map<std::uint64_t, int> g_temper_edit;
-std::map<std::uint64_t, int> g_sharp_edit;
+// 리셋돼 값이 안 바뀐다. 다만 게임 값이 바뀐 프레임에는 다시 씨앗을 넣는다(level_edit.h).
+std::map<std::uint64_t, LevelEdit> g_temper_edit;
+std::map<std::uint64_t, LevelEdit> g_sharp_edit;
 // 마지막으로 발견을 요청한 시각. 창이 열린 동안 20초마다 자동 요청하되, 콤보·"다시 읽기" 의
 // 수동 요청도 이 시각을 갱신해 힙 스캔이 연이어 두 번 돌지 않게 한다(리뷰 R-4).
 ULONGLONG g_refresh_ms = 0;
@@ -322,7 +323,7 @@ int level_cap(const game::ItemCatalogEntry* e, bool temper) {
 // 담금질·연마 칸 하나. cap 이 0 이면 그 값이 없는 아이템(재료 등), 음수면 표가 아직 없는
 // 것이라 "-". 입력은 인스턴스별로 유지한다. 클라·서버 모두 쓴다.
 void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
-                     bool temper, int cap, std::map<std::uint64_t, int>& edits) {
+                     bool temper, int cap, std::map<std::uint64_t, LevelEdit>& edits) {
     const char* what = temper ? "담금질" : "연마";
     if (cap <= 0) {
         ImGui::TextDisabled("-");
@@ -336,7 +337,10 @@ void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
         return;
     }
     const int cur = temper ? w.temper : w.sharpness;
-    int& v = edits.try_emplace(w.instance, cur).first->second;
+    // 게임 값이 바뀌었으면(우리 쓰기 · 내구도 감소 · 착용 변경) 칸도 그 값으로 돌아간다.
+    LevelEdit& st = edits[w.instance];
+    level_edit_sync(&st, cur);
+    int& v = st.v;
     ImGui::SetNextItemWidth(80.0f);
     ImGui::InputInt(temper ? "##tp" : "##sh", &v, 1, 10);
     if (v < 0) v = 0;
