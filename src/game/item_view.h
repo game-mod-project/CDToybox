@@ -17,7 +17,7 @@ namespace cdtb::game {
 // 화면으로 확인하기보다 테스트로 잡는 편이 확실하다.
 
 struct ItemFilter {
-    std::string query;          // 이름 또는 키에 걸린다
+    std::string query;          // 이름 · 설명(text) 또는 키에 걸린다
     bool hide_unnamed = false;  // 현지화 표에 없는 것을 감춘다
     int grade = -1;             // -1 = 전체, 0 = 등급 없음, 1..5 = T1..T5
     int category = -1;          // -1 = 전체
@@ -32,8 +32,10 @@ struct ItemFilter {
 
 // 한 항목이 필터를 통과하는가. filter_items 가 이것을 부르고, 인벤토리
 // 창은 자기 행에 직접 건다 - 거르는 규칙이 두 곳에 있으면 갈라진다.
+// text 는 이름 말고 검색어를 더 걸 문구다 - 아이템 설명(스펙 §5). 비면 안 본다.
 bool passes(const ItemFilter& f, std::string_view name, int grade,
-            int category, std::uint32_t key, EquipOwner owner);
+            int category, std::uint32_t key, EquipOwner owner,
+            std::string_view text = {});
 
 // Combo 색인을 필터로 옮긴다. 색인 0 은 "전체". 등급은 색인-1 이고,
 // 분류는 `categories[색인-1]` 이다(render 의 build_category_labels 가
@@ -66,7 +68,7 @@ struct ItemSortChoice {
 };
 
 // 표 머리글 정렬 사양을 ItemSort 로 옮긴다. 0번 열은 별표(정렬 없음)라 1번이
-// 키, 2 등급, 3 분류, **4 전용, 5 이름**이다. count 가 0(정렬 해제)이면 키
+// 키, 2 등급, 3 분류, **4 전용, 5 이름**, 6 설명(정렬 없음)이다. count 가 0(정렬 해제)이면 키
 // 오름차순으로 돌아간다 - 예전에는 해제를 무시해 마지막 정렬이 그대로 남았다.
 //
 // 이 색인은 item_panel 의 TableSetupColumn 차례와 **같아야 한다**. 열을
