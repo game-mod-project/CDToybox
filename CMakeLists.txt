@@ -109,6 +109,7 @@ add_library(cdtoybox SHARED
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/equip.cpp
+    src/game/equip_bag.cpp
     src/game/player.cpp
     src/game/nofall.cpp
     src/game/nofall_cave.cpp
@@ -150,6 +151,7 @@ add_executable(cdtb_tests
     tests/items_tests.cpp
     tests/item_key_map_tests.cpp
     tests/inventory_tests.cpp
+    tests/equip_bag_tests.cpp
     tests/item_view_tests.cpp
     tests/item_text_tests.cpp
     tests/icon_map_tests.cpp
@@ -194,6 +196,7 @@ add_executable(cdtb_tests
     src/game/items.cpp
     src/game/item_text.cpp
     src/game/inventory.cpp
+    src/game/equip_bag.cpp
     src/game/item_view.cpp
     src/game/icon_map.cpp
     src/game/roster.cpp
@@ -258,6 +261,7 @@ add_executable(cdtb_probe
     src/game/grant.cpp
     src/game/stash.cpp
     src/game/equip.cpp
+    src/game/equip_bag.cpp
     src/game/player.cpp
     src/game/mountvital.cpp
     src/game/nofall.cpp

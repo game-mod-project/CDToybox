@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <unordered_map>
 
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -69,6 +70,10 @@ struct WornPiece {
     int unlocked = 0;             // 열린 소켓 수
     WornSocket sockets[5]{};      // entry+0x60 벡터
     std::vector<WornDye> dyes;    // entry+0x78 벡터 (있으면)
+    // 가방(인벤토리 레코드)에도 있는 장비인가. 장비 표에 가방 아이템이 섞인다 - 슬롯 태그 23,
+    // 게임 툴팁 "비활성화"(2026-09-22 실측). 그런 장비는 가방 레코드가 진짜라 담금질·연마·
+    // 소켓을 가방 레코드에서 읽고(apply_bag_truth) 쓰기도 가방 레코드에 같이 한다(eq_write_*, 염색 제외).
+    bool in_bag = false;
 };
 
 // 착용 장비 목록을 읽는다(빈 슬롯 제외). 실패면 false.
@@ -133,28 +138,50 @@ void equip_tables_copy(std::vector<EquipTable>* out);
 void equip_request_refresh();
 bool equip_take_refresh();
 
-// 쓰기 직후용 빠른 재읽기: 힙 스캔 없이 캐시된 플레이어 테이블에서
-// 착용장비만 다시 읽어 스냅샷을 갱신한다(렌더 스레드에서 값싸다).
+// 쓰기 직후용 재읽기: 힙 스캔 없이 캐시된 플레이어 테이블에서 착용장비만 다시 읽어
+// 스냅샷을 갱신한다. 가방 장비를 가리려고 서버 인벤토리를 한 번 훑는다(수 MB 복사 - 클릭마다
+// 한 번이라 렌더 스레드에서 불러도 되지만 매 프레임 부르지 말 것).
 void equip_refresh_pieces(const mem::Reader& reader);
+
+// 장비 창 쓰기의 결과. realms = 장비 표에 쓴 realm 수(클라·서버), bag = 가방(인벤토리)
+// 레코드에 쓴 수(서버·클라), in_bag = 이 인스턴스가 가방에도 있었는가(쓰기 직전에 확인).
+// 판정은 eq_verdict(equip_bag.h) - 가방 장비는 가방 레코드가 진짜라 거기에 썼으면 성공이다.
+struct EqWriteResult {
+    int realms = 0;
+    int bag = 0;
+    bool in_bag = false;
+};
+
+// 가방 색인 - 서버·클라 인벤토리의 인스턴스 -> 레코드 주소. 일괄 쓰기는 이것을 한 번만 만들어
+// 넘긴다(장비마다 새로 만들면 한 프레임에 수백 MB 를 복사한다 - TS §2.16 과 같은 꼴).
+struct EqBagIndex {
+    std::unordered_map<std::uint64_t, std::uintptr_t> server;
+    std::unordered_map<std::uint64_t, std::uintptr_t> client;
+};
+
+// 지금의 서버·클라 인벤토리 컴포넌트로 가방 색인을 만든다(컴포넌트가 없으면 그쪽은 빈 표).
+EqBagIndex eq_bag_index(const mem::Reader& reader);
 
 // ------------------------------------------------------------------ 쓰기 (인프로세스)
 // **모드(주입 DLL)에서만 부른다.** 게임과 같은 주소공간에서 직접 쓴다.
 // 전부 SEH 로 감싸고 read-back 으로 검증한다. 잠긴 소켓은 거부한다.
 //
 // both-realms: collect_equip_tables 로 모은 모든 테이블에서 인스턴스 ID 로
-// entry 를 찾아 각각에 쓴다. 쓴 realm 수를 돌려준다(0 이면 실패).
+// entry 를 찾아 각각에 쓰고, 가방에도 있는 장비는 가방 레코드(서버·클라)에도 쓴다(염색 제외).
+// 결과는 EqWriteResult - bag 을 주면 그 색인을 쓰고, 안 주면 이번 쓰기만을 위해 만든다.
 
 // 이미 열린 소켓 k(0..4)에 보석 순번을 박는다. gem==0xFFFF 면 비운다.
-int eq_write_socket(const mem::Reader& reader, std::uint64_t instance,
-                    int k, std::uint16_t gem);
+EqWriteResult eq_write_socket(const mem::Reader& reader, std::uint64_t instance,
+                              int k, std::uint16_t gem,
+                              const EqBagIndex* bag = nullptr);
 
 // 담금질(+0x0A)을 설정한다. 상한은 부르는 쪽이 표(max_temper)로 자른다.
-int eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
-                    std::uint16_t level);
+EqWriteResult eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
+                              std::uint16_t level, const EqBagIndex* bag = nullptr);
 
 // 장비 연마(+0x58)를 설정한다. 상한은 부르는 쪽이 표(max_sharpness)로 자른다.
-int eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
-                       std::uint16_t level);
+EqWriteResult eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
+                                 std::uint16_t level, const EqBagIndex* bag = nullptr);
 
 // 염색 레코드 rec 의 RGB 를 설정한다.
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
@@ -171,9 +198,9 @@ int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
 // 스탯 계산은 여기서 연 칸을 그대로 더한다. 표보다 많이 열어도 동작하지만
 // 툴팁에 다 안 보인다 - `items::socket_cap_apply` 로 표도 같이 올린다.
 //
-// 착용 장비는 both-realms 로 쓴다. 쓴 realm 수를 돌려준다(0 이면 실패).
-int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
-                      int want);
+// 착용 장비는 both-realms 로, 가방 장비는 가방 레코드에도 쓴다. 결과는 EqWriteResult.
+EqWriteResult eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
+                                int want, const EqBagIndex* bag = nullptr);
 
 // 위와 같은 일을 **레코드 주소로** 한다. 인벤토리 레코드와 착용 장비
 // entry 는 같은 구조라(둘 다 `+0x60` 벡터, `+0x68` 크기, `+0x70` 열린 수)

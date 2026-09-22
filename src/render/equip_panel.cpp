@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "game/equip.h"
+#include "game/equip_bag.h"
 #include "game/items.h"
 #include "game/roster.h"
 #include "mem/reader.h"
@@ -50,6 +51,11 @@ void request_refresh_now() {
 std::uint64_t g_dye_inst = 0;
 bool g_open_dye = false;
 std::map<std::pair<std::uint64_t, int>, std::array<float, 3>> g_dye_edit;
+
+// 성공 문구의 "어디에 썼나". 가방에도 있는 장비는 가방 기록, 입은 장비는 클라·서버.
+const char* written_where(const game::EqWriteResult& r) {
+    return r.in_bag ? "가방 기록 포함" : "클라·서버 모두";
+}
 
 // 순번(catalog 인덱스)으로 이름을 얻는다. 카탈로그는 순번 순서다.
 const char* name_of_sunbeon(std::uint32_t sunbeon) {
@@ -97,9 +103,9 @@ void draw_socket_popup(const mem::Reader& reader,
         // 순서대로 열린다.
         ImGui::TextDisabled("잠긴 칸입니다. 앞 칸부터 순서대로 열립니다.");
         if (confirm_button("이 칸 열기")) {
-            const int n = game::eq_unlock_sockets(reader, w->instance,
-                                                  g_sock_k + 1);
-            if (n > 0) {
+            const game::EqWriteResult r =
+                game::eq_unlock_sockets(reader, w->instance, g_sock_k + 1);
+            if (game::eq_verdict(r) != game::EqVerdict::None) {
                 notice_set(&g_notice, NoticeLevel::Ok,
                            "소켓 {}칸까지 열었습니다. 벗었다 다시 착용하면"
                            " 화면에 반영됩니다.",
@@ -116,9 +122,9 @@ void draw_socket_popup(const mem::Reader& reader,
             ImGui::Text("지금: %s", gn != nullptr ? gn : "(보석)");
             ImGui::SameLine();
             if (confirm_small_button("비우기")) {
-                const int wc = game::eq_write_socket(reader, w->instance,
-                                                     g_sock_k, 0xFFFF);
-                if (wc >= 1) {
+                const game::EqWriteResult r =
+                    game::eq_write_socket(reader, w->instance, g_sock_k, 0xFFFF);
+                if (game::eq_verdict(r) != game::EqVerdict::None) {
                     notice_set(&g_notice, NoticeLevel::Ok,
                                "소켓 {} 을 비웠습니다. 벗었다 다시 착용하면"
                                " 화면에 반영됩니다.",
@@ -138,15 +144,16 @@ void draw_socket_popup(const mem::Reader& reader,
         GemChoice c;
         if (gem_list_draw(&g_sock_picker, o, &c) && c.entry != nullptr) {
             // 소켓에 박는 값은 그 보석의 순번(= 카탈로그 인덱스).
-            const int wc =
+            const game::EqWriteResult r =
                 game::eq_write_socket(reader, w->instance, g_sock_k,
                                       static_cast<std::uint16_t>(c.index));
-            if (wc >= 2) {
+            const game::EqVerdict vd = game::eq_verdict(r);
+            if (vd == game::EqVerdict::All) {
                 notice_set(&g_notice, NoticeLevel::Ok,
-                           "소켓 {}에 '{}' 을 박았습니다 (클라·서버 모두)."
+                           "소켓 {}에 '{}' 을 박았습니다 ({})."
                            " 벗었다 다시 착용하면 화면에 반영됩니다.",
-                           g_sock_k, c.entry->name);
-            } else if (wc == 1) {
+                           g_sock_k, c.entry->name, written_where(r));
+            } else if (vd == game::EqVerdict::Partial) {
                 notice_set(&g_notice, NoticeLevel::Warn,
                            "소켓 {}에 '{}' 을 한쪽만 박았습니다 - 다시"
                            " 시도하세요.",
@@ -189,6 +196,11 @@ void draw_dye_popup(const mem::Reader& reader,
         return;
     }
 
+    // 가방에 든 장비의 염색은 장비 표 사본에만 들어간다 - 가방 레코드의 염색 자리를 확인하지
+    // 않아 거기에는 안 쓴다. 게임이 가방 값으로 되맞출 수 있음을 미리 말한다.
+    if (piece->in_bag) {
+        ImGui::TextDisabled("가방에 든 장비라 염색은 장비 표에만 들어갑니다 - 게임이 되돌릴 수 있습니다.");
+    }
     ImGui::TextUnformatted("zone 별 색입니다. 벗었다 다시 착용하면 화면에"
                            " 반영됩니다.");
     for (const auto& d : piece->dyes) {
@@ -333,14 +345,16 @@ void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
     ImGui::SameLine();
     if (ImGui::SmallButton(temper ? "적용##tp" : "적용##sh")) {
         const std::uint16_t lv = static_cast<std::uint16_t>(v);
-        const int wc = temper ? game::eq_write_temper(reader, w.instance, lv)
-                              : game::eq_write_sharpness(reader, w.instance, lv);
-        if (wc >= 2) {
+        const game::EqWriteResult r =
+            temper ? game::eq_write_temper(reader, w.instance, lv)
+                   : game::eq_write_sharpness(reader, w.instance, lv);
+        const game::EqVerdict vd = game::eq_verdict(r);
+        if (vd == game::EqVerdict::All) {
             notice_set(&g_notice, NoticeLevel::Ok,
-                       "{} {} 을 적용했습니다 (클라·서버 모두). 벗었다 다시 착용하면"
+                       "{} {} 을 적용했습니다 ({}). 벗었다 다시 착용하면"
                        " 화면에 반영됩니다.",
-                       what, v);
-        } else if (wc == 1) {
+                       what, v, written_where(r));
+        } else if (vd == game::EqVerdict::Partial) {
             notice_set(&g_notice, NoticeLevel::Warn,
                        "{} {} 을 한쪽만 적용했습니다 - 다시 시도하세요.", what, v);
         } else {
@@ -351,12 +365,14 @@ void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
 }
 
 // 착용 장비 전부를 표의 상한까지(담금질 max_temper / 연마 max_sharpness). 상한 0 인
-// 것(그 값이 없는 아이템)은 건너뛴다. 클라·서버 모두 쓴다.
+// 것(그 값이 없는 아이템)은 건너뛴다. 클라·서버 모두 쓰고, 가방 장비는 가방 레코드에도 쓴다.
 void bulk_write(const mem::Reader& reader, const std::vector<game::WornPiece>& pieces,
                 bool temper) {
     const char* what = temper ? "담금질" : "연마";
     const auto& cat = game::item_catalog();
     int done = 0, part = 0, skipped = 0;
+    // 가방 색인은 한 번만 만든다 - 장비마다 만들면 한 프레임에 수백 MB 를 복사한다.
+    const game::EqBagIndex bag = game::eq_bag_index(reader);
     for (const auto& w : pieces) {
         const game::ItemCatalogEntry* e = w.key < cat.size() ? &cat[w.key] : nullptr;
         const int cap = level_cap(e, temper);
@@ -365,11 +381,13 @@ void bulk_write(const mem::Reader& reader, const std::vector<game::WornPiece>& p
             continue;
         }
         const std::uint16_t lv = static_cast<std::uint16_t>(cap);
-        const int wc = temper ? game::eq_write_temper(reader, w.instance, lv)
-                              : game::eq_write_sharpness(reader, w.instance, lv);
-        if (wc >= 2) {
+        const game::EqWriteResult r =
+            temper ? game::eq_write_temper(reader, w.instance, lv, &bag)
+                   : game::eq_write_sharpness(reader, w.instance, lv, &bag);
+        const game::EqVerdict vd = game::eq_verdict(r);
+        if (vd == game::EqVerdict::All) {
             ++done;
-        } else if (wc == 1) {
+        } else if (vd == game::EqVerdict::Partial) {
             ++part;
         }
     }
@@ -430,11 +448,15 @@ void draw_equip_panel(bool* open) {
     ImGui::SameLine();
     if (confirm_button("전부 소켓 5칸")) {
         int done = 0, part = 0;
+        // 가방 색인은 한 번만 만든다 - 장비마다 만들면 한 프레임에 수백 MB 를 복사한다.
+        const game::EqBagIndex bag = game::eq_bag_index(reader);
         for (const auto& w : pieces) {
-            const int wc = game::eq_unlock_sockets(reader, w.instance, 5);
-            if (wc >= 2) {
+            const game::EqWriteResult r =
+                game::eq_unlock_sockets(reader, w.instance, 5, &bag);
+            const game::EqVerdict vd = game::eq_verdict(r);
+            if (vd == game::EqVerdict::All) {
                 ++done;
-            } else if (wc == 1) {
+            } else if (vd == game::EqVerdict::Partial) {
                 ++part;
             }
         }
@@ -543,6 +565,16 @@ void draw_equip_panel(bool* open) {
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", nm);
             } else {
                 ImGui::Text("(카탈로그 순번 %u)", w.key);
+            }
+            // 가방에도 있는 장비(게임 툴팁 "비활성화") - 값은 가방 레코드를 보이고 쓰기도
+            // 가방 레코드에 같이 한다(equip_bag.h).
+            if (w.in_bag) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(가방)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("게임에서 '비활성화' 로 보이는 장비입니다.\n"
+                                      "가방 기록의 값을 보이고, 고치면 가방 기록에도 씁니다(염색은 장비 표에만).");
+                }
             }
 
             // 담금질(+0x0A, 툴팁 게이지 10칸)과 장비 연마(+0x58, "장비 연마 N/100").

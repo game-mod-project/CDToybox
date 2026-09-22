@@ -93,7 +93,7 @@ git -C E:/CDToybox worktree add E:/CDToybox-xxx -b <브랜치> develop
 
 ```powershell
 .\scripts\build.ps1          # VS2022 BuildTools + Ninja, RelWithDebInfo
-.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (786개, 2026-09-22)
+.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (794개, 2026-09-22)
 .\scripts\deploy.ps1         # build\xinput1_4.dll -> 게임 bin64\
 ```
 
