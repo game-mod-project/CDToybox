@@ -171,10 +171,13 @@ void draw_item_panel(bool* open) {
     ImGui::TextDisabled("(줄을 누르면 지급 칸과 클립보드로 · 머리글을 누르면 정렬)");
     ImGui::Separator();
 
+    // Resizable 은 열 경계를 끌어 너비를 바꾸게 한다(명부·장비 창과 같다). 이 표는
+    // 그게 빠져 있어 설명 칸이 좁아도 넓힐 수 없었다. 바뀐 너비는 표 ID 별로
+    // imgui.ini 에 남는다.
     constexpr ImGuiTableFlags kFlags =
         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Sortable |
-        ImGuiTableFlags_SortTristate;
+        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     // 열 차례가 game::item_sort_from_specs 의 색인과 **같아야 한다**.
     // 여기에 열을 끼우면 거기도 같이 밀어야 한다.
     // 표 ID 는 열 수를 바꿀 때 같이 바꾼다 - 옛 ID 의 저장 설정(정렬 열 한 줄)을
