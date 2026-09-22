@@ -93,7 +93,7 @@ git -C E:/CDToybox worktree add E:/CDToybox-xxx -b <브랜치> develop
 
 ```powershell
 .\scripts\build.ps1          # VS2022 BuildTools + Ninja, RelWithDebInfo
-.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (759개, 2026-09-22)
+.\build\cdtb_tests.exe       # 단위 시험 — 끝줄의 `0 failures` 를 볼 것 (785개, 2026-09-22)
 .\scripts\deploy.ps1         # build\xinput1_4.dll -> 게임 bin64\
 ```
 
@@ -153,7 +153,7 @@ docs/       아래 참조
 | `docs/STATUS.md` | **먼저 읽을 것.** 지금 무엇이 되고 · 안 되고 · 왜 그런가 |
 | `docs/TROUBLESHOOTING.md` | 겪은 문제와 해결. 증상 색인이 앞에 있다 |
 | `docs/README.md` | **문서 지도.** 조사 기록·계획을 주제별로 묶고 편마다 지금 상태(해결·미해결·반증·기록)와 근거를 적었다 |
-| `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (60편). 한 주제가 여러 편이면 **문서 지도와 최신 편의 머리말이 어느 편이 정본인지 밝힌다** |
+| `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (61편). 한 주제가 여러 편이면 **문서 지도와 최신 편의 머리말이 어느 편이 정본인지 밝힌다** |
 | `docs/superpowers/plans/` | 단계별 구현 계획 (6편 — 5편 구현 완료, 1단계 계획은 값 스캐너만 완료·카메라 보류. 머리말 배너를 볼 것) |
 | `docs/special-function-items.md` | `specguard` 대상 32종 — 치트로 만들면 인벤 렌더에서 죽는 장비 |
 
