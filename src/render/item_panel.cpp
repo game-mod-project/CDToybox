@@ -28,11 +28,11 @@ namespace {
 // '이름 없는 것 감추기' 는 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개
 // 개발용이라 목록에 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
 FilterBar g_bar = [] { FilterBar b; b.hide_unnamed = true; return b; }();
-// 이 창의 필터바 옵션. 힌트("이름 또는 키로 검색")와 match_key 가 한 쌍이다.
+// 이 창의 필터바 옵션. 힌트("이름 · 설명 · 키로 검색")와 match_key 가 한 쌍이다.
 const FilterBarOpts g_opts = [] {
     FilterBarOpts o;
     o.id = "items";
-    o.hint = "이름 또는 키로 검색";
+    o.hint = "이름 · 설명 · 키로 검색";
     o.show_hide_unnamed = true;
     o.match_key = true;
     return o;
@@ -176,7 +176,7 @@ void draw_item_panel(bool* open) {
         ImGuiTableFlags_SortTristate;
     // 열 차례가 game::item_sort_from_specs 의 색인과 **같아야 한다**.
     // 여기에 열을 끼우면 거기도 같이 밀어야 한다.
-    if (ImGui::BeginTable("items", 6, kFlags)) {
+    if (ImGui::BeginTable("items", 7, kFlags)) {
         // 별표는 첫 칸에 따로 둔다. 키 칸에 겹쳐 놓았더니 줄 전체를
         // 덮는 Selectable 이 클릭을 가져가 눌리지 않았다.
         ImGui::TableSetupColumn("★", ImGuiTableColumnFlags_WidthFixed |
@@ -191,6 +191,10 @@ void draw_item_panel(bool* open) {
         ImGui::TableSetupColumn("전용", ImGuiTableColumnFlags_WidthFixed,
                                 64.0f);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
+        // 설명(스펙 §2). 정렬 색인(item_sort_from_specs)을 안 밀게 맨 끝에 두고
+        // 정렬하지 않는다.
+        ImGui::TableSetupColumn("설명", ImGuiTableColumnFlags_WidthStretch |
+                                            ImGuiTableColumnFlags_NoSort);
         ImGui::TableSetupScrollFreeze(0, 1);
         // 머리글을 직접 그린다 - ★ 칸에 툴팁을 달기 위해서다. 6,810줄에서 가장
         // 눈에 안 띄는 기능이라 머리글이 뜻을 말해야 한다.
@@ -289,6 +293,9 @@ void draw_item_panel(bool* open) {
             } else {
                 ImGui::TextColored(grade_color(e.grade), "%s", e.name.c_str());
             }
+
+            ImGui::TableSetColumnIndex(6);
+            desc_cell(e.desc);
         }
         ImGui::EndTable();
     }

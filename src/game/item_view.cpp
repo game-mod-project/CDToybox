@@ -51,7 +51,7 @@ bool passes(const ItemFilter& f, std::string_view name, int grade,
     if (!text.empty() && text.find(f.query) != std::string_view::npos) {
         return true;
     }
-    // 이름과 키 둘 다에 건다. 지급 대상을 키로만 아는 경우가 있다.
+    // 키에도 건다(match_key 일 때). 지급 대상을 키로만 아는 경우가 있다.
     if (!f.match_key) return false;
     char digits[16];
     std::snprintf(digits, sizeof(digits), "%u", key);

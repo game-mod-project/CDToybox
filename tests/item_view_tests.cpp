@@ -208,7 +208,7 @@ TEST(sort_items_orders_by_grade) {
 
 TEST(passes_agrees_with_filter_items) {
     // filter_items 가 passes 를 부르도록 바뀌었다. 같은 입력에 같은
-    // 판정을 내야 한다 - 이름·키·이름없음·등급·분류를 전부 돈다.
+    // 판정을 내야 한다 - 이름·설명·키·이름없음·등급·분류를 전부 돈다.
     const auto named = [] {
         auto v = sample();
         v[2].desc = "나무를 베는 데 쓴다";   // 설명으로만 걸리는 줄
@@ -245,7 +245,7 @@ TEST(passes_agrees_with_filter_items) {
 }
 
 TEST(passes_ignores_key_when_match_key_is_off) {
-    // 인벤토리는 이름만 본다. 숫자를 쳐도 키가 걸리면 안 된다.
+    // 인벤토리는 키를 안 본다(이름 · 설명만). 숫자를 쳐도 키가 걸리면 안 된다.
     ItemFilter f;
     f.query = "9500";
     f.match_key = false;

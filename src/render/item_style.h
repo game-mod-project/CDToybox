@@ -13,6 +13,10 @@ namespace cdtb::render {
 ImVec4 grade_color(std::uint8_t grade);
 const char* category_name(std::uint8_t c);
 
+// 설명 칸(스펙 §2). 칸에는 첫 줄만 그리고 - 열 폭에서 잘린다 - 마우스를 올리면
+// 전문을 줄바꿈해 보인다. desc 가 비면 아무것도 안 그린다(툴팁도 없다).
+void desc_cell(const std::string& desc);
+
 // --- 필터 줄 ---------------------------------------------------------
 //
 // 아이템 목록과 인벤토리 창이 **같은 모양**이어야 해서 여기로 뺐다.
