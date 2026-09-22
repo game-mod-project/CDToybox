@@ -31,6 +31,16 @@
 | 데이터 | 한글 이름은 근거 있는 것만, 해석 못 한 것은 개수만 |
 | 진행 | 단위 시험 + 실측 + 툴팁 캡처 한 번, PR 둘 |
 
+**추가 요구 (사용자, 2026-09-23)** — 게임 툴팁 넉 장을 근거로:
+
+> 각 장비/소모품/어비스 기어의 경우 툴팁의 내용이 아이템 설명에 들어가면 된다 (효과/장착부위/설명 등)
+
+즉 목표는 **게임 툴팁과 같은 내용**이다. 툴팁이 실제로 담는 것(관통 I · 별미 정식 · 빨간 파두
+캡처에서 확인): 이름 · **분류**(어비스 기어 · 요리 · 연금술 재료) · **효과 줄들**(아이콘 + 숫자 ·
+지속시간이 박힌 문구) · 판매가 · **장착 가능 부위**(어비스 기어: 무기 · 장갑 · 신발) · 설명 문단.
+이 중 판매가는 이미 다른 열에 있을 수 있으므로 넣을지는 구현 때 정한다. 나머지(효과 · 장착 부위 ·
+설명)는 설명 열의 툴팁에 넣는다.
+
 ## 2. 화면
 
 - **넣을 곳**: 두 창 모두 정렬 색인이 열 차례에 묶여 있어(`item_sort_from_specs` · 인벤토리
@@ -180,6 +190,59 @@ MoveSpeedRate · CriticalRate · FireResistance · IceResistance · Fullness …
 - 결과는 **따로 게시하는 불변 스냅샷**(`item_effects_for(key)`)이다. 아이템 표는 게시 뒤 바뀌지
   않는 것이 약속이라(`item_catalog` 참조를 쥔 채 그린다) 거기에 나중에 써 넣지 않는다.
 - 표 중 하나라도 못 찾으면 효과만 비고 설명은 그대로 보인다. 다음 재시도 주기에 다시 계산한다.
+
+### 4.6 실행 파일에서 뽑은 필드 지도 · 효과는 두 갈래다 (2026-09-23 추가 실측)
+
+`tools/rtti/fields.py` 는 **역직렬화 함수의 실패 메시지**에서 데이터 클래스의 필드 이름과 오프셋을
+그대로 뽑는다(게임을 안 켜도 된다). `ItemInfo` 는 실패 메시지 124개 중 110개를 짝지었다. 이제
+레코드 자리를 이름으로 부를 수 있다 — §4.1 이 실측으로 잡아 둔 `+0x80` 이 `_itemUseInfoList`
+라는 것도 여기서 확인됐다.
+
+우리가 쓰는(또는 쓸) `ItemInfo` 자리:
+
+| 필드 | 오프셋 | 비고 |
+|---|---|---|
+| `_stringKey` | +0x08 | 내부 이름(장비의 캐릭터 접두사가 여기 있다) |
+| `_itemName` | +0x20 | 이름 현지화(우리 `+0x28` 이 그 안의 키) |
+| `_occupiedEquipSlotDataList` | +0x48 | 차지하는 장비 칸 |
+| `_itemTagList` | +0x58 | |
+| `_equipAbleHash` | +0x68 | 장착 가능 조합의 해시(어비스 기어 후보) |
+| `_consumableTypeList` | +0x70 | 소모품 종류 |
+| `_itemUseInfoList` | +0x80 | **소모품 효과의 입구**(+0x88 개수/용량) |
+| `_itemType` | +0xA3 | 우리 "분류" |
+| `_itemDesc` | +0xB0 | 설명(우리 `+0xB8` 이 그 안의 키) |
+| `_itemDesc2` | +0xD0 | 둘째 설명 — 표본 넷 모두 키 0 |
+| `_categoryInfo` | +0xF4 | 툴팁 제목 아래 분류로 보이는 후보(관통 I = 161) |
+| `_equipPassiveSkillList` | +0x100 | 착용 시 패시브 |
+| `_reserveSlotTargetDataList` | +0x200 | |
+| `_itemTier` | +0x210 | 우리 "등급" |
+| `_enchantDataList` | +0x248 | **어비스 기어 효과의 입구** |
+| `_priceList` | +0x258 | 판매가 |
+| `_patternDescriptionDataList` | +0x378 | 표본 넷 모두 비었다 |
+| `_itemEffectInfo` | +0x3BE | 표본 넷 모두 0xFFFF |
+
+**효과의 입구가 종류마다 다르다** (2026-09-23 실측, `%TEMP%\cdtb_items.bin` 6816 레코드 덤프):
+
+| 아이템 | `_itemUseInfoList` | `_enchantDataList` |
+|---|---|---|
+| 751123 빨간 파두(연금술 재료) | 14개 | 없음 |
+| 1002072 별미 정식(요리) | 14개 | 없음 |
+| 1003765 관통 I(심연 장비) | **없음(ptr 0)** | **1개** |
+| 1003766 관통 II | 없음 | 1개 |
+
+즉 §4.1 의 경로는 **소모품 전용**이다. 어비스 기어는 `_enchantDataList` → `EnchantData` 를 따로
+걸어야 한다. `EnchantData` 원소는 0x70 바이트 스트라이드로 보이고(`_buyPriceList +0x48` 이 맞는
+자리에서 나온다), `_enchantStatData +0x08` · `_itemEffectInfo`/`_equipBuffs +0x68` 이 있다.
+
+**효과 한 줄의 문구는 통짜 문장이 아니다.** `PatternDescriptionInfo` 가 있다 — `_stringFormat
++0x18`(형식 문자열) · `_descriptionParsed +0x38` · `_iconName +0x40`(툴팁 줄 앞 아이콘) ·
+`_paramList +0x58`. 게임 툴팁의 `생명 최대치 45 증가(1분)` 같은 줄은 형식 문자열 + 파라미터로
+조립된 것이다. 우리도 같은 규칙으로 조립해야 한다.
+
+곁가지로 확인된 관련 클래스: `EnchantStatData`(`_statList_DataDefinedStatic +0x20` 등),
+`SkillInfo`(`_buffLevelList +0x18` — §4.1 의 그 자리, `_maxLevel +0xF8`),
+`BuffInfo`(`_buffDataList +0x28` · `_maxLevel +0x2C` · `_uiTemplateName +0x3A`),
+`StatusInfo`(`_statType +0x30` · `_usePercent +0x61` · `_mustShowInUITooltip +0x89`).
 
 ## 5. 검색
 
