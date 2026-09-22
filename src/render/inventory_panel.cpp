@@ -25,6 +25,7 @@
 #include "render/notice.h"
 #include "render/overlay.h"
 #include "render/stash_panel.h"
+#include "render/table_order.h"
 #include "render/table_sort_imgui.h"
 #include "render/item_style.h"
 #include "render/filter_bar.h"
@@ -610,6 +611,7 @@ void draw_socket_cap() {
                               ImGuiTableFlags_Sortable |
                               ImGuiTableFlags_SortTristate,
                           outer)) {
+        table_keep_natural_order();   // 다시 켤 때 정렬한 열이 맨 앞에 서지 않게(table_order.h)
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("부위", ImGuiTableColumnFlags_WidthStretch |
                                           ImGuiTableColumnFlags_DefaultSort);
@@ -840,6 +842,7 @@ void draw_inventory_panel(bool* open) {
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Sortable,
                           ImVec2(0.0f, -inv_footer_h))) {
+        table_keep_natural_order();
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch,
                                 2.0f);
         ImGui::TableSetupColumn("분류", ImGuiTableColumnFlags_WidthFixed,

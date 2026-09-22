@@ -20,6 +20,7 @@
 #include "render/gates.h"
 #include "render/layout.h"
 #include "render/notice.h"
+#include "render/table_order.h"
 #include "render/table_sort_imgui.h"
 #include "render/view_cache.h"
 
@@ -321,6 +322,7 @@ void draw_companion_tab() {
                                   ImGuiTableFlags_Sortable |
                                   ImGuiTableFlags_SortTristate;
     if (ImGui::BeginTable("companions", 6, flags)) {
+        table_keep_natural_order();   // 다시 켤 때 정렬한 열이 맨 앞에 서지 않게(table_order.h)
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 52);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -416,6 +418,7 @@ void draw_companion_item_tab() {
                                   ImGuiTableFlags_Sortable |
                                   ImGuiTableFlags_SortTristate;
     if (!ImGui::BeginTable("companion_items", 6, flags)) return;
+    table_keep_natural_order();
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch |
                                         ImGuiTableColumnFlags_DefaultSort);
@@ -554,6 +557,7 @@ void draw_species_popup() {
                                             (std::min)(620.0f,
                                                        g_roster_w - 40.0f)),
                                  320))) {
+        table_keep_natural_order();
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("행", ImGuiTableColumnFlags_WidthFixed, 48);
         ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -870,6 +874,7 @@ void draw_my_companions_tab() {
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                   ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (!ImGui::BeginTable("my_companions", 9, flags)) return;
+    table_keep_natural_order();
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("번호", ImGuiTableColumnFlags_WidthFixed, 74);
     ImGui::TableSetupColumn("이름", ImGuiTableColumnFlags_WidthStretch);
@@ -1082,6 +1087,7 @@ void draw_nearby_tab() {
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                   ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (ImGui::BeginTable("nearby", 10, flags)) {
+        table_keep_natural_order();
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("액터", ImGuiTableColumnFlags_WidthFixed |
                                             ImGuiTableColumnFlags_NoSort, 104);
@@ -1320,6 +1326,7 @@ void draw_list_tab(const std::vector<game::RosterEntry>& all,
                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                   ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
     if (!ImGui::BeginTable(list_table_id(), ncol, flags)) return;
+    table_keep_natural_order();
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("키", ImGuiTableColumnFlags_WidthFixed, 90);
     if (show_merc_type) ImGui::TableSetupColumn("타입", ImGuiTableColumnFlags_WidthFixed, 60);

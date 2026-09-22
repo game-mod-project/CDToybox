@@ -66,6 +66,7 @@ add_library(cdtoybox SHARED
     src/render/icon_atlas.cpp
     src/render/grant_panel.cpp
     src/render/item_style.cpp
+    src/render/table_order.cpp
     src/render/filter_bar.cpp
     src/render/gem_picker.cpp
     src/render/stash_panel.cpp
@@ -187,6 +188,7 @@ add_executable(cdtb_tests
     tests/bag_backup_tests.cpp
     tests/wheel_tests.cpp
     tests/wanted_tests.cpp
+    tests/table_order_tests.cpp
     src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
@@ -221,9 +223,10 @@ add_executable(cdtb_tests
     src/render/ui_persist_state.cpp
     src/render/log_filter.cpp
     src/render/log_view.cpp
+    src/render/table_order.cpp
 )
 target_include_directories(cdtb_tests PRIVATE tests)
-target_link_libraries(cdtb_tests PRIVATE cdtb_core)
+target_link_libraries(cdtb_tests PRIVATE cdtb_core imgui)
 # 후킹 테스트에서 대상 함수가 인라인/폴딩되지 않도록 최적화를 끈다.
 target_compile_options(cdtb_tests PRIVATE /Od)
 target_link_options(cdtb_tests PRIVATE /OPT:NOICF)
