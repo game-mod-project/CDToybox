@@ -69,6 +69,10 @@ struct WornPiece {
     int unlocked = 0;             // 열린 소켓 수
     WornSocket sockets[5]{};      // entry+0x60 벡터
     std::vector<WornDye> dyes;    // entry+0x78 벡터 (있으면)
+    // 가방(인벤토리 레코드)에도 있는 장비인가. 장비 표에 가방 아이템이 섞인다 - 슬롯 태그 23,
+    // 게임 툴팁 "비활성화"(2026-09-22 실측). 그런 장비는 가방 레코드가 진짜라 담금질·연마·
+    // 소켓을 가방 레코드에서 읽고(apply_bag_truth) 쓰기도 가방 레코드에 같이 한다(eq_write_*).
+    bool in_bag = false;
 };
 
 // 착용 장비 목록을 읽는다(빈 슬롯 제외). 실패면 false.

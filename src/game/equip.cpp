@@ -10,8 +10,10 @@
 
 #include "core/log.h"
 #include "core/write_log.h"
+#include "game/equip_bag.h"
 #include "game/actors.h"
 #include "game/items.h"
+#include "game/inventory.h"
 #include "game/player.h"
 #include "game/roster.h"
 
@@ -291,22 +293,10 @@ bool read_worn_gear(const mem::Reader& reader, const EquipTable& t,
         w.entry = e;
         w.instance = rd64(reader, e + 0x00);
         w.key = key;
-        w.temper = rd16(reader, e + 0x0A);
-        w.sharpness = rd16(reader, e + 0x58);
+        // 담금질·연마·소켓 - 인벤토리 레코드와 같은 자리라 가방 쪽과 한 함수로 읽는다.
+        read_level_and_sockets(reader, e, &w);
         w.slot_tag = static_cast<std::uint16_t>(rd32(reader, e + (t.stride - 8)) &
                                                 0xFFFF);
-        const std::uintptr_t sp = rd64(reader, e + 0x60);
-        if (ptr_reads(reader, sp)) {
-            for (int k = 0; k < 5; ++k) {
-                const std::uintptr_t r = sp + static_cast<std::uintptr_t>(k) * 6;
-                WornSocket s;
-                s.gem = rd16(reader, r + 0);
-                s.marker = rd16(reader, r + 2);
-                s.index = rd8(reader, r + 4);
-                w.sockets[k] = s;
-                if (s.index != kSocketLocked && s.index == k) ++w.unlocked;
-            }
-        }
         // 염색 레코드: entry+0x78 벡터, +0x80 개수(<=12), 16바이트/레코드.
         // zone 은 +6, RGB 는 +7/8/9. rec 는 both-realms 쓰기 인자로 쓴다.
         const std::uintptr_t dp = rd64(reader, e + 0x78);
@@ -555,6 +545,8 @@ void equip_discover(const mem::Rtti& rtti, const mem::Reader& reader) {
     EquipTable pt;
     std::vector<WornPiece> pieces;
     const bool ok = pick_player_table(reader, tabs, prefer, &pt, &pieces, want);
+    // 가방에도 있는 장비(게임 "비활성화")는 가방 레코드 값을 보인다(equip_bag.h).
+    if (ok) apply_bag_truth(reader, bag_index(reader, inventory_component()), &pieces);
     const std::uint16_t cur = ok ? table_character_row(reader, pt) : kEquipAutoCharacter;
     // 후보나 표시 캐릭터, 성공 여부가 바뀌면 한 줄 남긴다(20초 주기 재탐색은 조용히 - 실패가
     // 이어져도 한 번만) - "콤보에 웅카가 없다" 를 로그로 가릴 수 있게.
@@ -621,6 +613,7 @@ void equip_refresh_pieces(const mem::Reader& reader) {
         g_eq_ready = false;   // camera 의 !equip_ready() 가 재탐색을 돌린다
         return;
     }
+    apply_bag_truth(reader, bag_index(reader, inventory_component()), &pieces);
     // 어느 스레드든 **한 번 성공하면** 표는 살아 있다 - 시계를 비운다.
     std::lock_guard<std::mutex> lk(g_eq_mutex);
     g_eq_dead_since = {};
@@ -690,18 +683,32 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         std::lock_guard<std::mutex> lk(g_eq_mutex);
         tabs = g_eq_tables;
     }
+    const auto apply = [&](std::uintptr_t e) {
+        if (op == 0) return socket_fill_entry(reader, e, a, b);
+        if (op == 1) return temper_set_entry(reader, e, b);
+        if (op == 2) {
+            return dye_set_entry(reader, e, a, static_cast<std::uint8_t>(b), g, bl);
+        }
+        if (op == 3) return socket_unlock_entry(reader, e, a) > 0;
+        if (op == 4) return sharpness_set_entry(reader, e, b);
+        return false;
+    };
     int wrote = 0;
     for (const auto& t : tabs) {
         const std::uintptr_t e = entry_by_instance(reader, t, instance);
-        if (e == 0) continue;
-        bool ok = false;
-        if (op == 0) ok = socket_fill_entry(reader, e, a, b);
-        else if (op == 1) ok = temper_set_entry(reader, e, b);
-        else if (op == 2) ok = dye_set_entry(reader, e, a,
-                                              static_cast<std::uint8_t>(b), g, bl);
-        else if (op == 3) ok = socket_unlock_entry(reader, e, a) > 0;
-        else if (op == 4) ok = sharpness_set_entry(reader, e, b);
-        if (ok) ++wrote;
+        if (e != 0 && apply(e)) ++wrote;
+    }
+    // 가방에도 있는 장비(게임 "비활성화")는 가방 레코드가 진짜다 - 서버·클라 인벤토리
+    // 레코드에도 쓴다(2026-09-22 실측: 장비 표에만 쓴 소켓 5칸이 착용 변경 뒤 가방 레코드의
+    // 2칸으로 돌아갔다). 염색은 가방 레코드의 +0x78 자리를 확인하지 않아 장비 표에만 쓴다.
+    int bag = 0;
+    if (op != 2) {
+        for (const std::uintptr_t comp :
+             {inventory_component(), inventory_component_client()}) {
+            const auto idx = bag_index(reader, comp);
+            const auto it = idx.find(instance);
+            if (it != idx.end() && apply(it->second)) ++bag;
+        }
     }
     // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
     static const char* const kWhat[5] = {"장비 소켓", "장비 담금질", "장비 염색",
@@ -715,9 +722,10 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
                               std::to_string(static_cast<int>(g)) + "," +
                               std::to_string(static_cast<int>(bl));
     else after = "소켓 " + std::to_string(a) + "칸";
-    after += " (" + std::to_string(wrote) + " realm)";
+    after += " (" + std::to_string(wrote) + " realm" +
+             (bag > 0 ? ", 가방 " + std::to_string(bag) : std::string()) + ")";
     log_write(kWhat[op], static_cast<std::uintptr_t>(instance), "-", after);
-    return wrote;
+    return wrote + bag;
 }
 
 int eq_write_socket(const mem::Reader& reader, std::uint64_t instance, int k,

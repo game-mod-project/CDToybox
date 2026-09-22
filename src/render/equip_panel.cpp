@@ -544,6 +544,16 @@ void draw_equip_panel(bool* open) {
             } else {
                 ImGui::Text("(카탈로그 순번 %u)", w.key);
             }
+            // 가방에도 있는 장비(게임 툴팁 "비활성화") - 값은 가방 레코드를 보이고 쓰기도
+            // 가방 레코드에 같이 한다(equip_bag.h).
+            if (w.in_bag) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(가방)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("게임에서 '비활성화' 로 보이는 장비입니다.\n"
+                                      "가방 기록의 값을 보이고, 고치면 가방 기록에도 씁니다.");
+                }
+            }
 
             // 담금질(+0x0A, 툴팁 게이지 10칸)과 장비 연마(+0x58, "장비 연마 N/100").
             // 상한은 표에서(level_cap) - 표가 아직 없으면 일괄처럼 "-" 로 둔다.
