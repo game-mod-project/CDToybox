@@ -40,12 +40,19 @@ std::string clean_item_desc(std::string_view raw) {
         }
         if (raw.compare(i, kPlaceholder.size(), kPlaceholder) == 0) {
             const std::size_t close = raw.find('}', i);
-            const std::size_t hash = raw.find('#', i);
-            // hash 가 npos 면 `hash < close` 가 거짓이라 그대로 둔다.
-            if (close != std::string_view::npos && hash < close) {
-                out.append(raw.substr(hash + 1, close - hash - 1));
-                i = close + 1;
-                continue;
+            if (close != std::string_view::npos) {
+                // 여는 `{` 와 첫 `}` 사이. 전수 꼴(`#` 가 정확히 하나, 안에 `{` 가 또
+                // 없음, 표시 문구가 비지 않음)일 때만 푼다. 아니면 한 글자씩 그대로 간다.
+                const std::string_view body = raw.substr(i + 1, close - i - 1);
+                const std::size_t hash = body.find('#');
+                if (hash != std::string_view::npos &&
+                    body.find('#', hash + 1) == std::string_view::npos &&
+                    body.find('{') == std::string_view::npos &&
+                    hash + 1 < body.size()) {
+                    out.append(body.substr(hash + 1));
+                    i = close + 1;
+                    continue;
+                }
             }
         }
         out += raw[i];

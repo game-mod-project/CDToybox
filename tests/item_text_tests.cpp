@@ -41,6 +41,20 @@ TEST(clean_item_desc_leaves_a_placeholder_without_a_label_alone) {
     CHECK_EQ(clean_item_desc("{Staticinfo:Item:X}"), std::string("{Staticinfo:Item:X}"));
 }
 
+TEST(clean_item_desc_leaves_a_placeholder_with_an_empty_label_alone) {
+    CHECK_EQ(clean_item_desc("{Staticinfo:A:B#}"), std::string("{Staticinfo:A:B#}"));
+}
+
+TEST(clean_item_desc_leaves_a_placeholder_with_two_hashes_alone) {
+    CHECK_EQ(clean_item_desc("{Staticinfo:A:B#x#y}"), std::string("{Staticinfo:A:B#x#y}"));
+}
+
+TEST(clean_item_desc_does_not_swallow_the_next_placeholder) {
+    // 앞 것은 안 닫혀 그대로 두고, 뒤의 온전한 자리표시는 푼다.
+    CHECK_EQ(clean_item_desc("{Staticinfo:A:B#x {Staticinfo:C:D#y}"),
+             std::string("{Staticinfo:A:B#x y"));
+}
+
 TEST(clean_item_desc_trims_spaces_around_line_breaks) {
     // <br/> 옆에 공백이 붙은 설명이 10건이다.
     CHECK_EQ(clean_item_desc("앞 문장. <br/> 뒤 문장."), std::string("앞 문장.\n뒤 문장."));
