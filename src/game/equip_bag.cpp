@@ -66,4 +66,10 @@ void apply_bag_truth(const mem::Reader& reader,
     }
 }
 
+EqVerdict eq_verdict(const EqWriteResult& r) {
+    if (r.in_bag) return r.bag >= 1 ? EqVerdict::All : EqVerdict::None;
+    if (r.realms >= 2) return EqVerdict::All;
+    return r.realms == 1 ? EqVerdict::Partial : EqVerdict::None;
+}
+
 }  // namespace cdtb::game

@@ -32,4 +32,10 @@ void apply_bag_truth(const mem::Reader& reader,
                      const std::unordered_map<std::uint64_t, std::uintptr_t>& bag,
                      std::vector<WornPiece>* pieces);
 
+// 쓰기 결과를 판정한다. 가방에도 있는 장비는 가방 레코드가 진짜라 bag >= 1 이면 All, 아니면
+// None 이다(장비 표 사본만 써 봐야 게임이 가방 값으로 되맞춘다). 입은 장비는 예전처럼 realm
+// 수로 가른다 - 2 이상 All(클라·서버 모두), 1 Partial(한쪽만), 0 None.
+enum class EqVerdict { All, Partial, None };
+EqVerdict eq_verdict(const EqWriteResult& r);
+
 }  // namespace cdtb::game

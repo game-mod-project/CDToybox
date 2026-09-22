@@ -674,10 +674,17 @@ bool equip_take_refresh() {
     return g_eq_refresh.exchange(false, std::memory_order_acq_rel);
 }
 
+EqBagIndex eq_bag_index(const mem::Reader& reader) {
+    EqBagIndex idx;
+    idx.server = bag_index(reader, inventory_component());
+    idx.client = bag_index(reader, inventory_component_client());
+    return idx;
+}
+
 // op: 0=socket 1=temper 2=dye 3=unlock 4=sharpness
-static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
-                        int op, int a, std::uint16_t b, std::uint8_t g,
-                        std::uint8_t bl) {
+static EqWriteResult eq_write_all(const mem::Reader& reader, std::uint64_t instance,
+                                  int op, int a, std::uint16_t b, std::uint8_t g,
+                                  std::uint8_t bl, const EqBagIndex* bag_in) {
     std::vector<EquipTable> tabs;
     {
         std::lock_guard<std::mutex> lk(g_eq_mutex);
@@ -693,21 +700,26 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
         if (op == 4) return sharpness_set_entry(reader, e, b);
         return false;
     };
-    int wrote = 0;
+    EqWriteResult res;
     for (const auto& t : tabs) {
         const std::uintptr_t e = entry_by_instance(reader, t, instance);
-        if (e != 0 && apply(e)) ++wrote;
+        if (e != 0 && apply(e)) ++res.realms;
     }
     // 가방에도 있는 장비(게임 "비활성화")는 가방 레코드가 진짜다 - 서버·클라 인벤토리
     // 레코드에도 쓴다(2026-09-22 실측: 장비 표에만 쓴 소켓 5칸이 착용 변경 뒤 가방 레코드의
     // 2칸으로 돌아갔다). 염색은 가방 레코드의 +0x78 자리를 확인하지 않아 장비 표에만 쓴다.
-    int bag = 0;
     if (op != 2) {
-        for (const std::uintptr_t comp :
-             {inventory_component(), inventory_component_client()}) {
-            const auto idx = bag_index(reader, comp);
-            const auto it = idx.find(instance);
-            if (it != idx.end() && apply(it->second)) ++bag;
+        // 색인을 안 받았으면 이번 쓰기만을 위해 만든다(한 칸 편집이라 한 번이다).
+        EqBagIndex local;
+        if (bag_in == nullptr) local = eq_bag_index(reader);
+        const EqBagIndex& idx = (bag_in != nullptr) ? *bag_in : local;
+        for (const auto* m : {&idx.server, &idx.client}) {
+            const auto it = m->find(instance);
+            if (it == m->end()) continue;
+            // 색인이 낡았을 수 있다(일괄 작업 도중 로드 등) - 레코드가 아직 그 인스턴스인지 본다.
+            if (rd64(reader, it->second) != instance) continue;
+            res.in_bag = true;
+            if (apply(it->second)) ++res.bag;
         }
     }
     // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
@@ -722,35 +734,35 @@ static int eq_write_all(const mem::Reader& reader, std::uint64_t instance,
                               std::to_string(static_cast<int>(g)) + "," +
                               std::to_string(static_cast<int>(bl));
     else after = "소켓 " + std::to_string(a) + "칸";
-    after += " (" + std::to_string(wrote) + " realm" +
-             (bag > 0 ? ", 가방 " + std::to_string(bag) : std::string()) + ")";
+    after += " (" + std::to_string(res.realms) + " realm" +
+             (res.bag > 0 ? ", 가방 " + std::to_string(res.bag) : std::string()) + ")";
     log_write(kWhat[op], static_cast<std::uintptr_t>(instance), "-", after);
-    return wrote + bag;
+    return res;
 }
 
-int eq_write_socket(const mem::Reader& reader, std::uint64_t instance, int k,
-                    std::uint16_t gem) {
-    return eq_write_all(reader, instance, 0, k, gem, 0, 0);
+EqWriteResult eq_write_socket(const mem::Reader& reader, std::uint64_t instance, int k,
+                              std::uint16_t gem, const EqBagIndex* bag) {
+    return eq_write_all(reader, instance, 0, k, gem, 0, 0, bag);
 }
 
-int eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
-                    std::uint16_t level) {
-    return eq_write_all(reader, instance, 1, 0, level, 0, 0);
+EqWriteResult eq_write_temper(const mem::Reader& reader, std::uint64_t instance,
+                              std::uint16_t level, const EqBagIndex* bag) {
+    return eq_write_all(reader, instance, 1, 0, level, 0, 0, bag);
 }
 
-int eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
-                       std::uint16_t level) {
-    return eq_write_all(reader, instance, 4, 0, level, 0, 0);
+EqWriteResult eq_write_sharpness(const mem::Reader& reader, std::uint64_t instance,
+                                 std::uint16_t level, const EqBagIndex* bag) {
+    return eq_write_all(reader, instance, 4, 0, level, 0, 0, bag);
 }
 
 int eq_write_dye(const mem::Reader& reader, std::uint64_t instance, int rec,
                  std::uint8_t r, std::uint8_t g, std::uint8_t b) {
-    return eq_write_all(reader, instance, 2, rec, r, g, b);
+    return eq_write_all(reader, instance, 2, rec, r, g, b, nullptr).realms;
 }
 
-int eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
-                      int want) {
-    return eq_write_all(reader, instance, 3, want, 0, 0, 0);
+EqWriteResult eq_unlock_sockets(const mem::Reader& reader, std::uint64_t instance,
+                                int want, const EqBagIndex* bag) {
+    return eq_write_all(reader, instance, 3, want, 0, 0, 0, bag);
 }
 
 int socket_unlock_record(const mem::Reader& reader, std::uintptr_t record,

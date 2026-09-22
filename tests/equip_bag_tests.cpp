@@ -130,3 +130,31 @@ TEST(apply_bag_truth_leaves_a_worn_piece_alone) {
     CHECK_EQ(ps[0].unlocked, 5);
     CHECK_EQ(ps[0].sockets[2].index, std::uint8_t{2});
 }
+
+TEST(eq_verdict_bag_piece_succeeds_when_the_bag_record_was_written) {
+    // 2026-09-22 방패 모양: 장비 표 사본은 이미 목표값이라 0, 가방 레코드는 써졌다.
+    cdtb::game::EqWriteResult r;
+    r.in_bag = true;
+    r.bag = 1;
+    r.realms = 0;
+    CHECK(cdtb::game::eq_verdict(r) == cdtb::game::EqVerdict::All);
+}
+
+TEST(eq_verdict_bag_piece_fails_when_only_the_mirrors_were_written) {
+    // 가방 레코드를 못 썼으면 장비 표 두 realm 을 써도 게임이 가방 값으로 되맞춘다.
+    cdtb::game::EqWriteResult r;
+    r.in_bag = true;
+    r.bag = 0;
+    r.realms = 2;
+    CHECK(cdtb::game::eq_verdict(r) == cdtb::game::EqVerdict::None);
+}
+
+TEST(eq_verdict_worn_piece_counts_realms) {
+    cdtb::game::EqWriteResult r;
+    r.realms = 2;
+    CHECK(cdtb::game::eq_verdict(r) == cdtb::game::EqVerdict::All);
+    r.realms = 1;
+    CHECK(cdtb::game::eq_verdict(r) == cdtb::game::EqVerdict::Partial);
+    r.realms = 0;
+    CHECK(cdtb::game::eq_verdict(r) == cdtb::game::EqVerdict::None);
+}
