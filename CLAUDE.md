@@ -154,7 +154,7 @@ docs/       아래 참조
 | `docs/TROUBLESHOOTING.md` | 겪은 문제와 해결. 증상 색인이 앞에 있다 |
 | `docs/README.md` | **문서 지도.** 조사 기록·계획을 주제별로 묶고 편마다 지금 상태(해결·미해결·반증·기록)와 근거를 적었다 |
 | `docs/superpowers/specs/` | 기능별 리버스 근거 · 설계 (61편). 한 주제가 여러 편이면 **문서 지도와 최신 편의 머리말이 어느 편이 정본인지 밝힌다** |
-| `docs/superpowers/plans/` | 단계별 구현 계획 (6편 — 5편 구현 완료, 1단계 계획은 값 스캐너만 완료·카메라 보류. 머리말 배너를 볼 것) |
+| `docs/superpowers/plans/` | 단계별 구현 계획 (7편 — 5편 구현 완료, 1단계 계획은 값 스캐너만 완료·카메라 보류, 아이템 설명·효과 계획은 진행 중. 머리말 배너를 볼 것) |
 | `docs/special-function-items.md` | `specguard` 대상 32종 — 치트로 만들면 인벤 렌더에서 죽는 장비 |
 
 문서 곳곳이 `.superpowers/sdd/<플랜>/progress.md` 를 실행 장부로 가리킨다.

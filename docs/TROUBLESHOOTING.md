@@ -3270,8 +3270,8 @@ $o = & dumpbin /DISASM:NOBYTES <배포할 dll>
 ## 관련 문서
 
 - `docs/STATUS.md` — 현황, 되는 것, 게임 구조
-- `docs/README.md` — **문서 지도.** 조사 기록 59편·계획 6편을 주제별로 묶고 지금 상태를 적었다
-- `docs/superpowers/specs/` — 조사 기록 59편
+- `docs/README.md` — **문서 지도.** 조사 기록 61편·계획 7편을 주제별로 묶고 지금 상태를 적었다
+- `docs/superpowers/specs/` — 조사 기록 61편
 - `docs/special-function-items.md` — specguard 대상 32종
 - `bin64/CDToybox.crash.txt` — 죽은 자리를 모듈 RVA 로 찍는다. **게임이
   팅기면 여기부터 본다.** 없으면 치명적 예외가 안 난 것(= 굳었거나 스스로
