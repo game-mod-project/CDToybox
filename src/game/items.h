@@ -45,6 +45,7 @@ const char* owner_label(EquipOwner owner);
 struct ItemEntry {
     std::uint32_t key = 0;
     std::uint64_t name_key = 0;   // 레코드가 들고 있는 현지화 키
+    std::uint64_t desc_key = 0;   // 레코드 +0xB8 의 설명 현지화 키((키 << 32) | 0x71)
     std::uintptr_t record = 0;
     std::uint8_t grade = 0;       // 0=없음, 1..5 = T1..T5
     std::uint8_t category = 0;    // 74종. 이름은 render/item_style 의 category_name
@@ -235,6 +236,8 @@ struct ItemCatalogEntry {
     std::uint32_t key = 0;
     std::uint64_t name_key = 0;
     std::string name;             // 빈 문자열이면 현지화 표에 없는 것
+    // 정리한 설명(clean_item_desc). 빈 문자열이면 설명 키가 없거나 안 풀린 것이다.
+    std::string desc;
     std::uint8_t grade = 0;
     std::uint8_t category = 0;
     std::uint32_t max_stack = 0;
