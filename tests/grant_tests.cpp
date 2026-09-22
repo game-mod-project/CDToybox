@@ -1004,6 +1004,17 @@ TEST(hire_check_jmp_target_follows_rel32) {
              base + 0xE8345F0);
 }
 
+// 2949 실측(2026-09-22, 파일에서 읽음). 자리는 kHireCheckRva 와 같다.
+TEST(hire_check_jmp_target_follows_the_2949_thunk) {
+    // 0x214E8C0: E9 AB 4C 2E 0C -> 0x214E8C5 + 0x0C2E4CAB = 0xE433570
+    const std::uint8_t thunk[] = {0xE9, 0xAB, 0x4C, 0x2E, 0x0C};
+    const std::uintptr_t base = 0x140000000ull;
+    CHECK_EQ(cdtb::game::kHireCheckRva, 0x214E8C0ull);
+    CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, sizeof(thunk),
+                                               base + cdtb::game::kHireCheckRva),
+             base + 0xE433570);
+}
+
 TEST(hire_check_jmp_target_rejects_non_jmp_or_short) {
     // 2760 자리 0x2097BC0 이 2850 에서 갖는 바이트 - lea ecx,[rbp+0x48] 한복판.
     const std::uint8_t mid[] = {0x8D, 0x4D, 0x48, 0xE8, 0x58};

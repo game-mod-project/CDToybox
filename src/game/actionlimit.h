@@ -1,6 +1,8 @@
 #pragma once
 
-// @build 1.0.0.2944  제한 컴포넌트 vtable 0x55B53C8 · 항목 0x38바이트
+// @build 1.0.0.2949  제한 컴포넌트 vtable 0x55B53C8 - RTTI(ClientCharacterControlActor
+//   Component)로 2949 에서도 같은 자리임을 확인했다(2026-09-22).
+// @build 1.0.0.2944  항목 0x38바이트 - 런타임 구조라 2949 에서는 아직 안 쟀다.
 //   근거: specs/2026-09-21-boss-room-action-limit.md
 #include <cstddef>
 #include <cstdint>

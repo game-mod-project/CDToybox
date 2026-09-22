@@ -509,6 +509,17 @@ KnowRegister register_held(const mem::Reader& reader, int number,
         return r;
     }
 
+    // **부를 자리가 그 함수인지 본다.** vtable 과 함수 자리는 갱신 때 따로 낡을 수 있다.
+    std::uint8_t head[sizeof(kKnowRegisterPrologue)]{};
+    if (!reader.read(base + kKnowRegisterRva, head, sizeof(head)) ||
+        !know_register_prologue_ok(head, sizeof(head))) {
+        log::warnf("지식 등록: RVA 0x{:X} 프롤로그가 다르다 ({:02X} {:02X} {:02X} {:02X} {:02X})"
+                   " - 안 부른다", kKnowRegisterRva, head[0], head[1], head[2], head[3],
+                   head[4]);
+        r.skip = "등록 함수 자리가 맞지 않습니다(게임이 갱신됐을 수 있습니다)";
+        return r;
+    }
+
     // **소유 액터를 확인한다.** 등록 함수가 초입에서 `[comp+8]` 을 역참조하므로
     // (0x02AA5421 -> 0x02AA5433), 0 이거나 못 읽으면 그 자리에서 죽는다.
     std::uint64_t owner = 0;

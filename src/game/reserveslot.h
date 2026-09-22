@@ -1,7 +1,9 @@
 #pragma once
 
-// @build 1.0.0.2944  kCondMgrGlobalRva 는 표 이름 `conditioninfo` 로,
-//   kSlotMgrGlobalRva 는 **라이브 프로브로** 확정했다(정적으로는 안 닿았다).
+// @build 1.0.0.2949  kCondMgrGlobalRva 가 그대로다(2026-09-22) - `conditioninfo` 를 만드는
+//   함수 0x3A0670 이 여전히 0x6D6AA38 을 읽는다.
+// @build 1.0.0.2944  kSlotMgrGlobalRva 는 **라이브 프로브로** 확정했다(정적으로는 안
+//   닿았다). 2949 에서는 아직 게임을 켜 대조하지 않았다.
 #include <cstddef>
 #include <cstdint>
 

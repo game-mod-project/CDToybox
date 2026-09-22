@@ -1,5 +1,8 @@
 #pragma once
 
+// @build 1.0.0.2949  호출 자리 · 조회 함수 재도출, 빈 레코드는 그대로(2026-09-22).
+//   근거: specs/2026-09-22-game-update-2949.md §4
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -45,10 +48,18 @@ namespace cdtb::game {
 // 사슬: 0x2B89CF0(호출자, 형제 자리 보유) -> 0x2B8C823 -> 0x2B8D2F0(우리 자리).
 // 0x2B8D2F0 을 부르는 곳은 **한 곳뿐**이다.
 //
-// 빌드별 자리: 0x2AD51F8(2760) -> 0x2AD7238(2850) -> **0x2B8DD36(2944)**.
+// 빌드별 자리: 0x2AD51F8(2760) -> 0x2AD7238(2850) -> 0x2B8DD36(2944)
+// -> **0x2B8DD46(2949)**. 위 명령 목록의 RVA 는 2944 기준이다.
 // 전문: `docs/superpowers/specs/2026-09-20-spawnguard-callsite.md`.
-inline constexpr std::uint64_t kSpawnCallSiteRva = 0x2B8DD36;
-inline constexpr std::uint64_t kSpawnLookupRva = 0x2146110;
+//
+// 1.0.0.2949(2026-09-22): 조회 함수는 프롤로그 `48 89 5C 24 08 83 79 14 00` 후보 둘
+// 중 `call ; lea reg,[rip+..]` 짝이 142곳인 0x2146120 이고(다른 하나는 0곳), 그 142곳의
+// lea 대상이 **만장일치로 0x6CF2F70** 이라 빈 레코드는 그대로다. `E8 <조회>` +
+// kSpawnDerefTail 은 실행 섹션 전량에서 0x2B8DD46 **한 곳뿐**이고, 그 자리 10바이트는
+// `E8 D5 83 5B FF 48 83 78 28 FF` 로 2944 캡처와 한 글자도 다르지 않다(자리와 조회가
+// 함께 +0x10 밀려 rel32 가 같다).
+inline constexpr std::uint64_t kSpawnCallSiteRva = 0x2B8DD46;   // 2944 0x2B8DD36
+inline constexpr std::uint64_t kSpawnLookupRva = 0x2146120;     // 2944 0x2146110
 inline constexpr std::uint64_t kSpawnEmptyRecordRva = 0x6CF2F70;
 
 // 자리 뒤에 곧바로 오는 `cmp qword ptr [rax+0x28], -1`.

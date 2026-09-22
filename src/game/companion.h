@@ -1,7 +1,8 @@
 #pragma once
 
-// @build 1.0.0.2944  작업 함수 둘 · 메시지 ID 다섯 전부 이 빌드에서 재도출
-//   근거: specs/2026-09-18-game-update-2944.md §2 §3
+// @build 1.0.0.2949  작업 함수 둘 재도출(2026-09-22) · 메시지 ID 다섯은 recheck.py 로
+//   대조해 그대로였다. 근거: specs/2026-09-22-game-update-2949.md §3
+//   (2944 근거: specs/2026-09-18-game-update-2944.md §2 §3)
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -60,7 +61,10 @@ bool companion_capture_install(const mem::Rtti& rtti,
 //
 // 이 훅은 인자와 결과 코드를 로그로 낸다. 아무것도 바꾸지 않는다.
 // 붙잡기·부적 사용이 왜 거부되는지는 이 코드로만 알 수 있다.
-inline constexpr std::uint64_t kHireWorkRva = 0x2BADB80;   // 2850 까지 0x2AE02C0
+//
+// 1.0.0.2949(2026-09-22): 2959 역직렬화 0x2A2F0F0 의 +0x180 call 대상. 프롤로그
+// `48 89 5C 24 10 4C 89 44 24 18` 과 본문 2763바이트가 2944 와 같다.
+inline constexpr std::uint64_t kHireWorkRva = 0x2BADB90;   // 2944 0x2BADB80 · 2850 0x2AE02C0
 
 // 소환 작업 함수. 2894 처리기(RVA 0x29621E0; 2850 빌드는 역직렬화 0x2963920 →
 // 0x2B7B130 의 +0x155)가 관문을 통과한 뒤 이것을 부른다 - 정상 소환에서
@@ -77,7 +81,11 @@ inline constexpr std::uint64_t kHireWorkRva = 0x2BADB80;   // 2850 까지 0x2AE0
 // 2894 를 아예 안 보낸다(실측 2026-09-06). 그래서 이 함수가 불리기는
 // 하는지, 불린다면 어떤 코드를 돌려주는지를 봐야 어디서 갈리는지
 // 알 수 있다. 읽고 찍기만 한다.
-inline constexpr std::uint64_t kSpawnWorkRva = 0x2B9EB50;   // 2850 까지 0x2AD1640
+//
+// 1.0.0.2949(2026-09-22): 3069 역직렬화 0x2A30630 의 +0x138 call -> 래퍼 0x2C49600
+// (549바이트, 2944 와 같다) 의 +0x155 call 대상. 프롤로그
+// `48 8B C4 4C 89 48 20 4C 89 40 18` 그대로.
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2B9EB60;   // 2944 0x2B9EB50 · 2850 0x2AD1640
 // 마지막 소환 결과. 코드 0 이 성공이다.
 //
 // 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).

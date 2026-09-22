@@ -104,20 +104,21 @@ TEST(specguard_tail_rejects_truncated_and_accepts_immediates) {
 // `specs/2026-09-20-specguard-div-family.md` 에 있다.
 // ---------------------------------------------------------------------------
 
-// 0xF83F65B 와 0xF83F6B4 는 **같은 함수**(0xF83F5D0..0xF83F734) 안의 두 div 다.
+// 0xF83F65B 와 0xF83F6B4(2944)는 **같은 함수**(0xF83F5D0..0xF83F734) 안의 두 div 다.
 // 둘 다 `[rdi+8]` 로 나누고 0 갈래가 div 로 샌다. 앞의 것만 걸면 가드가
 // 몫 0 을 내고 `cmp eax,[rdi+4] / jae` 가 **안 뛰어** 그대로 뒤의 div 로
 // 흘러가 거기서 죽는다 - 크래시를 89바이트 뒤로 옮길 뿐이다(실측 2026-09-20).
+// 2949 에서는 0xF2FD66B · 0xF2FD6C3 으로, 같은 함수(0xF2FD5E0..0xF2FD738) 안이다.
 TEST(specguard_reg_table_has_both_divs_of_the_bag_render_function) {
-    CHECK(has_site(kSpecguardDivReg, 0xF83F65BULL, 6));
-    CHECK(has_site(kSpecguardDivReg, 0xF83F6B4ULL, 6));
+    CHECK(has_site(kSpecguardDivReg, 0xF2FD66BULL, 6));
+    CHECK(has_site(kSpecguardDivReg, 0xF2FD6C3ULL, 6));
 }
 
-// 2944 실측 자리 셋(kDivReg)과 하나(kDivMem[3])는 그대로 있어야 한다.
-TEST(specguard_table_keeps_the_2944_measured_sites) {
-    CHECK(has_site(kSpecguardDivReg, 0x240919BULL, 5));
-    CHECK(has_site(kSpecguardDivReg, 0x24095B4ULL, 6));
-    CHECK(has_site(kSpecguardDivMem, 0x240937DULL, 6));
+// 2949 실측 자리 둘(kDivReg)과 하나(kDivMem[3])도 있어야 한다(2944 에서 각 +0x10).
+TEST(specguard_table_keeps_the_2949_measured_sites) {
+    CHECK(has_site(kSpecguardDivReg, 0x24091ABULL, 5));
+    CHECK(has_site(kSpecguardDivReg, 0x24095C4ULL, 6));
+    CHECK(has_site(kSpecguardDivMem, 0x240938DULL, 6));
 }
 
 // 2850 값으로 남겨 둔 셋은 **지우지 않는다.** install 이 opcode 를 보고
@@ -137,7 +138,7 @@ TEST(specguard_site_total_counts_both_tables) {
     CHECK(kSpecguardSiteTotal == 8);
 }
 
-// 0xF83F6B4 의 꼬리. `48 85 D2` = test rdx,rdx - REX 접두를 건너뛰면 0x85 이고
+// 0xF83F6B4 의 꼬리(2949 의 0xF2FD6C3 도 같은 바이트다). `48 85 D2` = test rdx,rdx - REX 접두를 건너뛰면 0x85 이고
 // modrm 0xD2 는 mod==3 이라 RIP 상대가 아니다. 케이브로 옮겨도 안전하다.
 TEST(specguard_tail_accepts_the_2944_twin_tail) {
     const std::uint8_t test_rdx[] = {0x48, 0x85, 0xD2};

@@ -25,6 +25,8 @@ namespace cdtb::game {
 //   - 구조체 {+0x00 u32 first, +0x04 u32 상한, +0x08 u64 나누는값, +0x10 u64}
 //   - `xor edx, edx` 바로 뒤 `div <나누는값>` -> `cmp eax, 상한`
 //
+// (이 절의 RVA 는 2944 기준이다. 2949 자리는 아래 두 표의 주석에 있다.)
+//
 // 크래시가 나는 까닭은 둘 중 하나다:
 //   (A) 0 검사가 **아예 없다**            - 0x240937D
 //   (B) 검사는 있는데 **0 갈래가 div 로 샌다** - 0xF83F65B · 0xF83F6B4 · 0x24095B4
@@ -54,19 +56,30 @@ struct SpecguardSite {
 // `specguard_unsupported()` 가 참이 되고 지급 창이 경고한다. 지우면
 // "전부 설치" 라는 거짓 보고가 된다.
 //
-//   0xEB1BF4(2760) -> 0xEB26B4(2850) -> 없음(2944)   가방 렌더
-//   0xEA874F(2760) -> 0xEA920F(2850) -> 없음(2944)   가방 렌더
-//   0x21DA368(2760) -> 0x21DB8D8(2850) -> 없음(2944) 가방 렌더
-//   0x234EC7D(2760) -> 0x235021D(2850) -> 0x240937D(2944)  착용
+//   0xEB1BF4(2760) -> 0xEB26B4(2850) -> 없음(2944 · 2949)   가방 렌더
+//   0xEA874F(2760) -> 0xEA920F(2850) -> 없음(2944 · 2949)   가방 렌더
+//   0x21DA368(2760) -> 0x21DB8D8(2850) -> 없음(2944 · 2949) 가방 렌더
+//   0x234EC7D(2760) -> 0x235021D(2850) -> 0x240937D(2944) -> 0x240938D(2949)  착용
+//
+// **2949(2026-09-22):** 다섯 자리의 `div + 꼬리` 바이트열이 실행 섹션에서 **각각 딱
+// 1곳**이고, 2944 와 바이트가 같아 patch_len·꼬리 위치 독립도 그대로다. 가족 표식도
+// 그대로다 - 네 함수가 공통으로 전역 `0x06D69458`(2944 와 같은 자리)을 읽고
+// `0x01416C10`(2944 는 `0x01416C00`)을 부르며 gs:[0x58] + `0x1EC` 를 본다.
+// 전문: `docs/superpowers/specs/2026-09-22-game-update-2949.md` §2.
 inline constexpr SpecguardSite kSpecguardDivMem[] = {
-    {0xEB26B4, 7}, {0xEA920F, 5}, {0x21DB8D8, 7}, {0x240937D, 6}};
+    {0xEB26B4, 7}, {0xEA920F, 5}, {0x21DB8D8, 7}, {0x240938D, 6}};
 
 // div <reg64> 자리. 나누는 값이 레지스터다. patch_len = div(3) + 위치독립 꼬리.
 //
-//   0xF064E5B(2760) -> 0xF01981B(2850) -> 0xF83F65B(2944)  `div r8` + `cmp eax,[rdi+4]`
-//   **0xF83F6B4(2944)**                                    `div r8` + `test rdx,rdx`
-//   0x234EA9B(2760) -> 0x235003B(2850) -> 0x240919B(2944)  `div r14` + `mov ecx,edi`
-//   0x234EEB4(2760) -> 0x2350454(2850) -> 0x24095B4(2944)  `div r9` + `mov ecx,r8d`
+//   0xF064E5B(2760) -> 0xF01981B(2850) -> 0xF83F65B(2944) -> 0xF2FD66B(2949)  `div r8` + `cmp eax,[rdi+4]`
+//   **0xF83F6B4(2944)** -> 0xF2FD6C3(2949)                                   `div r8` + `test rdx,rdx`
+//   0x234EA9B(2760) -> 0x235003B(2850) -> 0x240919B(2944) -> 0x24091AB(2949)  `div r14` + `mov ecx,edi`
+//   0x234EEB4(2760) -> 0x2350454(2850) -> 0x24095B4(2944) -> 0x24095C4(2949)  `div r9` + `mov ecx,r8d`
+//
+// 2949 에서 쌍둥이 간격은 0x59 가 아니라 **0x58** 이다. 두 div 사이에 끼어 있는
+// `xor [rip+..], esi` 한 줄의 차이이고, 두 자리의 앞뒤 모양(`mov r8,[rdi+8]; test;
+// jne; mov eax,[rdi]; jmp -> xor edx,edx; div r8`)은 2944 와 같다 - 같은 함수
+// 0xF2FD5E0..0xF2FD738 안이다.
 //
 // **0xF83F6B4 는 2026-09-20 에 새로 찾은 자리다.** 0xF83F65B 와 **같은 함수**
 // (0xF83F5D0..0xF83F734) 안에 89바이트 뒤에 있고, 같은 `[rdi+8]` 로 나누며
@@ -83,7 +96,7 @@ inline constexpr SpecguardSite kSpecguardDivMem[] = {
 // 앞의 것만 걸면 **크래시를 89바이트 뒤로 옮길 뿐이다** - 가드가 몫 0 을 내면
 // `cmp eax,[rdi+4] / jae` 가 상한>0 인 한 안 뛰어 그대로 여기로 흘러온다.
 inline constexpr SpecguardSite kSpecguardDivReg[] = {
-    {0xF83F65B, 6}, {0xF83F6B4, 6}, {0x240919B, 5}, {0x24095B4, 6}};
+    {0xF2FD66B, 6}, {0xF2FD6C3, 6}, {0x24091AB, 5}, {0x24095C4, 6}};
 
 inline constexpr int kSpecguardSiteTotal =
     static_cast<int>(std::size(kSpecguardDivMem) +

@@ -1,7 +1,7 @@
 #pragma once
 
-// @build 1.0.0.2944  kHireCheckRva 재도출(고용 작업 +0x3F3, 교차검증 통과)
-//   근거: specs/2026-09-18-game-update-2944.md §3
+// @build 1.0.0.2949  kHireCheckRva 재도출(고용 작업 +0x3F3, 3021 작업 +0x36A 교차검증
+//   통과, 2026-09-22). 근거: specs/2026-09-22-game-update-2949.md §3
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -529,7 +529,10 @@ bool endurance_ready();
 // 영역이 다르다). 고용 작업 +0x3F3 의 call 대상이고 2454 작업 +0x36A 도 같은
 // 자리를 부른다. 본체로 가는 jmp 썽크(E9)다 - run_hire_species 가 부르기 전에
 // 썽크를 따라가 본체 프롤로그까지 확인한다(아래 두 함수).
-inline constexpr std::uint64_t kHireCheckRva = 0x214E8B0;   // 2850 까지 0x20991F0
+// 1.0.0.2949(2026-09-22): 고용 작업 0x2BADB90 +0x3F3 과 3021 작업 0x2BA1520 +0x36A 가
+// 둘 다 0x214E8C0 을 부른다. 썽크 `E9 AB 4C 2E 0C` -> 본체 0xE433570, 본체 프롤로그가
+// kHireCheckBodyPrologue 와 같다.
+inline constexpr std::uint64_t kHireCheckRva = 0x214E8C0;   // 2944 0x214E8B0 · 2850 0x20991F0
 
 // 썽크 n바이트가 `jmp rel32`(E9) 면 그 대상 절대 주소, 아니면 0. thunk_addr 는
 // 썽크의 절대 주소다(rel32 는 다음 명령 기준). 읽기는 호출자가 한다.

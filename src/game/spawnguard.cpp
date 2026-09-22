@@ -1,8 +1,8 @@
-// @build 1.0.0.2944  **kCallSiteRva 를 재도출했다**(2026-09-20) - 0x2B8DD36.
-//   조회를 부르는 273곳 중 뒤가 `cmp qword [rax+0x28],-1` 인 자리는 한 곳뿐이고
-//   (파일 전량에서도 한 곳) 그것이 널 검사가 빠진 그 자리다. 판정을 그 꼬리까지
-//   보도록 넓혔다. 자리와 근거는 `game/spawnguard_site.h`.
-// @build 1.0.0.2944  kLookupRva · kEmptyRecordRva 재도출(짝 97곳 만장일치)
+// @build 1.0.0.2949  **kCallSiteRva · kLookupRva 를 재도출했다**(2026-09-22) -
+//   0x2B8DD46 · 0x2146120. 조회를 부르는 273곳 중 뒤가 `cmp qword [rax+0x28],-1` 인
+//   자리는 여전히 한 곳뿐이고, kEmptyRecordRva(0x6CF2F70)는 lea 짝 142곳 만장일치로
+//   그대로다. 판정은 2944 때 넓힌 대로 꼬리까지 본다. 자리와 근거는
+//   `game/spawnguard_site.h`.
 
 #include "game/guardcave.h"
 #include "game/spawnguard.h"

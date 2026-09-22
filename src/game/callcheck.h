@@ -1,5 +1,11 @@
 #pragma once
 
+// @build 1.0.0.2949  kWheelUiFnRva 만 옮겼다(0x10BE8B0 -> 0x10BE8C0). 나머지는 2949 에서
+//   그대로임을 의미로 대조했다(2026-09-22): 검증기 +0x5E 가 새 조회 0x2146120 을 부르고
+//   오류 슬롯 여섯을 2944 와 같은 오프셋에서 읽는다 · 앞단 +0x14C 가 검증기를 부른다 ·
+//   관리자·관문 바이트 여섯이 맞고 관리자 전역이 0x6D691B0 그대로 · 휠 UI +0x495 가
+//   0x6A6555C 를 읽는다. 근거: specs/2026-09-22-game-update-2949.md §6.
+
 #include <cstddef>
 #include <cstdint>
 
@@ -183,7 +189,9 @@ inline void callcheck_count_one(std::uint32_t err, CallCheckCounts* c) {
 // 인자 수(§1.14): 휠 UI 는 `this` 하나(rdx/r8/r9 를 읽기 전에 먼저 쓰고 스택 인자를
 // 안 읽는다). 앞단은 셋(this · 오류 out · 번호) - 호출자 둘 다 rcx/rdx/r8 만 채우고
 // 콜리가 스택 인자를 안 읽는다. 휠은 오류를 반환값이 아니라 **넘겨준 칸**에서 읽는다.
-inline constexpr std::uint64_t kWheelUiFnRva = 0x10BE8B0;
+// 1.0.0.2949: `UIGamePlayControlRoot_ContentSlotMenu@uiCommonScript` vtable(0x56EBA00)의
+// [18] 이 0x10BE8C0 이고, 그 +0x486 이 앞단 0x9E0FC0 을 부른다(2944 와 같은 오프셋).
+inline constexpr std::uint64_t kWheelUiFnRva = 0x10BE8C0;   // 2944 0x10BE8B0
 inline constexpr std::size_t kWheelUiPreCallOff = 0x486;   // call kWheelPreFnRva
 inline constexpr std::size_t kWheelUiSlotOff = 0x1C8;      // i32, -1 = 고른 칸 없음
 inline constexpr std::size_t kWheelUiKindOff = 0x158;      // u8, 칸 종류
