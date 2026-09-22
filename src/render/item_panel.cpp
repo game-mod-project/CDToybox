@@ -176,7 +176,10 @@ void draw_item_panel(bool* open) {
         ImGuiTableFlags_SortTristate;
     // 열 차례가 game::item_sort_from_specs 의 색인과 **같아야 한다**.
     // 여기에 열을 끼우면 거기도 같이 밀어야 한다.
-    if (ImGui::BeginTable("items", 7, kFlags)) {
+    // 표 ID 는 열 수를 바꿀 때 같이 바꾼다 - 옛 ID 의 저장 설정(정렬 열 한 줄)을
+    // ImGui 1.92.9b 가 새 열 수에 차례로 끼워 맞춰, 바꾼 뒤 첫 실행에서 열 순서가
+    // 흐트러졌다(설명 열을 넣은 2026-09-22, 하니스 실측). 저장된 정렬은 한 번 잃는다.
+    if (ImGui::BeginTable("items7", 7, kFlags)) {
         // 별표는 첫 칸에 따로 둔다. 키 칸에 겹쳐 놓았더니 줄 전체를
         // 덮는 Selectable 이 클릭을 가져가 눌리지 않았다.
         ImGui::TableSetupColumn("★", ImGuiTableColumnFlags_WidthFixed |

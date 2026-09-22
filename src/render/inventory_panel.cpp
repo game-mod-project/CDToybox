@@ -78,7 +78,7 @@ bool g_waiting = true;
 // 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류. 같은
 // 위젯(render/filter_bar)을 쓴다. '이름 없는 것 감추기' 는 이 창에 없다.
 FilterBar g_bar;
-// 이 창의 필터바 옵션. 이름만 본다 - 키 문자열까지 걸면 숫자를 쳤을 때
+// 이 창의 필터바 옵션. 이름 · 설명만 본다 - 키 문자열까지 걸면 숫자를 쳤을 때
 // 동작이 바뀐다. 힌트("이름 · 설명으로 검색")와 match_key=false 가 한 쌍이다.
 const FilterBarOpts g_opts = [] {
     FilterBarOpts o;
@@ -832,7 +832,10 @@ void draw_inventory_panel(bool* open) {
     // 표를 닫은 뒤 읽는다.
     bool need_refresh = false;
     // 열 차례가 apply_sort 의 색인과 **같아야 한다**.
-    if (ImGui::BeginTable("inv", 10,
+    // 표 ID 는 열 수를 바꿀 때 같이 바꾼다 - 옛 ID 의 저장 설정(정렬 열 한 줄)을
+    // ImGui 1.92.9b 가 새 열 수에 차례로 끼워 맞춰, 바꾼 뒤 첫 실행에서 열 순서가
+    // 흐트러졌다(설명 열을 넣은 2026-09-22, 하니스 실측). 저장된 정렬은 한 번 잃는다.
+    if (ImGui::BeginTable("inv10", 10,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Sortable,

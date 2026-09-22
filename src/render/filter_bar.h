@@ -31,9 +31,9 @@ struct FilterBarOpts {
     const char* id = "filter";            // ImGui ID 범위. 창마다 다르게
     const char* hint = "이름으로 검색";    // 검색창 힌트
     bool show_hide_unnamed = false;       // 아이템 목록만 켠다
-    // 검색어를 키 문자열에도 거는가. 힌트 문구와 한 쌍이다 - "이름 또는
-    // 키로 검색" 이면 true, "이름으로 검색" 이면 false. 떨어져 있으면
-    // 한쪽만 고쳐 어긋난다.
+    // 검색어를 키 문자열에도 거는가. 힌트 문구와 한 쌍이다 - 힌트가 키를
+    // 말하면("이름 · 설명 · 키로 검색") true, 아니면("이름 · 설명으로 검색")
+    // false. 떨어져 있으면 한쪽만 고쳐 어긋난다.
     bool match_key = true;
 };
 
