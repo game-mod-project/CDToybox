@@ -119,6 +119,9 @@ git -C E:/CDToybox worktree add E:/CDToybox-xxx -b <브랜치> develop
 창을 건드린다). 스크립트 머리말에 ImGui 백엔드 관련 함정(WM_MOUSELEAVE,
 `AllowOverlap`)이 적혀 있으니 손대기 전에 읽을 것.
 
+**게임 갱신 뒤** — `tools/rtti/recheck.py <exe>` 로 무엇이 낡았나를 보고,
+`tools/rtti/rederive.py <exe>` 로 새 값을 낸다(절차 `specs/2026-09-01-patch-recheck.md`).
+
 **정적 분석 도구** — `tools/rtti/*.py`. 인터프리터는 `py -3.14`
 (= `%LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe`) 를 쓴다.
 `WindowsApps\python.exe` 는 스토어 스텁이라 멈춘다.

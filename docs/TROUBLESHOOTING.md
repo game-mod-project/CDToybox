@@ -2353,7 +2353,8 @@ py -3.14 tools/rtti/cheat_report.py "<exe>" TrocTr > id_map.tsv   # 1115개 전�
 - `커서 가드 설치 완료` · `raw input 등록`
 
 고정 RVA 가족: 손으로 세지 말고 `py -3.14 tools/rtti/recheck.py <exe>` 의 4번 표를 본다
-(소스를 읽어 만든다). 그 표에 안 잡히는 **배열·구조체 안 자리**도 있다 —
+(소스를 읽어 만든다). **새 값은 `py -3.14 tools/rtti/rederive.py <exe>` 가 옛 경로 그대로
+다시 짚어 소스와 대조해 낸다**(2026-09-22). 그 표에 안 잡히는 **배열·구조체 안 자리**도 있다 —
 `specguard_sites.h`(8) · `skillgate.cpp`(관문 2) · `callgate.cpp`(관문 4) · `grant.cpp`
 (`kGoodDriveSites`) · `callcheck.h`(오류 슬롯 7). 2949(2026-09-22)에서는 이 전부를 다시 짚었다
 — 폭이 구역마다 달랐고(0 · +0x10 · 수십만) 지식 컴포넌트 코드는 통째로 옮겨졌다
