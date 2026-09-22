@@ -708,18 +708,26 @@ static EqWriteResult eq_write_all(const mem::Reader& reader, std::uint64_t insta
     // 가방에도 있는 장비(게임 "비활성화")는 가방 레코드가 진짜다 - 서버·클라 인벤토리
     // 레코드에도 쓴다(2026-09-22 실측: 장비 표에만 쓴 소켓 5칸이 착용 변경 뒤 가방 레코드의
     // 2칸으로 돌아갔다). 염색은 가방 레코드의 +0x78 자리를 확인하지 않아 장비 표에만 쓴다.
+    int bag_by_realm[2] = {0, 0};   // 서버 · 클라 가방 레코드에 쓴 수(로그용)
     if (op != 2) {
         // 색인을 안 받았으면 이번 쓰기만을 위해 만든다(한 칸 편집이라 한 번이다).
         EqBagIndex local;
         if (bag_in == nullptr) local = eq_bag_index(reader);
         const EqBagIndex& idx = (bag_in != nullptr) ? *bag_in : local;
-        for (const auto* m : {&idx.server, &idx.client}) {
-            const auto it = m->find(instance);
-            if (it == m->end()) continue;
+        const std::unordered_map<std::uint64_t, std::uintptr_t>* maps[2] = {&idx.server,
+                                                                            &idx.client};
+        for (int realm = 0; realm < 2; ++realm) {
+            const auto it = maps[realm]->find(instance);
+            if (it == maps[realm]->end()) continue;
+            // 색인에 있으면 가방 장비다 - 아래 확인에서 빠져도 장비 표 사본의 realm 수로 성공을
+            // 알리지 않는다(가방 레코드에 못 썼으면 실패다).
+            res.in_bag = true;
             // 색인이 낡았을 수 있다(일괄 작업 도중 로드 등) - 레코드가 아직 그 인스턴스인지 본다.
             if (rd64(reader, it->second) != instance) continue;
-            res.in_bag = true;
-            if (apply(it->second)) ++res.bag;
+            if (apply(it->second)) {
+                ++res.bag;
+                ++bag_by_realm[realm];
+            }
         }
     }
     // 게임 메모리 쓰기는 예외 없이 남긴다. 이전값은 realm 마다 달라 안 읽는다.
@@ -734,8 +742,12 @@ static EqWriteResult eq_write_all(const mem::Reader& reader, std::uint64_t insta
                               std::to_string(static_cast<int>(g)) + "," +
                               std::to_string(static_cast<int>(bl));
     else after = "소켓 " + std::to_string(a) + "칸";
+    // 가방 장비면 서버·클라를 따로 적는다 - 못 쓴 쪽(0)도 보인다.
     after += " (" + std::to_string(res.realms) + " realm" +
-             (res.bag > 0 ? ", 가방 " + std::to_string(res.bag) : std::string()) + ")";
+             (res.in_bag ? ", 가방 서버 " + std::to_string(bag_by_realm[0]) + " · 클라 " +
+                               std::to_string(bag_by_realm[1])
+                         : std::string()) +
+             ")";
     log_write(kWhat[op], static_cast<std::uintptr_t>(instance), "-", after);
     return res;
 }

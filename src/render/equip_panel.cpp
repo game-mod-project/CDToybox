@@ -196,6 +196,11 @@ void draw_dye_popup(const mem::Reader& reader,
         return;
     }
 
+    // 가방에 든 장비의 염색은 장비 표 사본에만 들어간다 - 가방 레코드의 염색 자리를 확인하지
+    // 않아 거기에는 안 쓴다. 게임이 가방 값으로 되맞출 수 있음을 미리 말한다.
+    if (piece->in_bag) {
+        ImGui::TextDisabled("가방에 든 장비라 염색은 장비 표에만 들어갑니다 - 게임이 되돌릴 수 있습니다.");
+    }
     ImGui::TextUnformatted("zone 별 색입니다. 벗었다 다시 착용하면 화면에"
                            " 반영됩니다.");
     for (const auto& d : piece->dyes) {
@@ -360,7 +365,7 @@ void draw_level_cell(const mem::Reader& reader, const game::WornPiece& w,
 }
 
 // 착용 장비 전부를 표의 상한까지(담금질 max_temper / 연마 max_sharpness). 상한 0 인
-// 것(그 값이 없는 아이템)은 건너뛴다. 클라·서버 모두 쓴다.
+// 것(그 값이 없는 아이템)은 건너뛴다. 클라·서버 모두 쓰고, 가방 장비는 가방 레코드에도 쓴다.
 void bulk_write(const mem::Reader& reader, const std::vector<game::WornPiece>& pieces,
                 bool temper) {
     const char* what = temper ? "담금질" : "연마";
@@ -568,7 +573,7 @@ void draw_equip_panel(bool* open) {
                 ImGui::TextDisabled("(가방)");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("게임에서 '비활성화' 로 보이는 장비입니다.\n"
-                                      "가방 기록의 값을 보이고, 고치면 가방 기록에도 씁니다.");
+                                      "가방 기록의 값을 보이고, 고치면 가방 기록에도 씁니다(염색은 장비 표에만).");
                 }
             }
 
