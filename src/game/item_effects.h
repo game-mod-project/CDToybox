@@ -157,6 +157,10 @@ inline constexpr std::size_t kBuffDataFlag3A = 0x3A;    // u8 배율 분기 선�
 inline constexpr std::size_t kBuffDataLinkRow = 0x90;   // 하위 u16 = BuffInfo 행
 inline constexpr std::size_t kBuffDataLinkLevel = 0x94; // i32 대상 레벨
 inline constexpr std::uint16_t kNoPatternRow = 0xFFFF;
+// "BuffInfo 행이 없다" 의 표식. 값은 위와 같은 0xFFFF 지만 **뜻이 다르다**
+// (패턴 표가 아니라 버프 표를 가리킨다) - 한 상수를 두 뜻으로 쓰면 나중에
+// 한쪽 값만 바뀔 때 조용히 어긋난다.
+inline constexpr std::uint16_t kNoBuffRow = 0xFFFF;
 
 // PatternDescriptionInfo 레코드(0x60)
 inline constexpr std::size_t kPatternEntity = 0x00;     // u32 현지화 엔티티

@@ -248,6 +248,28 @@ TEST(no_item_effects_rebuild_once_built) {
     CHECK(!cdtb::game::should_build_item_effects(true, false));
 }
 
+TEST(no_publish_when_the_snapshot_has_no_lines) {
+    // 줄이 0 이면 게시하지 않는다. `items_named()` 는 아이템 이름 카테고리가
+    // 찼음만 말하지 형식 문자열(cat 15)이 찼다는 뜻이 아니다 - 그때 게시하면
+    // "해석 못 한 효과 N개" 만 영원히 남는다(staged-data-load-retry 함정).
+    cdtb::game::ItemEffectSummary empty;
+    CHECK(!cdtb::game::should_publish_item_effects(empty));
+
+    // 해석 못 한 것만 잔뜩 나온 판도 마찬가지다 - 이것이 바로 현지화가 덜 찬
+    // 모습이다. 다음 주기에 다시 온다.
+    cdtb::game::ItemEffectSummary only_unresolved;
+    only_unresolved.unresolved = 1459;
+    CHECK(!cdtb::game::should_publish_item_effects(only_unresolved));
+}
+
+TEST(publish_when_the_snapshot_has_at_least_one_line) {
+    cdtb::game::ItemEffectSummary s;
+    s.items_with_effects = 1;
+    s.total_lines = 1;
+    s.unresolved = 900;   // 해석 못 한 것이 많아도 줄이 하나라도 있으면 낸다
+    CHECK(cdtb::game::should_publish_item_effects(s));
+}
+
 TEST(summarize_item_effects_counts_rows_lines_and_unresolved) {
     std::vector<cdtb::game::ItemEffects> rows(4);
     rows[0].lines.push_back({"생명 500 회복 (1분)", 60000});

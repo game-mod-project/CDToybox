@@ -34,7 +34,9 @@ vtable 목록은 둘 다 받는다.
    `test r8b, 0xFB`). **분기마다 결과가 다르다.** 한 함수에서 상수를 전부 긁어
    곱하면 틀린다. 그래서 정규식이 아니라 종류 0~8 마다 **따로 모의 실행**한다.
 3. **나눗셈의 두 얼굴** - 정수는 컴파일러 매직 상수(`imul` + `sar`), 실수는
-   `vdivsd`/`vmulsd` 의 rip 상대 상수다. 둘을 합쳐 최종 배율을 낸다.
+   `vdivsd`/`vmulsd` 의 rip 상대 상수다. 둘을 합쳐 최종 배율을 내되, **어느
+   쪽이었는지를 `integer_div` 로 같이 낸다** - 정수 경로는 나머지가 버려지므로
+   부르는 쪽이 잘라야 하고(25000/10⁴ -> 2), 실수 경로는 소수가 살아남아야 한다.
 
 표의 키는 셋이다 - (vtable, 파라미터 종류, `+0x3A`)
 ---------------------------------------------------
@@ -253,6 +255,8 @@ class Walk:
         self.outcome = 'none'       # none | number | object
         self.getter = False         # 겹침 증분을 더해 주는 값 게터를 거쳤는가
         self.trunc = False
+        self.int_div = False        # 매직 상수(imul+sar) 로 나눴다 - **잘린다**
+        self.float_div = False      # vdivsd/vmulsd 로 나눴다 - 소수가 남는다
         self.stop = ''
         self.steps = 0
 
@@ -506,6 +510,7 @@ class Walk:
                 d = magic_divisor(self.awaiting_sar, ops[1].imm)
                 if d:
                     self.den *= d
+                    self.int_div = True   # 정수 나눗셈이다 - 나머지가 버려진다
                 self.awaiting_sar = None
             return out
 
@@ -523,6 +528,7 @@ class Walk:
                     self.den *= f
                 else:
                     self.num *= f
+                self.float_div = True   # 실수 나눗셈이다 - 소수가 살아남는다
             return out
 
         if m in ('vmovss', 'vmovsd', 'movss', 'movsd') and len(ops) == 2:
@@ -555,7 +561,12 @@ class Walk:
         if self.outcome != 'number' or self.read is None:
             return None
         div = self.den / self.num
+        # **정수 나눗셈인가.** 매직 상수(`imul`+`sar`)로 나눴으면 나머지가
+        # 버려지므로 부르는 쪽도 잘라야 한다(실측 25000/10⁴ -> 2). 실수
+        # 경로(`vdivsd`/`vmulsd`)를 한 번이라도 지났으면 소수가 살아남는다 -
+        # 둘이 섞이면 **안 자르는 쪽**으로 둔다(없는 자릿수를 만들지 않는다).
         return {'offset': self.read, 'divisor': div, 'trunc': self.trunc,
+                'integer_div': self.int_div and not self.float_div,
                 'getter': self.getter, 'stop': self.stop}
 
 
@@ -644,6 +655,12 @@ HEADER = """\
 // 종류 8({RepeatTick})은 여기 없다. 호출부가 슬롯 11 을 부르지 않고 BuffData
 // `+0x28`(주기 ms)을 1000.0 으로 나눠 직접 만든다(RVA 0x1F29A51).
 //
+// `integer_div` — 나눗셈이 **정수**인가(컴파일러 매직 상수 `imul`+`sar`). true 면
+// 게임이 나머지를 버리므로 부르는 쪽도 잘라야 한다(실측 25000/10⁴ -> 2 · 75000/10⁴
+// -> 7). false 는 `vdivsd`/`vmulsd` 경로라 **소수가 살아남는다** - 자르면 화면값이
+// 2.5 여야 할 자리에 2 가 나간다. 둘이 섞인 조합은 false 다(없는 자릿수를 만들지
+// 않는다).
+//
 // `note` 에 붙는 말
 //   절대값 표시 - 종류 4~7 = `{|ParamN|}` 자리. 게임이 부호를 떼고 보인다.
 //   겹침 증분   - 게임은 그 칸이 아니라 `[칸] + [증분칸] * 겹침수` 를 쓴다.
@@ -715,9 +732,10 @@ def main(argv=None):
     ok = self_check(rows)
 
     body = ''.join(
-        '    {0x%XULL, %d, %d, 0x%X, %s,\n     "%s"},\n'
+        '    {0x%XULL, %d, %d, 0x%X, %s, %s,\n     "%s"},\n'
         % (r['vt'], r['kind'], r['flag'], r['rule']['offset'],
            fmt_div(r['rule']['divisor']),
+           'true' if r['rule']['integer_div'] else 'false',
            esc(build_note(r['name'], r['kind'], r['rule'], r['info'])))
         for r in rows)
     unknown_lines = ''.join(
@@ -817,11 +835,15 @@ def report(rows, unknown, classes, fsens):
     print('\n== 뽑은 규칙 %d줄 (클래스 %d종) =='
           % (len(rows), len(classes)), file=sys.stderr)
     for r in rows:
-        print('  0x%X  종류%d  +0x3A=%d  +0x%-4X ÷%-12s %s'
+        print('  0x%X  종류%d  +0x3A=%d  +0x%-4X ÷%-12s %-4s %s'
               % (r['vt'], r['kind'], r['flag'], r['rule']['offset'],
                  fmt_div_short(r['rule']['divisor']),
+                 '정수' if r['rule']['integer_div'] else '실수',
                  build_note(r['name'], r['kind'], r['rule'], r['info'])),
               file=sys.stderr)
+    ints = sum(1 for r in rows if r['rule']['integer_div'])
+    print('  (정수 나눗셈 %d줄 · 실수 %d줄)' % (ints, len(rows) - ints),
+          file=sys.stderr)
     print('\n== +0x3A 로 배율이 갈리는 %d종 ==' % len(fsens), file=sys.stderr)
     for vt, name, ks, info in fsens:
         for k in ks:

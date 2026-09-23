@@ -38,9 +38,13 @@ std::uintptr_t record_at(const mem::Reader& r, const Table& t,
     return static_cast<std::uintptr_t>(rec);
 }
 
-// 이 행의 `_equipAbleHashList` 에 해시가 들어 있는가. 목록의 [1]번째가 그 행
-// 자신의 이름 엔티티라도(명세 §4.7-F) 우리는 "들어 있는가" 만 보므로 그대로
-// 둔다 - 걸러낼 필요가 없다.
+// 이 행의 `_equipAbleHashList` 에 해시가 들어 있는가.
+//
+// 목록의 **[1]번째는 그 행 자신의 이름 엔티티**다(명세 §4.7-F). 그래도 거르지
+// 않는다 - 거를 근거(어떤 아이템의 `_equipAbleHash` 가 어느 행의 이름 엔티티와
+// 겹치는 사례)를 **실측한 적이 없기 때문**이다. 겹치면 그 행의 부위가 한 줄
+// 잘못 붙는다. 실측으로 겹침을 세어 보기 전까지는 [1]을 건너뛰는 쪽이 오히려
+// 추측이다(진짜 그룹 해시가 그 자리에 오는 행이 있을 수 있다).
 bool row_has_hash(const mem::Reader& r, std::uintptr_t record,
                   std::uint32_t hash) {
     std::uint64_t list = 0;

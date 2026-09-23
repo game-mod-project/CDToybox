@@ -242,7 +242,7 @@ private:
         if (it != buff_cache_.end()) return it->second;
 
         ItemEffects e;
-        if (row != kNoPatternRow) {
+        if (row != kNoBuffRow) {
             const std::uintptr_t bd = buff_level_data(row, level);
             if (bd != 0) {
                 emit(bd, &e);
@@ -278,8 +278,11 @@ private:
     // --- BuffData 한 칸 -> 한 줄 (§4.7-D · E) ---
     void emit(std::uintptr_t outer, ItemEffects* out) {
         // **지속시간은 바깥쪽 것이다** - 사슬을 따라가기 전에 읽어 둔다.
+        // 못 읽으면 그 줄을 버린다(조용히 0 으로 두면 접미가 사라져 "즉발" 로
+        // 보인다 - 틀린 줄을 보이느니 안 보인다). 아래 패턴·vtable 읽기 실패와
+        // 같은 처리다 - 칸 자체가 안 읽히는 것은 해석 실패가 아니라 접근 실패다.
         std::uint32_t duration = 0;
-        r_.read_value(outer + kBuffDataDuration, &duration);
+        if (!r_.read_value(outer + kBuffDataDuration, &duration)) return;
 
         std::uintptr_t cur = outer;
         int depth = 1;
@@ -318,6 +321,12 @@ private:
         const Pattern& p = pattern_of(pattern_row);
         if (!p.ok) {
             ++out->unresolved;   // 형식 문자열이 아직 안 풀렸다
+            return;
+        }
+        // `_paramList` 를 못 읽었는데 형식에는 값 자리가 있다. 그대로 내면
+        // `{Param1}` 이 화면에 나간다 - **줄을 버리고 센다**(모르면 안 보인다).
+        if (p.params.empty() && format_needs_params(p.format)) {
+            ++out->unresolved;
             return;
         }
 
@@ -364,9 +373,12 @@ private:
         // 자리(`{|ParamN|}`)가 있는 것 자체가 음수가 온다는 뜻이다.
         std::int32_t raw = 0;
         if (!r_.read_value(bd + rule->offset, &raw)) return false;
-        // 나눈 뒤 **0 쪽으로 자른다**: 실측 25000/10⁴ -> 2 · 75000/10⁴ -> 7
-        // (반올림이면 3 · 8 이 됐을 것이다, §4.7-H 3번).
-        v->set(type, std::trunc(static_cast<double>(raw) / rule->divisor));
+        const double scaled = static_cast<double>(raw) / rule->divisor;
+        // **정수 나눗셈일 때만 0 쪽으로 자른다.** 게임이 매직 상수(`imul`+`sar`)로
+        // 나누는 자리는 나머지가 버려진다(실측 25000/10⁴ -> 2 · 75000/10⁴ -> 7 -
+        // 반올림이면 3 · 8 이 됐을 것이다, §4.7-H 3번). `vdivsd`/`vmulsd` 자리는
+        // 소수가 살아남아야 한다 - 무조건 자르면 2.5 여야 할 값이 2 로 나간다.
+        v->set(type, rule->integer_div ? std::trunc(scaled) : scaled);
         return true;
     }
 

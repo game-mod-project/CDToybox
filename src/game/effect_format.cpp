@@ -34,6 +34,27 @@ int abs_param_index(std::string_view body) {
 
 }  // namespace
 
+bool format_needs_params(std::string_view format) {
+    // 토큰 자르기는 effect_line 과 **같은 규칙**이라야 한다 - 여기서 "값 자리가
+    // 없다" 고 본 줄을 effect_line 이 값 자리로 읽으면 토큰이 새어 나간다.
+    std::size_t i = 0;
+    while (i < format.size()) {
+        if (format[i] != '{') {
+            ++i;
+            continue;
+        }
+        const std::size_t close = format.find('}', i);
+        if (close == std::string_view::npos) break;   // 짝이 안 맞는다 - 그대로 둔다
+        const std::string_view body = format.substr(i + 1, close - i - 1);
+        if (param_index(body) >= 0 || abs_param_index(body) >= 0 ||
+            body == "RepeatTick") {
+            return true;
+        }
+        i = close + 1;
+    }
+    return false;
+}
+
 std::string duration_suffix(std::uint32_t ms) {
     if (ms == 0) return {};
     if (ms >= 60000) return "(" + std::to_string(ms / 60000) + "분)";

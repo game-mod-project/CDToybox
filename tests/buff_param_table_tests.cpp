@@ -114,6 +114,36 @@ TEST(buff_param_table_keeps_the_level_classes_at_their_raw_value) {
     CHECK_EQ(buff_param_divisor(0x1458FC1C0ull, 1, 0), 1.0);
 }
 
+TEST(buff_param_table_marks_integer_and_float_divisions_apart) {
+    // 같은 "÷N" 이라도 게임이 매직 상수(`imul`+`sar`)로 나눈 자리는 나머지가
+    // 버려지고(정수), `vdivsd` 자리는 소수가 남는다. 하나로 뭉뚱그려 전부 자르면
+    // 2.5 여야 할 화면값이 2 로 나간다 - 그 갈래를 표가 들고 있어야 한다.
+    const BuffParamRule* crit = buff_param_rule(0x1458FA908ull, 1, 0);
+    CHECK(crit != nullptr);
+    if (crit != nullptr) {
+        // 실측: 25000/10⁴ -> 2 · 75000/10⁴ -> 7(반올림이면 3 · 8).
+        CHECK(crit->integer_div);
+    }
+    const BuffParamRule* rate = buff_param_rule(0x1458FB5A0ull, 2, 1);
+    CHECK(rate != nullptr);
+    if (rate != nullptr) {
+        CHECK(!rate->integer_div);   // ÷10⁷ 은 실수 경로다
+    }
+    // 같은 클래스·같은 종류인데 `+0x3A` 로 나눗셈 갈래까지 달라진다.
+    const BuffParamRule* rate0 = buff_param_rule(0x1458FB5A0ull, 2, 0);
+    CHECK(rate0 != nullptr);
+    if (rate0 != nullptr) {
+        CHECK(rate0->integer_div);
+    }
+    // 표가 통째로 한쪽으로 쏠리면(생성기가 갈래를 못 읽은 것이다) 여기서 깨진다.
+    std::size_t ints = 0;
+    for (const BuffParamRule& r : kBuffParamRules) {
+        if (r.integer_div) ++ints;
+    }
+    CHECK(ints > 0);
+    CHECK(ints < buff_param_rule_count());
+}
+
 TEST(buff_param_table_rows_are_sorted_and_unique) {
     // 오름차순이 아니면 같은 키가 두 줄 들어가도 안 보인다.
     CHECK(buff_param_rule_count() > 0);

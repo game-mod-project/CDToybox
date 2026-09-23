@@ -26,6 +26,7 @@
 #include "game/camera.h"
 #include "game/clan.h"
 #include "game/equip.h"
+#include "game/equip_types.h"
 #include "game/grant.h"
 #include "game/inventory.h"
 #include "game/item_effects.h"
@@ -2600,7 +2601,8 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
 // (cmd_items 와 같은 이유 - 배포 전에 여기서 결과를 본다).
 //
 //   effects                 전체 표를 걷고 요약 통계만 낸다
-//   effects <아이템키> ...  그 아이템들의 효과 줄 · 해석 못 한 수를 찍는다
+//   effects <아이템키> ...  그 아이템들의 효과 줄 · 해석 못 한 수 · 장착 부위를
+//                           찍는다(계획 Task 6)
 //
 // 아이템 키 -> 행 번호(build_item_effects 의 색인)는 build_item_catalog 의
 // 결과 위치로 셈하지 않는다 - 그쪽은 빈 슬롯을 건너뛰어 압축되므로 행 번호와
@@ -2680,6 +2682,15 @@ void cmd_effects(const mem::Rtti& rt, const mem::Reader& reader, int argc,
         return;
     }
 
+    // 장착 가능 부위(§4.7-F). 모드와 **같은 함수**를 부른다. 못 찾으면 부위
+    // 줄만 빠지고 효과는 그대로 낸다(모드의 discover_item_effects 와 같은 규칙).
+    std::uintptr_t equip_mgr = 0;
+    if (!game::find_static_manager(reader, rt, game::kEquipTypeManagerClass,
+                                   &equip_mgr)) {
+        equip_mgr = 0;
+        std::printf("장착 부위 표를 못 찾았습니다 - 부위 줄 없이 냅니다.\n");
+    }
+
     for (int i = 2; i < argc; ++i) {
         const std::uint32_t key =
             static_cast<std::uint32_t>(std::strtoull(argv[i], nullptr, 0));
@@ -2713,6 +2724,21 @@ void cmd_effects(const mem::Rtti& rt, const mem::Reader& reader, int argc,
                     fx.unresolved);
         for (const auto& line : fx.lines) {
             std::printf("   - %s\n", line.text.c_str());
+        }
+
+        // 장착 가능 부위. 해시가 0 이면 장착 제한이 없는 아이템이라 줄을
+        // 안 낸다(모드 툴팁도 그때는 그 절을 뺀다).
+        std::uint32_t equip_hash = 0;
+        reader.read_value(entry->record + game::kRecEquipAbleHash, &equip_hash);
+        if (equip_mgr != 0 && equip_hash != 0) {
+            const auto types = game::equip_type_names_from_manager(
+                reader, sys, equip_mgr, equip_hash);
+            std::printf("   장착 부위 %zu종 (해시 0x%08X): %s\n", types.size(),
+                        equip_hash,
+                        types.empty()
+                            ? "(이름을 못 풀었습니다)"
+                            : game::equip_types_line(types, types.size())
+                                  .c_str());
         }
     }
 }

@@ -38,6 +38,9 @@ constexpr std::uint64_t kDamage = 0x1458FC370ull;              // 종류 5 -> +0
 constexpr std::uint64_t kSocketCritical = 0x1458FA908ull;      // 종류 1 -> +0x98 ÷10⁴
 constexpr std::uint64_t kVaryStaticStatLevel = 0x1458FC1C0ull;  // 종류 1 -> +0xA0 ÷1
 constexpr std::uint64_t kChangeBuffLevel = cdtb::game::kChangeBuffLevelVtable;
+// 종류 2 의 배율이 **+0x3A 로 갈리는** 클래스. 0 -> +0x98 ÷1000(정수 나눗셈) ·
+// 1 -> +0x98 ÷10⁷(실수 나눗셈). 명세 §4.7-H''' 의 "용기 : 75% 회복" 이 이것이다.
+constexpr std::uint64_t kVaryDataDefinedStatRate = 0x1458FB5A0ull;
 constexpr std::uint64_t kUnknownClass = 0xDEADBEEFull;   // 배율 표에 없는 클래스
 
 // --- 패턴 행 (실측 행 번호를 그대로 쓴다) ---
@@ -46,6 +49,8 @@ constexpr std::uint16_t kPatHpTick = 4;      // 종류 8 + 종류 5 - 한 줄에
 constexpr std::uint16_t kPatIceLevel = 7;    // '냉기 저항 Lv{Param1}'
 constexpr std::uint16_t kPatNoString = 12;   // 현지화에 없는 패턴
 constexpr std::uint16_t kPatSocketCrit = 61;  // '천 갑옷 타격 시 치명타 확률 {Param1}% 증가'
+constexpr std::uint16_t kPatRecover = 9;     // '{Param2}% 회복' - 종류 **2**
+constexpr std::uint16_t kPatNoParamList = 13;  // 형식은 값을 요구하는데 목록이 없다
 
 // --- 버프 행 ---
 constexpr std::uint16_t kBuffSocketCrit = 242;  // 관통 I·II·III (레벨 1·2·3)
@@ -104,14 +109,19 @@ struct World {
     }
 
     // BuffData 한 칸. pattern_row 0xFFFF 면 패턴이 없다(링크이거나 툴팁 줄이 아니다).
+    // flag3a 는 배율 표의 셋째 키(§4.7-H''') - 같은 클래스·같은 종류라도 이
+    // 바이트로 배율이 갈린다.
     std::size_t buff_data(std::uint64_t vtable, std::uint32_t duration_ms,
-                          std::uint16_t pattern_row) {
+                          std::uint16_t pattern_row,
+                          std::uint8_t flag3a = 0) {
         const std::size_t bd = alloc(0x120);
         mem.put_u64(bd + cdtb::game::kBuffDataVtable, vtable);
         mem.put_u32(bd + cdtb::game::kBuffDataDuration, duration_ms);
         mem.put_u16(bd + cdtb::game::kBuffDataPattern, pattern_row);
+        mem.put_u8(bd + cdtb::game::kBuffDataFlag3A, flag3a);
         // +0x3A 는 배율 분기 선택자, +0x3B 는 잔여물이다. 상위 바이트를 채워
-        // **하위 u16 만** 행 번호로 쓰는지 못박는다.
+        // **하위 u16 만** 행 번호로 쓰는지 못박고, 동시에 구현이 +0x3A 대신
+        // +0x3B 를 읽으면(둘은 붙어 있다) 0xFB 가 와서 분기가 달라지게 한다.
         mem.put_u8(bd + 0x3B, 0xFB);
         return bd;
     }
@@ -323,7 +333,9 @@ struct Fixture {
         kRowNonSkill = 7,     // 스킬이 아닌 사용
         kRowBadPattern = 8,   // 형식 문자열이 안 풀린다
         kRowShared = 9,       // kRowConsumable 과 같은 스킬(캐시)
-        kItemCount = 10,
+        kRowFlag3A = 10,      // 같은 클래스·종류, +0x3A 만 다른 두 칸
+        kRowNoParamList = 11,  // 형식은 값을 요구하는데 `_paramList` 가 없다
+        kItemCount = 12,
     };
 
     World w;
@@ -333,7 +345,7 @@ struct Fixture {
     Fixture() {
         World::Tbl item = w.make_table(kItemCount, cdtb::game::kItemMgrCount);
         World::Tbl use = w.make_table(16, cdtb::game::kEffectMgrCount);
-        World::Tbl skill = w.make_table(8, cdtb::game::kEffectMgrCount);
+        World::Tbl skill = w.make_table(16, cdtb::game::kEffectMgrCount);
         World::Tbl buff = w.make_table(320, cdtb::game::kEffectMgrCount);
         World::Tbl pattern = w.make_table(64, cdtb::game::kEffectMgrCount);
 
@@ -349,6 +361,10 @@ struct Fixture {
         w.set_pattern(pattern, kPatSocketCrit, 0x6100,
                       "천 갑옷 타격 시 치명타 확률 {Param1}% 증가", {{1, 0}});
         w.set_pattern(pattern, kPatNoString, 0xC000, nullptr, {{1, 0}});
+        // 종류 **2** 짜리 한 줄. 배율이 +0x3A 로 갈리는 클래스를 태운다.
+        w.set_pattern(pattern, kPatRecover, 0x9000, "{Param2}% 회복", {{2, 0}});
+        // 형식은 `{Param1}` 을 요구하는데 `_paramList` 가 비었다(M-10).
+        w.set_pattern(pattern, kPatNoParamList, 0xD000, "{Param1} 증가", {});
 
         // --- 소모품 사슬: 스킬 1 레벨 1 = 줄 둘 ---
         const std::size_t hp_max = w.buff_data(kVaryStatMaxValue, 90000, kPatHpMax);
@@ -414,6 +430,26 @@ struct Fixture {
         w.put_value(bad, 0x98, 1000);
         w.set_skill(skill, 6, {{bad}});
 
+        // --- 배율 분기 선택자 `+0x3A` (§4.7-H''') ---
+        // 클래스도 종류도 값도 같고 **`+0x3A` 만 다르다**. 표가 가르는 배율:
+        //   +0x3A = 1 -> +0x98 ÷10⁷ (실수 나눗셈)  75000000 -> 7.5
+        //   +0x3A = 0 -> +0x98 ÷1000(정수 나눗셈)  75000000 -> 75000
+        // 구현이 +0x3A 대신 +0x3B(잔여물 0xFB)를 읽으면 둘 다 0 으로 접혀
+        // 75000 이 두 번 나온다.
+        const std::size_t rate_hi =
+            w.buff_data(kVaryDataDefinedStatRate, 0, kPatRecover, 1);
+        w.put_value(rate_hi, 0x98, 75000000);
+        const std::size_t rate_lo =
+            w.buff_data(kVaryDataDefinedStatRate, 0, kPatRecover, 0);
+        w.put_value(rate_lo, 0x98, 75000000);
+        w.set_skill(skill, 7, {{rate_hi, rate_lo}});
+
+        // --- `_paramList` 가 없는데 형식은 값을 요구한다 ---
+        const std::size_t no_params =
+            w.buff_data(kVaryStatMaxValue, 0, kPatNoParamList);
+        w.put_value(no_params, 0x98, 1000);
+        w.set_skill(skill, 8, {{no_params}});
+
         // --- 어비스: 관통 I·II·III (레벨 1·2·3) ---
         const std::size_t crit1 = w.buff_data(kSocketCritical, 0, kPatSocketCrit);
         w.put_value(crit1, 0x98, 25000);   // ÷10⁴ = 2.5 -> **2**
@@ -437,6 +473,8 @@ struct Fixture {
         // 스킬이 아닌 사용 - 문맥은 툴팁이지만 효과로 안 친다.
         w.add_use(use, 8, 0x08, 0x00, {{1, 1}});   // FeedToTarget
         w.add_use(use, 9, 0x10, 0x00, {{1, 1}});   // RegisterReserveSlot
+        w.add_use(use, 10, cdtb::game::kUseKindSkill, 0x00, {{7, 1}});
+        w.add_use(use, 11, cdtb::game::kUseKindSkill, 0x00, {{8, 1}});
 
         // --- 아이템 레코드 ---
         w.set_uses(w.make_record(item, kRowConsumable, 0x300), {0, 1, 2});
@@ -448,6 +486,8 @@ struct Fixture {
         w.set_uses(w.make_record(item, kRowNonSkill, 0x300), {8, 9});
         w.set_uses(w.make_record(item, kRowBadPattern, 0x300), {7});
         w.set_uses(w.make_record(item, kRowShared, 0x300), {0});
+        w.set_uses(w.make_record(item, kRowFlag3A, 0x300), {10});
+        w.set_uses(w.make_record(item, kRowNoParamList, 0x300), {11});
         // 어비스는 EnchantData 둘 - 0x70 스트라이드를 못박는다.
         w.set_enchants(w.make_record(item, kRowAbyss, 0x300),
                        {{{kBuffSocketCrit, 1},
@@ -647,6 +687,42 @@ TEST(item_effects_gives_up_on_a_chain_that_is_too_deep) {
     CHECK_EQ(e.unresolved, 1);
 }
 
+// --------------------------------------------- 배율 분기 (+0x3A) · 나눗셈 갈래
+
+TEST(item_effects_picks_the_divisor_by_buff_data_flag_3a) {
+    // 배율 표의 키는 셋이다 - (vtable, 파라미터 종류, **BuffData +0x3A**).
+    // 두 칸은 클래스도 종류도 값(75000000)도 같고 `+0x3A` 만 다르다.
+    //   +0x3A = 1 -> ÷10⁷  -> 7.5
+    //   +0x3A = 0 -> ÷1000 -> 75000
+    // 구현이 한 칸 옆(`+0x3B`, 잔여물 0xFB)을 읽으면 둘 다 0 으로 접혀
+    // "75000% 회복" 이 두 번 나온다 - 그때 이 시험이 깨진다.
+    Fixture f;
+    std::vector<ItemEffects> all;
+    CHECK(f.build(&all));
+    const ItemEffects& e = all[Fixture::kRowFlag3A];
+    CHECK_EQ(e.lines.size(), static_cast<std::size_t>(2));
+    CHECK_EQ(e.unresolved, 0);
+    if (e.lines.size() < 2) return;
+    CHECK_EQ(e.lines[0].text, std::string("7.5% 회복"));
+    CHECK_EQ(e.lines[1].text, std::string("75000% 회복"));
+}
+
+TEST(item_effects_keeps_the_fraction_on_a_float_divisor) {
+    // 배율 표의 `integer_div` 가 false 인 조합(= 게임이 `vdivsd` 로 나누는 자리)은
+    // **소수가 살아남아야 한다**. 무조건 자르면 7.5 가 7 로 나간다. 자르는 쪽은
+    // 아래 어비스 시험(÷10⁴ 정수 나눗셈)이 따로 못박는다.
+    Fixture f;
+    std::vector<ItemEffects> all;
+    CHECK(f.build(&all));
+    const ItemEffects& e = all[Fixture::kRowFlag3A];
+    if (e.lines.empty()) {
+        CHECK(!e.lines.empty());
+        return;
+    }
+    CHECK(e.lines[0].text.find("7.5") != std::string::npos);
+    CHECK_EQ(e.lines[0].text, std::string("7.5% 회복"));
+}
+
 // ------------------------------------------------------------------ 어비스
 
 TEST(item_effects_reads_enchant_equip_buffs) {
@@ -692,6 +768,17 @@ TEST(item_effects_counts_unknown_classes_as_unresolved) {
     CHECK(e.lines.empty());
     CHECK_EQ(e.unresolved, 1);
     CHECK(!e.empty());   // "효과 없음" 과 "해석 못 함" 은 다르다
+}
+
+TEST(item_effects_drops_a_line_whose_param_list_is_missing) {
+    // 형식은 `{Param1}` 을 요구하는데 `_paramList` 가 비었다(널이거나 길이가
+    // 쓰레기). 그대로 내면 토큰이 **화면에 그대로** 나간다 - 줄을 버리고 센다.
+    Fixture f;
+    std::vector<ItemEffects> all;
+    CHECK(f.build(&all));
+    const ItemEffects& e = all[Fixture::kRowNoParamList];
+    CHECK(e.lines.empty());
+    CHECK_EQ(e.unresolved, 1);
 }
 
 TEST(item_effects_counts_unresolved_format_strings) {

@@ -73,10 +73,7 @@ constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
 // `_itemName`(+0x20) 의 키 칸인 것과 같은 꼴(스펙 §3, 6816개 전수).
 constexpr std::size_t kRecDescKey = 0xB8;
 constexpr std::size_t kRecEquipType = 0x42;  // u16 _equipTypeInfo (FFFF=장비 아님)
-// u32 _equipAbleHash. 0 이 아니면 장착 가능 부위가 있는 아이템이다 -
-// `EquipTypeInfo._equipAbleHashList` 에 이 해시가 든 행들이 그 부위다
-// (명세 §4.7-F, game/equip_types.h).
-constexpr std::size_t kRecEquipAbleHash = 0x68;
+// _equipAbleHash(+0x68)는 탐침도 쓰므로 items.h 에 있다.
 constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
 constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없음)
@@ -457,6 +454,10 @@ ItemEffectSummary summarize_item_effects(const std::vector<ItemEffects>& rows) {
     return s;
 }
 
+bool should_publish_item_effects(const ItemEffectSummary& summary) {
+    return summary.total_lines != 0;
+}
+
 bool discover_item_effects(const mem::Rtti& rtti, const mem::Reader& reader) {
     const bool have = g_effects_ready.load(std::memory_order_acquire);
     if (!should_build_item_effects(have, items_named())) return have;
@@ -478,6 +479,12 @@ bool discover_item_effects(const mem::Rtti& rtti, const mem::Reader& reader) {
     if (!build_item_effects_from_managers(reader, sys, names, mgr, &by_row)) {
         return false;
     }
+
+    // 줄이 하나도 안 나왔으면 **게시하지 않는다**. 형식 문자열이 사는 cat 15 가
+    // 아직 안 찼을 수 있고, 여기서 굳히면 다시 만들 기회가 없다 - 다음 주기에
+    // 다시 온다(staged-data-load-retry 함정, 위 스탯 이름표 가드와 같은 이유).
+    const ItemEffectSummary s = summarize_item_effects(by_row);
+    if (!should_publish_item_effects(s)) return false;
 
     // 행 -> 키 · 장착 해시를 읽으려면 레코드 배열이 필요하다. 여기서 막히면
     // 게시하지 않고 다음 주기에 다시 온다 - 아래 경고를 두 번 남기지 않도록
@@ -539,7 +546,6 @@ bool discover_item_effects(const mem::Rtti& rtti, const mem::Reader& reader) {
     }
 
     const auto ms = ::GetTickCount64() - t0;
-    const ItemEffectSummary s = summarize_item_effects(by_row);
     publish_effects(std::move(built));
     g_effects_ready.store(true, std::memory_order_release);
     log::infof("아이템 효과: 효과가 있는 아이템 {}개, 줄 합계 {}, 해석 못 한 줄 {}개, "

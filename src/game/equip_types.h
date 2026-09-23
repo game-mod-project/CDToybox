@@ -13,8 +13,7 @@ namespace cdtb::game {
 
 // 아이템의 `_equipAbleHash` 로 걸리는 `EquipTypeInfo` 행들의 부위 이름.
 //
-// 사슬(명세 §4.7-F, 2026-09-23 R2 실측 확정 - 근거 전문은
-// `.superpowers/sdd/2026-09-22-item-description-effects/r2-abyss-gear.md` §3):
+// 사슬(명세 §4.7-F, 2026-09-23 R2 실측 확정):
 //
 //   ItemInfo._equipAbleHash (레코드 +0x68, u32)
 //     -> EquipTypeInfoManager(117행) 전 행을 돌며
@@ -27,8 +26,11 @@ namespace cdtb::game {
 // 실측: 관통 I(0xBB5411B9) -> 35행(무기 33종 + 장갑 + 신발),
 //       신속 I(0xB1DDF576) -> 4행(투구 · 갑옷 · 장갑 · 신발).
 //
-// 목록의 [1]번째 항목은 그 행 **자신의 이름 엔티티**다(그룹 해시가 아니다) -
-// 우리는 "들어 있는가" 만 보므로 걸러낼 필요는 없다.
+// 목록의 [1]번째 항목은 그 행 **자신의 이름 엔티티**다(그룹 해시가 아니다).
+// 걸러내지 않는다 - 그 자리를 건너뛰어야 할 만큼의 근거(어떤 아이템의
+// `_equipAbleHash` 가 어느 행의 이름 엔티티와 겹치는 사례)를 **실측한 적이
+// 없기 때문**이다. 겹치면 엉뚱한 부위가 한 줄 붙는다 - 부위가 이상하게 나오면
+// 여기를 먼저 의심하고, 전수로 겹침을 세어 본 뒤에 거른다.
 //
 // 게임 툴팁은 이 행들을 "무기 · 장갑 · 신발" 세 줄로 접어 보이는데, 접는 규칙은
 // 데이터가 아니라 UI 코드에 있어 아직 못 찾았다(§4.7-H 5번). 그래서 우리는
@@ -58,7 +60,7 @@ std::vector<std::string> equip_type_names_from_manager(
 std::string equip_types_line(const std::vector<std::string>& names,
                              std::size_t max_shown = 4);
 
-// --- 실측 상수 (명세 §4.7-F, r2-abyss-gear.md §3) ---
+// --- 실측 상수 (명세 §4.7-F) ---
 
 // 매니저 클래스. `find_static_manager` 에 장식된 이름 전체를 준다(부분 일치로
 // 주면 엉뚱한 클래스를 잡는다 - stat_names.h 와 같은 이유).
@@ -77,7 +79,7 @@ inline constexpr std::size_t kEquipAbleHashCount = 0x50;   // u32 개수
 inline constexpr std::size_t kEquipAbleHashStride = 0x04;  // 항목 = u32 해시
 
 // `_equipTypeName`(+0x58 LocalString 객체)의 **완성된 현지화 키**. 실측
-// (r2-abyss-gear.md): 레코드 +0x60 에 이미 `(엔티티 << 32) | 0x2E0` 값이 들어
+// (명세 §4.7-F): 레코드 +0x60 에 이미 `(엔티티 << 32) | 0x2E0` 값이 들어
 // 있어 `loc_key` 로 다시 조립할 필요가 없다.
 inline constexpr std::size_t kEquipTypeNameKey = 0x60;
 

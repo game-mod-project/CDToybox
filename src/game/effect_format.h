@@ -71,6 +71,12 @@ std::string effect_line(std::string_view format, const EffectParams& v,
                         const std::function<std::string(std::string_view table,
                                                         std::string_view key)>& name_of);
 
+// 형식 문자열에 **값 자리**(`{Param0..3}` · `{|Param0..3|}` · `{RepeatTick}`)가
+// 하나라도 있는가. 걷기 쪽이 "패턴의 `_paramList` 가 비었는데 형식은 값을
+// 요구한다" 를 가려내는 데 쓴다 - 그런 줄은 토큰을 화면에 내보내지 않고 버리고
+// "해석 못 한 효과" 로 센다. `{Staticinfo:…}` · `{Key:…}` 는 값 자리가 아니다.
+bool format_needs_params(std::string_view format);
+
 // 지속시간 접미. ms >= 60000 이면 "(N분)"(N = ms/60000 내림), 0 < ms < 60000 이면
 // "(N초)"(N = ms/1000 내림), ms == 0 이면 빈 문자열. 실측: 90000 -> "(1분)".
 std::string duration_suffix(std::uint32_t ms);

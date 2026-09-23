@@ -6,6 +6,7 @@
 namespace {
 using cdtb::game::duration_suffix;
 using cdtb::game::effect_line;
+using cdtb::game::format_needs_params;
 using cdtb::game::effect_number;
 using cdtb::game::EffectValues;
 
@@ -96,4 +97,28 @@ TEST(effect_line_of_empty_format_is_empty) {
     EffectValues v;
     v.duration_ms = 60000;
     CHECK(effect_line("", v, names).empty());
+}
+
+TEST(format_needs_params_finds_every_value_slot) {
+    // 걷기 쪽이 "형식은 값을 요구하는데 `_paramList` 가 비었다" 를 가려내는 데
+    // 쓴다 - 그런 줄은 토큰을 화면에 내보내지 않고 버린다.
+    CHECK(format_needs_params("{Param0} 증가"));
+    CHECK(format_needs_params("{Param3} 증가"));
+    CHECK(format_needs_params("{|Param1|} 감소"));
+    CHECK(format_needs_params("{RepeatTick} 초마다"));
+    CHECK(format_needs_params("{Staticinfo:SubLevel:Hp} 최대치 {Param1} 증가"));
+}
+
+TEST(format_needs_params_ignores_tokens_that_are_not_values) {
+    // 이름·키·화폐 토큰은 값 자리가 아니다. 이것까지 값으로 치면 멀쩡한 줄을
+    // 버리게 된다.
+    CHECK(!format_needs_params("용기 고정"));
+    CHECK(!format_needs_params("{Staticinfo:SubLevel:Hp} 고정"));
+    CHECK(!format_needs_params("대지의 울림 ({Key:Key_Skill_1})"));
+    CHECK(!format_needs_params("{Money:Silver:3}"));
+    CHECK(!format_needs_params(""));
+    // `{Param4}` 는 없다(4~7 은 `{|ParamN|}` 꼴로만 온다).
+    CHECK(!format_needs_params("{Param4} 증가"));
+    // 짝이 안 맞아도 죽지 않는다.
+    CHECK(!format_needs_params("{Param1"));
 }

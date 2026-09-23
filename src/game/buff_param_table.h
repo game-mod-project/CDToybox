@@ -42,8 +42,22 @@ namespace cdtb::game {
 //     (`_isDisplayAbsoluteNumber`)와는 **다른 것**이다 — 그 바이트는 호출부가
 //     따로 본다(`cmp byte ptr [rax + r15*2 + 1], 0`).
 //
+// 나눗셈이 두 갈래다 — `integer_div`
+// ----------------------------------
+// 같은 "÷10000" 이라도 게임이 **어떻게** 나누는지가 다르다.
+//
+//   * **정수**(`integer_div == true`) — 컴파일러 매직 상수(`imul` + `sar`)다.
+//     나머지가 버려지므로 우리도 잘라야 한다. 실측: 소켓 치명타 25000/10⁴ -> **2**,
+//     75000/10⁴ -> **7**(반올림이면 3 · 8 이 됐을 것이다, §4.7-H 3번).
+//   * **실수**(`false`) — `vdivsd`/`vmulsd` 다. **소수가 살아남는다** — 여기서
+//     자르면 화면값이 2.5 여야 할 자리에 2 가 나간다.
+//
+// 생성기가 모의 실행 중에 어느 경로를 지났는지 보고 이 칸을 채운다. 둘이 섞인
+// 조합은 false 다(없는 자릿수를 만들지 않는다).
+//
 // 종류 8(`{RepeatTick}`)은 이 표에 없다. 호출부가 슬롯 11 을 부르지 않고
-// BuffData `+0x28`(주기 ms)을 1000.0 으로 나눠 직접 만든다(RVA 0x1F29A51).
+// BuffData `+0x28`(주기 ms)을 1000.0 으로 나눠 직접 만든다(RVA 0x1F29A51) —
+// 여기도 **실수 나눗셈이라 안 자른다**.
 //
 // 모르는 조합
 // -----------
@@ -63,6 +77,7 @@ struct BuffParamRule {
     std::uint8_t flag3a;       // 슬롯 11 의 r9b = BuffData +0x3A (0 또는 1)
     std::uint16_t offset;      // 값이 사는 칸 (BuffData 기준)
     double divisor;            // 화면 값 = 칸 값 / divisor
+    bool integer_div;          // 정수 나눗셈인가 (아래)
     const char* note;          // 곁가지 규칙 (절대값 표시 · 겹침 증분 · thunk)
 };
 
@@ -106,8 +121,12 @@ constexpr double buff_param_divisor(std::uint64_t vtable,
     return r ? r->divisor : 0.0;
 }
 
-// 클래스를 아예 모르는 것과 "아는 클래스인데 이 종류는 안 쓴다" 를 가른다.
-// 진단 문구를 고를 때 쓴다 — 전자는 표를 다시 뽑아야 하고, 후자는 정상이다.
+// 클래스를 아예 모르는 것과 "아는 클래스인데 이 종류는 안 쓴다" 를 가른다 —
+// 전자는 표를 다시 뽑아야 하고, 후자는 정상이다.
+//
+// 걷기 쪽(`item_effects.cpp`)은 `buff_param_rule` 하나만 쓴다. 이 함수와 위의
+// `buff_param_offset`/`buff_param_divisor`/`buff_param_rule_count` 는 **시험과
+// 도구용**이다(`tests/buff_param_table_tests.cpp` 가 표의 모양을 여기로 본다).
 constexpr bool buff_param_class_known(std::uint64_t vtable) noexcept {
     for (const BuffParamRule& r : kBuffParamRules) {
         if (r.vtable_va == vtable) {
