@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "game/item_effects.h"
 #include "game/localization.h"
 #include "mem/reader.h"
 #include "mem/rtti.h"
@@ -483,6 +484,58 @@ struct ItemKeyIndex {
 // 대신한다.
 const ItemCatalogEntry* item_by_key(std::uint32_t key);
 
+// ------------------------------------------------ 효과 스냅샷 (툴팁 · 검색)
+//
+// 효과는 **아이템 표와 따로** 게시한다(명세 §4.5). 표는 게시 뒤 안 바뀌는 것이
+// 약속이라(`item_catalog` 참조를 쥔 채 그린다) `ItemCatalogEntry` 에 나중에 써
+// 넣을 수 없다. 게시 방식은 카탈로그와 같다 - 옛 판을 살려 둔 채 포인터만
+// 바꿔 끼운다.
+
+struct ItemEffectInfo {
+    ItemEffects effects;
+    // `_equipAbleHash` 로 풀린 장착 가능 부위 이름들. 어비스 · 장비만 채워진다
+    // (해시가 0 이면 빈 목록 - 없는 아이템에 빈 줄을 만들지 않는다).
+    std::vector<std::string> equip_types;
+    // 검색용으로 효과 줄을 줄바꿈으로 이어 둔 것. 그리는 쪽이 프레임마다
+    // 다시 잇지 않게 미리 만든다.
+    std::string search_text;
+};
+
+// 효과 스냅샷을 (다시) 만들어야 하는가. 순수 함수라 시험이 재시도 규칙을
+// 못박는다.
+//
+// **카탈로그가 게시되고 현지화가 찬 뒤**라야 한다. 현지화보다 먼저 만들면
+// 효과 문구가 토큰(`{Staticinfo:…}`)으로 굳고, 한 번 성공으로 치면 다시
+// 만들 기회가 없다(staged-data-load-retry 함정). 한 번 제대로 만든 뒤에는
+// 다시 만들지 않는다 - 정적 표만 걸으므로 결과가 변하지 않는다.
+bool should_build_item_effects(bool have_effects, bool names_resolved);
+
+// 로그 한 줄용 집계(순수).
+struct ItemEffectSummary {
+    std::size_t items_with_effects = 0;  // 줄이 한 개라도 있는 행 수
+    std::size_t total_lines = 0;         // 줄 합계
+    long long unresolved = 0;            // 해석 못 한 줄 합계
+};
+ItemEffectSummary summarize_item_effects(const std::vector<ItemEffects>& rows);
+
+// 배경 분석 스레드에서 부른다. 아이템 표 · 현지화 · 스탯 이름표 · 효과 매니저
+// 중 하나라도 아직이면 조용히 false 다 - 재시도 루프가 다음 주기에 다시 부른다.
+// 이미 만들었으면 즉시 true 로 빠진다.
+bool discover_item_effects(const mem::Rtti& rtti, const mem::Reader& reader);
+
+// 스냅샷이 섰는가. 서기 전에는 아래 조회가 전부 nullptr 다.
+bool item_effects_ready();
+
+// 스냅샷이 몇 번째 판인가. 화면이 "내가 거른 뒤에 효과가 들어왔다" 를
+// 알아채는 표시다(0 = 아직 없음).
+std::size_t item_effects_version();
+
+// 키로 조회한다. 준비 전이거나 그 아이템에 효과 · 장착 부위가 없으면 nullptr.
+// 돌려주는 포인터는 그 판이 살아 있는 동안 유효하다 - 옛 판을 안 지우므로
+// 프레임을 넘겨 쥐고 있어도 된다(카탈로그와 같은 규약).
+const ItemEffects* item_effects_for(std::uint32_t key);
+const std::vector<std::string>* item_equip_types_for(std::uint32_t key);
+const std::string* item_effects_text_for(std::uint32_t key);
 
 // 이 모듈이 힙에서 찾는 RTTI 클래스(통과 단위 미리 훑기용, mem/rtti.h prefetch_instances).
 std::vector<std::string> items_scan_classes();

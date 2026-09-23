@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "game/equip_types.h"   // equip_types_line
+
 namespace cdtb::game {
 namespace {
 
@@ -38,7 +40,7 @@ int compare_by(const ItemCatalogEntry& a, const ItemCatalogEntry& b,
 
 bool passes(const ItemFilter& f, std::string_view name, int grade,
             int category, std::uint32_t key, EquipOwner owner,
-            std::string_view text) {
+            std::string_view text, std::string_view effects) {
     if (f.hide_unnamed && name.empty()) return false;
     if (f.grade >= 0 && grade != f.grade) return false;
     if (f.category >= 0 && category != f.category) return false;
@@ -49,6 +51,10 @@ bool passes(const ItemFilter& f, std::string_view name, int grade,
     }
     // 설명에도 건다(스펙 §5). 키를 안 보는 창(인벤토리)에서도 설명은 본다.
     if (!text.empty() && text.find(f.query) != std::string_view::npos) {
+        return true;
+    }
+    // 효과 문구에도 건다(스펙 §5). 스냅샷이 아직이면 비어 와서 안 걸린다.
+    if (!effects.empty() && effects.find(f.query) != std::string_view::npos) {
         return true;
     }
     // 키에도 건다(match_key 일 때). 지급 대상을 키로만 아는 경우가 있다.
@@ -80,8 +86,15 @@ std::vector<const ItemCatalogEntry*> filter_items(
     const std::vector<ItemCatalogEntry>& all, const ItemFilter& filter) {
     std::vector<const ItemCatalogEntry*> out;
     out.reserve(all.size());
+    // 효과 문구는 아이템 표와 따로 게시된 스냅샷에서 온다(명세 §4.5).
+    // 스냅샷이 아직이면 전부 nullptr 이라 효과로는 안 걸린다. 검색어가
+    // 없으면 아예 조회하지 않는다 - 6,816개를 공짜로 훑을 이유가 없다.
+    const bool fx_ready = !filter.query.empty() && item_effects_ready();
     for (const auto& e : all) {
-        if (!passes(filter, e.name, e.grade, e.category, e.key, e.owner, e.desc)) {
+        const std::string* fx =
+            fx_ready ? item_effects_text_for(e.key) : nullptr;
+        if (!passes(filter, e.name, e.grade, e.category, e.key, e.owner, e.desc,
+                    fx == nullptr ? std::string_view{} : std::string_view(*fx))) {
             continue;
         }
         out.push_back(&e);
@@ -140,6 +153,51 @@ PageRange page_range(std::size_t total, std::size_t page,
     r.begin = p * per_page;
     r.end = std::min(r.begin + per_page, total);
     return r;
+}
+
+// ------------------------------------------------------------- 설명 툴팁
+
+std::string unresolved_line(int count) {
+    return "해석 못 한 효과 " + std::to_string(count) + "개";
+}
+
+std::vector<TooltipSection> tooltip_sections(
+    std::string_view desc, const ItemEffects* effects,
+    const std::vector<std::string>* equip_types, bool effects_ready) {
+    std::vector<TooltipSection> out;
+
+    // 효과 · 장착 부위는 스냅샷이 선 뒤에만 본다. 준비 전에 들어온 것은
+    // 반쯤 채워진 판일 수 있어 아예 안 그린다(맨 아래 Pending 으로 알린다).
+    if (effects_ready && effects != nullptr) {
+        for (const auto& line : effects->lines) {
+            if (line.text.empty()) continue;
+            out.push_back({TooltipSection::Kind::Effect, line.text});
+        }
+    }
+    if (effects_ready && equip_types != nullptr && !equip_types->empty()) {
+        std::string line = equip_types_line(*equip_types);
+        if (!line.empty()) {
+            out.push_back({TooltipSection::Kind::EquipTypes, std::move(line)});
+        }
+    }
+
+    // 구분선은 위에 뭔가 있고 아래에 설명이 있을 때만이다 - 빈 칸 하나만
+    // 남는 줄을 만들지 않는다.
+    if (!out.empty() && !desc.empty()) {
+        out.push_back({TooltipSection::Kind::Separator, {}});
+    }
+    if (!desc.empty()) {
+        out.push_back({TooltipSection::Kind::Desc, std::string(desc)});
+    }
+
+    if (!effects_ready) {
+        out.push_back({TooltipSection::Kind::Pending,
+                       std::string(kEffectsPendingText)});
+    } else if (effects != nullptr && effects->unresolved > 0) {
+        out.push_back({TooltipSection::Kind::Unresolved,
+                       unresolved_line(effects->unresolved)});
+    }
+    return out;
 }
 
 }  // namespace cdtb::game

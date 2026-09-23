@@ -228,6 +228,58 @@ TEST(no_rebuild_once_names_resolved) {
     CHECK(!cdtb::game::should_rebuild_catalog(true, true, true));
 }
 
+// ------------------------------------------------ 효과 스냅샷 게시 · 재시도
+//
+// 아이템 표와 **따로** 게시하고(명세 §4.5), 현지화가 찬 뒤에야 만든다.
+// 한 번 실패하고 끝내면 효과 문구가 영영 빈다(staged-data-load-retry 함정).
+
+TEST(no_item_effects_until_the_catalog_has_names) {
+    // 이름이 안 풀린 채 만들면 문구가 `{Staticinfo:…}` 토큰으로 굳는다.
+    CHECK(!cdtb::game::should_build_item_effects(false, false));
+}
+
+TEST(build_item_effects_once_names_are_resolved) {
+    CHECK(cdtb::game::should_build_item_effects(false, true));
+}
+
+TEST(no_item_effects_rebuild_once_built) {
+    // 정적 표만 걸으므로 결과가 변하지 않는다 - 한 번이면 된다.
+    CHECK(!cdtb::game::should_build_item_effects(true, true));
+    CHECK(!cdtb::game::should_build_item_effects(true, false));
+}
+
+TEST(summarize_item_effects_counts_rows_lines_and_unresolved) {
+    std::vector<cdtb::game::ItemEffects> rows(4);
+    rows[0].lines.push_back({"생명 500 회복 (1분)", 60000});
+    rows[0].lines.push_back({"치명타 확률 2% 증가", 0});
+    rows[1].unresolved = 3;            // 줄은 없고 못 읽은 것만 있는 행
+    rows[2].lines.push_back({"공격력 3 증가", 0});
+    rows[2].unresolved = 1;
+    // rows[3] 은 빈 행
+
+    const auto s = cdtb::game::summarize_item_effects(rows);
+    CHECK_EQ(s.items_with_effects, static_cast<std::size_t>(2));
+    CHECK_EQ(s.total_lines, static_cast<std::size_t>(3));
+    CHECK_EQ(s.unresolved, 4LL);
+}
+
+TEST(summarize_item_effects_handles_an_empty_table) {
+    const auto s = cdtb::game::summarize_item_effects({});
+    CHECK_EQ(s.items_with_effects, static_cast<std::size_t>(0));
+    CHECK_EQ(s.total_lines, static_cast<std::size_t>(0));
+    CHECK_EQ(s.unresolved, 0LL);
+}
+
+TEST(item_effects_lookups_are_empty_before_the_snapshot_is_published) {
+    // 게시 전에는 전부 nullptr 이다 - 그리는 쪽이 "효과 없음" 으로 떨어진다.
+    // (이 시험 실행기에는 게임이 없으므로 스냅샷이 영영 안 선다.)
+    CHECK(!cdtb::game::item_effects_ready());
+    CHECK(cdtb::game::item_effects_for(751123u) == nullptr);
+    CHECK(cdtb::game::item_equip_types_for(751123u) == nullptr);
+    CHECK(cdtb::game::item_effects_text_for(751123u) == nullptr);
+    CHECK_EQ(cdtb::game::item_effects_version(), static_cast<std::size_t>(0));
+}
+
 TEST(build_item_catalog_fills_names_from_localization) {
     Fixture f;
     std::vector<cdtb::game::ItemCatalogEntry> out;

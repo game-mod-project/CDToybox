@@ -29,11 +29,12 @@ namespace {
 // '이름 없는 것 감추기' 는 기본으로 켜 둔다. 이름이 안 풀린 72개는 대개
 // 개발용이라 목록에 있어도 쓸모가 없다. 필요하면 체크를 풀면 된다.
 FilterBar g_bar = [] { FilterBar b; b.hide_unnamed = true; return b; }();
-// 이 창의 필터바 옵션. 힌트("이름 · 설명 · 키로 검색")와 match_key 가 한 쌍이다.
+// 이 창의 필터바 옵션. 힌트("이름 · 설명 · 효과 · 키로 검색")와 match_key 가
+// 한 쌍이다.
 const FilterBarOpts g_opts = [] {
     FilterBarOpts o;
     o.id = "items";
-    o.hint = "이름 · 설명 · 키로 검색";
+    o.hint = "이름 · 설명 · 효과 · 키로 검색";
     o.show_hide_unnamed = true;
     o.match_key = true;
     return o;
@@ -50,6 +51,9 @@ std::size_t g_built_from = 0;
 // 이때 개수(6813)는 그대로라 크기만으로는 갱신을 놓친다 - 목록이
 // '이름 없는 것 감추기' 로 0개에 갇힌다. 판의 실체(포인터)로 가른다.
 const void* g_built_ptr = nullptr;
+// 효과 스냅샷은 아이템 표보다 늦게 온다(명세 §4.5). 그때 다시 거르지 않으면
+// 효과로 검색해도 사용자가 필터를 건드릴 때까지 안 걸린다.
+std::size_t g_built_effects = 0;
 
 constexpr float kIconSize = 22.0f;
 constexpr std::size_t kPerPage[] = {20, 40, 60, 100};
@@ -68,6 +72,7 @@ void rebuild() {
     game::sort_items(g_view, g_sort, g_ascending);
     g_built_from = all.size();
     g_built_ptr = all.data();
+    g_built_effects = game::item_effects_version();
     g_dirty = false;
 }
 
@@ -158,6 +163,8 @@ void draw_item_panel(bool* open) {
         rebuild_categories();
         g_dirty = true;
     }
+    // 효과 스냅샷이 뒤늦게 서면 한 번 더 거른다(분류는 그대로다).
+    if (g_built_effects != game::item_effects_version()) g_dirty = true;
     if (g_dirty) rebuild();
 
     if (draw_filter_bar(&g_bar, g_opts)) {
@@ -304,7 +311,7 @@ void draw_item_panel(bool* open) {
             }
 
             ImGui::TableSetColumnIndex(6);
-            desc_cell(e.desc);
+            desc_cell(e.desc, e.key);
         }
         ImGui::EndTable();
     }
