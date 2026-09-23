@@ -95,6 +95,7 @@ add_library(cdtoybox SHARED
     src/game/items.cpp
     src/game/item_text.cpp
     src/game/effect_format.cpp
+    src/game/stat_names.cpp
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/wanted.cpp
@@ -193,6 +194,7 @@ add_executable(cdtb_tests
     tests/level_edit_tests.cpp
     tests/buff_param_table_tests.cpp
     tests/effect_format_tests.cpp
+    tests/stat_names_tests.cpp
     src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
@@ -202,6 +204,7 @@ add_executable(cdtb_tests
     src/game/items.cpp
     src/game/item_text.cpp
     src/game/effect_format.cpp
+    src/game/stat_names.cpp
     src/game/inventory.cpp
     src/game/equip_bag.cpp
     src/game/item_view.cpp
@@ -254,6 +257,7 @@ add_executable(cdtb_probe
     src/game/localization.cpp
     src/game/items.cpp
     src/game/item_text.cpp
+    src/game/stat_names.cpp
     src/game/roster.cpp
     src/game/companion.cpp
     src/game/wanted.cpp
