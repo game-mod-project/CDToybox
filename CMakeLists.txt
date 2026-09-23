@@ -190,6 +190,7 @@ add_executable(cdtb_tests
     tests/wanted_tests.cpp
     tests/table_order_tests.cpp
     tests/level_edit_tests.cpp
+    tests/buff_param_table_tests.cpp
     src/game/nofall_cave.cpp
     src/input/cursor.cpp
     src/input/filter.cpp
