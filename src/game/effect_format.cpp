@@ -9,15 +9,27 @@ namespace {
 
 constexpr std::string_view kStaticinfoPrefix = "Staticinfo:";
 
+// 종류 4~7 은 0~3 의 **절대값 표시** 짝이다(§4.7-E). `{|Param1|}` = 종류 5.
+constexpr std::size_t kAbsTypeBase = 4;
+constexpr std::size_t kRepeatTickType = 8;
+
 // body 는 토큰의 여는 `{` 다음부터 닫는 `}` 앞까지다("Param1" · "|Param1|" ·
 // "Staticinfo:SubLevel:Hp" · "Key:Key_Skill_1" ...).
-bool is_param_token(std::string_view body) {
-    return body == "Param0" || body == "Param1" || body == "Param2" || body == "Param3";
+//
+// `{ParamN}` 이면 N(0~3)을, 아니면 -1 을 낸다.
+int param_index(std::string_view body) {
+    if (body.size() != 6 || body.substr(0, 5) != "Param") return -1;
+    const char c = body[5];
+    if (c < '0' || c > '3') return -1;
+    return c - '0';
 }
 
-bool is_abs_param_token(std::string_view body) {
-    return body == "|Param0|" || body == "|Param1|" || body == "|Param2|" ||
-           body == "|Param3|";
+// `{|ParamN|}` 이면 N(0~3)을, 아니면 -1 을 낸다.
+int abs_param_index(std::string_view body) {
+    if (body.size() != 8 || body.front() != '|' || body.back() != '|') {
+        return -1;
+    }
+    return param_index(body.substr(1, 6));
 }
 
 }  // namespace
@@ -47,7 +59,7 @@ std::string effect_number(double v) {
 }
 
 std::string effect_line(
-    std::string_view format, const EffectValues& v,
+    std::string_view format, const EffectParams& v,
     const std::function<std::string(std::string_view, std::string_view)>& name_of) {
     if (format.empty()) return {};
 
@@ -71,12 +83,20 @@ std::string effect_line(
         const std::string_view token = format.substr(i, close - i + 1);  // "{...}" 포함
         const std::string_view body = format.substr(i + 1, close - i - 1);  // 안쪽 내용
 
-        if (is_param_token(body)) {
-            out += effect_number(v.param);
-        } else if (is_abs_param_token(body)) {
-            out += effect_number(std::abs(v.param));
+        const int plain = param_index(body);
+        const int absolute = abs_param_index(body);
+        if (plain >= 0) {
+            const auto type = static_cast<std::size_t>(plain);
+            out.append(v.has(type) ? effect_number(v.value[type])
+                                   : std::string(token));
+        } else if (absolute >= 0) {
+            const auto type = static_cast<std::size_t>(absolute) + kAbsTypeBase;
+            out.append(v.has(type) ? effect_number(std::abs(v.value[type]))
+                                   : std::string(token));
         } else if (body == "RepeatTick") {
-            out += effect_number(v.repeat_tick);
+            out.append(v.has(kRepeatTickType)
+                           ? effect_number(v.value[kRepeatTickType])
+                           : std::string(token));
         } else if (body.starts_with(kStaticinfoPrefix)) {
             const std::string_view rest = body.substr(kStaticinfoPrefix.size());
             const std::size_t colon = rest.find(':');
@@ -92,6 +112,17 @@ std::string effect_line(
         i = close + 1;
     }
     return out + duration_suffix(v.duration_ms);
+}
+
+std::string effect_line(
+    std::string_view format, const EffectValues& v,
+    const std::function<std::string(std::string_view, std::string_view)>& name_of) {
+    // 단순형은 종류를 안 가린다 - 모든 값 자리를 같은 값으로 채운다.
+    EffectParams p;
+    p.duration_ms = v.duration_ms;
+    for (std::size_t t = 0; t < kRepeatTickType; ++t) p.set(t, v.param);
+    p.set(kRepeatTickType, v.repeat_tick);
+    return effect_line(format, p, name_of);
 }
 
 }  // namespace cdtb::game
