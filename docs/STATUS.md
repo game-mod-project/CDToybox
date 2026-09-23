@@ -299,6 +299,18 @@ $ cdtb_probe items find 비약
 다시 켤 때 정렬한 열이 맨 앞에 서던 ImGui 결함(상류 ocornut/imgui#9519)은 모든 정렬 표에서 table_keep_natural_order() 로 막는다(TS §6.27).
 두 표는 열 너비도 끌어 조절한다(2026-09-23, `ImGuiTableFlags_Resizable` — 명부 · 장비 창에는 이미 있었다). 바뀐 너비는 표 ID 별로 `imgui.ini` 에 남는다.
 
+**효과(2026-09-23, 구현 완료 · 게임 확인 전).** 설명 툴팁이 게임 툴팁과 같은 내용을 보인다 —
+효과 줄 · 장착 가능 부위 · 설명 전문. 효과의 **입구가 둘**이다: 소모품은
+`ItemInfo._itemUseInfoList`(+0x80), 어비스/인챈트 장비는 `_enchantDataList`(+0x248). 둘 다
+BuffInfo 레벨 목록을 거쳐 `BuffData` 에 닿고, 거기 `+0x38` 하위 u16 이 가리키는
+`PatternDescriptionInfo` 의 **형식 문자열**(현지화 cat 15 / 필드 0xF0)에 값을 끼워 한 줄을 만든다.
+값의 배율은 클래스마다 달라서 **게임 코드(가상 슬롯 11)에서 뽑아 커밋한 표**(`buff_param_table.inc`,
+생성기 `tools/rtti/buff_params.py`)로 정한다 — 규칙을 못 뽑은 클래스의 줄은 보이지 않고
+"해석 못 한 효과 N개" 로만 센다. `{Staticinfo:SubLevel:Hp}` 같은 토큰은
+SubLevelInfo/StatusInfo → 지식 → 지식 이름(cat 9 / 0x490)으로 바꾼다(`생명` · `용기` · `기력` …).
+검증은 게임 툴팁과의 **글자 단위 일치**다(빨간 파두 · 별미 정식 여섯 줄, 관통 I·II·III 의 2 · 5 · 7%).
+근거는 명세 §4.7, 계획은 `plans/2026-09-23-item-effects.md`.
+
 ### 1.8 인게임 아이템 목록 (완료, 화면 확인)
 
 오버레이에 "아이템 목록" 패널. 검색창 + 목록, 줄을 누르면 키가 **지급 칸과

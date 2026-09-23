@@ -2,10 +2,10 @@
 
 **갱신:** 2026-09-22 · exe **1.0.0.2949**
 
-조사 기록 61편 · 계획 7편이 어디에 무엇이 있고 **지금도 유효한가**를 한 곳에 모았다.
+조사 기록 61편 · 계획 8편이 어디에 무엇이 있고 **지금도 유효한가**를 한 곳에 모았다.
 상태는 문서 자신의 문장이나 **이후 문서의 명시적 문장**으로만 정했다. 조사 기록 55편은
 제목 아래(제목 위에 옛 배너가 있는 편은 맨 위)의 `정리 (2026-09-21)` 배너가 같은 상태와
-근거를 적는다. 나머지 13편 — 계획 7편 · `socket-wire-format` · `story-mount-clone-design` ·
+근거를 적는다. 나머지 14편 — 계획 8편 · `socket-wire-format` · `story-mount-clone-design` ·
 `dragon-wheel-handoff` · `boss-room-action-limit` · `game-update-2949` · `item-description-effects-design` — 은 그 배너가 없고,
 문서 첫머리의 상태 배너가 그 역할을 한다. 본문은 역사 기록이라 고치지 않았다 — **배너가
 본문보다 우선한다.**
@@ -160,8 +160,9 @@
 | [panel-shared-widgets-design](superpowers/specs/2026-09-10-panel-shared-widgets-design.md) | 📐 구현됨 | 필터바 · 필터 술어 · 보석 선택기 |
 | [plans/panel-shared-widgets](superpowers/plans/2026-09-10-panel-shared-widgets.md) | ✅ 완료 | |
 | [panel-shared-widgets-review](superpowers/specs/2026-09-10-panel-shared-widgets-review.md) | ✅ 완료 | Critical/Important 없음 |
-| [item-description-effects-design](superpowers/specs/2026-09-22-item-description-effects-design.md) | 🔨 PR1 구현 · PR2 실측 전 | 설명 열 · 검색(PR1). 설명 표기 전수 §3, 효과 경로 · 전수 §4.1 |
-| [plans/item-description-effects](superpowers/plans/2026-09-22-item-description-effects.md) | 🔨 진행 중 | PR1 태스크 1~6, PR2 1단계 7~10(2단계는 실측 뒤 덧붙인다) |
+| [item-description-effects-design](superpowers/specs/2026-09-22-item-description-effects-design.md) | ✅ 실측 확정 | 설명 열 · 검색(PR1) + **효과 조립 규칙 §4.7**(툴팁 6줄 글자 단위 일치 · 배율의 출처 · 스탯 이름 치환) |
+| [plans/item-description-effects](superpowers/plans/2026-09-22-item-description-effects.md) | ✅ PR1 완료 | 태스크 1~6(설명 열 · 검색). PR2 1단계 7~10 은 아래 계획이 대체한다 |
+| [plans/item-effects](superpowers/plans/2026-09-23-item-effects.md) | 🔨 구현 완료 · 게임 확인 전 | 효과 문구 여덟 과제(배율 표 생성기 · 포맷터 · 이름표 · 걷기 · 장착 부위 · 탐침 · 창 · 문서) |
 
 ## 12. 참고 모드(CT/ASI) 이식
 
