@@ -136,6 +136,8 @@ ItemInfo 레코드 +0x80  u32* 사용 행 목록,  +0x88 u32 개수          (_i
 
 ### 4.2 해석기 — 9종
 
+> 2026-09-23 실측으로 갱신됐다 — 어긋나는 곳은 §4.7 이 이긴다.
+
 스킬 사용이 있는 아이템 606개(사용 3656건)의 단계 안 버프 데이터 클래스 분포(값2-1 · 값2 두 칸
 합산이라 대략치):
 
@@ -158,6 +160,8 @@ ItemInfo 레코드 +0x80  u32* 사용 행 목록,  +0x88 u32 개수          (_i
 - `VoidActiveBuffData` 는 무엇인지 모른다. 해석해 본 뒤 효과 목록에 넣을지 정한다.
 
 ### 4.3 능력치 이름
+
+> 2026-09-23 실측으로 갱신됐다 — 어긋나는 곳은 §4.7 이 이긴다.
 
 능력치 표(84행)에는 영문 내부 이름만 있다: Hp · Mp · Stamina · DDD · DPV · AttackSpeedRate ·
 MoveSpeedRate · CriticalRate · FireResistance · IceResistance · Fullness … 현지화 표에서 이 행들의
@@ -243,6 +247,103 @@ MoveSpeedRate · CriticalRate · FireResistance · IceResistance · Fullness …
 `SkillInfo`(`_buffLevelList +0x18` — §4.1 의 그 자리, `_maxLevel +0xF8`),
 `BuffInfo`(`_buffDataList +0x28` · `_maxLevel +0x2C` · `_uiTemplateName +0x3A`),
 `StatusInfo`(`_statType +0x30` · `_usePercent +0x61` · `_mustShowInUITooltip +0x89`).
+
+### 4.7 조립 규칙 — 실측 확정 (2026-09-23, 탐침 실측 R1 · R2)
+
+게임 툴팁 여섯 줄을 **글자까지 재현**해 검증했다(빨간 파두 3줄 · 별미 정식 3줄 — 숫자 · 시간 ·
+조사 · 띄어쓰기 일치, 스탯 이름 넷만 미치환). 아래가 우리가 구현할 규칙이다. 앞의 §4.2 · §4.3 과
+어긋나면 **이 절이 이긴다**. 근거 전문은 장부의 `r1-consumable-effects.md`(47k자) ·
+`r2-abyss-gear.md`(28k자).
+
+**A. 입구가 둘이다**
+
+| 종류 | 입구 | 표본 |
+|---|---|---|
+| 소모품(요리 · 연금술 …) | `_itemUseInfoList` +0x80 (u32 행 배열, +0x88 개수) | 빨간 파두 · 별미 정식 = 14칸 |
+| 어비스 기어 | `_enchantDataList` +0x248 (EnchantData 0x70 인라인 배열) | 관통 I·II·III = 1칸 |
+
+**B. 소모품 사슬**
+
+```
+ItemInfo +0x80 → ItemUseInfoManager.records[행] (0x20) → +0x18 ItemUseData_* (0x40)
+  +0x18 종류: Skill=0x00 · FeedToTarget=0x08 · RegisterReserveSlot=0x10
+  +0x19 문맥: 0x00 · 0x07 · 0x0C   ← **툴팁 줄은 0x00 짜리다**
+  ItemUseData_Skill +0x30 {u32 스킬행, u32 레벨(1-기반)}, +0x38 개수
+→ SkillInfo.records[스킬행] +0x18 레벨 목록(16바이트 칸) → BuffData* 배열 → BuffData
+```
+
+같은 효과 스킬이 문맥만 달리해 **세 번씩** 등록된다(0x00/0x07/0x0C). `+0x19 == 0x00` 만 채택하거나
+(스킬행, 레벨) 중복을 지우면 툴팁과 같은 줄 수가 나온다. 패턴이 없는 스킬(퀵슬롯 등록 등)은 저절로
+빠지므로 예외 처리가 필요 없다.
+
+`ChangeBuffLevelBuffData` 는 **다른 BuffInfo/레벨로 넘기는 링크**다(`+0x94` = 대상 레벨). 자기에게
+패턴 행이 있으면 거기서 멈추고, 없으면 `BuffInfo._buffDataList`(+0x28)의 그 레벨로 한 단 더 간다
+(관측 최대 2단).
+
+**C. 어비스 기어 사슬**
+
+```
+ItemInfo +0x248 → EnchantData +0x58 `_equipBuffs` (0x20 스트라이드)
+      원소 +0x00 하위 u16 = BuffInfo 행, +0x04 u32 = 레벨
+→ BuffInfo._buffDataList[레벨] → BuffData
+```
+`EnchantData` 안에 `EnchantStatData` 가 **포인터가 아니라 통째로** 들어 있다. `_buyPriceList +0x48`
+(관통 I = 1980 → 툴팁 `판매가 1.98`)로 레이아웃을 교차 검증했다.
+
+**D. BuffData 공통 자리**
+
+| 자리 | 뜻 |
+|---|---|
+| `+0x18` u32 | 지속 ms (0 = 즉발) |
+| `+0x38` **하위 u16** | PatternDescriptionInfo **행 번호** (상위 바이트는 잔여물 — 반드시 마스크) |
+| `+0x98` u64 | 스탯 수치형 = 값×1000 · 비율형 = 비율×10⁷ · 어비스(관통) = 25000/50000/75000 |
+| `+0xA0` | 레벨형 = 레벨 원값(나눗셈 없음) |
+| `+0x94` | `ChangeBuffLevel` 의 대상 레벨 |
+| `+0x28` | `Damage` 의 주기 ms |
+| `+0x90` | StatusInfo 행 — **클래스에 따라 잔여물이라 믿지 말 것** |
+
+지속시간 표기(실측): `ms >= 60000 → "({ms/60000}분)"`, 아니면 `"({ms/1000}초)"`, **정수 내림**,
+0 이면 접미 없음(90000 → "1분").
+
+**E. 문구는 형식 문자열 + 파라미터다**
+
+- `PatternDescriptionInfo` 레코드 0x60: `_stringFormat +0x18` · `_descriptionParsed +0x38` ·
+  `_iconName +0x40` · `_paramList +0x58`(항목 **2바이트**: `_paramType`, `_isDisplayAbsoluteNumber`).
+- 현지화는 **카테고리 15 / 필드 0xF0**, 엔티티는 아이템 키가 아니라 레코드 `+0x00`/`+0x24` 의 u32
+  해시다. cat 15 항목 수 352 = 표 행 수(전수 대조 불일치 0).
+- 자리표시자: `{Param0..3}` = 타입 0..3, `{|Param0..3|}` = 4..7(절대값 표시), `{RepeatTick}` = 8.
+  파싱본의 `{pN}` 의 N 은 **`_paramList` 안의 순번**이다(토큰 이름이 아니다).
+- 치환 안 되는 토큰 셋: `{Staticinfo:<표>:<키>}` · `{Key:<액션>}` · `{Money:<통화>:<n>}`.
+- 실제 예: `'{Staticinfo:SubLevel:Hp} 최대치 {Param1} 증가'` ·
+  `'{Staticinfo:SubLevel:AttackSpeedRate} : Lv{Param1} 증가'` ·
+  `'천 갑옷 타격 시 치명타 확률 {Param1}% 증가'`(관통 I).
+
+**F. 장착 가능 부위 (어비스 기어)**
+
+`_equipAbleHash` +0x68 → `EquipTypeInfo`(117행)의 `_equipAbleHashList`(+0x48)에 그 해시가 든 행들.
+관통 I(0xBB5411B9) = 35행(무기 33 + 장갑 + 신발), 신속 I(0xB1DDF576) = 투구·갑옷·장갑·신발.
+부위 이름은 cat 46 / 필드 0x2E0, 줄 문구는 cat 11 / 필드 0xB0(`%0# 장착 가능`).
+탈락시킨 후보: `_occupiedEquipSlotDataList` · `_itemTagList` · `_reserveSlotTargetDataList`
+(어비스 190개 전부 비었다).
+
+**G. 비용 · 시점**
+
+실행 중 상태가 **전혀 필요 없다**(정적 표 + 현지화 풀뿐). 표 단위로 한 번 펼치면 6만~10만 역참조,
+그 뒤 아이템당 14 조회 + 문자열 포맷. 캐시는 1MB 미만. 단 `_descriptionParsed` 와 현지화 풀이 찬
+**뒤에** 돌려야 한다 — 매니저 `+0x08` 개수와 현지화 풀 크기를 게이트로 재시도한다
+([[staged-data-load-retry]] 와 같은 함정).
+
+**H. 남은 것 (다음 게임 세션에 닫는다)**
+
+1. `{Staticinfo:SubLevel:Hp}` → `생명` 치환 규칙(**가장 큰 한 칸**). 결정적 경로: 게임 실행 중
+   `cdtb_probe dumpimage` 로 이미지를 뜬 뒤 `staticinfo`(0x558E1C0) · `sublevel`(0x55C3F98) 리터럴
+   참조부를 역어셈블(디스크 exe 는 Denuvo 로 안 보인다). 차선: `StatusInfo._activeKnowledgeInfo
+   +0x34`(Mp=5085 · IceResistance=5102) → 지식 이름(cat 9 / 필드 0x490) 확인 — 단 Hp 는 0 이라
+   그 길로는 안 풀린다.
+2. 파라미터 배율의 일반 규칙: BuffData vtable 의 파라미터 게터 역어셈블(클래스 9종 주소 확보됨).
+3. 어비스 `{Param1}` 의 배율: 관통 II 또는 III 툴팁 한 장이면 역산된다(25000 → 2% 관측).
+4. `_equipBuffs` 가 없는 어비스 30개(파괴 I · 간파 I 계열)의 효과 출처.
+5. 35행이 `무기 · 장갑 · 신발` 세 줄로 접히는 규칙(데이터가 아니라 UI 코드에 있다).
 
 ## 5. 검색
 
