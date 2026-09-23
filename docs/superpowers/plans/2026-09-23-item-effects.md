@@ -17,7 +17,7 @@
 - **추측 금지.** 오프셋 · 배율 · 행 번호는 명세 §4.7 에 적힌 실측값만 쓴다. 명세에 없는 값이 필요하면 멈추고 `NEEDS_CONTEXT` 로 보고한다.
 - 게임 메모리에 **쓰지 않는다**. 이 PR 은 전부 읽기다.
 - 게임 함수를 부르지 않는다(현지화 조회 함수 포함 — `localization.h` 머리 주석).
-- 값은 **u32 로 읽는다**(u64 로 읽으면 상위 4바이트가 잔여물이다). 4바이트 핸들도 **하위 u16 만** 쓴다.
+- 값은 **부호 있는 32비트로 읽는다**(u64 로 읽으면 상위 4바이트가 잔여물이고, 부호 없이 읽으면 음수 값이 40억대가 된다). 4바이트 핸들도 **하위 u16 만** 쓴다.
 - 사용자 대면 문구는 **합쇼체**. 로그는 기존 투(`log::infof`)를 따른다.
 - 새 파일은 `CMakeLists.txt` 의 세 목록(DLL · cdtb_core · cdtb_tests)에 맞게 등록한다.
 - 시험은 `tests/fake_memory.h` 의 `FakeMemory` 로 쓴다(게임 없이 돈다). 각 Task 끝에 `scripts\build.ps1` 성공 + `build\cdtb_tests.exe` `0 failures` 를 확인한다.
@@ -272,7 +272,7 @@ std::string equip_types_line(const std::vector<std::string>& names, std::size_t 
 - Modify: `src/game/items.h` · `items.cpp` (효과 스냅샷 게시), `src/render/item_style.cpp`(툴팁), `src/render/item_panel.cpp` · `inventory_panel.cpp`(검색)
 
 - [ ] **Step 1:** 배경 스레드에서 `build_item_effects` 를 돌리고 **따로 게시**한다(`item_effects_for(key)`) — 아이템 표는 게시 뒤 안 바꾼다(명세 §4.5).
-- [ ] **Step 2:** 설명 툴팁을 `분류 → 효과 줄들 → 장착 부위 → 설명 전문` 순으로 그린다. 효과가 없으면 그 절은 빼고, 해석 못 한 것이 있으면 마지막에 `해석 못 한 효과 N개` 를 흐리게 붙인다.
+- [ ] **Step 2:** 설명 툴팁을 `효과 줄들 → 장착 부위 → 설명 전문` 순으로 그린다(분류는 이미 표의 열이라 툴팁에 다시 넣지 않는다). 효과가 없으면 그 절은 빼고, 해석 못 한 것이 있으면 마지막에 `해석 못 한 효과 N개` 를 흐리게 붙인다.
 - [ ] **Step 3:** 검색이 효과 문구에도 걸리게 한다(`game::passes` 에 효과 문자열 추가 — 스냅샷이 준비된 뒤부터).
 - [ ] **Step 4:** 빌드 · 시험 · 커밋 — `feat(ui): 설명 툴팁에 효과 · 장착 부위`
 
