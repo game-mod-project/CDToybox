@@ -333,16 +333,62 @@ ItemInfo +0x248 → EnchantData +0x58 `_equipBuffs` (0x20 스트라이드)
 **뒤에** 돌려야 한다 — 매니저 `+0x08` 개수와 현지화 풀 크기를 게이트로 재시도한다
 ([[staged-data-load-retry]] 와 같은 함정).
 
+**H'. 컨트롤러 재실측으로 닫은 것 (2026-09-23 오후, 게임 실행 중)**
+
+파이썬 참조 구현으로 두 아이템의 여섯 줄을 **전부 재조립해 게임 툴팁과 글자까지 맞췄다**
+(스크래치 `lines.py` · `assemble.py`):
+
+```
+생명 최대치 45 증가(1분)     생명 : 1 초마다 15 감소(20초)     공격 속도 : Lv3 증가(20초)
+용기 : 75% 회복              용기 고정(6초)                    냉기 저항 Lv6(1분)
+```
+
+닫은 세 가지:
+
+1. **스탯 이름 치환 규칙 — 확정.**
+   ```
+   {Staticinfo:SubLevel:<키>}  → SubLevelInfo(40행)에서 _stringKey == <키> 인 행
+                               → 그 행 _knowledgeInfo(+0x46) = 지식 행 번호
+   {Staticinfo:Status:<키>}    → StatusInfo(84행)에서 같은 방식, 지식은 _activeKnowledgeInfo(+0x34)
+   지식 행 → KnowledgeInfo +0x08 = 문자열 객체 {char*, u32 len, u32 hash}
+          → 그 hash 를 엔티티로 **현지화 cat 9 / 필드 0x490** = 표시 이름
+   ```
+   실측: Hp→생명 · Mp→용기 · Sp→기력 · IceResistance→냉기 저항 · AttackSpeedRate→공격 속도 ·
+   CriticalRate→치명타 확률. 지식 행 0 은 "없음" 이 아니라 **유효한 행**이다(Knowledge_Hp) —
+   없음은 0xFFFF 다. 지식 매니저는 전역 RVA `0x06D69AB8`(우리 `knowledge.h` 가 이미 쓴다).
+
+2. **값 슬롯은 파생 클래스로 고른다(vtable).** 그리고 **u32 로 읽어야 한다** — u64 로 읽으면
+   상위 4바이트가 잔여물이라 값이 터무니없어진다(Lv3 이 Lv72057594037927939 로 나왔다).
+
+   | 클래스(vtable) | 파라미터 |
+   |---|---|
+   | `ChangeBuffLevel` 0x1458FD040 | `+0x94` 대상 레벨 |
+   | `VaryStaticStatLevel` 0x1458FC1C0 | `+0xA0` u32 원값 |
+   | `VaryDataDefinedStatRate` 0x1458FB5A0 | `+0x98` ÷ 10⁷ |
+   | `VaryStatMaxValue` 0x1458FBD20 · `Damage` 0x1458FC370 | `+0x98` ÷ 1000 |
+
+3. **BuffInfo 의 레벨 목록은 `+0x18`**(`+0x28` 이 아니다), 개수는 `+0x20`. 칸은 16바이트
+   `{i32 레벨, u32 잔여물, BuffData*}` 이고 **레벨이 음수일 수 있어 첨자가 아니라 값으로 찾는다**.
+
+어비스 기어도 같은 기계로 나온다 — 관통 I/II/III = BuffInfo 242
+(`BuffLevel_Socket_AddCriticalRateByMaterialKey_FabricArmor`) 레벨 1/2/3, 패턴 61
+`'천 갑옷 타격 시 치명타 확률 {Param1}% 증가'`, `+0x98` = 25000/50000/75000, 클래스 vtable
+**0x1458FA908**(위 표에 없는 종류). 배율만 미정이다(아래 3번).
+
 **H. 남은 것 (다음 게임 세션에 닫는다)**
 
-1. `{Staticinfo:SubLevel:Hp}` → `생명` 치환 규칙(**가장 큰 한 칸**). 결정적 경로: 게임 실행 중
-   `cdtb_probe dumpimage` 로 이미지를 뜬 뒤 `staticinfo`(0x558E1C0) · `sublevel`(0x55C3F98) 리터럴
-   참조부를 역어셈블(디스크 exe 는 Denuvo 로 안 보인다). 차선: `StatusInfo._activeKnowledgeInfo
-   +0x34`(Mp=5085 · IceResistance=5102) → 지식 이름(cat 9 / 필드 0x490) 확인 — 단 Hp 는 0 이라
-   그 길로는 안 풀린다.
-2. 파라미터 배율의 일반 규칙: BuffData vtable 의 파라미터 게터 역어셈블(클래스 9종 주소 확보됨).
-3. 어비스 `{Param1}` 의 배율: 관통 II 또는 III 툴팁 한 장이면 역산된다(25000 → 2% 관측).
-4. `_equipBuffs` 가 없는 어비스 30개(파괴 I · 간파 I 계열)의 효과 출처.
+1. ~~스탯 이름 치환~~ — **닫혔다**(H' 1번).
+2. 파라미터 배율의 **일반** 규칙: 위 네 클래스 밖은 아직 모른다. BuffData vtable 의 파라미터 게터를
+   역어셈블하면 클래스별로 어느 필드를 어떤 배율로 내주는지 그대로 나온다(클래스 9종 + 어비스용
+   0x1458FA908 주소 확보됨). 게임 실행 중 `cdtb_probe dumpimage` 로 이미지를 떠야 한다(디스크 exe 는
+   Denuvo 로 코드가 안 보인다).
+3. 어비스 `{Param1}` 의 배율: 관통 I 이 내부값 25000 에 화면 2% 다. 후보 둘 — `÷10⁴` 뒤 내림
+   (2.5→2, II→5%, III→7%) 또는 `÷12500`(정확히 2, II→4%, III→6%). **관통 II 나 III 툴팁 한 장**
+   이면 갈린다.
+4. `_equipBuffs` 가 없는 어비스 30개(파괴 I · 간파 I · 신속 I 계열)의 효과 출처 — 실측으로 좁혔다:
+   `EnchantStatData._statList_DataDefinedStatic`(EnchantData 기준 `+0x28`)에 16바이트 칸이 있고
+   `{u16 StatusInfo 행(+잔여물), …, u64 값 @+0x08}` 꼴이다(파괴 I = 행 4, 값 1000). 간파 I · 신속 I 은
+   `_statList_DataDefinedStaticLevel`(`+0x38`)도 쓴다. 이 값들이 어떤 문구로 그려지는지가 남았다.
 5. 35행이 `무기 · 장갑 · 신발` 세 줄로 접히는 규칙(데이터가 아니라 UI 코드에 있다).
 
 ## 5. 검색
