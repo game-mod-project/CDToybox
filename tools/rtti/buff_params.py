@@ -36,27 +36,40 @@ vtable 목록은 둘 다 받는다.
 3. **나눗셈의 두 얼굴** - 정수는 컴파일러 매직 상수(`imul` + `sar`), 실수는
    `vdivsd`/`vmulsd` 의 rip 상대 상수다. 둘을 합쳐 최종 배율을 낸다.
 
-`_isDisplayAbsoluteNumber`(r9b)
--------------------------------
-몇몇 클래스는 `cmp r9b, 1` 로 갈라져 배율이 달라진다(비율형: 1 이면 ÷10⁷,
-아니면 ÷1000). 표에 넣는 값은 **r9b=1 갈래**다 - 실측(명세 §4.7-H' 3번,
-`VaryDataDefinedStatRate` ÷10⁷)이 그쪽이기 때문이다. 다른 갈래의 배율은 그 줄의
-`note` 에 적어 둔다.
+표의 키는 셋이다 - (vtable, 파라미터 종류, `+0x3A`)
+---------------------------------------------------
+배율은 클래스만으로 안 정해진다. **같은 클래스라도 두 가지로 더 갈린다.**
 
-파라미터가 둘인 클래스
-----------------------
-`DamageBuffData`(종류 1 = +0x98 ÷1000, 종류 3 = +0xF8 ÷10⁴)처럼 한 클래스가 칸을
-둘 내주는 것이 있다. 표는 vtable 하나에 줄 하나이므로 **숫자를 내는 가장 낮은
-종류**를 대표로 싣고, 나머지는 그 줄의 `note` 에 적는다. `TribeAdditionalDamageRate`
-처럼 어떤 종류는 숫자가 아니라 표 조회(종족 이름)인 것도 `note` 로 남긴다.
+1. **파라미터 종류**(r8b). `DamageBuffData` 는 종류 1 이 `+0x98 ÷1000`,
+   종류 3 이 `+0xF8 ÷10⁴` 다. `SetStatMinRate` 는 종류 1 이 `+0x98`,
+   종류 2 가 `+0xA0` 이다.
+2. **BuffData `+0x3A`**(r9b). 호출부(RVA 0x1F29931~)가
+   `movzx r9d, byte ptr [rdi + 0x3a]` + `mov rcx, rdi` 로 넘기는 값이다 -
+   **BuffData 자신의 바이트**지 파라미터 항목의 둘째 바이트가 아니다
+   (그 둘째 바이트 `_isDisplayAbsoluteNumber` 는 호출부가 따로 본다:
+   `cmp byte ptr [rax + r15*2 + 1], 0`). 비율형 클래스는 `cmp r9b, 1` 로
+   갈라져 1 이면 ÷10⁷, 아니면 ÷1000 이 된다. 실측 분포는 0 이 2881개,
+   1 이 232개다.
+
+그래서 이 도구는 종류 0~7 × `+0x3A` 0·1 을 **전부 펼쳐** 한 조합에 한 줄씩 낸다.
+조합마다 값이 같아도 줄을 합치지 않는다 - 부르는 쪽이 고르지 않고 찾게 한다.
+
+종류 8(`{RepeatTick}`)은 여기 없다. 호출부가 슬롯 11 을 부르지 않고 BuffData
+`+0x28`(주기 ms)을 1000.0 으로 직접 나눈다(RVA 0x1F29A51).
+
+숫자가 아닌 파라미터
+--------------------
+`TribeAdditionalDamageRate` 의 종류 1 처럼 값이 숫자가 아니라 **표 조회(종족
+이름)** 인 것이 있다. 배율이 없으므로 줄을 내지 않고 못 뽑은 목록에 적는다.
 
 자기 검증
 ---------
 아래 셋이 안 맞으면 **0이 아닌 종료 코드로 죽는다**(조용히 틀린 표를 내지 않는다).
+셋 다 게임 툴팁과 글자까지 맞춘 줄에서 나온 실측이다.
 
-    0x1458FBD20 VaryStatMaxValue        -> +0x98 ÷1000
-    0x1458FA908 (어비스 소켓 치명타)     -> +0x98 ÷10000
-    0x1458FB5A0 VaryDataDefinedStatRate -> +0x98 ÷10000000
+    0x1458FBD20 VaryStatMaxValue        종류1 +0x3A=0 -> +0x98 ÷1000
+    0x1458FA908 (어비스 소켓 치명타)     종류1 +0x3A=0 -> +0x98 ÷10000
+    0x1458FB5A0 VaryDataDefinedStatRate 종류2 +0x3A=1 -> +0x98 ÷10000000
 """
 import argparse
 import json
@@ -79,15 +92,21 @@ except ImportError:                                               # pragma: no c
 # 파라미터 게터가 사는 가상 함수 슬롯. `call qword ptr [rax + 0x58]` = 11번째 칸.
 PARAM_SLOT = 11
 
-# 자기 검증 셋 (실측, 명세 §4.7-H'·H'')
+# 자기 검증 셋 (실측, 명세 §4.7-H'·H''). 키는 (vtable, 종류, +0x3A).
 SELF_CHECK = {
-    0x1458FBD20: (0x98, 1000.0),
-    0x1458FA908: (0x98, 10000.0),
-    0x1458FB5A0: (0x98, 10000000.0),
+    (0x1458FBD20, 1, 0): (0x98, 1000.0),
+    (0x1458FA908, 1, 0): (0x98, 10000.0),
+    (0x1458FB5A0, 2, 1): (0x98, 10000000.0),
 }
 
-# 파라미터 종류. {Param0..3} = 0..3, {|Param0..3|} = 4..7, {RepeatTick} = 8.
-PARAM_KINDS = range(0, 9)
+# 파라미터 종류. {Param0..3} = 0..3, {|Param0..3|} = 4..7.
+# 8({RepeatTick})은 호출부가 BuffData +0x28 ÷1000.0 으로 직접 만든다 - 슬롯 11 에
+# 오지 않으므로 훑지 않는다.
+PARAM_KINDS = range(0, 8)
+
+# 슬롯 11 의 r9b = BuffData +0x3A. 게임은 `cmp r9b, 1` 만 하므로 1 이 아닌 값은
+# 전부 0 과 같다(실측 분포도 0·1 뿐이다).
+FLAG3A_VALUES = (0, 1)
 
 _REG64 = {}
 for _base, _alias in [
@@ -541,7 +560,11 @@ class Walk:
 
 
 def analyze(code, vtable_va):
-    """클래스 하나 -> 파라미터 종류별 규칙."""
+    """클래스 하나 -> (종류, +0x3A) 조합마다 규칙.
+
+    조합을 **전부 펼친다**. 함수 하나에서 상수를 긁어모으면 분기가 섞여 틀리므로
+    조합마다 따로 모의 실행한다.
+    """
     raw = slot_entry(code, vtable_va)
     if not raw:
         return {'error': 'vtable 을 읽을 수 없음'}
@@ -549,36 +572,30 @@ def analyze(code, vtable_va):
     if code.off(fn) is None:
         return {'error': '슬롯 11 이 코드가 아님 (0x%X)' % fn}
 
-    per_kind = {}
-    alt = {}
-    object_kinds = []
+    rules = {}
+    objects = []
     for k in PARAM_KINDS:
-        w = Walk(code, fn, k, 1).run()
-        r = w.result()
-        if w.outcome == 'object':
-            object_kinds.append((k, w.read))
-        if r:
-            per_kind[k] = r
-            w0 = Walk(code, fn, k, 0).run().result()
-            if w0 and (w0['offset'], w0['divisor']) != (r['offset'], r['divisor']):
-                alt[k] = w0
+        for flag in FLAG3A_VALUES:
+            w = Walk(code, fn, k, flag).run()
+            if w.outcome == 'object':
+                objects.append((k, flag, w.read))
+                continue
+            r = w.result()
+            if r:
+                rules[(k, flag)] = r
     return {'fn': fn, 'raw': raw, 'thunk': hops > 0,
-            'kinds': per_kind, 'alt': alt, 'objects': object_kinds}
+            'rules': rules, 'objects': objects}
 
 
-def pick_rule(info):
-    """한 클래스의 대표 규칙 = 숫자를 내는 **가장 낮은** 파라미터 종류."""
-    kinds = info.get('kinds') or {}
-    if not kinds:
-        return None
-    groups = {}
-    for k in sorted(kinds):
-        r = kinds[k]
-        groups.setdefault((r['offset'], r['divisor']), []).append(k)
-    first = min(groups.items(), key=lambda kv: min(kv[1]))
-    (off, div), ks = first
-    return {'offset': off, 'divisor': div, 'kinds': ks, 'groups': groups,
-            'getter': kinds[ks[0]].get('getter', False)}
+def flag_sensitive(info):
+    """`+0x3A` 값에 따라 칸이나 배율이 달라지는 종류들."""
+    rules = info.get('rules') or {}
+    out = []
+    for k in PARAM_KINDS:
+        a, b = rules.get((k, 0)), rules.get((k, 1))
+        if a and b and (a['offset'], a['divisor']) != (b['offset'], b['divisor']):
+            out.append(k)
+    return out
 
 
 # ------------------------------------------------------------------ 출력
@@ -598,26 +615,11 @@ def esc(s):
     return s.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def build_note(name, rule, info):
-    bits = []
-    if name:
-        bits.append(name)
-    bits.append('종류 ' + ','.join(str(k) for k in rule['kinds']))
-    for (off, div), ks in sorted(rule['groups'].items()):
-        if (off, div) == (rule['offset'], rule['divisor']):
-            continue
-        bits.append('종류 %s: +0x%X ÷%s'
-                    % (','.join(str(k) for k in ks), off, fmt_div_short(div)))
-    objs = sorted(k for k, _off in info.get('objects', []))
-    if objs:
-        bits.append('종류 %s: 표 조회(이름)' % ','.join(str(k) for k in objs))
-    alt = info.get('alt') or {}
-    for k in rule['kinds']:
-        if k in alt:
-            a = alt[k]
-            bits.append('절대표시 0 이면 +0x%X ÷%s'
-                        % (a['offset'], fmt_div_short(a['divisor'])))
-            break
+def build_note(name, kind, rule, info):
+    """줄에 붙일 말. 키(vtable·종류·+0x3A)에 이미 있는 것은 적지 않는다."""
+    bits = [name or '(이름 없음)']
+    if 4 <= kind <= 7:
+        bits.append('절대값 표시')
     if rule.get('getter'):
         bits.append('겹침 증분 +0x%X' % (rule['offset'] + 0x10))
     if info.get('thunk'):
@@ -634,22 +636,27 @@ HEADER = """\
 // 뽑는 방법과 함정은 `tools/rtti/buff_params.py` 머리 주석, 근거는
 // `docs/superpowers/specs/2026-09-22-item-description-effects-design.md` §4.7-H''.
 //
-// 표에 없는 클래스 = **모름**이다(`buff_param_divisor` 가 0 을 돌려준다).
-// 그런 효과 줄은 버리고 세기만 한다 - 틀린 숫자를 보이는 것보다 낫다.
+// 키가 **셋**이다: vtable · 파라미터 종류(슬롯 11 의 r8b) · BuffData `+0x3A`
+// (슬롯 11 의 r9b). 같은 클래스라도 종류마다 칸이 다르고, `+0x3A` 값마다 배율이
+// 다르다. 조합이 표에 없으면 **모름**이다(`buff_param_divisor` 가 0 을 돌려준다) -
+// 그런 효과 줄은 버리고 세기만 한다. 틀린 숫자를 보이는 것보다 낫다.
+//
+// 종류 8({RepeatTick})은 여기 없다. 호출부가 슬롯 11 을 부르지 않고 BuffData
+// `+0x28`(주기 ms)을 1000.0 으로 나눠 직접 만든다(RVA 0x1F29A51).
 //
 // `note` 에 붙는 말
-//   종류 N      - 이 규칙이 채우는 파라미터 종류. {Param0..3}=0..3,
-//                 {|Param0..3|}=4..7, {RepeatTick}=8.
-//   종류 N: ... - 같은 클래스가 **다른 칸**도 내준다는 뜻이다. 한 줄에 규칙
-//                 하나만 담을 수 있어 가장 낮은 종류를 대표로 적었다.
-//   절대표시 0  - `_isDisplayAbsoluteNumber`(슬롯 11 의 r9b)가 1 이 아니면
-//                 배율이 저렇게 달라진다. 표에 적은 값은 **1 갈래**다(실측).
+//   절대값 표시 - 종류 4~7 = `{|ParamN|}` 자리. 게임이 부호를 떼고 보인다.
 //   겹침 증분   - 게임은 그 칸이 아니라 `[칸] + [증분칸] * 겹침수` 를 쓴다.
 //                 툴팁은 겹침수 1 로 부른다.
+//   thunk       - 슬롯 11 이 점프 하나이고 본체는 딴 데 있다.
 //
 // 이미지 %(image)s
-// 클래스 %(total)d종 중 %(known)d종에서 규칙을 얻었다.
-// 못 얻은 %(unknown)d종:
+// 클래스 %(total)d종 중 %(known)d종에서 규칙 %(rowcount)d줄을 얻었다.
+// `+0x3A` 값에 따라 배율이 갈리는 클래스 %(fsens)d종:
+%(fsens_lines)s
+// 값이 숫자가 아니라 **표 조회(이름)** 인 조합 - 배율이 없어 줄을 내지 않았다:
+%(object_lines)s
+// 규칙을 못 얻은 %(unknown)d종:
 %(unknown_lines)s
 // vtable 주소는 모듈 고정 VA(기준 0x140000000)다. 게임이 갱신되면 다시 돌린다.
 
@@ -680,42 +687,67 @@ def main(argv=None):
         print('vtable 목록이 비었습니다: %s' % args.vtables, file=sys.stderr)
         return 2
 
-    rows, unknown = [], []
+    rows, unknown, classes, fsens, objs = [], [], [], [], []
     for vt, given_name in entries:
         name = given_name or class_name(code, vt)
         info = analyze(code, vt)
         if 'error' in info:
             unknown.append((vt, name, info['error']))
             continue
-        rule = pick_rule(info)
-        if rule is None:
-            why = '표 조회(이름)만 있음' if info.get('objects') else '파라미터 없음'
+        if not info['rules']:
+            why = '표 조회(이름)만 있음' if info['objects'] else '파라미터 없음'
             unknown.append((vt, name, why))
             continue
-        rows.append({'vt': vt, 'name': name, 'rule': rule, 'info': info})
+        classes.append(vt)
+        sens = flag_sensitive(info)
+        if sens:
+            fsens.append((vt, name, sens, info))
+        if info['objects']:
+            objs.append((vt, name, info['objects']))
+        for (kind, flag), rule in info['rules'].items():
+            rows.append({'vt': vt, 'name': name, 'kind': kind, 'flag': flag,
+                         'rule': rule, 'info': info})
 
-    rows.sort(key=lambda r: r['vt'])
+    rows.sort(key=lambda r: (r['vt'], r['kind'], r['flag']))
     unknown.sort(key=lambda u: u[0])
+    fsens.sort(key=lambda f: f[0])
 
     ok = self_check(rows)
 
     body = ''.join(
-        '    {0x%XULL, 0x%X, %s,\n     "%s"},\n'
-        % (r['vt'], r['rule']['offset'], fmt_div(r['rule']['divisor']),
-           esc(build_note(r['name'], r['rule'], r['info'])))
+        '    {0x%XULL, %d, %d, 0x%X, %s,\n     "%s"},\n'
+        % (r['vt'], r['kind'], r['flag'], r['rule']['offset'],
+           fmt_div(r['rule']['divisor']),
+           esc(build_note(r['name'], r['kind'], r['rule'], r['info'])))
         for r in rows)
     unknown_lines = ''.join(
         '//   0x%X  %-34s %s\n' % (vt, name or '(이름 없음)', why)
         for vt, name, why in unknown) or '//   (없음)\n'
+    fsens_lines = ''.join(
+        '//   0x%X  %-34s %s\n'
+        % (vt, name or '(이름 없음)',
+           ' · '.join('종류 %d: 0->÷%s 1->÷%s'
+                      % (k, fmt_div_short(info['rules'][(k, 0)]['divisor']),
+                         fmt_div_short(info['rules'][(k, 1)]['divisor']))
+                      for k in ks))
+        for vt, name, ks, info in fsens) or '//   (없음)\n'
+    object_lines = ''.join(
+        '//   0x%X  %-34s 종류 %s\n'
+        % (vt, name or '(이름 없음)',
+           ','.join(str(k) for k in sorted({k for k, _f, _o in items})))
+        for vt, name, items in objs) or '//   (없음)\n'
 
     text = HEADER % {
         'image': os.path.basename(image),
-        'total': len(entries), 'known': len(rows), 'unknown': len(unknown),
+        'total': len(entries), 'known': len(classes), 'unknown': len(unknown),
+        'rowcount': len(rows), 'fsens': len(fsens),
+        'fsens_lines': fsens_lines.rstrip('\n'),
+        'object_lines': object_lines.rstrip('\n'),
         'unknown_lines': unknown_lines.rstrip('\n'),
         'rows': body,
     }
 
-    report(rows, unknown)
+    report(rows, unknown, classes, fsens)
     if not ok:
         print('자기 검증 실패 - 표를 내지 않습니다.', file=sys.stderr)
         return 1
@@ -723,7 +755,8 @@ def main(argv=None):
     if args.out:
         with open(args.out, 'w', encoding='utf-8', newline='\n') as f:
             f.write(text)
-        print('썼습니다: %s (%d줄)' % (args.out, len(rows)), file=sys.stderr)
+        print('썼습니다: %s (규칙 %d줄 · 클래스 %d종)'
+              % (args.out, len(rows), len(classes)), file=sys.stderr)
     else:
         sys.stdout.write(text)
     return 0
@@ -762,30 +795,41 @@ def load_vtables(path):
 
 
 def self_check(rows):
-    by_vt = {r['vt']: r['rule'] for r in rows}
+    by_key = {(r['vt'], r['kind'], r['flag']): r['rule'] for r in rows}
     ok = True
     print('== 자기 검증 ==', file=sys.stderr)
-    for vt, (off, div) in sorted(SELF_CHECK.items()):
-        got = by_vt.get(vt)
+    for (vt, kind, flag), (off, div) in sorted(SELF_CHECK.items()):
+        got = by_key.get((vt, kind, flag))
         if got is None:
-            print('  0x%X  없음 (기대 +0x%X ÷%s)  FAIL' % (vt, off, fmt_div_short(div)),
-                  file=sys.stderr)
+            print('  0x%X 종류%d +0x3A=%d  없음 (기대 +0x%X ÷%s)  FAIL'
+                  % (vt, kind, flag, off, fmt_div_short(div)), file=sys.stderr)
             ok = False
             continue
         good = got['offset'] == off and float(got['divisor']) == div
-        print('  0x%X  +0x%X ÷%-10s (기대 +0x%X ÷%s)  %s'
-              % (vt, got['offset'], fmt_div_short(got['divisor']), off,
-                 fmt_div_short(div), 'OK' if good else 'FAIL'), file=sys.stderr)
+        print('  0x%X 종류%d +0x3A=%d  +0x%X ÷%-10s (기대 +0x%X ÷%s)  %s'
+              % (vt, kind, flag, got['offset'], fmt_div_short(got['divisor']),
+                 off, fmt_div_short(div), 'OK' if good else 'FAIL'), file=sys.stderr)
         ok = ok and good
     return ok
 
 
-def report(rows, unknown):
-    print('\n== 뽑은 규칙 %d종 ==' % len(rows), file=sys.stderr)
+def report(rows, unknown, classes, fsens):
+    print('\n== 뽑은 규칙 %d줄 (클래스 %d종) =='
+          % (len(rows), len(classes)), file=sys.stderr)
     for r in rows:
-        print('  0x%X  +0x%-4X ÷%-12s %s'
-              % (r['vt'], r['rule']['offset'], fmt_div_short(r['rule']['divisor']),
-                 build_note(r['name'], r['rule'], r['info'])), file=sys.stderr)
+        print('  0x%X  종류%d  +0x3A=%d  +0x%-4X ÷%-12s %s'
+              % (r['vt'], r['kind'], r['flag'], r['rule']['offset'],
+                 fmt_div_short(r['rule']['divisor']),
+                 build_note(r['name'], r['kind'], r['rule'], r['info'])),
+              file=sys.stderr)
+    print('\n== +0x3A 로 배율이 갈리는 %d종 ==' % len(fsens), file=sys.stderr)
+    for vt, name, ks, info in fsens:
+        for k in ks:
+            a, b = info['rules'][(k, 0)], info['rules'][(k, 1)]
+            print('  0x%X  %-34s 종류%d  0 -> +0x%X ÷%s   1 -> +0x%X ÷%s'
+                  % (vt, name or '(이름 없음)', k, a['offset'],
+                     fmt_div_short(a['divisor']), b['offset'],
+                     fmt_div_short(b['divisor'])), file=sys.stderr)
     print('\n== 못 뽑은 %d종 ==' % len(unknown), file=sys.stderr)
     for vt, name, why in unknown:
         print('  0x%X  %-34s %s' % (vt, name or '(이름 없음)', why), file=sys.stderr)
