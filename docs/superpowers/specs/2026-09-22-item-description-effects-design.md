@@ -308,7 +308,10 @@ ItemInfo +0x248 → EnchantData +0x58 `_equipBuffs` (0x20 스트라이드)
 **E. 문구는 형식 문자열 + 파라미터다**
 
 - `PatternDescriptionInfo` 레코드 0x60: `_stringFormat +0x18` · `_descriptionParsed +0x38` ·
-  `_iconName +0x40` · `_paramList +0x58`(항목 **2바이트**: `_paramType`, `_isDisplayAbsoluteNumber`).
+  `_iconName +0x40` · **`_paramList +0x48`(포인터) · `+0x50`(개수)** — 항목은 **2바이트**
+  `{_paramType, _isDisplayAbsoluteNumber}`. (`fields.py` 가 `_paramList` 를 `+0x58` 로 잡은 것은
+  `_uiPassiveShowLevel` 과의 오귀속이다. 2026-09-23 실측: 행 5 `[(1,0)]` · 행 4 `[(8,0),(5,1)]` ·
+  행 61 `[(1,0)]` — 개수와 종류가 형식 문자열의 토큰과 정확히 맞는다.)
 - 현지화는 **카테고리 15 / 필드 0xF0**, 엔티티는 아이템 키가 아니라 레코드 `+0x00`/`+0x24` 의 u32
   해시다. cat 15 항목 수 352 = 표 행 수(전수 대조 불일치 0).
 - 자리표시자: `{Param0..3}` = 타입 0..3, `{|Param0..3|}` = 4..7(절대값 표시), `{RepeatTick}` = 8.
@@ -397,6 +400,24 @@ ItemInfo +0x248 → EnchantData +0x58 `_equipBuffs` (0x20 스트라이드)
 - 주의: 슬롯 11 이 점프 섬프(thunk)인 클래스가 있고(0x1458FC230 · 0x1458FC1C0), 분기마다
   상수가 달라 **단순 정규식으로 읽으면 틀린다**. 표 생성기는 분기를 따라가고, 이미 아는 셋
   (÷1000 · ÷10⁴ · ÷10⁷)으로 **자기 검증**해야 한다.
+
+**H'''. 배율의 분기 선택자는 `BuffData +0x3A` 다 (2026-09-23 실측)**
+
+슬롯 11 의 네 번째 인자(`r9b`)는 호출부에서 `movzx r9d, byte ptr [rdi + 0x3a]` 로 오는데
+`rdi` 가 **BuffData 자신**이다(바로 뒤 `mov rcx, rdi`). 파라미터의 `_isDisplayAbsoluteNumber`
+가 아니다. 그 바이트는 0 또는 1 이고(전수 분포 **0: 2881 · 1: 232**), 클래스에 따라 **같은 칸을
+다른 배율로** 내준다.
+
+툴팁과 글자까지 맞은 줄들의 값(= 구현이 재현해야 하는 기준):
+
+| 클래스 | `+0x3A` | 칸 | 배율 | 확인한 문구 |
+|---|---|---|---|---|
+| `VaryStatMaxValue` 0x1458FBD20 | 0 | +0x98 | ÷1000 | 생명 최대치 45 증가(1분) |
+| 소켓 치명타 0x1458FA908 | 0 | +0x98 | ÷10⁴ | 치명타 확률 2 · 5 · 7% |
+| `VaryDataDefinedStatRate` 0x1458FB5A0 | 1 | +0x98 | ÷10⁷ | 용기 : 75% 회복 |
+
+그래서 배율 표의 키는 **(vtable, 파라미터 종류, `+0x3A`)** 이다. 파라미터 종류에 따라 칸이 다른
+클래스도 있다(`Damage` 종류 3 = `+0xF8`, `SetStatMinRate` 종류 2 = `+0xA0`).
 
 **H. 남은 것 (다음 게임 세션에 닫는다)**
 
