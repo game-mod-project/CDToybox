@@ -281,7 +281,7 @@ std::string equip_types_line(const std::vector<std::string>& names, std::size_t 
 ### Task 8: 문서
 
 - [ ] `docs/STATUS.md` §1.7 에 효과 문단(경로 두 갈래 · 이름표 · 배율 표의 출처).
-- [ ] `docs/TROUBLESHOOTING.md` 에 두 함정: **값은 u32 로 읽는다**(잔여물), **버프 레벨은 음수가 있어 첨자로 찍으면 안 된다**.
+- [ ] `docs/TROUBLESHOOTING.md` 에 두 함정: **값은 부호 있는 32비트로 읽는다**(u64 로 읽으면 잔여물이 섞인다), **버프 레벨은 음수가 있어 첨자로 찍으면 안 된다**.
 - [ ] `docs/README.md` · 루트 `README.md` · `CLAUDE.md` 의 수(시험 · 명세 · 계획) 갱신.
 - [ ] 커밋 — `docs: 효과 문구`
 

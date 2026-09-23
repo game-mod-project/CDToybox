@@ -94,11 +94,16 @@ except ImportError:                                               # pragma: no c
 # 파라미터 게터가 사는 가상 함수 슬롯. `call qword ptr [rax + 0x58]` = 11번째 칸.
 PARAM_SLOT = 11
 
-# 자기 검증 셋 (실측, 명세 §4.7-H'·H''). 키는 (vtable, 종류, +0x3A).
+# 자기 검증 셋 (실측, 명세 §4.7-H'·H''). 키는 (vtable, 종류, +0x3A),
+# 값은 (칸, 나누는 수, 정수 나눗셈인가).
+#
+# 정수 갈래까지 보는 이유: 화면값으로 잘림을 실측한 유일한 근거가 소켓 치명타
+# (25000 → 2 · 75000 → 7)이고, 그것을 인코딩하는 칸이 `integer_div` 다. 이 칸이
+# 조용히 뒤집히면 소수가 잘리거나 안 잘려도 아무도 안 죽는다.
 SELF_CHECK = {
-    (0x1458FBD20, 1, 0): (0x98, 1000.0),
-    (0x1458FA908, 1, 0): (0x98, 10000.0),
-    (0x1458FB5A0, 2, 1): (0x98, 10000000.0),
+    (0x1458FBD20, 1, 0): (0x98, 1000.0, True),
+    (0x1458FA908, 1, 0): (0x98, 10000.0, True),
+    (0x1458FB5A0, 2, 1): (0x98, 10000000.0, False),
 }
 
 # 파라미터 종류. {Param0..3} = 0..3, {|Param0..3|} = 4..7.
@@ -816,17 +821,21 @@ def self_check(rows):
     by_key = {(r['vt'], r['kind'], r['flag']): r['rule'] for r in rows}
     ok = True
     print('== 자기 검증 ==', file=sys.stderr)
-    for (vt, kind, flag), (off, div) in sorted(SELF_CHECK.items()):
+    for (vt, kind, flag), (off, div, want_int) in sorted(SELF_CHECK.items()):
         got = by_key.get((vt, kind, flag))
         if got is None:
-            print('  0x%X 종류%d +0x3A=%d  없음 (기대 +0x%X ÷%s)  FAIL'
-                  % (vt, kind, flag, off, fmt_div_short(div)), file=sys.stderr)
+            print('  0x%X 종류%d +0x3A=%d  없음 (기대 +0x%X ÷%s %s)  FAIL'
+                  % (vt, kind, flag, off, fmt_div_short(div),
+                     '정수' if want_int else '실수'), file=sys.stderr)
             ok = False
             continue
-        good = got['offset'] == off and float(got['divisor']) == div
-        print('  0x%X 종류%d +0x3A=%d  +0x%X ÷%-10s (기대 +0x%X ÷%s)  %s'
+        good = (got['offset'] == off and float(got['divisor']) == div
+                and bool(got['integer_div']) == want_int)
+        print('  0x%X 종류%d +0x3A=%d  +0x%X ÷%-10s %s (기대 +0x%X ÷%s %s)  %s'
               % (vt, kind, flag, got['offset'], fmt_div_short(got['divisor']),
-                 off, fmt_div_short(div), 'OK' if good else 'FAIL'), file=sys.stderr)
+                 '정수' if got['integer_div'] else '실수',
+                 off, fmt_div_short(div), '정수' if want_int else '실수',
+                 'OK' if good else 'FAIL'), file=sys.stderr)
         ok = ok and good
     return ok
 
