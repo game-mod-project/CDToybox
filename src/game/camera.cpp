@@ -333,6 +333,11 @@ void auto_analysis_loop() {
         // 준비되면 스스로 즉시 빠진다.
         discover_items(rtti, reader);
         t = step("아이템표", t);
+        // 설명 툴팁의 효과 줄 · 장착 부위. 아이템 표와 **현지화가 찬 뒤**라야
+        // 하므로 여기 얹어 두고 못 만들면 다음 통과에 다시 온다 - 한 번
+        // 실패하고 끝내면 문구가 영영 빈다(staged-data-load-retry 함정).
+        discover_item_effects(rtti, reader);
+        t = step("아이템 효과", t);
         // 소켓 지급이 키 -> 순번 대응표를 쓴다. 아이템 표가 선 뒤에
         // 한 번만 읽고 스스로 빠진다.
         discover_item_ids(rtti, reader);
@@ -398,16 +403,24 @@ void auto_analysis_loop() {
         // "대응표를 아직 못 읽었습니다" 로 남았다(실측 2026-09-09).
         // 표가 방금 완성됐을 수 있으니 여기서 한 번 더 부른다.
         if (items_done) discover_item_ids(rtti, reader);
+        // 효과는 이름(현지화)이 풀린 뒤라야 문구가 제대로 나온다. 이 루프가
+        // 바로 그것을 기다리는 곳이라 여기서도 다시 부른다.
+        const bool effects_done = discover_item_effects(rtti, reader);
         // 명부: 값싼 세션 사슬 먼저, RTTI 스캔은 월드 안에서만(clan.cpp 가 가른다).
         discover_clan(rtti, reader);
         rtti.clear_prefetch();   // 반복 사이(5초)엔 캐시를 비워 둔다 - 소멸자는 안전망
-        if (items_done && inventory_ready() && item_ids_ready()) break;
+        if (items_done && effects_done && inventory_ready() && item_ids_ready()) {
+            break;
+        }
         for (int j = 0; j < 50 && !g_stop.load(); ++j) {
             ::Sleep(100);   // 5초, 중단 요청에 100ms 안에 반응
         }
     }
     if (!items_named() && !g_stop.load()) {
         log::warnf("아이템 표: 현지화를 끝내 못 봤다 - 이름 없이 키만 낸다");
+    }
+    if (!item_effects_ready() && !g_stop.load()) {
+        log::warnf("아이템 효과: 표를 끝내 못 걸었다 - 툴팁에 설명만 보인다");
     }
 
     // 세션은 플레이하는 내내 새로 생긴다. 위의 두 루프는 각각 카메라와

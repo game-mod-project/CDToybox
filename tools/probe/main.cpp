@@ -26,8 +26,10 @@
 #include "game/camera.h"
 #include "game/clan.h"
 #include "game/equip.h"
+#include "game/equip_types.h"
 #include "game/grant.h"
 #include "game/inventory.h"
+#include "game/item_effects.h"
 #include "game/items.h"
 #include "game/nofall.h"
 #include "game/nofall_cave.h"
@@ -37,6 +39,7 @@
 #include "game/mountvital.h"
 #include "game/roster.h"
 #include "game/stash.h"
+#include "game/stat_names.h"
 
 using namespace cdtb;
 using namespace cdtb::probe;
@@ -72,6 +75,7 @@ void usage() {
         "  loc item <엔티티키>         이름(0x70)과 다음 칸(0x71)\n"
         "  items [최대]                아이템 표를 키+이름으로 나열\n"
         "  items find <문자열>         이름에 그 문자열이 든 것만\n"
+        "  effects [아이템키 ...]      효과 줄 · 해석 못 한 수 (인자 없으면 요약)\n"
         "  itemmap [최대]              아이템키 <-> 짧은 식별자 대응표\n"
         "  itemmap id <짧은id> ...     짧은 식별자로 아이템 되찾기\n"
         "  itemmap key <아이템키> ...  아이템 키의 짧은 식별자\n"
@@ -2593,6 +2597,152 @@ void cmd_items(const mem::Rtti& rt, const mem::Reader& reader, int argc,
     }
 }
 
+// 아이템의 효과 문구를 찍는다. 모드가 쓰는 것과 같은 함수를 부른다
+// (cmd_items 와 같은 이유 - 배포 전에 여기서 결과를 본다).
+//
+//   effects                 전체 표를 걷고 요약 통계만 낸다
+//   effects <아이템키> ...  그 아이템들의 효과 줄 · 해석 못 한 수 · 장착 부위를
+//                           찍는다(계획 Task 6)
+//
+// 아이템 키 -> 행 번호(build_item_effects 의 색인)는 build_item_catalog 의
+// 결과 위치로 셈하지 않는다 - 그쪽은 빈 슬롯을 건너뛰어 압축되므로 행 번호와
+// 어긋날 수 있다. 대신 같은 매니저(mgr.item)의 레코드 포인터 배열에서 주소로
+// 다시 찾는다(item_effects.cpp 의 record_at 과 같은 자리 계산).
+void cmd_effects(const mem::Rtti& rt, const mem::Reader& reader, int argc,
+                 char** argv) {
+    game::LocSystem sys;
+    if (!game::find_loc_system(rt, reader, &sys)) {
+        std::printf("현지화 시스템을 찾지 못했습니다.\n");
+        return;
+    }
+
+    game::EffectManagers mgr;
+    if (!game::find_effect_managers(rt, reader, &mgr)) {
+        std::printf("효과 매니저를 찾지 못했습니다"
+                    " (아이템 · 사용 · 스킬 · 버프 · 패턴 매니저 중 하나 이상).\n");
+        return;
+    }
+
+    game::StatNames names;
+    if (!names.build(rt, reader, sys)) {
+        std::printf("스탯 이름표를 만들지 못했습니다"
+                    " (효과 문구의 스탯 이름이 토큰으로 남을 수 있습니다).\n");
+        // 치명적이지 않다 - 이름표가 비어도 효과 문구는 토큰을 그대로 두고
+        // 계속한다(stat_names.h 의 계약).
+    }
+
+    std::vector<game::ItemCatalogEntry> cat;
+    if (!game::build_item_catalog(reader, mgr.item, sys, &cat)) {
+        std::printf("아이템 목록을 만들지 못했습니다.\n");
+        return;
+    }
+
+    const auto t0 = ::GetTickCount64();
+    std::vector<game::ItemEffects> effects;
+    if (!game::build_item_effects_from_managers(reader, sys, names, mgr,
+                                                &effects)) {
+        std::printf("효과 표를 걷지 못했습니다.\n");
+        return;
+    }
+    const auto walk_ms = ::GetTickCount64() - t0;
+
+    if (argc <= 2) {
+        std::size_t with_effects = 0, total_lines = 0;
+        long long total_unresolved = 0;
+        for (const auto& fx : effects) {
+            if (!fx.lines.empty()) ++with_effects;
+            total_lines += fx.lines.size();
+            total_unresolved += fx.unresolved;
+        }
+        std::printf("효과가 있는 아이템 %zu개 (전체 %zu행)\n", with_effects,
+                    effects.size());
+        std::printf("효과 줄 합계 %zu\n", total_lines);
+        std::printf("해석 못 한 줄 합계 %lld\n", total_unresolved);
+        std::printf("스탯 이름표 크기 %zu\n", names.size());
+        std::printf("걷는 데 걸린 시간 %llums\n",
+                    static_cast<unsigned long long>(walk_ms));
+        return;
+    }
+
+    // 레코드 포인터 배열을 한 번에 읽어 둔다. 아이템마다 다시 읽으면 느리다.
+    std::uint32_t rec_count = 0;
+    std::uint64_t records_ptr = 0;
+    reader.read_value(mgr.item + game::kItemMgrCount, &rec_count);
+    reader.read_value(mgr.item + game::kItemMgrRecords, &records_ptr);
+    std::vector<std::uint64_t> record_ptrs;
+    if (records_ptr != 0 && rec_count > 0 && rec_count < game::kMaxEffectRows) {
+        record_ptrs.resize(rec_count);
+        if (!reader.read(static_cast<std::uintptr_t>(records_ptr),
+                         record_ptrs.data(), record_ptrs.size() * 8)) {
+            record_ptrs.clear();
+        }
+    }
+    if (record_ptrs.empty()) {
+        std::printf("아이템 레코드 배열을 읽지 못해 행 번호를 못 찾습니다.\n");
+        return;
+    }
+
+    // 장착 가능 부위(§4.7-F). 모드와 **같은 함수**를 부른다. 못 찾으면 부위
+    // 줄만 빠지고 효과는 그대로 낸다(모드의 discover_item_effects 와 같은 규칙).
+    std::uintptr_t equip_mgr = 0;
+    if (!game::find_static_manager(reader, rt, game::kEquipTypeManagerClass,
+                                   &equip_mgr)) {
+        equip_mgr = 0;
+        std::printf("장착 부위 표를 못 찾았습니다 - 부위 줄 없이 냅니다.\n");
+    }
+
+    for (int i = 2; i < argc; ++i) {
+        const std::uint32_t key =
+            static_cast<std::uint32_t>(std::strtoull(argv[i], nullptr, 0));
+        const game::ItemCatalogEntry* entry = nullptr;
+        for (const auto& e : cat) {
+            if (e.key == key) { entry = &e; break; }
+        }
+        if (entry == nullptr) {
+            std::printf("%u  (아이템 표에 없음)\n", key);
+            continue;
+        }
+
+        int row = -1;
+        for (std::size_t ri = 0; ri < record_ptrs.size(); ++ri) {
+            if (static_cast<std::uintptr_t>(record_ptrs[ri]) == entry->record) {
+                row = static_cast<int>(ri);
+                break;
+            }
+        }
+        const char* name = entry->name.empty() ? "(이름 없음)"
+                                               : entry->name.c_str();
+        if (row < 0 || static_cast<std::size_t>(row) >= effects.size()) {
+            std::printf("%u %s  (행 번호를 못 찾았습니다)\n", key, name);
+            continue;
+        }
+
+        const auto& fx = effects[static_cast<std::size_t>(row)];
+        std::printf("%u %s  (분류 %u)\n", key, name,
+                    static_cast<unsigned>(entry->category));
+        std::printf("   효과 %zu줄, 해석 못 한 것 %d개\n", fx.lines.size(),
+                    fx.unresolved);
+        for (const auto& line : fx.lines) {
+            std::printf("   - %s\n", line.text.c_str());
+        }
+
+        // 장착 가능 부위. 해시가 0 이면 장착 제한이 없는 아이템이라 줄을
+        // 안 낸다(모드 툴팁도 그때는 그 절을 뺀다).
+        std::uint32_t equip_hash = 0;
+        reader.read_value(entry->record + game::kRecEquipAbleHash, &equip_hash);
+        if (equip_mgr != 0 && equip_hash != 0) {
+            const auto types = game::equip_type_names_from_manager(
+                reader, sys, equip_mgr, equip_hash);
+            std::printf("   장착 부위 %zu종 (해시 0x%08X): %s\n", types.size(),
+                        equip_hash,
+                        types.empty()
+                            ? "(이름을 못 풀었습니다)"
+                            : game::equip_types_line(types, types.size())
+                                  .c_str());
+        }
+    }
+}
+
 // 아이템 키 <-> 짧은 식별자 대응표를 읽는다.
 //
 //   itemmap                표 요약 + 앞 20칸
@@ -4544,6 +4694,10 @@ int main(int argc, char** argv) {
     }
     if (cmd == "items") {
         cmd_items(rt, reader, argc, argv);
+        return 0;
+    }
+    if (cmd == "effects") {
+        cmd_effects(rt, reader, argc, argv);
         return 0;
     }
     if (cmd == "nearby") {

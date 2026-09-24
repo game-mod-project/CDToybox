@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -79,12 +80,13 @@ bool g_waiting = true;
 // 걸러 내기는 아이템 목록과 같은 모양이다 - 검색 · 등급 · 분류. 같은
 // 위젯(render/filter_bar)을 쓴다. '이름 없는 것 감추기' 는 이 창에 없다.
 FilterBar g_bar;
-// 이 창의 필터바 옵션. 이름 · 설명만 본다 - 키 문자열까지 걸면 숫자를 쳤을 때
-// 동작이 바뀐다. 힌트("이름 · 설명으로 검색")와 match_key=false 가 한 쌍이다.
+// 이 창의 필터바 옵션. 이름 · 설명 · 효과만 본다 - 키 문자열까지 걸면 숫자를
+// 쳤을 때 동작이 바뀐다. 힌트("이름 · 설명 · 효과로 검색")와 match_key=false 가
+// 한 쌍이다.
 const FilterBarOpts g_opts = [] {
     FilterBarOpts o;
     o.id = "inv";
-    o.hint = "이름 · 설명으로 검색";
+    o.hint = "이름 · 설명 · 효과로 검색";
     o.match_key = false;
     return o;
 }();
@@ -874,8 +876,17 @@ void draw_inventory_panel(bool* open) {
         std::size_t shown = 0;
         for (std::size_t i = 0; i < g_rows.size(); ++i) {
             const Row& r = g_rows[i];
+            // 효과 문구는 따로 게시된 스냅샷에서 온다(명세 §4.5). 검색어가
+            // 있을 때만 조회한다 - 줄마다 해시 한 번이라도 프레임마다 도는
+            // 자리라 공짜일 때 아예 안 하는 편이 낫다(표를 걷는 일은 배경
+            // 스레드가 이미 끝내 뒀다).
+            const std::string* fx = filter.query.empty()
+                                        ? nullptr
+                                        : game::item_effects_text_for(r.key);
             if (!game::passes(filter, r.name, r.grade, r.category, r.key,
-                              r.owner, r.desc)) {
+                              r.owner, r.desc,
+                              fx == nullptr ? std::string_view{}
+                                            : std::string_view(*fx))) {
                 continue;
             }
             ++shown;
@@ -920,7 +931,7 @@ void draw_inventory_panel(bool* open) {
                 ImGui::TextUnformatted(r.text.sockets.c_str());
             }
             ImGui::TableNextColumn();
-            desc_cell(r.desc);
+            desc_cell(r.desc, r.key);
             ImGui::TableNextColumn();
             // 제자리 수정은 게임이 되쓴다. 대신 값을 지급 칸에 채워
             // 주고, 고쳐서 새로 지급하게 한다.

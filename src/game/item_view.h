@@ -33,9 +33,11 @@ struct ItemFilter {
 // 한 항목이 필터를 통과하는가. filter_items 가 이것을 부르고, 인벤토리
 // 창은 자기 행에 직접 건다 - 거르는 규칙이 두 곳에 있으면 갈라진다.
 // text 는 이름 말고 검색어를 더 걸 문구다 - 아이템 설명(스펙 §5). 비면 안 본다.
+// effects 는 효과 줄을 이어 둔 문구다(`item_effects_text_for`). 효과 스냅샷이
+// 아직 없으면 비어 오고, 그러면 효과로는 안 걸린다 - 두 창이 같은 규칙이다.
 bool passes(const ItemFilter& f, std::string_view name, int grade,
             int category, std::uint32_t key, EquipOwner owner,
-            std::string_view text = {});
+            std::string_view text = {}, std::string_view effects = {});
 
 // Combo 색인을 필터로 옮긴다. 색인 0 은 "전체". 등급은 색인-1 이고,
 // 분류는 `categories[색인-1]` 이다(render 의 build_category_labels 가
@@ -87,5 +89,38 @@ struct PageRange {
 // page 는 0 부터. 범위를 넘으면 마지막 쪽으로 당긴다.
 PageRange page_range(std::size_t total, std::size_t page,
                      std::size_t per_page);
+
+// ------------------------------------------------------------- 설명 툴팁
+//
+// 게임 툴팁과 같은 차례로 절을 늘어놓는다(명세 §1 추가 요구 · §2):
+//
+//   효과 줄들 -> 장착 부위 한 줄 -> 구분선 -> 설명 전문 -> 해석 못 한 효과 N개
+//
+// 없는 절은 빠진다. 그리기(ImGui)를 모르는 순수 함수라 차례와 빠지는 절을
+// 시험이 못박는다 - 화면으로만 확인하면 절 하나가 사라져도 모른다.
+
+struct TooltipSection {
+    enum class Kind {
+        Effect,      // 효과 한 줄
+        EquipTypes,  // 장착 가능 부위 한 줄
+        Separator,   // 위(효과·부위)와 아래(설명)를 가르는 줄. text 는 빈다
+        Desc,        // 설명 전문
+        Unresolved,  // "해석 못 한 효과 N개" - 흐리게 그린다
+        Pending,     // "효과를 읽는 중입니다" - 흐리게 그린다
+    };
+    Kind kind = Kind::Desc;
+    std::string text;
+};
+
+// `effects` · `equip_types` 는 없으면 nullptr. `effects_ready` 가 false 면
+// 효과 절을 아예 만들지 않고 마지막에 Pending 한 줄을 붙인다 - 스냅샷이
+// 뒤늦게 오므로(§4.5) "효과가 없다" 와 "아직 안 읽었다" 를 갈라야 한다.
+std::vector<TooltipSection> tooltip_sections(
+    std::string_view desc, const ItemEffects* effects,
+    const std::vector<std::string>* equip_types, bool effects_ready);
+
+// 위 두 흐린 줄의 글자. 시험과 화면이 같은 것을 쓰도록 한 곳에 둔다.
+std::string unresolved_line(int count);
+inline constexpr std::string_view kEffectsPendingText = "효과를 읽는 중입니다";
 
 }  // namespace cdtb::game

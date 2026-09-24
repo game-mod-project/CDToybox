@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "game/item_text.h"
+#include "game/item_view.h"   // tooltip_sections - 절 차례는 순수 함수가 정한다
 #include "game/items.h"
 
 namespace cdtb::render {
@@ -120,18 +121,54 @@ const char* category_name(std::uint8_t c) {
     }
 }
 
-void desc_cell(const std::string& desc) {
-    if (desc.empty()) return;
-    const std::string_view line = game::desc_first_line(desc);
-    ImGui::TextUnformatted(line.data(), line.data() + line.size());
+void desc_cell(const std::string& desc, std::uint32_t key) {
+    const bool ready = game::item_effects_ready();
+
+    if (desc.empty()) {
+        // 설명이 없어도 **효과나 장착 부위가 있으면** 툴팁을 띄운다. 설명 없는
+        // 아이템이 80개인데(명세 §3) 그중 어비스 기어는 효과가 툴팁에만 있어
+        // 여기서 일찍 빠지면 볼 길이가 아예 없다. 칸에는 흐린 표식만 두어
+        // 마우스를 올릴 자리를 만든다(빈 칸은 ImGui 가 크기 0 이라 안 올려진다).
+        // 조회는 **이 80개에서만** 한다 - 설명이 있는 쪽은 예전처럼 그냥 그린다.
+        const game::ItemEffects* fx =
+            ready ? game::item_effects_for(key) : nullptr;
+        const std::vector<std::string>* types =
+            ready ? game::item_equip_types_for(key) : nullptr;
+        if ((fx == nullptr || fx->lines.empty()) &&
+            (types == nullptr || types->empty())) {
+            return;   // 보일 것이 없다
+        }
+        ImGui::TextDisabled("%s", "(효과)");
+    } else {
+        const std::string_view line = game::desc_first_line(desc);
+        ImGui::TextUnformatted(line.data(), line.data() + line.size());
+    }
     // BeginItemTooltip 은 잠깐 멈췄을 때만 뜬다(ImGuiHoveredFlags_ForTooltip) - 줄을 훑으며
     // 지나갈 때마다 큰 툴팁이 깜빡이지 않는다. 설명은 최장 503바이트라 줄바꿈이 필요하다.
-    if (ImGui::BeginItemTooltip()) {
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-        ImGui::TextUnformatted(desc.c_str());
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
+    if (!ImGui::BeginItemTooltip()) return;
+
+    // 조회는 마우스를 올린 한 칸에서만 한다 - 표 전체에 미리 하지 않는다.
+    const auto sections = game::tooltip_sections(
+        desc, game::item_effects_for(key), game::item_equip_types_for(key),
+        ready);
+
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+    for (const auto& s : sections) {
+        switch (s.kind) {
+            case game::TooltipSection::Kind::Separator:
+                ImGui::Separator();
+                break;
+            case game::TooltipSection::Kind::Unresolved:
+            case game::TooltipSection::Kind::Pending:
+                ImGui::TextDisabled("%s", s.text.c_str());
+                break;
+            default:
+                ImGui::TextUnformatted(s.text.c_str());
+                break;
+        }
     }
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
 }
 
 

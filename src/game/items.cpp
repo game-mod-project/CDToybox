@@ -11,8 +11,11 @@
 
 #include "core/log.h"
 #include "core/write_log.h"
+#include "game/equip_types.h"
+#include "game/item_effects.h"
 #include "game/item_text.h"
-#include "game/roster.h"   // read_engine_string - 엔진 문자열은 한 군데서만 읽는다
+#include "game/roster.h"   // read_engine_string · find_static_manager
+#include "game/stat_names.h"
 #include "mem/scanner.h"
 
 namespace cdtb::game {
@@ -70,6 +73,7 @@ constexpr std::size_t kRecNameKey = 0x28;   // u64 이름 현지화 키
 // `_itemName`(+0x20) 의 키 칸인 것과 같은 꼴(스펙 §3, 6816개 전수).
 constexpr std::size_t kRecDescKey = 0xB8;
 constexpr std::size_t kRecEquipType = 0x42;  // u16 _equipTypeInfo (FFFF=장비 아님)
+// _equipAbleHash(+0x68)는 탐침도 쓰므로 items.h 에 있다.
 constexpr std::size_t kRecCategory = 0xA3;  // u8  _itemType (74종)
 constexpr std::size_t kRecGrade = 0x210;    // u8  _itemTier (0=없음, 1..5)
 constexpr std::size_t kRecSockets = 0x238;    // u32 소켓 칸 수 (이름 없음)
@@ -382,6 +386,198 @@ const ItemCatalogEntry* item_by_key(std::uint32_t key) {
     if (key == 0 || !items_ready()) return nullptr;
     std::lock_guard<std::mutex> lk(g_key_index_mutex);
     return g_key_index.find(item_catalog(), key);
+}
+
+// ------------------------------------------------ 효과 스냅샷 (툴팁 · 검색)
+
+namespace {
+
+using EffectMap = std::unordered_map<std::uint32_t, ItemEffectInfo>;
+
+const EffectMap kEmptyEffects;
+
+// 게시 방식은 카탈로그와 같다 - 옛 판을 살려 둔 채 포인터만 바꿔 끼운다.
+// 그리는 쪽이 조회 결과(포인터)를 쥔 채 프레임을 도는데 그 밑에서 맵을
+// 갈아엎으면 죽는다.
+std::atomic<const EffectMap*> g_effects{&kEmptyEffects};
+std::vector<std::unique_ptr<EffectMap>> g_effect_versions;
+std::mutex g_effect_versions_mutex;
+std::atomic<bool> g_effects_ready{false};
+std::atomic<std::size_t> g_effects_version{0};
+
+void publish_effects(std::unique_ptr<EffectMap> built) {
+    const auto* p = built.get();
+    {
+        std::lock_guard<std::mutex> lk(g_effect_versions_mutex);
+        g_effect_versions.push_back(std::move(built));
+    }
+    g_effects.store(p, std::memory_order_release);
+    g_effects_version.fetch_add(1, std::memory_order_acq_rel);
+}
+
+const ItemEffectInfo* effect_info_for(std::uint32_t key) {
+    if (key == 0 || !g_effects_ready.load(std::memory_order_acquire)) {
+        return nullptr;
+    }
+    const EffectMap* m = g_effects.load(std::memory_order_acquire);
+    if (m == nullptr) return nullptr;
+    const auto it = m->find(key);
+    return it == m->end() ? nullptr : &it->second;
+}
+
+// 검색용 한 덩어리. 효과 줄만 잇는다(장착 부위는 명세 §5 의 검색 대상이
+// 아니다). 그리는 쪽이 프레임마다 다시 잇지 않도록 여기서 한 번 만든다.
+std::string join_effect_lines(const ItemEffects& fx) {
+    std::string out;
+    for (const auto& line : fx.lines) {
+        if (!out.empty()) out += '\n';
+        out += line.text;
+    }
+    return out;
+}
+
+}  // namespace
+
+bool should_build_item_effects(bool have_effects, bool names_resolved) {
+    if (have_effects) return false;   // 정적 표라 한 번이면 된다
+    // 현지화가 아직이면 만들어도 문구가 토큰으로 굳는다 - 다음 주기를 기다린다.
+    return names_resolved;
+}
+
+ItemEffectSummary summarize_item_effects(const std::vector<ItemEffects>& rows) {
+    ItemEffectSummary s;
+    for (const auto& fx : rows) {
+        if (!fx.lines.empty()) ++s.items_with_effects;
+        s.total_lines += fx.lines.size();
+        s.unresolved += fx.unresolved;
+    }
+    return s;
+}
+
+bool should_publish_item_effects(const ItemEffectSummary& summary) {
+    return summary.total_lines != 0;
+}
+
+bool discover_item_effects(const mem::Rtti& rtti, const mem::Reader& reader) {
+    const bool have = g_effects_ready.load(std::memory_order_acquire);
+    if (!should_build_item_effects(have, items_named())) return have;
+
+    // 싼 관문부터 본다 - RTTI 힙 훑기가 제일 비싸다. 못 찾은 것은 로그를
+    // 남기지 않는다(재시도 루프에서 오므로 매번 남으면 잡음이 된다).
+    LocSystem sys;
+    if (!find_loc_system(rtti, reader, &sys)) return false;
+    EffectManagers mgr;
+    if (!find_effect_managers(rtti, reader, &mgr)) return false;
+
+    // 스탯 이름표가 아직이면 문구에 `{Staticinfo:…}` 토큰이 그대로 남는다.
+    // 여기서 굳히지 않고 다음 주기에 다시 온다(staged-data-load-retry 함정).
+    StatNames names;
+    if (!names.build(rtti, reader, sys)) return false;
+
+    const auto t0 = ::GetTickCount64();
+    std::vector<ItemEffects> by_row;
+    if (!build_item_effects_from_managers(reader, sys, names, mgr, &by_row)) {
+        return false;
+    }
+
+    // 줄이 하나도 안 나왔으면 **게시하지 않는다**. 형식 문자열이 사는 cat 15 가
+    // 아직 안 찼을 수 있고, 여기서 굳히면 다시 만들 기회가 없다 - 다음 주기에
+    // 다시 온다(staged-data-load-retry 함정, 위 스탯 이름표 가드와 같은 이유).
+    const ItemEffectSummary s = summarize_item_effects(by_row);
+    if (!should_publish_item_effects(s)) return false;
+
+    // 행 -> 키 · 장착 해시를 읽으려면 레코드 배열이 필요하다. 여기서 막히면
+    // 게시하지 않고 다음 주기에 다시 온다 - 아래 경고를 두 번 남기지 않도록
+    // 이 관문을 먼저 지난다.
+    std::uint32_t count = 0;
+    std::uintptr_t records = 0;
+    if (!read_header(reader, mgr.item, &count, &records)) return false;
+
+    // 장착 부위 매니저. 못 찾으면 부위 없이 효과만 낸다 - 효과를 통째로
+    // 버리고 재시도에 매달리는 것보다 낫다(명세 §6: 표를 못 찾으면 그 절만
+    // 비고 로그 한 줄). 여기까지 온 이상 다른 매니저 다섯은 이미 섰다.
+    std::uintptr_t equip_mgr = 0;
+    if (!find_static_manager(reader, rtti, kEquipTypeManagerClass,
+                             &equip_mgr)) {
+        equip_mgr = 0;
+        log::warnf("아이템 효과: 장착 부위 표를 못 찾았다 - 부위 줄 없이 낸다");
+    }
+    // 같은 해시를 수백 개 아이템이 나눠 쓴다. 해시마다 한 번만 푼다 -
+    // 아이템마다 117행을 다시 걸으면 배경 스레드에서도 오래 걸린다.
+    std::unordered_map<std::uint32_t, std::vector<std::string>> types_by_hash;
+
+    auto built = std::make_unique<EffectMap>();
+    std::size_t with_types = 0;
+    for (std::size_t row = 0; row < count; ++row) {
+        std::uint64_t record = 0;
+        if (!reader.read_value(records + row * 8, &record) || record == 0) {
+            continue;   // 빈 슬롯. 나머지는 계속 읽는다.
+        }
+        const auto rec = static_cast<std::uintptr_t>(record);
+        std::uint32_t key = 0;
+        if (!reader.read_value(rec + kRecKey, &key) || key == 0) continue;
+
+        ItemEffectInfo info;
+        if (row < by_row.size()) info.effects = by_row[row];
+
+        // 장착 부위는 어비스 · 장비에만 있다. 해시가 0 이면 아예 안 만든다 -
+        // 없는 아이템에 빈 줄을 보이지 않기 위해서다.
+        std::uint32_t hash = 0;
+        if (equip_mgr != 0 && reader.read_value(rec + kRecEquipAbleHash, &hash) &&
+            hash != 0) {
+            auto it = types_by_hash.find(hash);
+            if (it == types_by_hash.end()) {
+                it = types_by_hash
+                         .emplace(hash, equip_type_names_from_manager(
+                                            reader, sys, equip_mgr, hash))
+                         .first;
+            }
+            info.equip_types = it->second;
+        }
+
+        if (info.effects.lines.empty() && info.effects.unresolved == 0 &&
+            info.equip_types.empty()) {
+            continue;   // 보일 것이 없다 - 맵에 안 담는다
+        }
+        if (!info.equip_types.empty()) ++with_types;
+        info.search_text = join_effect_lines(info.effects);
+        // 키가 겹치는 행이 있다 - 먼저 온 것이 남는다(ItemKeyIndex 와 같은 규칙).
+        built->emplace(key, std::move(info));
+    }
+
+    const auto ms = ::GetTickCount64() - t0;
+    publish_effects(std::move(built));
+    g_effects_ready.store(true, std::memory_order_release);
+    log::infof("아이템 효과: 효과가 있는 아이템 {}개, 줄 합계 {}, 해석 못 한 줄 {}개, "
+               "장착 부위가 있는 아이템 {}개, 스탯 이름표 {}개, {}ms",
+               s.items_with_effects, s.total_lines, s.unresolved, with_types,
+               names.size(), static_cast<unsigned long long>(ms));
+    return true;
+}
+
+bool item_effects_ready() {
+    return g_effects_ready.load(std::memory_order_acquire);
+}
+
+std::size_t item_effects_version() {
+    return g_effects_version.load(std::memory_order_acquire);
+}
+
+const ItemEffects* item_effects_for(std::uint32_t key) {
+    const ItemEffectInfo* info = effect_info_for(key);
+    return info == nullptr ? nullptr : &info->effects;
+}
+
+const std::vector<std::string>* item_equip_types_for(std::uint32_t key) {
+    const ItemEffectInfo* info = effect_info_for(key);
+    if (info == nullptr || info->equip_types.empty()) return nullptr;
+    return &info->equip_types;
+}
+
+const std::string* item_effects_text_for(std::uint32_t key) {
+    const ItemEffectInfo* info = effect_info_for(key);
+    if (info == nullptr || info->search_text.empty()) return nullptr;
+    return &info->search_text;
 }
 
 // ------------------------------------- 아이템 키 <-> 짧은 식별자 대응표
@@ -1050,6 +1246,14 @@ bool is_socket_gem(const ItemCatalogEntry& e) {
 }
 
 
-std::vector<std::string> items_scan_classes() { return {kManagerClass}; }
+std::vector<std::string> items_scan_classes() {
+    // 아이템 표 말고 **효과 스냅샷**이 찾는 매니저도 같이 낸다. 통과 시작의
+    // 한 번 훑기(prefetch_instances)에 얹지 않으면 discover_item_effects 가
+    // 매니저 여섯을 각자 11GB 힙에서 찾는다 - 통과가 그만큼 길어진다.
+    return {kManagerClass,          kItemUseManagerClass,
+            kSkillManagerClass,     kBuffManagerClass,
+            kPatternManagerClass,   kEquipTypeManagerClass,
+            kSubLevelManagerClass,  kStatusManagerClass};
+}
 
 }  // namespace cdtb::game
