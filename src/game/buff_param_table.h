@@ -81,7 +81,39 @@ struct BuffParamRule {
     const char* note;          // 곁가지 규칙 (절대값 표시 · 겹침 증분 · thunk)
 };
 
+// 클래스 이름 -> vtable. 생성기가 같이 낸다.
+//
+// vtable VA 는 게임 갱신마다 옮겨 다니고 **서로의 순서도 안 지켜진다**(2949->2976
+// 에서 실측). 그래서 자리를 박아 두는 쪽은 갱신마다 깨지고, 한 곳만 잘못 고치면
+// 조용히 다른 클래스를 보게 된다. 이름은 갱신을 안 탄다.
+struct BuffParamClass {
+    const char* name;          // RTTI 이름에서 `.?AV` 와 `@pa@@` 를 뗀 것
+    std::uint64_t vtable_va;   // 모듈 고정 VA
+};
+
 #include "game/buff_param_table.inc"
+
+constexpr std::size_t buff_param_class_count() noexcept {
+    return sizeof(kBuffParamClasses) / sizeof(kBuffParamClasses[0]);
+}
+
+// 이름으로 vtable 을 찾는다. 모르는 이름이면 0.
+//
+// **시험·도구 전용이다.** 걷기 쪽(`item_effects.cpp`)은 런타임에 읽은 vtable 로
+// 곧장 `buff_param_rule` 을 부른다 - 이름 비교를 효과 줄마다 할 이유가 없다.
+constexpr std::uint64_t buff_param_vtable(const char* name) noexcept {
+    if (name == nullptr) return 0;
+    for (const BuffParamClass& c : kBuffParamClasses) {
+        const char* a = c.name;
+        const char* b = name;
+        while (*a != '\0' && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*a == '\0' && *b == '\0') return c.vtable_va;
+    }
+    return 0;
+}
 
 constexpr std::size_t buff_param_rule_count() noexcept {
     return sizeof(kBuffParamRules) / sizeof(kBuffParamRules[0]);

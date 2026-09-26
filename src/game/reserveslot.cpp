@@ -1,3 +1,7 @@
+// @build 1.0.0.2976  kGpvMgrGlobalRva -0x18 (2026-09-26, 실행 중 인스턴스를 담은 칸).
+//   **kCondNameTableRva 를 2850 이후 처음 다시 짚었다** - 0x5955150, 468개
+//   (`GetLevel` 로 시작하는 char* 열). kEmptyStrRva 는 여전히 미도출.
+//   근거: specs/2026-09-26-game-update-2976.md §10 · §11
 // @build 1.0.0.2949  kGpvMgrGlobalRva 가 그대로다(2026-09-22) - 2949 실행 중 그 전역이
 //   `GamePlayVariableInfoManager`(개수 59)를 가리켰다(읽기 전용 탐침).
 // @build 1.0.0.2850  **kCondNameTableRva · kEmptyStrRva 는 아직 미도출.**
@@ -243,10 +247,10 @@ void reserveslot_diagnose(const mem::Reader& reader,
 
 namespace {
 
-inline constexpr std::uintptr_t kCondNameTableRva = 0x0584FA10;   // char* x466
-inline constexpr int kCondNameCount = 466;
+inline constexpr std::uintptr_t kCondNameTableRva = 0x5955150;   // char* x468 (2949 까지 0x0584FA10)
+inline constexpr int kCondNameCount = 468;
 inline constexpr std::uintptr_t kEmptyStrRva = 0x0692E4C0;
-inline constexpr std::uintptr_t kGpvMgrGlobalRva = 0x06D6E418;   // 2850 까지 0x06C32880
+inline constexpr std::uintptr_t kGpvMgrGlobalRva = 0x06D6E400;   // 2949 0x06D6E418 · 2850 까지 0x06C32880
 inline constexpr std::size_t kGpvComp = 0x168;   // [액터+0x68] + 0x168
 
 // 문자열 객체 하나를 읽는다. `p` 는 **객체 포인터가 든 자리**가 아니라 객체 자체다.

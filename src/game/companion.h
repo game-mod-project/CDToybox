@@ -1,5 +1,8 @@
 #pragma once
 
+// @build 1.0.0.2976  작업 함수 둘 재도출(2026-09-26, 각 +0x70) - 역직렬화 경로와
+//   본문 크기(2763바이트)가 2944·2949 와 같다. 메시지 ID 는 안 바뀌었다.
+//   근거: specs/2026-09-26-game-update-2976.md §3
 // @build 1.0.0.2949  작업 함수 둘 재도출(2026-09-22) · 메시지 ID 다섯은 recheck.py 로
 //   대조해 그대로였다. 근거: specs/2026-09-22-game-update-2949.md §3
 //   (2944 근거: specs/2026-09-18-game-update-2944.md §2 §3)
@@ -64,7 +67,7 @@ bool companion_capture_install(const mem::Rtti& rtti,
 //
 // 1.0.0.2949(2026-09-22): 2959 역직렬화 0x2A2F0F0 의 +0x180 call 대상. 프롤로그
 // `48 89 5C 24 10 4C 89 44 24 18` 과 본문 2763바이트가 2944 와 같다.
-inline constexpr std::uint64_t kHireWorkRva = 0x2BADB90;   // 2944 0x2BADB80 · 2850 0x2AE02C0
+inline constexpr std::uint64_t kHireWorkRva = 0x2BADC00;   // 2949 0x2BADB90 · 2944 0x2BADB80
 
 // 소환 작업 함수. 2894 처리기(RVA 0x29621E0; 2850 빌드는 역직렬화 0x2963920 →
 // 0x2B7B130 의 +0x155)가 관문을 통과한 뒤 이것을 부른다 - 정상 소환에서
@@ -85,7 +88,7 @@ inline constexpr std::uint64_t kHireWorkRva = 0x2BADB90;   // 2944 0x2BADB80 · 
 // 1.0.0.2949(2026-09-22): 3069 역직렬화 0x2A30630 의 +0x138 call -> 래퍼 0x2C49600
 // (549바이트, 2944 와 같다) 의 +0x155 call 대상. 프롤로그
 // `48 8B C4 4C 89 48 20 4C 89 40 18` 그대로.
-inline constexpr std::uint64_t kSpawnWorkRva = 0x2B9EB60;   // 2944 0x2B9EB50 · 2850 0x2AD1640
+inline constexpr std::uint64_t kSpawnWorkRva = 0x2B9EBD0;   // 2949 0x2B9EB60 · 2944 0x2B9EB50
 // 마지막 소환 결과. 코드 0 이 성공이다.
 //
 // 게임에는 소환 쿨타임이 있다(TrocTrCallMercenaryCoolTime* 계열).

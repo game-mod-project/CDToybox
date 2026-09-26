@@ -33,14 +33,23 @@ using cdtb::game::StatNames;
 using cdtb::tests::FakeMemory;
 
 // --- 실측 vtable (§4.7-H' 2번 · H''' · buff_param_table.inc) ---
-constexpr std::uint64_t kVaryStatMaxValue = 0x1458FBD20ull;    // 종류 1 -> +0x98 ÷1000
-constexpr std::uint64_t kDamage = 0x1458FC370ull;              // 종류 5 -> +0x98 ÷1000
-constexpr std::uint64_t kSocketCritical = 0x1458FA908ull;      // 종류 1 -> +0x98 ÷10⁴
-constexpr std::uint64_t kVaryStaticStatLevel = 0x1458FC1C0ull;  // 종류 1 -> +0xA0 ÷1
+// **자리를 박지 않는다** - VA 는 갱신마다 옮겨 다니므로 생성표에 이름으로 묻는다
+// (2026-09-26, 1.0.0.2976 대응). 이름이 표에서 사라지면 0 이 되는데, 그 구멍은
+// `buff_param_table_tests.cpp` 의 `…resolves_every_class_this_file_names` 가 막는다.
+using cdtb::game::buff_param_vtable;
+constexpr std::uint64_t kVaryStatMaxValue =
+    buff_param_vtable("VaryStatMaxValueBuffData");   // 종류 1 -> +0x98 ÷1000
+constexpr std::uint64_t kDamage =
+    buff_param_vtable("DamageBuffData");             // 종류 5 -> +0x98 ÷1000
+constexpr std::uint64_t kSocketCritical =
+    buff_param_vtable("AddCritiacalRateByMaterialKeyBuffData");  // 종류 1 ÷10⁴
+constexpr std::uint64_t kVaryStaticStatLevel =
+    buff_param_vtable("VaryStaticStatLevelBuffData");  // 종류 1 -> +0xA0 ÷1
 constexpr std::uint64_t kChangeBuffLevel = cdtb::game::kChangeBuffLevelVtable;
 // 종류 2 의 배율이 **+0x3A 로 갈리는** 클래스. 0 -> +0x98 ÷1000(정수 나눗셈) ·
 // 1 -> +0x98 ÷10⁷(실수 나눗셈). 명세 §4.7-H''' 의 "용기 : 75% 회복" 이 이것이다.
-constexpr std::uint64_t kVaryDataDefinedStatRate = 0x1458FB5A0ull;
+constexpr std::uint64_t kVaryDataDefinedStatRate =
+    buff_param_vtable("VaryDataDefinedStatRateBuffData");
 constexpr std::uint64_t kUnknownClass = 0xDEADBEEFull;   // 배율 표에 없는 클래스
 
 // --- 패턴 행 (실측 행 번호를 그대로 쓴다) ---

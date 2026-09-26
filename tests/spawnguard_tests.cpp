@@ -31,11 +31,12 @@ constexpr std::uintptr_t kLookup = kBase + kSpawnLookupRva;
 
 }  // namespace
 
-// 실측 바이트 그대로. rel32 = 0xFF5B83D5 = -0xA47C2B 이고
-// 0x2B8DD3B - 0xA47C2B = 0x2146110 이다(2944). 2949 는 0x2B8DD4B - 0xA47C2B =
-// 0x2146120 으로 같은 바이트가 새 상수와 맞는다.
-TEST(spawnguard_site_accepts_the_measured_2944_bytes) {
-    const std::uint8_t o[] = {0xE8, 0xD5, 0x83, 0x5B, 0xFF,
+// 실측 바이트 그대로. 2976 자리에서 읽은 10바이트가
+// `E8 B5 83 5B FF 48 83 78 28 FF` 다 - rel32 = 0xFF5B83B5 = -0xA47C4B 이고
+// 0x2B8DDBB - 0xA47C4B = 0x2146170 이다.
+// (2944·2949 는 rel32 -0xA47C2B 로 0x2146110 · 0x2146120 이었다.)
+TEST(spawnguard_site_accepts_the_measured_2976_bytes) {
+    const std::uint8_t o[] = {0xE8, 0xB5, 0x83, 0x5B, 0xFF,
                               0x48, 0x83, 0x78, 0x28, 0xFF};
     CHECK(spawnguard_check_site(o, sizeof(o), kSite, kLookup) == SpawnSite::kOk);
 }
@@ -51,7 +52,7 @@ TEST(spawnguard_site_rejects_a_stale_address_that_is_not_a_call) {
 
 // call 이긴 한데 다른 함수를 부르는 경우.
 TEST(spawnguard_site_rejects_a_call_to_something_else) {
-    std::uint8_t o[] = {0xE8, 0xD5, 0x83, 0x5B, 0xFF,
+    std::uint8_t o[] = {0xE8, 0xB5, 0x83, 0x5B, 0xFF,
                         0x48, 0x83, 0x78, 0x28, 0xFF};
     ++o[1];   // rel32 를 1 틀어 대상이 조회 +1 이 되게 한다
     CHECK(spawnguard_check_site(o, sizeof(o), kSite, kLookup) ==
@@ -63,7 +64,7 @@ TEST(spawnguard_site_rejects_a_call_to_something_else) {
 // 것까지 같아서 `E8` + 대상만 보면 통과한다. 거기에 우리 썽크를 걸면 이미
 // 멀쩡한 자리를 건드리는 것이라 얻는 것 없이 위험만 보탠다.
 TEST(spawnguard_site_rejects_the_sibling_that_the_game_already_guards) {
-    const std::uint8_t o[] = {0xE8, 0xD5, 0x83, 0x5B, 0xFF,
+    const std::uint8_t o[] = {0xE8, 0xB5, 0x83, 0x5B, 0xFF,
                               0x48, 0x8D, 0x1D, 0x2E, 0x91};   // lea rbx,[rip+..]
     CHECK(spawnguard_check_site(o, sizeof(o), kSite, kLookup) ==
           SpawnSite::kGuarded);
@@ -79,9 +80,9 @@ TEST(spawnguard_site_rejects_short_and_null_reads) {
 
 // 표식 셋이 흘러내리지 않게 못박는다. RVA 자체는 시험이 검증할 수 없다 -
 // 저장소에 게임 exe 가 없다. 근거는 `spawnguard_site.h` 주석과
-// `specs/2026-09-22-game-update-2949.md` §4(2944: `specs/2026-09-20-spawnguard-callsite.md`).
-TEST(spawnguard_site_keeps_the_measured_2949_rvas) {
-    CHECK(kSpawnCallSiteRva == 0x2B8DD46ULL);
-    CHECK(kSpawnLookupRva == 0x2146120ULL);
-    CHECK(kSpawnEmptyRecordRva == 0x6CF2F70ULL);
+// `specs/2026-09-26-game-update-2976.md`(2949: `specs/2026-09-22-game-update-2949.md` §4).
+TEST(spawnguard_site_keeps_the_measured_2976_rvas) {
+    CHECK(kSpawnCallSiteRva == 0x2B8DDB6ULL);
+    CHECK(kSpawnLookupRva == 0x2146170ULL);
+    CHECK(kSpawnEmptyRecordRva == 0x6CF2F50ULL);
 }

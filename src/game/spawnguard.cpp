@@ -1,3 +1,4 @@
+// @build 1.0.0.2976  자리는 spawnguard_site.h 를 볼 것 (2026-09-26 재도출).
 // @build 1.0.0.2949  **kCallSiteRva · kLookupRva 를 재도출했다**(2026-09-22) -
 //   0x2B8DD46 · 0x2146120. 조회를 부르는 273곳 중 뒤가 `cmp qword [rax+0x28],-1` 인
 //   자리는 여전히 한 곳뿐이고, kEmptyRecordRva(0x6CF2F70)는 lea 짝 142곳 만장일치로

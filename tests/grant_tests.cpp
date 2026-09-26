@@ -1004,15 +1004,16 @@ TEST(hire_check_jmp_target_follows_rel32) {
              base + 0xE8345F0);
 }
 
-// 2949 실측(2026-09-22, 파일에서 읽음). 자리는 kHireCheckRva 와 같다.
-TEST(hire_check_jmp_target_follows_the_2949_thunk) {
-    // 0x214E8C0: E9 AB 4C 2E 0C -> 0x214E8C5 + 0x0C2E4CAB = 0xE433570
-    const std::uint8_t thunk[] = {0xE9, 0xAB, 0x4C, 0x2E, 0x0C};
+// 2976 실측(2026-09-26, 파일에서 읽음). 자리는 kHireCheckRva 와 같다.
+// (2949 는 0x214E8C0 의 E9 AB 4C 2E 0C -> 0xE433570 이었다.)
+TEST(hire_check_jmp_target_follows_the_2976_thunk) {
+    // 0x214E910: E9 BB E2 36 0C -> 0x214E915 + 0x0C36E2BB = 0xE4BCBD0
+    const std::uint8_t thunk[] = {0xE9, 0xBB, 0xE2, 0x36, 0x0C};
     const std::uintptr_t base = 0x140000000ull;
-    CHECK_EQ(cdtb::game::kHireCheckRva, 0x214E8C0ull);
+    CHECK_EQ(cdtb::game::kHireCheckRva, 0x214E910ull);
     CHECK_EQ(cdtb::game::hire_check_jmp_target(thunk, sizeof(thunk),
                                                base + cdtb::game::kHireCheckRva),
-             base + 0xE433570);
+             base + 0xE4BCBD0);
 }
 
 TEST(hire_check_jmp_target_rejects_non_jmp_or_short) {

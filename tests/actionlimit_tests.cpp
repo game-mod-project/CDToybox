@@ -25,7 +25,8 @@ void put_u64(std::uint8_t* b, std::size_t off, std::uint64_t v) {
 }
 
 TEST(actionlimit_constants_are_the_measured_ones) {
-    CHECK_EQ(static_cast<long long>(cdtb::game::kCtlVtRva), 0x55B53C8LL);
+    // 2949 0x55B53C8 -> 2976 0x55B5460 (RTTI 로 다시 짚음).
+    CHECK_EQ(static_cast<long long>(cdtb::game::kCtlVtRva), 0x55B5460LL);
     CHECK_EQ(static_cast<long long>(cdtb::game::kCtlLimitOff), 0x120LL);
     CHECK_EQ(static_cast<long long>(cdtb::game::kLimitArrayOff), 0xD8LL);
     CHECK_EQ(static_cast<long long>(cdtb::game::kLimitCountOff), 0xE0LL);

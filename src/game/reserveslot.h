@@ -1,5 +1,8 @@
 #pragma once
 
+// @build 1.0.0.2976  kCondMgrGlobalRva -0x18 · kSlotMgrGlobalRva -0x20 (2026-09-26).
+//   앞은 표 이름 앵커로, 뒤는 실행 중 인스턴스를 담은 칸으로 짚었다(칸 1곳뿐).
+//   근거: specs/2026-09-26-game-update-2976.md §10
 // @build 1.0.0.2949  kCondMgrGlobalRva 가 그대로다(2026-09-22) - `conditioninfo` 를 만드는
 //   함수 0x3A0670 이 여전히 0x6D6AA38 을 읽는다.
 // @build 1.0.0.2949  kSlotMgrGlobalRva 도 그대로다(2026-09-22) - 2949 실행 중 그 전역이
@@ -39,8 +42,8 @@ namespace cdtb::game {
 // 함수를 불러 죽었던 전례가 있다(TROUBLESHOOTING 1.8/1.13).
 
 // 두 매니저는 배치가 같다.
-inline constexpr std::uintptr_t kSlotMgrGlobalRva = 0x06D69AE0;   // 2850 까지 0x06C2E300
-inline constexpr std::uintptr_t kCondMgrGlobalRva = 0x06D6AA38;   // 2850 까지 0x06C2F260
+inline constexpr std::uintptr_t kSlotMgrGlobalRva = 0x06D69AC0;   // 2949 0x06D69AE0 · 2850 까지 0x06C2E300
+inline constexpr std::uintptr_t kCondMgrGlobalRva = 0x06D6AA20;   // 2949 0x06D6AA38 · 2850 까지 0x06C2F260
 inline constexpr std::size_t kMgrCount = 0x08;
 inline constexpr std::size_t kMgrArray = 0x58;
 inline constexpr std::size_t kMgrWellKnown = 0xA0;   // u16 여덟

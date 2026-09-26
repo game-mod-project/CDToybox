@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "game/buff_param_table.h"
 #include "game/localization.h"
 #include "game/stat_names.h"
 #include "mem/reader.h"
@@ -180,7 +181,11 @@ inline constexpr double kRepeatTickDivisor = 1000.0;
 // 클래스에서 `+0x90` 은 StatusInfo 행이거나 잔여물이라(§4.7-D) 따라가면 엉뚱한
 // 줄이 나온다. 게임이 갱신되면 이 VA 가 밀려 링크를 못 따라가는데, 그때는 줄이
 // 빠지고 `unresolved` 가 늘 뿐 **틀린 줄은 안 나온다**(안전한 쪽으로 깨진다).
-inline constexpr std::uint64_t kChangeBuffLevelVtable = 0x1458FD040ull;
+//
+// 자리를 박지 않고 생성표에 **이름으로** 묻는다(2026-09-26, 1.0.0.2976 대응) -
+// vtable VA 는 갱신마다 옮겨 다니므로, 박아 두면 갱신 때 여기만 조용히 낡는다.
+inline constexpr std::uint64_t kChangeBuffLevelVtable =
+    buff_param_vtable("ChangeBuffLevelBuffData");
 
 // 사슬 길이 상한(바깥쪽 BuffData 를 1단으로 센다). 실측 최대 2단이고, 3단을
 // 넘으면 포기한다 - 순환하는 자료를 만나도 여기서 멈춘다.

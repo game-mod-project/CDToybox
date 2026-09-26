@@ -1,3 +1,4 @@
+// @build 1.0.0.2976  제한 컴포넌트 vt 0x55B5460 (RTTI 로 재도출, 2026-09-26)
 // @build 1.0.0.2949  제한 컴포넌트 vt 0x55B53C8 (RTTI 로 그대로임을 확인, 2026-09-22)
 // @build 1.0.0.2944  항목 0x38바이트 (2949 런타임 미확인)
 //   근거는 `actionlimit.h` 와 specs/2026-09-21-boss-room-action-limit.md.

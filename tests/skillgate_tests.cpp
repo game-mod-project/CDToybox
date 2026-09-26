@@ -340,9 +340,11 @@ TEST(the_shipped_gate_table_matches_what_the_executable_had) {
     // **exe 1.0.0.2949 로 또 짚었다**(2026-09-22) - 같은 경로(슬롯 0x6CF7BF0 을 읽는 유일한
     // 곳 -> 직전 썽크 -> jmp 목적지 / 같은 함수의 setge)로 내려갔고 창은 또 그대로다.
     // 2944 자리는 관문0 0x0E808870 · 관문1 0x02140CF9 였다.
+    // **exe 1.0.0.2976 으로 또 짚었다**(2026-09-26) - 같은 경로로 내려갔고 창은
+    // 또 그대로다. 2949 자리는 관문0 0x0E3F9650 · 관문1 0x02140D09 였다.
     const GateDef* g0 = gate_def(cdtb::game::kGateFromType);
     CHECK(g0 != nullptr);
-    CHECK(g0->rva == 0x0E3F9650);
+    CHECK(g0->rva == 0x0E49B3E0);
     CHECK(g0->len == 3);
     const std::uint8_t w0[8] = {0x48, 0x89, 0x5C, 0x24, 0x18, 0x66, 0x89, 0x54};
     CHECK(std::memcmp(g0->want, w0, 8) == 0);
@@ -355,7 +357,7 @@ TEST(the_shipped_gate_table_matches_what_the_executable_had) {
 
     const GateDef* g1 = gate_def(cdtb::game::kGateCost);
     CHECK(g1 != nullptr);
-    CHECK(g1->rva == 0x02140D09);
+    CHECK(g1->rva == 0x02140D59);
     CHECK(g1->len == 5);
     // **창 8바이트 전체**여야 한다 - 앞 바이트 0x6A 는 앞 명령의 변위다.
     const std::uint8_t w1[8] = {0x6A, 0x0F, 0x9D, 0x44, 0x24, 0x40, 0x41, 0x8B};

@@ -94,16 +94,21 @@ except ImportError:                                               # pragma: no c
 # 파라미터 게터가 사는 가상 함수 슬롯. `call qword ptr [rax + 0x58]` = 11번째 칸.
 PARAM_SLOT = 11
 
-# 자기 검증 셋 (실측, 명세 §4.7-H'·H''). 키는 (vtable, 종류, +0x3A),
+# 자기 검증 셋 (실측, 명세 §4.7-H'·H''). 키는 (**클래스 이름**, 종류, +0x3A),
 # 값은 (칸, 나누는 수, 정수 나눗셈인가).
 #
 # 정수 갈래까지 보는 이유: 화면값으로 잘림을 실측한 유일한 근거가 소켓 치명타
 # (25000 → 2 · 75000 → 7)이고, 그것을 인코딩하는 칸이 `integer_div` 다. 이 칸이
 # 조용히 뒤집히면 소수가 잘리거나 안 잘려도 아무도 안 죽는다.
+#
+# **왜 vtable 주소가 아니라 이름인가** (2026-09-26, 1.0.0.2976 대응)
+# 2949→2976 에서 vtable 이 전부 옮겨졌고 **서로의 순서도 안 지켜졌다** - 2949 의
+# 이름↔주소 16쌍을 두 빌드에서 정렬해 견줘 보니 BlockCrime 이 14번째에서 최하위로
+# 갔다. 그래서 옛 주소로는 자기 검증을 옮길 수 없다. 이름은 갱신을 안 탄다.
 SELF_CHECK = {
-    (0x1458FBD20, 1, 0): (0x98, 1000.0, True),
-    (0x1458FA908, 1, 0): (0x98, 10000.0, True),
-    (0x1458FB5A0, 2, 1): (0x98, 10000000.0, False),
+    ('VaryStatMaxValueBuffData', 1, 0): (0x98, 1000.0, True),
+    ('AddCritiacalRateByMaterialKeyBuffData', 1, 0): (0x98, 10000.0, True),
+    ('VaryDataDefinedStatRateBuffData', 2, 1): (0x98, 10000000.0, False),
 }
 
 # 파라미터 종류. {Param0..3} = 0..3, {|Param0..3|} = 4..7.
@@ -684,6 +689,15 @@ HEADER = """\
 
 constexpr BuffParamRule kBuffParamRules[] = {
 %(rows)s};
+
+// 이름 -> vtable. 규칙을 못 얻은 클래스도 들어 있다.
+//
+// **왜 이 표가 있나** (2026-09-26, 1.0.0.2976 대응) — 시험이 vtable 주소를 박아
+// 두면 게임 갱신마다 30여 곳을 손으로 고쳐야 하고, 한 곳만 틀려도 조용히 다른
+// 클래스를 시험하게 된다. 이름은 갱신을 안 타므로 시험은 `buff_param_vtable("…")`
+// 로 묻는다. 걷기 쪽 코드는 이 표를 안 쓴다(런타임에 읽은 vtable 로 바로 찾는다).
+constexpr BuffParamClass kBuffParamClasses[] = {
+%(classes)s};
 """
 
 
@@ -760,7 +774,13 @@ def main(argv=None):
            ','.join(str(k) for k in sorted({k for k, _f, _o in items})))
         for vt, name, items in objs) or '//   (없음)\n'
 
+    class_lines = ''.join(
+        '    {"%s", 0x%XULL},\n' % (name, vt)
+        for vt, name in sorted(entries, key=lambda e: (e[1] or '', e[0]))
+        if name)
+
     text = HEADER % {
+        'classes': class_lines,
         'image': os.path.basename(image),
         'total': len(entries), 'known': len(classes), 'unknown': len(unknown),
         'rowcount': len(rows), 'fsens': len(fsens),
@@ -818,21 +838,21 @@ def load_vtables(path):
 
 
 def self_check(rows):
-    by_key = {(r['vt'], r['kind'], r['flag']): r['rule'] for r in rows}
+    by_key = {(r['name'], r['kind'], r['flag']): r['rule'] for r in rows}
     ok = True
     print('== 자기 검증 ==', file=sys.stderr)
-    for (vt, kind, flag), (off, div, want_int) in sorted(SELF_CHECK.items()):
-        got = by_key.get((vt, kind, flag))
+    for (name, kind, flag), (off, div, want_int) in sorted(SELF_CHECK.items()):
+        got = by_key.get((name, kind, flag))
         if got is None:
-            print('  0x%X 종류%d +0x3A=%d  없음 (기대 +0x%X ÷%s %s)  FAIL'
-                  % (vt, kind, flag, off, fmt_div_short(div),
+            print('  %-40s 종류%d +0x3A=%d  없음 (기대 +0x%X ÷%s %s)  FAIL'
+                  % (name, kind, flag, off, fmt_div_short(div),
                      '정수' if want_int else '실수'), file=sys.stderr)
             ok = False
             continue
         good = (got['offset'] == off and float(got['divisor']) == div
                 and bool(got['integer_div']) == want_int)
-        print('  0x%X 종류%d +0x3A=%d  +0x%X ÷%-10s %s (기대 +0x%X ÷%s %s)  %s'
-              % (vt, kind, flag, got['offset'], fmt_div_short(got['divisor']),
+        print('  %-40s 종류%d +0x3A=%d  +0x%X ÷%-10s %s (기대 +0x%X ÷%s %s)  %s'
+              % (name, kind, flag, got['offset'], fmt_div_short(got['divisor']),
                  '정수' if got['integer_div'] else '실수',
                  off, fmt_div_short(div), '정수' if want_int else '실수',
                  'OK' if good else 'FAIL'), file=sys.stderr)

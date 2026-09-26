@@ -325,7 +325,11 @@ def main():
     cur = file_version(exe)
     for p in sorted(stamped):
         vs = stamped[p]
-        ok = (len(vs) == 1 and vs[0] == cur)
+        # 이력 도장을 남기는 것이 이 저장소의 관례다(2949 -> 2976 처럼 옛 자리를
+        # 주석에 남긴다). 도장이 하나뿐이고 그게 현 빌드여야 한다고 하면 이력을
+        # 남긴 파일이 전부 ** 가 되어 경보가 늘 울린다 - 묻는 것은 **현 빌드를
+        # 보고 정했나** 하나다(2026-09-26).
+        ok = cur in vs
         print('   %s%-34s %s' % ('OK  ' if ok else '**  ',
                                  rel(root, p), ' · '.join(vs)))
     naked = sorted(has_rva - set(stamped))
@@ -333,7 +337,7 @@ def main():
         print('   -- 도장이 없는 파일 (고정 RVA 를 들고 있는데 출처 기록이 없다)')
         for p in naked:
             print('        %s' % rel(root, p))
-    print('   (실행 중인 exe %s. ** 는 그 빌드를 안 보고 정한 상수라는 뜻이니'
+    print('   (실행 중인 exe %s. ** 는 그 빌드 도장이 없다는 뜻이니'
           ' 4번 표를 그 파일부터 볼 것)' % cur)
     print()
     print('=' * 72)
