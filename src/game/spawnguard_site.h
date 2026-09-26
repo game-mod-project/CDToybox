@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2976  셋 다 재도출(2026-09-26) - 조회 +0x50 · 호출 자리 +0x70 ·
+//   빈 레코드 -0x20. 조회는 call+lea 짝 142/142 만장일치. 근거: specs/2026-09-26-game-update-2976.md §5
 // @build 1.0.0.2949  호출 자리 · 조회 함수 재도출, 빈 레코드는 그대로(2026-09-22).
 //   근거: specs/2026-09-22-game-update-2949.md §4
 
@@ -58,9 +60,9 @@ namespace cdtb::game {
 // kSpawnDerefTail 은 실행 섹션 전량에서 0x2B8DD46 **한 곳뿐**이고, 그 자리 10바이트는
 // `E8 D5 83 5B FF 48 83 78 28 FF` 로 2944 캡처와 한 글자도 다르지 않다(자리와 조회가
 // 함께 +0x10 밀려 rel32 가 같다).
-inline constexpr std::uint64_t kSpawnCallSiteRva = 0x2B8DD46;   // 2944 0x2B8DD36
-inline constexpr std::uint64_t kSpawnLookupRva = 0x2146120;     // 2944 0x2146110
-inline constexpr std::uint64_t kSpawnEmptyRecordRva = 0x6CF2F70;
+inline constexpr std::uint64_t kSpawnCallSiteRva = 0x2B8DDB6;   // 2949 0x2B8DD46 · 2944 0x2B8DD36
+inline constexpr std::uint64_t kSpawnLookupRva = 0x2146170;     // 2949 0x2146120 · 2944 0x2146110
+inline constexpr std::uint64_t kSpawnEmptyRecordRva = 0x6CF2F50;   // 2949 0x6CF2F70
 
 // 자리 뒤에 곧바로 오는 `cmp qword ptr [rax+0x28], -1`.
 //

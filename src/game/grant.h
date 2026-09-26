@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2976  kHireCheckRva 재도출(2026-09-26, +0x50) - 썽크 E9 BB E2 36 0C
+//   -> 본체 0xE4BCBD0. 근거: specs/2026-09-26-game-update-2976.md §3
 // @build 1.0.0.2949  kHireCheckRva 재도출(고용 작업 +0x3F3, 3021 작업 +0x36A 교차검증
 //   통과, 2026-09-22). 근거: specs/2026-09-22-game-update-2949.md §3
 #include <cstddef>
@@ -532,7 +534,7 @@ bool endurance_ready();
 // 1.0.0.2949(2026-09-22): 고용 작업 0x2BADB90 +0x3F3 과 3021 작업 0x2BA1520 +0x36A 가
 // 둘 다 0x214E8C0 을 부른다. 썽크 `E9 AB 4C 2E 0C` -> 본체 0xE433570, 본체 프롤로그가
 // kHireCheckBodyPrologue 와 같다.
-inline constexpr std::uint64_t kHireCheckRva = 0x214E8C0;   // 2944 0x214E8B0 · 2850 0x20991F0
+inline constexpr std::uint64_t kHireCheckRva = 0x214E910;   // 2949 0x214E8C0 · 2944 0x214E8B0
 
 // 썽크 n바이트가 `jmp rel32`(E9) 면 그 대상 절대 주소, 아니면 0. thunk_addr 는
 // 썽크의 절대 주소다(rel32 는 다음 명령 기준). 읽기는 호출자가 한다.

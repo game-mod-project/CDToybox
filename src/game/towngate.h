@@ -1,5 +1,7 @@
 #pragma once
 
+// @build 1.0.0.2976  kRegionMgrGlobalRva -0x20 (2026-09-26) - 표 이름 `regioninfo`
+//   를 만드는 함수 0x50D700 의 적재 0x50D715. 근거: specs/2026-09-26-game-update-2976.md §10
 // @build 1.0.0.2949  kRegionMgrGlobalRva 가 그대로다(2026-09-22) - 표 이름 `regioninfo`
 //   를 만드는 함수 0x50D700(2944 와 같은 함수)이 여전히 0x6D69AD0 을 읽는다.
 //   RegionInfo 필드 오프셋(+0x74 +0x75 +0x08)은 2944 에서 확인했고, 2949 첫 실행에서도
@@ -75,7 +77,7 @@ namespace cdtb::game {
 // 스크립트: 스크래치패드 `mgrglobals.py` (인자는 exe + 표 이름들).
 //
 // 2850: 0x06C2E2F0 (조회 0x49BB80) -> 2944: 0x06D69AD0 (조회 0x50D700). +0x13B7E0.
-inline constexpr std::uintptr_t kRegionMgrGlobalRva = 0x06D69AD0;
+inline constexpr std::uintptr_t kRegionMgrGlobalRva = 0x06D69AB0;   // 2949 0x06D69AD0
 inline constexpr const char* kRegionMgrClass = "RegionInfoManager";
 
 // RegionInfo 레코드(192바이트). `tools/rtti/fields.py` 로 20개를 짝지었다.

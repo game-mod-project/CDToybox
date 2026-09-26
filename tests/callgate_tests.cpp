@@ -64,22 +64,23 @@ TEST(callgate_table_has_all_four_gates) {
 
 TEST(callgate_sites_match_the_measured_rvas) {
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateIndoor)->rva),
-             0x009DE7DCLL);
+             0x009DE83CLL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateRoof)->rva),
-             0x009DE839LL);
+             0x009DE899LL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGateRegion)->rva),
-             0x009DD899LL);
+             0x009DD8F9LL);
     CHECK_EQ(static_cast<long long>(callgate_def(kCallGatePosition)->rva),
-             0x009DD6C4LL);
+             0x009DD724LL);
 }
 
-TEST(callgate_gates_all_moved_by_one_delta_in_2944) {
-    // 2850 -> 2944 에서 넷이 **같은 폭**으로 밀렸다. 하나만 폭이 다르면 그
-    // 관문을 잘못 짚었다는 신호다 - 다음 갱신 때 이 대조가 그것을 잡는다.
-    // (영역이 다르면 폭도 달라진다. 같은 영역 안에서만 성립한다.)
-    const long long kDelta = 0x7B1E0LL;
-    const long long old_rva[kCallGateCount] = {0x009635FCLL, 0x00963659LL,
-                                               0x009626B9LL, 0x009624E4LL};
+TEST(callgate_gates_all_moved_by_one_delta_in_2976) {
+    // 2949 -> 2976 에서 넷이 **같은 폭**(+0x60)으로 밀렸다. 하나만 폭이 다르면
+    // 그 관문을 잘못 짚었다는 신호다 - 다음 갱신 때 이 대조가 그것을 잡는다.
+    // (영역이 다르면 폭도 달라진다. 같은 영역 안에서만 성립한다.
+    //  2850 -> 2944 때는 넷 다 +0x7B1E0 이었다.)
+    const long long kDelta = 0x60LL;
+    const long long old_rva[kCallGateCount] = {0x009DE7DCLL, 0x009DE839LL,
+                                               0x009DD899LL, 0x009DD6C4LL};
     for (int g = 0; g < kCallGateCount; ++g) {
         CHECK_EQ(static_cast<long long>(callgate_def(g)->rva) - old_rva[g],
                  kDelta);
@@ -124,9 +125,13 @@ TEST(callgate_position_uses_jne_not_je) {
 TEST(callgate_windows_are_the_measured_bytes) {
     const std::uint8_t indoor[8] = {0x03, 0x03, 0x84, 0xC0, 0x74, 0x0E, 0x8B,
                                     0x05};
-    const std::uint8_t roof[8] = {0xC0, 0x74, 0x0A, 0x8B, 0x05, 0xDB, 0x92,
+    // 지붕·지역 창의 뒤 세 바이트는 **전역 변위**라 코드와 따로 움직인다 -
+    // 2976 에서 DB->5F · 7F->03 으로 바뀌었다(자리는 넷 다 +0x60). 그래서
+    // 이 둘만 rederive 의 창 대조가 "못 찾음" 으로 떨어졌고, 슬롯에서 다시
+    // 짚었다(specs/2026-09-26-game-update-2976.md).
+    const std::uint8_t roof[8] = {0xC0, 0x74, 0x0A, 0x8B, 0x05, 0x5F, 0x92,
                                   0x31};
-    const std::uint8_t region[8] = {0xC0, 0x74, 0x75, 0x8B, 0x05, 0x7F, 0xA2,
+    const std::uint8_t region[8] = {0xC0, 0x74, 0x75, 0x8B, 0x05, 0x03, 0xA2,
                                     0x31};
     const std::uint8_t position[8] = {0x06, 0x00, 0x84, 0xC0, 0x75, 0x0A, 0x8B,
                                       0x05};

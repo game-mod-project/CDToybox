@@ -1,5 +1,8 @@
 #pragma once
 
+// @build 1.0.0.2976  셋 다 재도출(2026-09-26) - 등록 +0x70(호출부 간격 0xA8 그대로) ·
+//   전역 -0x20 · vtable +0x1F0. 2949 처럼 코드가 통째로 옮겨지지는 않았다.
+//   근거: specs/2026-09-26-game-update-2976.md §6
 // @build 1.0.0.2949  지식 등록 함수(0x2B72C90)와 서버 컴포넌트 vtable(0x5B2B880)을
 //   재도출했고, 매니저 전역(0x6D69AB8)은 지식 정보 조회 함수 0x433650 이 읽는 전역으로
 //   그대로임을 확인했다(2026-09-22). 근거: specs/2026-09-22-game-update-2949.md §5.
@@ -40,7 +43,7 @@ namespace cdtb::game {
 // **RVA 를 박아 두는 것이라 게임이 갱신되면 밀린다**(game-update-rva-drift).
 // 그래서 읽은 값이 말이 되는지, 그리고 컴포넌트의 레코드 수와 같은지 반드시 대조한다
 // (`Initialize` 가 매니저의 개수로 표를 잡으므로 두 값은 같아야 한다).
-inline constexpr std::uintptr_t kKnowMgrGlobalRva = 0x06D69AB8;   // 2850 까지 0x06C2E2D8
+inline constexpr std::uintptr_t kKnowMgrGlobalRva = 0x06D69A98;   // 2949 0x06D69AB8 · 2850 까지 0x06C2E2D8
 inline constexpr std::size_t kKnowMgrCount = 0x08;   // i32 전체 지식 수
 inline constexpr std::size_t kKnowMgrArray = 0x58;   // KnowledgeInfo* 배열(stride 8)
 
@@ -201,8 +204,8 @@ KnowWrite know_forget(const mem::Reader& reader, int number);
 // 2944(0x02AA6450 / 0x02AA64F8)와 같은 0xA8 이다. 대상 0x2B72C90 의 첫 15바이트가 위
 // 프롤로그 그대로다. vtable 은 RTTI 로 0x5B2B880 이고, 2949 실행 로그도
 // `지식 컴포넌트 … vtable 0x145B2B880` 을 찍었다.
-inline constexpr std::uintptr_t kKnowRegisterRva = 0x02B72C90;       // 2944 0x02AA55D0
-inline constexpr std::uintptr_t kServerCompVtableRva = 0x05B2B880;   // 2944 0x05A13200
+inline constexpr std::uintptr_t kKnowRegisterRva = 0x02B72D00;       // 2949 0x02B72C90 · 2944 0x02AA55D0
+inline constexpr std::uintptr_t kServerCompVtableRva = 0x05B2BA70;   // 2949 0x05B2B880 · 2944 0x05A13200
 
 // 등록 함수의 첫 15바이트(위 세 명령). **부르기 전에 이것을 대조한다.** 이 호출은
 // 게임 함수를 직접 부르므로, 갱신으로 자리가 낡으면 명령 중간으로 뛰어들어 죽는다 -

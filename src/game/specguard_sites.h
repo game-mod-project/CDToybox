@@ -1,5 +1,9 @@
 #pragma once
 
+// @build 1.0.0.2976  div 자리 다섯 재도출(2026-09-26) - kDivMem[3] +0x50 ·
+//   kDivReg 0x240… 셋 +0x50 · 쌍둥이 0xF… 둘은 +0x19383A~40. 쌍둥이 간격은 0x52
+//   (2949 0x58 · 2944 0x59). 가방 렌더 셋은 2976 에도 없다. 근거: specs/2026-09-26-game-update-2976.md §2
+
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -67,7 +71,7 @@ struct SpecguardSite {
 // `0x01416C10`(2944 는 `0x01416C00`)을 부르며 gs:[0x58] + `0x1EC` 를 본다.
 // 전문: `docs/superpowers/specs/2026-09-22-game-update-2949.md` §2.
 inline constexpr SpecguardSite kSpecguardDivMem[] = {
-    {0xEB26B4, 7}, {0xEA920F, 5}, {0x21DB8D8, 7}, {0x240938D, 6}};
+    {0xEB26B4, 7}, {0xEA920F, 5}, {0x21DB8D8, 7}, {0x24093DD, 6}};
 
 // div <reg64> 자리. 나누는 값이 레지스터다. patch_len = div(3) + 위치독립 꼬리.
 //
@@ -96,7 +100,7 @@ inline constexpr SpecguardSite kSpecguardDivMem[] = {
 // 앞의 것만 걸면 **크래시를 89바이트 뒤로 옮길 뿐이다** - 가드가 몫 0 을 내면
 // `cmp eax,[rdi+4] / jae` 가 상한>0 인 한 안 뛰어 그대로 여기로 흘러온다.
 inline constexpr SpecguardSite kSpecguardDivReg[] = {
-    {0xF2FD66B, 6}, {0xF2FD6C3, 6}, {0x24091AB, 5}, {0x24095C4, 6}};
+    {0xF490EAB, 6}, {0xF490EFD, 6}, {0x24091FB, 5}, {0x2409614, 6}};
 
 inline constexpr int kSpecguardSiteTotal =
     static_cast<int>(std::size(kSpecguardDivMem) +

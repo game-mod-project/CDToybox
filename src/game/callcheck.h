@@ -1,5 +1,9 @@
 #pragma once
 
+// @build 1.0.0.2976  오류 슬롯 일곱 전부 -0x1C, 함수들 +0x60(휠 UI 만 -0x90),
+//   관리자 전역 -0x20 (2026-09-26). kSilentErrorRva 만 그대로다. ⚠️ 새
+//   eErrNoAlreadySummonedMercenary(0x6CF6F60)가 **옛 eErrNoInvalidMercenaryNo 와
+//   같은 값**이라 부분 수정하면 두 사유가 뒤바뀐다. 근거: specs/2026-09-26-game-update-2976.md §7
 // @build 1.0.0.2949  kWheelUiFnRva 만 옮겼다(0x10BE8B0 -> 0x10BE8C0). 나머지는 2949 에서
 //   그대로임을 의미로 대조했다(2026-09-22): 검증기 +0x5E 가 새 조회 0x2146120 을 부르고
 //   오류 슬롯 여섯을 2944 와 같은 오프셋에서 읽는다 · 앞단 +0x14C 가 검증기를 부른다 ·
@@ -75,18 +79,18 @@ struct CallCheckReason {
     const char* name;
 };
 inline constexpr CallCheckReason kCallCheckReasons[] = {
-    {0x6CF6F60, "eErrNoInvalidMercenaryNo"},
-    {0x6CF7AE4, "eErrNotExistVehicle"},
-    {0x6CF7B28, "eErrNoCallVehicleMercenaryRideLimit"},
-    {0x6CF7B24, "eErrNoCallVehicleMercenaryMovableNavigation"},
-    {0x6CF7AFC, "eErrNoCallVehicleInvalidPosition"},
+    {0x6CF6F44, "eErrNoInvalidMercenaryNo"},
+    {0x6CF7AC8, "eErrNotExistVehicle"},
+    {0x6CF7B0C, "eErrNoCallVehicleMercenaryRideLimit"},
+    {0x6CF7B08, "eErrNoCallVehicleMercenaryMovableNavigation"},
+    {0x6CF7AE0, "eErrNoCallVehicleInvalidPosition"},
     // 아래 둘은 검증기 **앞단**(`kWheelPreFnRva`)이 낸다(2026-09-21). 등록 코드
     // `lea rcx,[슬롯] / lea r8,[설명] / lea rdx,[이름] / call 0x1427810` 으로
     // 짝지었고, 같은 방법이 대조군 `0x6CF7AFC` 에서 정확히 맞았다.
     //   0x21FE601 -> "FocusActor를 찾을 수 없습니다."
     //   0x21FED36 -> "이미 호출된 용병입니다."
-    {0x6CF6ED8, "eErrNotFoundFocusActor"},
-    {0x6CF6F7C, "eErrNoAlreadySummonedMercenary"},
+    {0x6CF6EBC, "eErrNotFoundFocusActor"},
+    {0x6CF6F60, "eErrNoAlreadySummonedMercenary"},
 };
 inline constexpr std::size_t kCallCheckReasonCount =
     sizeof(kCallCheckReasons) / sizeof(kCallCheckReasons[0]);
@@ -97,7 +101,7 @@ inline constexpr std::size_t kCallCheckReasonCount =
 // (§1.5 그대로 - 흔한 프롤로그는 확인이 아니다). 대신 `+0x5E` 의 `call` 이
 // **번호->레코드 조회**를 향하는지 본다. 그 조회는 `spawnguard_site.h` 가 이미
 // 실측으로 들고 있는 값이라, 갱신 때 둘이 같이 움직이거나 같이 걸린다.
-inline constexpr std::uint64_t kCallCheckFnRva = 0x9DD420;
+inline constexpr std::uint64_t kCallCheckFnRva = 0x9DD480;   // 2949 0x9DD420
 inline constexpr std::size_t kCallCheckLookupCallOff = 0x5E;
 
 // 오류 코드를 이름으로 옮긴다. `values[i]` 는 `kCallCheckReasons[i].slot_rva`
@@ -191,12 +195,12 @@ inline void callcheck_count_one(std::uint32_t err, CallCheckCounts* c) {
 // 콜리가 스택 인자를 안 읽는다. 휠은 오류를 반환값이 아니라 **넘겨준 칸**에서 읽는다.
 // 1.0.0.2949: `UIGamePlayControlRoot_ContentSlotMenu@uiCommonScript` vtable(0x56EBA00)의
 // [18] 이 0x10BE8C0 이고, 그 +0x486 이 앞단 0x9E0FC0 을 부른다(2944 와 같은 오프셋).
-inline constexpr std::uint64_t kWheelUiFnRva = 0x10BE8C0;   // 2944 0x10BE8B0
+inline constexpr std::uint64_t kWheelUiFnRva = 0x10BE830;   // 2949 0x10BE8C0 · 2944 0x10BE8B0
 inline constexpr std::size_t kWheelUiPreCallOff = 0x486;   // call kWheelPreFnRva
 inline constexpr std::size_t kWheelUiSlotOff = 0x1C8;      // i32, -1 = 고른 칸 없음
 inline constexpr std::size_t kWheelUiKindOff = 0x158;      // u8, 칸 종류
 inline constexpr std::uint8_t kWheelKindVehicle = 2;
-inline constexpr std::uint64_t kWheelPreFnRva = 0x9E0FC0;
+inline constexpr std::uint64_t kWheelPreFnRva = 0x9E1020;   // 2949 0x9E0FC0
 inline constexpr std::size_t kWheelPreValidatorCallOff = 0x14C;  // call kCallCheckFnRva
 inline constexpr std::uint64_t kSilentErrorRva = 0x6A6555C;      // 이 값과 같으면 문구 없음
 
@@ -217,10 +221,10 @@ inline constexpr std::uint64_t kSilentErrorRva = 0x6A6555C;      // 이 값과 �
 //   0x8B4510+0x23  48 8B 79 58                   포커스 +0x58
 //   0x8B4510+0xEF  4C 8B B0 D8 00 00 00          -> +0xD8
 // 하나라도 다르면 칸 읽기만 끄고 결말은 그대로 찍는다.
-inline constexpr std::uint64_t kFocusQueryFnRva = 0x64F490;
-inline constexpr std::uint64_t kMainPlayerCheckFnRva = 0x8B4480;
-inline constexpr std::uint64_t kFocusActorCheckFnRva = 0x8B4510;
-inline constexpr std::uint64_t kFocusMgrGlobalRva = 0x6D691B0;
+inline constexpr std::uint64_t kFocusQueryFnRva = 0x64F4F0;   // 2949 0x64F490
+inline constexpr std::uint64_t kMainPlayerCheckFnRva = 0x8B44E0;   // 2949 0x8B4480
+inline constexpr std::uint64_t kFocusActorCheckFnRva = 0x8B4570;   // 2949 0x8B4510
+inline constexpr std::uint64_t kFocusMgrGlobalRva = 0x6D69190;   // 2949 0x6D691B0
 inline constexpr std::size_t kFocusMgrOff = 0x30;
 inline constexpr std::size_t kMainPlayerOff = 0x50;
 inline constexpr std::size_t kFocusCtlOff = 0x58;
